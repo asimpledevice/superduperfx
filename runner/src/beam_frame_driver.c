@@ -92,6 +92,11 @@ static uint64_t beam_debt(void) {
 }
 
 /* Parked time: the beam, APU and coprocessors advance; the CPU does not. */
+/* SNESRECOMP_PARK_TO_VBLANK=1: see the parked step in run_frame. */
+#ifndef SNESRECOMP_PARK_TO_VBLANK
+#define SNESRECOMP_PARK_TO_VBLANK 0
+#endif
+
 static void advance_parked(uint64_t until) {
   g_cpu.master_cycles = until;
   snes_refresh_exempt();
@@ -203,6 +208,19 @@ void snes_beam_frame_driver_run_frame(void) {
      * match when it is nearer than a line (+1: the comparator window excludes
      * its end), a line otherwise, so a raster IRQ or a GSU STOP is seen
      * within a line of hardware raising it. */
+#if SNESRECOMP_PARK_TO_VBLANK
+    /* Nothing can end this wait before the field boundary: no H/V
+     * comparator is armed and the cart has no coprocessor that raises IRQ.
+     * The NMI at frame_end is the only way out, so park straight there
+     * instead of a line at a time (each line otherwise re-enters the
+     * interpreter, re-detects the same wait and parks again). */
+    if (!g_snes->hIrqEnabled && !g_snes->vIrqEnabled && g_snes->cart &&
+        !g_snes->cart->superfx && !g_snes->cart->sa1 && !g_snes->cart->cx4 &&
+        !g_snes->cart->dsp1 && !g_snes->cart->sdd1) {
+      advance_parked(frame_end);
+      continue;
+    }
+#endif
     to_irq = snes_master_clocks_until_irq(g_snes);
     if (to_irq)
       to_irq += 1;

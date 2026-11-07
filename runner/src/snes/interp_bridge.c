@@ -318,6 +318,9 @@ static int bridge_read_is_stable(uint32_t adr) {
 #ifndef SNESRECOMP_INTERP_EDGE_TRACE
 #define SNESRECOMP_INTERP_EDGE_TRACE 1
 #endif
+#ifndef SNESRECOMP_WRAM_POLL_QUIESCENT
+#define SNESRECOMP_WRAM_POLL_QUIESCENT 0
+#endif
 /* Absolute guest master clock of the next beam event, cached between steps.
  * Invalidated (0) whenever the bridge touches anything that can move or
  * reconfigure the beam: any non-WRAM/ROM access and every bridge entry. */
@@ -360,7 +363,16 @@ static uint8_t bridge_bus_read(void *mem, uint32_t adr) {
             if (g_snes && g_snes->cart)
                 g_snes->cart->cpuBusAddress = adr & 0xFFFFFFu;
             cpu->open_bus = value;
-            if (g_cpu_fast_page_kind[(adr & 0xFFFFFFu) >> kCpuFastMapPageShift] ==
+            /* SNESRECOMP_WRAM_POLL_QUIESCENT=1: a read of the low-WRAM mirror
+             * is not "continuous". On the plain carts the fast map covers,
+             * WRAM changes only through a CPU write (write epoch), an
+             * interrupt handler, or DMA/HDMA (bridge_idle_replay_allowed and
+             * the scheduler own those), so a loop that only reads WRAM and
+             * repeats its whole state is a genuine wait for an interrupt --
+             * e.g. "LDA $10 / BEQ -" waiting for the NMI handler -- and the
+             * stable-wait detector may yield it to the scheduler. */
+            if (!SNESRECOMP_WRAM_POLL_QUIESCENT &&
+                g_cpu_fast_page_kind[(adr & 0xFFFFFFu) >> kCpuFastMapPageShift] ==
                 kCpuFastMapWramLow) {
                 s_interp_continuous_read_epoch++;
                 if (!s_idle_poll_now) s_interp_idle_live_epoch++;
