@@ -306,6 +306,32 @@ static int bridge_read_is_stable(uint32_t adr) {
 #define SNESRECOMP_INTERP_FUSED_ROM_READ 0
 #endif
 
+/* SNESRECOMP_LAZY_BEAM=1: walk the beam only when the guest clock reaches
+ * the next beam event (snes_master_clocks_to_next_beam_event), before any bus
+ * access that is not plain WRAM/ROM, and when the bridge returns. The beam is
+ * then never observed stale, so results match the per-instruction walk. */
+#ifndef SNESRECOMP_LAZY_BEAM
+#define SNESRECOMP_LAZY_BEAM 0
+#endif
+static inline void bridge_beam_catchup(const CpuState *cpu) {
+#if SNESRECOMP_LAZY_BEAM
+    if (g_snes && cpu->master_cycles != g_snes->beamMasterLast)
+        snes_sync_master_clock(g_snes, cpu->master_cycles);
+#else
+    (void)cpu;
+#endif
+}
+static inline void bridge_beam_after_step(const CpuState *cpu) {
+    if (!g_snes) return;
+#if SNESRECOMP_LAZY_BEAM
+    if (cpu->master_cycles >= g_snes->beamMasterLast &&
+        cpu->master_cycles - g_snes->beamMasterLast <
+            snes_master_clocks_to_next_beam_event(g_snes))
+        return;
+#endif
+    snes_sync_master_clock(g_snes, cpu->master_cycles);
+}
+
 static uint8_t bridge_bus_read(void *mem, uint32_t adr) {
     CpuState *cpu = (CpuState *)mem;
     bridge_timing_bus(adr);
@@ -337,6 +363,7 @@ static uint8_t bridge_bus_read(void *mem, uint32_t adr) {
         }
     }
 #endif
+    bridge_beam_catchup(cpu);
     int stable_rom = 0;
 #if SNESRECOMP_INTERP_FUSED_ROM_READ
     /* A ROM fetch used to decode the same mapping twice: once to establish
@@ -408,6 +435,10 @@ static void bridge_bus_write(void *mem, uint32_t adr, uint8_t val) {
     bridge_timing_bus(adr);
     g_interp_bridge_write_epoch++;
     CpuState *cpu = (CpuState *)mem;
+    {
+        const uint8_t k = g_cpu_fast_page_kind[(adr & 0xFFFFFFu) >> kCpuFastMapPageShift];
+        if (k != kCpuFastMapWram && k != kCpuFastMapWramLow) bridge_beam_catchup(cpu);
+    }
     const int is_apu_port = bridge_is_apu_port(adr);
     if (is_apu_port && bridge_apu_port_diag_enabled()) {
         static unsigned reports;
@@ -456,6 +487,7 @@ static int bridge_hw_word(uint32_t adrl, uint32_t adrh) {
 static bool bridge_bus_read_word(void *mem, uint32_t adrl, uint32_t adrh,
                                  uint16_t *out) {
     if (!bridge_hw_word(adrl, adrh)) return false;
+    bridge_beam_catchup((const CpuState *)mem);
     bridge_timing_bus(adrl);
     bridge_timing_bus(adrh);
     s_interp_volatile_read_epoch++;  /* a claimed word is always MMIO */
@@ -490,6 +522,7 @@ static bool bridge_bus_write_word(void *mem, uint32_t adrl, uint32_t adrh,
     /* reversed = RMW write-back (high byte first on hardware); keep those on
      * the faithful byte path — WriteRegWord would flip non-APU order. */
     if (reversed || !bridge_hw_word(adrl, adrh)) return false;
+    bridge_beam_catchup((const CpuState *)mem);
     bridge_timing_bus(adrl);
     bridge_timing_bus(adrh);
     g_interp_bridge_write_epoch++;
@@ -1746,6 +1779,19 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
     uint8_t qslot_bucket[64];
     memset(qbucket, 0, sizeof qbucket);
     memset(qslot_bucket, 0xFF, sizeof qslot_bucket);
+    /* SNESRECOMP_QUIESCENT_BACKEDGE=1: record detector states only where
+     * control flow went backwards or changed bank, i.e. at loop heads,
+     * instead of on every step. A loop whose whole state repeats passes
+     * through its head, so the stable-wait yield still fires, at most one
+     * iteration later and at the head. Declared idle polls replay a dense
+     * per-step history, so a run that starts with any declared keeps the
+     * per-step recording. */
+#ifndef SNESRECOMP_QUIESCENT_BACKEDGE
+#define SNESRECOMP_QUIESCENT_BACKEDGE 0
+#endif
+    const int q_sparse = SNESRECOMP_QUIESCENT_BACKEDGE && !s_idle_poll_count;
+    uint32_t q_prev_pc = 0xFFFFFFFFu;
+    unsigned q_next_slot = 0;
     /* Stable-poll detector state: the architectural state at the last few
      * loop heads this frame branched back to (see the detector below). */
     typedef struct PollHeadState {
@@ -2126,7 +2172,14 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
                 }
             }
         }
-        if (auto_quiescent) {
+        int q_record = auto_quiescent;
+        if (q_record && q_sparse) {
+            /* Loop head: first step, a backward move, or a bank change. */
+            q_record = pc_before <= q_prev_pc ||
+                       (pc_before >> 16) != (q_prev_pc >> 16);
+            q_prev_pc = pc_before;
+        }
+        if (q_record) {
             QuiescentState now;
             memset(&now, 0, sizeof now);
             now.pc=pc_before; now.a=in.a; now.x=in.x; now.y=in.y;
@@ -2171,7 +2224,7 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
                  * Replay it to the deadline (docs/IDLE_POLL.md). Every guard
                  * that fails leaves the run to the detector below, exactly
                  * as if nothing were declared. */
-                if (s_idle_poll_count && !idle_seen &&
+                if (s_idle_poll_count && !q_sparse && !idle_seen &&
                     old->idle_live_epoch==now.idle_live_epoch &&
                     old->volatile_read_epoch==now.volatile_read_epoch) {
                     idle_seen = 1;
@@ -2269,14 +2322,12 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
                     break;
                 }
             }
-            {
-                const unsigned qs = (unsigned)(steps & 63);
-                if (qslot_bucket[qs] != 0xFF)
-                    qbucket[qslot_bucket[qs]] &= ~(1ull << qs);
-                qbucket[qb] |= 1ull << qs;
-                qslot_bucket[qs] = (uint8_t)qb;
-            }
-            qring[steps & 63]=now;
+            const unsigned qs = q_sparse ? (q_next_slot++ & 63u) : (unsigned)(steps & 63);
+            if (qslot_bucket[qs] != 0xFF)
+                qbucket[qslot_bucket[qs]] &= ~(1ull << qs);
+            qbucket[qb] |= 1ull << qs;
+            qslot_bucket[qs] = (uint8_t)qb;
+            qring[qs]=now;
         }
         if (s_pre_opcode_hook_count > 0) {
             const uint32_t key = pc_before & 0x7FFFFFu;
@@ -2786,7 +2837,7 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
              * WatchdogCheck charge; see common_cpu_infra.c. */
             snes_refresh_charge();
             cpu->coprocessor_master_cycles = cpu->master_cycles;
-            if (g_snes) snes_sync_master_clock(g_snes, cpu->master_cycles);
+            bridge_beam_after_step(cpu);
             if (g_snes && g_snes->cart)
                 cart_sync_coprocessors(g_snes->cart, cpu->master_cycles);
 #ifdef SNES_COSIM
@@ -3338,6 +3389,7 @@ static int interp_bridge_run_ex2(CpuState *cpu, uint32_t entry_pc24,
                               yield_flag_addr, yield_flag_value,
                               reset_cap_on_bounce, stop_pcs, n_stop,
                               stop_on_rti);
+    bridge_beam_catchup(cpu);  /* lazy beam: hand back a beam that is current */
     g_interp_wlog_pc24 = 0;  /* control returns to compiled code */
     RecompStackPop();
     g_last_recomp_func = _saved_func;

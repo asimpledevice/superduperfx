@@ -589,6 +589,27 @@ uint32_t snes_master_clocks_until_irq(const Snes *snes) {
   }
 }
 
+/* Master clocks from the beam's position to the next point where walking it
+ * can have an effect: the HDMA HBlank boundary on a visible line, the start
+ * of the next line, or the IRQ comparator. Zero means "walk now" (IRQ
+ * pending, or a comparator this helper cannot place).
+ *
+ * Lazy-beam callers (SNESRECOMP_LAZY_BEAM) may skip snes_sync_master_clock
+ * while the owed delta is below this distance, provided they also walk the
+ * beam before any access that can observe it (MMIO) and before handing
+ * control back to their scheduler. Walking in larger steps then produces the
+ * same beam state, IRQ latch points and HDMA as walking every instruction. */
+uint32_t snes_master_clocks_to_next_beam_event(const Snes *snes) {
+  if (!snes || snes->inIrq) return 0;
+  const uint32_t h = snes->hPos, v = snes->vPos;
+  uint32_t d = (v < 225u && h < 1024u) ? 1024u - h : 1364u - h;
+  if (snes->hIrqEnabled || snes->vIrqEnabled) {
+    const uint32_t i = snes_master_clocks_until_irq(snes);
+    if (i < d) d = i;
+  }
+  return d;
+}
+
 /* ── beam hold ─────────────────────────────────────────────────────────────
  * While set, snes_sync_master_clock is a no-op: the beam stays where it is and
  * the CPU-time delta simply accumulates, to be walked on the first sync after

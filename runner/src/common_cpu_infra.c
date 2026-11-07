@@ -903,7 +903,9 @@ void snes_refresh_charge(void) {
   }
   uint64_t delta = m - g_refresh_charged_upto;
   s_refresh_phase += delta;
-  uint64_t lines = s_refresh_phase / 1364u;
+  /* Almost always under one line: skip the 64-bit divide (expensive on
+   * in-order CPUs such as the N64's VR4300). Same result either way. */
+  uint64_t lines = s_refresh_phase < 1364u ? 0 : s_refresh_phase / 1364u;
   if (lines > 4096u) {            /* teleport, not execution */
     s_refresh_phase = 0;
     g_refresh_charged_upto = m;

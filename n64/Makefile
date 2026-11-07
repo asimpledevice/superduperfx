@@ -42,7 +42,8 @@ N64_CFLAGS += -Iinclude -I$(RUNNER) -I$(RUNNER)/snes -I$(RUNNER)/desktop \
 	-Wno-error -Wno-unused-parameter -Wno-unused-variable \
 	-Wno-unused-function -Wno-sign-compare -Wno-unused-but-set-variable
 N64_CFLAGS += -O2
-N64_CFLAGS += -DSNESRECOMP_FAST_READ_MAP=1
+N64_CFLAGS += -DSNESRECOMP_FAST_READ_MAP=1 -DSNESRECOMP_QUIESCENT_BACKEDGE=1 \
+	-DSNESRECOMP_LAZY_BEAM=1 -DSNESRECOMP_REVERSE_DEBUG=0
 
 # Diagnostic history buffers sized for desktop debugging total about 5.5 MB
 # of .bss. Shrink them to token sizes (powers of two: the rings index with
@@ -62,10 +63,12 @@ RUNTIME_RENAMES = -Ddma_read=snes_dma_read -Ddma_write=snes_dma_write \
 $(BUILD_DIR)/runner/%.o $(BUILD_DIR)/n64_host.o $(BUILD_DIR)/n64_stubs.o: \
 	CFLAGS += $(RUNTIME_RENAMES)
 
-# make PROFILE=1: sample PCs for 10 frames starting at frame 3 and dump them
-# over the debug log (see n64/profile/symbolize.py).
+# make PROFILE=1: sample PCs for PROFILE_FRAMES frames starting at frame
+# PROFILE_START and dump them over the debug log (n64/profile/symbolize.py).
+PROFILE_START ?= 3
+PROFILE_FRAMES ?= 10
 ifeq ($(PROFILE),1)
-N64_CFLAGS += -DN64_PROFILE_START=3 -DN64_PROFILE_FRAMES=10
+N64_CFLAGS += -DN64_PROFILE_START=$(PROFILE_START) -DN64_PROFILE_FRAMES=$(PROFILE_FRAMES)
 endif
 
 N64_MKDFS_ROOT = $(BUILD_DIR)/filesystem

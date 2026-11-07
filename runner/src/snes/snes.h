@@ -188,6 +188,7 @@ bool snes_next_irq_master(const Snes *snes, uint64_t now, uint64_t *out);
  * than a late one — and a split scheduled two scanlines after the one that
  * scheduled it, as Gundam Wing does at $00:888E, is lost outright. */
 uint32_t snes_master_clocks_until_irq(const Snes *snes);
+uint32_t snes_master_clocks_to_next_beam_event(const Snes *snes);
 
 /* Clocks to the start of scanline `line`, for a host that needs to place its
  * frame boundary on the PPU's field boundary. See the implementation. */
