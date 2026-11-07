@@ -313,8 +313,18 @@ static int bridge_read_is_stable(uint32_t adr) {
 #ifndef SNESRECOMP_LAZY_BEAM
 #define SNESRECOMP_LAZY_BEAM 0
 #endif
+/* SNESRECOMP_INTERP_EDGE_TRACE=0 drops the per-instruction diagnostic
+ * history (recent-PC ring and control-flow edge ring). */
+#ifndef SNESRECOMP_INTERP_EDGE_TRACE
+#define SNESRECOMP_INTERP_EDGE_TRACE 1
+#endif
+/* Absolute guest master clock of the next beam event, cached between steps.
+ * Invalidated (0) whenever the bridge touches anything that can move or
+ * reconfigure the beam: any non-WRAM/ROM access and every bridge entry. */
+static uint64_t s_beam_next_event;
 static inline void bridge_beam_catchup(const CpuState *cpu) {
 #if SNESRECOMP_LAZY_BEAM
+    s_beam_next_event = 0;
     if (g_snes && cpu->master_cycles != g_snes->beamMasterLast)
         snes_sync_master_clock(g_snes, cpu->master_cycles);
 #else
@@ -324,12 +334,13 @@ static inline void bridge_beam_catchup(const CpuState *cpu) {
 static inline void bridge_beam_after_step(const CpuState *cpu) {
     if (!g_snes) return;
 #if SNESRECOMP_LAZY_BEAM
-    if (cpu->master_cycles >= g_snes->beamMasterLast &&
-        cpu->master_cycles - g_snes->beamMasterLast <
-            snes_master_clocks_to_next_beam_event(g_snes))
-        return;
-#endif
+    if (cpu->master_cycles < s_beam_next_event) return;
     snes_sync_master_clock(g_snes, cpu->master_cycles);
+    s_beam_next_event = g_snes->beamMasterLast +
+                        snes_master_clocks_to_next_beam_event(g_snes);
+#else
+    snes_sync_master_clock(g_snes, cpu->master_cycles);
+#endif
 }
 
 static uint8_t bridge_bus_read(void *mem, uint32_t adr) {
@@ -1685,6 +1696,15 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
                                  int stop_on_rti) {
     const int auto_quiescent = yield_pc == 0xFFFFFFFEu;
     cpu_fast_map_validate();
+#if SNESRECOMP_LAZY_BEAM
+    s_beam_next_event = 0;   /* the scheduler may have moved the beam */
+#endif
+    /* Fixed for the run: whether the cart has a coprocessor to keep in step,
+     * and the APU batch threshold. */
+    const int has_coprocessor = g_snes && g_snes->cart &&
+        (g_snes->cart->superfx || g_snes->cart->cx4 || g_snes->cart->dsp1 ||
+         g_snes->cart->sdd1 || g_snes->cart->sa1);
+    const uint64_t apu_flush_thresh = bridge_bounce_flush_thresh();
     /* Local interpreter context → nesting (an AOT bounce that itself traps and
      * re-enters the bridge) gets its own frame; no shared mutable interp. */
     Interp816 in;
@@ -1836,7 +1856,7 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
          * after a compiled body samples the deadline and IRQs 40 master
          * clocks early per owed line. A no-op when the previous step was
          * interpreted. */
-        snes_refresh_charge();
+        snes_refresh_charge_inline(g_cpu.master_cycles);
 #ifdef SNESRECOMP_INTERP_PROFILE
         g_interp_total_steps++;
         interp_hist_init();
@@ -2679,6 +2699,7 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
             if (itn < 8) head[itn] = _e;
             if (trace) ring[itn & 255] = _e;
             itn++;
+#if SNESRECOMP_INTERP_EDGE_TRACE
             extern int snes_frame_counter;
             ITraceRecentEnt *_g =
                 &g_itrace_recent[g_itrace_recent_n++ & (ITRACE_RECENT_LEN - 1)];
@@ -2688,9 +2709,10 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
                 interp_edge_note(edge_from, pc_before,
                                  interp_edge_kind_for_op(edge_op), edge_op,
                                  in.sp);
-            edge_from = pc_before & 0xFFFFFFu;
             edge_op = op;
             edge_expect = interp_fallthrough_pc(pc_before, op, in.mf, in.xf);
+#endif
+            edge_from = pc_before & 0xFFFFFFu;
         }
         /* Env-gated diagnostic (SNESRECOMP_C2WATCH=1): log every interpreted
          * opcode in the menu-blit range $C2:FC40-$C2:FF00 with the live mode
@@ -2835,10 +2857,10 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
             cpu->master_cycles += _master;
             /* DRAM refresh tax — shared watermark with the AOT tier's
              * WatchdogCheck charge; see common_cpu_infra.c. */
-            snes_refresh_charge();
+            snes_refresh_charge_inline(g_cpu.master_cycles);
             cpu->coprocessor_master_cycles = cpu->master_cycles;
             bridge_beam_after_step(cpu);
-            if (g_snes && g_snes->cart)
+            if (has_coprocessor)
                 cart_sync_coprocessors(g_snes->cart, cpu->master_cycles);
 #ifdef SNES_COSIM
             /* Shared APU clock (common_rtl.h): the guest-time advance is a
@@ -2857,7 +2879,7 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
                         rtl_apu_frame_timeline_active(),
                         g_snes && cart_has_sa1(g_snes->cart), false)) {
                     s_apu_pending_master += _master;
-                    if (s_apu_pending_master >= bridge_bounce_flush_thresh()) bridge_apu_flush(cpu);
+                    if (s_apu_pending_master >= apu_flush_thresh) bridge_apu_flush(cpu);
                 }
             }
             idle_cost[steps & 63].master = _master;

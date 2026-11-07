@@ -893,7 +893,8 @@ void WatchdogFrameStart(void) {
  * more than 4096 lines is treated as a teleport (boot, savestate load) and
  * exempted rather than charged. */
 uint64_t g_refresh_charged_upto;
-static uint64_t s_refresh_phase;
+uint64_t g_refresh_phase;
+#define s_refresh_phase g_refresh_phase
 void snes_refresh_exempt(void) { g_refresh_charged_upto = g_cpu.master_cycles; }
 void snes_refresh_charge(void) {
   uint64_t m = g_cpu.master_cycles;

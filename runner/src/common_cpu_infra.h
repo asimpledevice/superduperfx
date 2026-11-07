@@ -48,6 +48,21 @@ typedef RtlEnhancedRenderResult RtlEnhancedRenderFrameFunc(
 
 void WatchdogCheck(void);
 void snes_refresh_charge(void);   /* DRAM refresh tax; see common_cpu_infra.c */
+/* Inline form of snes_refresh_charge for per-instruction callers: the
+ * common case (no line boundary crossed since the last charge) only updates
+ * the watermark and phase; anything else takes the full function. Same
+ * result as snes_refresh_charge in every case. */
+extern uint64_t g_refresh_charged_upto, g_refresh_phase;
+static inline void snes_refresh_charge_inline(uint64_t master_cycles) {
+  const uint64_t upto = g_refresh_charged_upto;
+  if (upto != 0 && master_cycles >= upto &&
+      g_refresh_phase + (master_cycles - upto) < 1364u) {
+    g_refresh_phase += master_cycles - upto;
+    g_refresh_charged_upto = master_cycles;
+    return;
+  }
+  snes_refresh_charge();
+}
 void snes_refresh_exempt(void);   /* mark a master-clock teleport (park, load) */
 /* Rollback: the refresh tax carries a sub-scanline remainder and a high-water
  * mark across frames, and both decide how many cycles the NEXT block is

@@ -43,7 +43,7 @@ N64_CFLAGS += -Iinclude -I$(RUNNER) -I$(RUNNER)/snes -I$(RUNNER)/desktop \
 	-Wno-unused-function -Wno-sign-compare -Wno-unused-but-set-variable
 N64_CFLAGS += -O2
 N64_CFLAGS += -DSNESRECOMP_FAST_READ_MAP=1 -DSNESRECOMP_QUIESCENT_BACKEDGE=1 \
-	-DSNESRECOMP_LAZY_BEAM=1 -DSNESRECOMP_REVERSE_DEBUG=0
+	-DSNESRECOMP_LAZY_BEAM=1 -DSNESRECOMP_REVERSE_DEBUG=0 -DSNESRECOMP_INTERP_EDGE_TRACE=0
 
 # Diagnostic history buffers sized for desktop debugging total about 5.5 MB
 # of .bss. Shrink them to token sizes (powers of two: the rings index with
