@@ -1,6 +1,10 @@
-# Interpreter-only N64 build of the snesrecomp runtime (libdragon).
+# N64 build of the snesrecomp runtime (libdragon).
 #
-#   make ROM=/path/to/game.sfc
+#   make ROM=/path/to/game.sfc                      # interpreter only
+#   make ROM=game.sfc GEN_DIR=gen GEN_INC=recomp     # plus generated code
+#
+# GEN_DIR is a v2_emit output directory; GEN_INC is the cfg directory that
+# holds its funcs.h. Generated code is compiled with -Os.
 #
 # The ROM is copied into the cartridge filesystem (build/filesystem) at build
 # time. Nothing ROM-derived is written into the source tree.
@@ -35,6 +39,17 @@ HOST_SRCS = n64_host.c n64_platform.c n64_compat.c n64_stubs.c
 OBJS = $(addprefix $(BUILD_DIR)/runner/,$(RUNNER_SRCS:.c=.o)) \
        $(addprefix $(BUILD_DIR)/,$(HOST_SRCS:.c=.o))
 
+ifneq ($(GEN_DIR),)
+GEN_SRCS := $(notdir $(wildcard $(GEN_DIR)/*.c))
+GEN_OBJS := $(addprefix $(BUILD_DIR)/gen/,$(GEN_SRCS:.c=.o))
+OBJS += $(GEN_OBJS)
+$(BUILD_DIR)/n64_stubs.o: CFLAGS += -DSNESRECOMP_N64_HAS_GENERATED_CODE
+$(BUILD_DIR)/gen/%.o: $(GEN_DIR)/%.c
+	@mkdir -p $(dir $@)
+	@echo "    [CC] $<"
+	$(CC) -c $(CFLAGS) -Os -I$(GEN_INC) -I$(GEN_DIR) -o $@ $<
+endif
+
 N64_CFLAGS += -Iinclude -I$(RUNNER) -I$(RUNNER)/snes -I$(RUNNER)/desktop \
 	-include include/n64_compat.h \
 	-DSNESRECOMP_TRACE=0 \
@@ -44,7 +59,8 @@ N64_CFLAGS += -Iinclude -I$(RUNNER) -I$(RUNNER)/snes -I$(RUNNER)/desktop \
 N64_CFLAGS += -O2
 N64_CFLAGS += -DSNESRECOMP_FAST_READ_MAP=1 -DSNESRECOMP_QUIESCENT_BACKEDGE=1 \
 	-DSNESRECOMP_LAZY_BEAM=1 -DSNESRECOMP_REVERSE_DEBUG=0 -DSNESRECOMP_INTERP_EDGE_TRACE=0 \
-	-DSNESRECOMP_WRAM_POLL_QUIESCENT=1 -DSNESRECOMP_PARK_TO_VBLANK=1
+	-DSNESRECOMP_WRAM_POLL_QUIESCENT=1 -DSNESRECOMP_PARK_TO_VBLANK=1 \
+	-DSNESRECOMP_FRAME_FINGERPRINTS=0 -DSNESRECOMP_PPU_DMA_HISTORY=0
 
 # Diagnostic history buffers sized for desktop debugging total about 5.5 MB
 # of .bss. Shrink them to token sizes (powers of two: the rings index with
@@ -61,7 +77,7 @@ N64_CFLAGS += -DSNESRECOMP_AUDIO_TRACE_HISTORY=0 -DSNESRECOMP_INTERP_PAGE_MAP=0 
 # (the only libdragon-facing unit) keeps libdragon's names.
 RUNTIME_RENAMES = -Ddma_read=snes_dma_read -Ddma_write=snes_dma_write \
 	-Dcart_init=snes_cart_init
-$(BUILD_DIR)/runner/%.o $(BUILD_DIR)/n64_host.o $(BUILD_DIR)/n64_stubs.o: \
+$(BUILD_DIR)/runner/%.o $(BUILD_DIR)/gen/%.o $(BUILD_DIR)/n64_host.o $(BUILD_DIR)/n64_stubs.o: \
 	CFLAGS += $(RUNTIME_RENAMES)
 
 # make PROFILE=1: sample PCs for PROFILE_FRAMES frames starting at frame
@@ -96,6 +112,6 @@ snesrecomp_interp.z64: $(BUILD_DIR)/snesrecomp_interp.dfs
 clean:
 	rm -rf $(BUILD_DIR) snesrecomp_interp.z64
 
--include $(wildcard $(BUILD_DIR)/*.d $(BUILD_DIR)/runner/*.d $(BUILD_DIR)/runner/snes/*.d)
+-include $(wildcard $(BUILD_DIR)/*.d $(BUILD_DIR)/runner/*.d $(BUILD_DIR)/runner/snes/*.d $(BUILD_DIR)/gen/*.d)
 
 .PHONY: all clean

@@ -193,12 +193,85 @@ through the full bus decode (`cpu_read8` -> `bridge_bus_read` ->
   package) and a one-line patch mirroring IS-Viewer output to stderr. The
   development snapshot at the time crashed in RDRAM writes; v148 works.
 
+## Speedups (2026-11-07, second pass)
+
+All runtime changes are opt-in compile flags (desktop defaults unchanged) and
+keep SMW's frame hashes identical over 3000 frames
+(`n64/profile/check_hashes.sh`), except where a generated tree is linked,
+which has its own reference (the native and interpreter tiers already differ
+upstream).
+
+| Flag | What it does |
+|---|---|
+| `SNESRECOMP_FAST_READ_MAP` | `cpu_fast_map`: direct page pointers for plain WRAM/ROM; the interpreter bus read uses them |
+| `SNESRECOMP_QUIESCENT_BACKEDGE` | stable-wait detector records state only at loop heads |
+| `SNESRECOMP_LAZY_BEAM` | beam walked at beam events, before MMIO, and on bridge return, not every instruction |
+| `SNESRECOMP_REVERSE_DEBUG=0` | existing switch; drops the per-instruction register round trip |
+| `SNESRECOMP_INTERP_EDGE_TRACE=0` | drops per-instruction diagnostic rings |
+| `SNESRECOMP_WRAM_POLL_QUIESCENT` | low-WRAM reads on plain carts do not defeat the stable-wait detector |
+| `SNESRECOMP_PARK_TO_VBLANK` | beam frame driver parks a wait straight to the field boundary when no IRQ source exists |
+| `SNESRECOMP_FRAME_FINGERPRINTS=0`, `SNESRECOMP_PPU_DMA_HISTORY=0` | existing switches; drop per-frame WRAM hash and PPU/DMA snapshot |
+
+Also: `snes_refresh_charge` skips a 64-bit divide; coprocessor presence and
+the APU flush threshold are hoisted out of the per-instruction loop.
+
+The biggest single win: in attract mode 82% of interpreted instructions were
+SMW's wait-for-NMI loop (`LDA $10 / BEQ` at `$00806B`). The two idle-wait
+flags let the runtime skip it exactly.
+
+### N64 results (ares), steady state (frames 360-600)
+
+| Build | Guest CPU + APU | PPU |
+|---|---|---|
+| First run | ~1,275 ms | ~105-154 ms |
+| + fast map, detector, lazy beam | ~594 ms | |
+| + reverse-debug off, hoisting | ~441 ms | ~140 ms |
+| + idle-wait skip | ~250 ms | ~145 ms |
+| + selective native code (below) | **~185 ms** | ~150 ms |
+
+### Native code, selectively
+
+`tools/n64/select_native_set.py` reads a coverage capture
+(`SNESRECOMP_TIER2_CAPTURE=1`), attributes interpreted instructions to the
+generated function containing them, keeps the hottest native up to a
+coverage target or size budget, and writes `force_lle` lines for the rest.
+Append them to a copy of the title's bank cfg and regenerate.
+
+SMW attract mode (capture from the interpreter-only build): 88.8% of
+interpreted work lies in functions with native bodies.
+
+| Native set | Coverage of interpreted work | MIPS code |
+|---|---|---|
+| 25 functions | 50% | 76 KB |
+| 117 functions | 81% | 512 KB |
+| 471 entry PCs (all captured) | 88.8% | 1.6 MB |
+| everything generated | | 8.2 MB (11.6 MB with LLE stubs) |
+
+`make GEN_DIR=... GEN_INC=...` links a generated tree. The full captured set
+gives a 2.3 MB `.text` ROM that runs SMW's attract mode correctly in ares.
+
+N64 profile of that build (frames 400-460):
+
+| Component | Share |
+|---|---|
+| Software PPU | 41% |
+| APU / SPC700 / DSP | 23% |
+| Interpreter (code still interpreted) | 17% |
+| CPU pixel copy to the display | 4.7% |
+| DMA | 4.0% |
+| Bus helpers | 3.6% |
+| **Generated code** | **0.9%** |
+
+Native code is already the cheapest part of the frame, so a leaner emitter
+does not pay for itself yet. Its value would be code size; selection
+already makes the native set fit.
+
 ## Next steps
 
-1. Fast memory path for the interpreter: page-table reads for ROM and WRAM
-   instead of the full bus decode per byte.
-2. Measure the generated (AOT) code's speed on N64, then prototype selective
-   AOT with a native-code budget.
-3. Cut per-instruction bookkeeping (state syncs, beam, APU catch-up) to
-   per-block or per-scanline where correctness allows.
-4. Replace the CPU frame conversion and software PPU output with an RDP path.
+1. RDP graphics backend (PPU is 41% of the frame, plus the pixel copy).
+2. Audio: batched SPC700, DSP on the RSP (23%).
+3. Interpreter share (17%): promote more code. The analysis rejects some hot
+   callers for `truncated_call_continuation` (e.g. SMW's `$0086DF`
+   jump-table dispatcher, which pops its return address); a recognizer for
+   that idiom would be game-agnostic.
+4. Gameplay captures, not just attract mode, for the native set.
