@@ -1,4 +1,5 @@
 #include "common_cpu_infra.h"
+#include "cpu_fast_map.h"
 #include "audio_trace.h"
 #include "framedump.h"
 #include "types.h"
@@ -1104,6 +1105,7 @@ Snes *SnesInit(const uint8 *data, int data_size) {
       return NULL;
     }
     g_rom = g_snes->cart->rom;
+    cpu_fast_map_rebuild();
     {
       tier2_capture_set_entry_probe(cpu_dispatch_entry_reason);
       tier2_capture_set_checkpoint_hook(rtl_write_tier2_coverage_manifest);

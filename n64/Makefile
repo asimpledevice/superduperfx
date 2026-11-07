@@ -21,7 +21,7 @@ RUNNER_SRCS = \
 	snes_rewind.c cpu_state.c program_module.c rom_patch.c \
 	generic_frame_driver.c beam_frame_driver.c beam_frame_driver_state.c \
 	content_variant.c variant_selector.c cpu_trace.c audio_trace.c \
-	ppu_dma_trace.c execution_mode.c mod_audio.c host_mesh.c \
+	ppu_dma_trace.c execution_mode.c mod_audio.c host_mesh.c cpu_fast_map.c \
 	host_mesh_builder.c guarded_patch.c util.c \
 	snes/apu.c snes/cart.c snes/cpu.c snes/dma.c snes/dsp.c snes/dsp1.c \
 	snes/dsp1_hle.c snes/joypad.c snes/audio_shadow.c snes/dsp_shadow.c \
@@ -42,6 +42,7 @@ N64_CFLAGS += -Iinclude -I$(RUNNER) -I$(RUNNER)/snes -I$(RUNNER)/desktop \
 	-Wno-error -Wno-unused-parameter -Wno-unused-variable \
 	-Wno-unused-function -Wno-sign-compare -Wno-unused-but-set-variable
 N64_CFLAGS += -O2
+N64_CFLAGS += -DSNESRECOMP_FAST_READ_MAP=1
 
 # Diagnostic history buffers sized for desktop debugging total about 5.5 MB
 # of .bss. Shrink them to token sizes (powers of two: the rings index with

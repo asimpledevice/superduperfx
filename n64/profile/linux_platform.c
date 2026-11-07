@@ -35,6 +35,13 @@ uint32_t n64_platform_read_pad(void) { return 0; }
 void n64_platform_present(const uint32_t *pixels, int width, int height,
                           const char *status) {
   (void)status;
+  if (s_frames % 30 == 0) {
+    uint32_t h = 2166136261u;  /* FNV-1a over the visible frame */
+    for (int i = 0; i < width * height; ++i) {
+      h = (h ^ (pixels[i] & 0xffffff)) * 16777619u;
+    }
+    printf("HASH %u %08x\n", s_frames, h);
+  }
   if (++s_frames >= s_limit) {
     const char *dump = getenv("N64_PROFILE_DUMP");
     if (dump) {

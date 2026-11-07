@@ -7,6 +7,7 @@
 #include <string.h>
 #include <time.h>
 #include "interp_bridge.h"
+#include "cpu_fast_map.h"
 #include "cpu_plain_rom_read.h"
 #include "interp816.h"
 #include "tier2_capture.h"
@@ -309,6 +310,33 @@ static uint8_t bridge_bus_read(void *mem, uint32_t adr) {
     CpuState *cpu = (CpuState *)mem;
     bridge_timing_bus(adr);
     uint8_t value;
+#if SNESRECOMP_FAST_READ_MAP
+    {
+        /* Plain WRAM / ROM page (cpu_fast_map.h). Same observable effects as
+         * the general path below for these pages: stable (no volatile-epoch
+         * bump), not an APU port, cpu_read8's bus note and open-bus latch, and
+         * the continuous-read bookkeeping that the low-WRAM mirror in system
+         * banks gets ($0000-$1FFF counts as continuous). */
+        const uint8_t *page = cpu_fast_map_page(adr);
+        if (page) {
+            value = page[adr & 0x1FFFu];
+            if (g_snes && g_snes->cart)
+                g_snes->cart->cpuBusAddress = adr & 0xFFFFFFu;
+            cpu->open_bus = value;
+            if (g_cpu_fast_page_kind[(adr & 0xFFFFFFu) >> kCpuFastMapPageShift] ==
+                kCpuFastMapWramLow) {
+                s_interp_continuous_read_epoch++;
+                if (!s_idle_poll_now) s_interp_idle_live_epoch++;
+                BridgeDynamicValue *d=&s_bridge_dynamic_values[(adr^(adr>>8)^(adr>>16))&63];
+                if (!d->valid || d->address!=adr || d->value!=value) {
+                    d->valid=1; d->address=adr; d->value=value;
+                    s_interp_dynamic_progress_epoch++;
+                }
+            }
+            return value;
+        }
+    }
+#endif
     int stable_rom = 0;
 #if SNESRECOMP_INTERP_FUSED_ROM_READ
     /* A ROM fetch used to decode the same mapping twice: once to establish
@@ -1623,6 +1651,7 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
                                  const uint32_t *stop_pcs, int n_stop,
                                  int stop_on_rti) {
     const int auto_quiescent = yield_pc == 0xFFFFFFFEu;
+    cpu_fast_map_validate();
     /* Local interpreter context → nesting (an AOT bounce that itself traps and
      * re-enters the bridge) gets its own frame; no shared mutable interp. */
     Interp816 in;
