@@ -82,7 +82,9 @@ int cosim_apu_shared_clock(void);
 #endif
 
 // Axis-7 determinism per-frame WRAM fingerprint ring (common_rtl.c).
+#ifndef FP_RING
 #define FP_RING 8192
+#endif
 extern uint64_t g_fp_ring[FP_RING];
 extern uint64_t g_fp_max_frame;
 
@@ -103,15 +105,18 @@ uint8 *RomPtr(uint32_t addr);
 
 #if defined(_DEBUG)
 // Gives better warning messages but non inlined on tcc
-static inline uint16 GET_WORD(const uint8 *p) { return *(uint16 *)(p); }
+static inline uint16 GET_WORD(const uint8 *p) { return (uint16)(p[0] | (p[1] << 8)); }
 static inline const uint8 *RomFixedPtr(uint32_t addr) { return RomPtr(addr); }
 #else
-#define GET_WORD(p) (*(uint16*)(p))
+/* Guest memory is little-endian; read and write it byte by byte so these
+ * also work on big-endian hosts (the N64). */
+#define GET_WORD(p) ((uint16)(((const uint8 *)(p))[0] | (((const uint8 *)(p))[1] << 8)))
 #define RomFixedPtr(addr) RomPtr(addr)
 #endif
 
 #define GET_BYTE(p) (*(uint8*)(p))
-#define SET_WORD(p, v) (*(uint16*)(p) = (uint16)(v))
+#define SET_WORD(p, v) do { uint8 *_sw_p = (uint8 *)(p); uint16 _sw_v = (uint16)(v); \
+    _sw_p[0] = (uint8)_sw_v; _sw_p[1] = (uint8)(_sw_v >> 8); } while (0)
 
 // Construct a LongPtr from a 16-bit lo word and 8-bit bank byte.
 // Used by the DP aliasing fix: local pointer variables replace g_ram reads.
@@ -199,7 +204,7 @@ uint8_t *IndirPtr_Slow(LongPtr ptr, uint16 offs);
 // data-table loads).
 uint8_t *IndirPtrDB(uint8 dp_addr, uint16 offs);
 static inline uint8_t *IndirPtr(LongPtr ptr, uint16 offs) {
-  uint32 a = (*(uint32 *)&ptr & 0xffffff) + offs;
+  uint32 a = ((uint32)ptr.bank << 16 | (uint16)ptr.addr) + offs;
   uint8 bank = (uint8)(a >> 16);
   if (bank >= 0x7e && bank <= 0x7f)
     return &g_ram[a & 0x1ffff];

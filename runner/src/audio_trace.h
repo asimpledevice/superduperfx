@@ -308,7 +308,9 @@ uint32_t audio_trace_copy_snaps(uint64_t first_idx, uint32_t max,
  * by the engine, echoed, read back by the CPU) can be read for thousands of
  * frames after the fact. The beam position lets it be lined up against an
  * oracle's port log (tools/mesen_scene apu_log=1). */
+#ifndef AUDIO_TRACE_PORT_RING
 #define AUDIO_TRACE_PORT_RING (1u << 16)
+#endif
 typedef struct AudioTracePortEvent {
   uint64_t sample_idx;   /* native-sample clock */
   uint32_t frame;        /* snes_frame_counter */

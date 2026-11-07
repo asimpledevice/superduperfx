@@ -726,7 +726,9 @@ static inline int PpuMosaicAt(Ppu *ppu, int i) {
 static int s_oam_snap_frame = -1;
 
 /* PPU register write journal -- see ppu.h. */
+#ifndef PPU_WLOG_CAP
 #define PPU_WLOG_CAP (1u << 17)
+#endif
 static PpuWlogEntry s_wlog[PPU_WLOG_CAP];
 static uint32_t s_wlog_head;          /* total entries ever written */
 static int s_wlog_line = kPpuWlogPreRaster;

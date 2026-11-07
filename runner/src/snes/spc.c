@@ -89,7 +89,9 @@ void spc_saveload(Spc *spc, SaveLoadInfo *sli) {
 /* Opt-in SPC instruction trace (SNESRECOMP_SPC_TRACE=1): ring of the last
  * executed (pc, opcode) pairs, dumped when the core halts on SLEEP/STOP so
  * the exact path into the halt can be inspected. */
+#ifndef SPC_TRACE_RING
 #define SPC_TRACE_RING 65536
+#endif
 static uint16_t s_spc_trace_pc[SPC_TRACE_RING];
 static uint8_t s_spc_trace_op[SPC_TRACE_RING];
 static uint32_t s_spc_trace_head = 0;

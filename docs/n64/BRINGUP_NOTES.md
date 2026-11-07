@@ -94,10 +94,59 @@ Largest `.bss` objects in the units above, all diagnostics:
 
 These need a compile-time switch for an N64 build.
 
+## Interpreter-only host (`n64/`)
+
+`make -C n64 ROM=/path/to/game.sfc` builds `n64/snesrecomp_interp.z64`: the
+shared runtime with no generated code, so every guest instruction runs in the
+interpreter tier. It is game-agnostic. The ROM is packed into the cartridge
+filesystem (`rom:/game.sfc`) at build time and never committed.
+
+- `n64/src/n64_host.c`: host contract symbols, the framework's beam-aligned
+  frame driver, the boot sequence (`RtlRegisterGame`, `SnesInit`) and the
+  frame loop with timing.
+- `n64/src/n64_platform.c`: the only libdragon-facing unit (display, pad,
+  filesystem, logging). libdragon and the runtime both define `dma_read`,
+  `dma_write` and `cart_init`, so the two never share a translation unit,
+  and the runtime's copies are renamed with `-D` in the Makefile.
+- `n64/src/n64_stubs.c`: empty dispatch tables (interpreter-only) and a
+  disabled MSU-1 (`msu1.c` needs `<dirent.h>`).
+- `n64/include/config.h`: wraps the desktop `config.h` without SDL.
+
+Controls: stick or D-pad, N64 A = SNES B, B = Y, C-right = A, C-up = X,
+Z = Select, Start, L, R. The bottom line of the screen shows the frame
+number and the milliseconds spent in the guest frame and the PPU.
+
+### Memory
+
+| | text | data | bss |
+|---|---|---|---|
+| First link | 519,492 | 5,052 | 6,473,352 |
+| Diagnostics shrunk | 519,300 | 5,052 | 395,976 |
+
+The diagnostic ring sizes are now `#ifndef`-overridable in the shared
+runtime, and `SNESRECOMP_INTERP_PAGE_MAP=0` drops the interpreter page map.
+Desktop defaults are unchanged. Heap use at boot is roughly 1.5 MB (ROM copy,
+PPU 205 KB, APU 82 KB, DSP 34 KB, the 256x224 XRGB frame and two
+320x240 16-bit display buffers).
+
+### Byte order
+
+The N64 is big-endian; the runtime had only ever run little-endian.
+`GET_WORD`, `SET_WORD` and `IndirPtr` in `common_rtl.h` read guest memory
+through host-order pointer casts. They now assemble bytes explicitly, which is
+identical on little-endian hosts. A full big-endian audit has not been done;
+running the build is the next check.
+
+### Not yet verified
+
+The ROM builds but has not been run. mupen64plus 2.5.9 (Ubuntu package)
+shows no IS-Viewer log output and produced no screenshots even for
+libdragon's own examples, so it is not usable as a check here. Options: real
+hardware (EverDrive 64), or ares, which libdragon recommends.
+
 ## Next steps
 
-1. Minimal N64 host: `config.h`/`variables.h` stand-ins, timing shim, libdragon
-   `main`, stub video/audio output. Link interpreter-only first (no generated
-   code), boot to the first frame, and measure interpreter speed.
-2. Add a diagnostics-off switch for the buffers above.
-3. Prototype selective AOT with a native-code budget.
+1. Run the interpreter-only ROM (hardware or ares). Fix boot and byte-order
+   problems; record the per-frame timings.
+2. Prototype selective AOT with a native-code budget.
+3. Replace the CPU frame conversion and software PPU output with an RDP path.

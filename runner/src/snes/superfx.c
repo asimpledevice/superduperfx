@@ -697,7 +697,9 @@ void superfx_reset(SuperFx *f) {
 }
 bool superfx_is_running(const SuperFx *f) { return f && (f->sfr & SFR_G) != 0; }
 
+#ifndef SUPERFX_JOB_CAP
 #define SUPERFX_JOB_CAP 4096u
+#endif
 static SuperFxJob s_jobs[SUPERFX_JOB_CAP];
 static uint32_t s_job_head;   /* total jobs ever started */
 static const SuperFx *s_job_owner;

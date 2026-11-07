@@ -210,7 +210,16 @@ uint64_t interp816_cycles_total(void) { return s_interp816_cycles; }
  * comparable to the whole-run interpreted share. Instructions are kept beside
  * it because a page that is all long-cycle opcodes and a page that is a tight
  * two-cycle loop want different fixes. */
+/* SNESRECOMP_INTERP_PAGE_MAP=0 drops the map (1 MiB of counters) for
+ * memory-constrained hosts; the accessors then report zero. */
+#ifndef SNESRECOMP_INTERP_PAGE_MAP
+#define SNESRECOMP_INTERP_PAGE_MAP 1
+#endif
+#if SNESRECOMP_INTERP_PAGE_MAP
 #define INTERP816_PAGE_COUNT 0x10000u
+#else
+#define INTERP816_PAGE_COUNT 1u
+#endif
 static uint64_t s_interp_page_cycles[INTERP816_PAGE_COUNT];
 static uint64_t s_interp_page_insns[INTERP816_PAGE_COUNT];
 
@@ -343,6 +352,7 @@ int interp816_runOpcode(Interp816* cpu) {
   OPCODE_HIST_END(opcode);
   s_interp816_insns++;
   s_interp816_cycles += (uint64_t)cpu->cyclesUsed;
+#if SNESRECOMP_INTERP_PAGE_MAP
   {
     /* Charge the page the OPCODE stood on (_pcb), not the post-execute PC,
      * so a branch or a jump is attributed to the routine that issued it. */
@@ -350,6 +360,7 @@ int interp816_runOpcode(Interp816* cpu) {
     s_interp_page_cycles[_pg] += (uint64_t)cpu->cyclesUsed;
     s_interp_page_insns[_pg]++;
   }
+#endif
 #ifdef SNES_COSIM
   { I816RingEnt* e = &g_i816_ring[g_i816_ring_head & (I816_RING_N - 1)];
     e->pc = _pcb; e->op = opcode; e->mf = _mf; e->xf = _xf;

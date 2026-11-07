@@ -18,8 +18,12 @@ extern uint8_t  g_ram[0x20000];
 
 #if SNESRECOMP_PPU_DMA_HISTORY
 
+#ifndef DMA_RING_LEN
 #define DMA_RING_LEN  8192   /* ~16 B each; covers many frames of uploads */
+#endif
+#ifndef PPU_RING_LEN
 #define PPU_RING_LEN  4096   /* one snapshot/frame => ~68 s at 60 fps      */
+#endif
 #define DMA_DUMP_MAX  512    /* slice size pulled into the post-mortem     */
 
 typedef struct {

@@ -1290,7 +1290,9 @@ static void itrace_dump(uint32_t entry, const ITraceEnt *head, int nhead,
  * step (pc, op, sp, frame) continuously so a late observer can read the
  * interpreter's recent control flow backward (ring-buffer doctrine: no
  * arm-then-capture). 8192 entries ≈ several frames of pure-interp code. */
+#ifndef ITRACE_RECENT_LEN
 #define ITRACE_RECENT_LEN 8192
+#endif
 typedef struct { uint32_t pc; int32_t frame; uint16_t sp; uint8_t op; uint8_t pad; } ITraceRecentEnt;
 static ITraceRecentEnt g_itrace_recent[ITRACE_RECENT_LEN];
 static uint64_t g_itrace_recent_n = 0;
@@ -1329,7 +1331,9 @@ void interp_bridge_dump_recent_steps(int n, FILE *out) {
  * Detection is by discontinuity, so it needs no per-opcode hooks: each step
  * knows where the previous opcode would have fallen through to, and a PC
  * anywhere else is an edge from that opcode. */
+#ifndef INTERP_EDGE_RING_LEN
 #define INTERP_EDGE_RING_LEN 16384
+#endif
 #define INTERP_EDGE_FOLD 8
 static InterpEdge g_interp_edges[INTERP_EDGE_RING_LEN];
 static uint64_t g_interp_edges_n = 0;
@@ -3233,7 +3237,9 @@ idle_replay_step_cap:
  */
 extern const char *g_last_recomp_func; /* common_cpu_infra.c */
 
+#ifndef INTERP_SCOPE_NAMES
 #define INTERP_SCOPE_NAMES 4096u /* power of two; ~1400 tier sites seen in MMX */
+#endif
 static char s_interp_scope_names[INTERP_SCOPE_NAMES][20];
 static uint32_t s_interp_scope_pc[INTERP_SCOPE_NAMES];
 static uint8_t s_interp_scope_used[INTERP_SCOPE_NAMES];
