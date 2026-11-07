@@ -187,6 +187,8 @@ through the full bus decode (`cpu_read8` -> `bridge_bus_read` ->
 - `make PROFILE=1`: N64 sampling profiler (COP0 EPC on a 1 ms timer) for
   frames 3-13, dumped as `PROF` lines over IS-Viewer;
   `n64/profile/symbolize.py <elf> <log>` maps them to functions.
+- `n64/profile/ares_run.sh ROM OUTDIR "secs..."`: headless ares run with
+  debug log and screenshots.
 - ares v148 built locally with SDL3 3.2.30 (Ubuntu 24.04 has no SDL3
   package) and a one-line patch mirroring IS-Viewer output to stderr. The
   development snapshot at the time crashed in RDRAM writes; v148 works.
