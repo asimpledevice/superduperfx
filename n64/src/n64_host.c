@@ -89,6 +89,10 @@ static uint32_t *s_pixels;  /* PPU output, XRGB8888, kSnesW x kSnesH */
 
 /* ---- ROM ------------------------------------------------------------- */
 
+#ifndef N64_ROM_PATH
+#define N64_ROM_PATH "rom:/game.sfc"
+#endif
+
 static uint8_t *load_rom(const char *path, int *size_out) {
   FILE *f = fopen(path, "rb");
   if (!f) return NULL;
@@ -118,7 +122,7 @@ int main(void) {
     Die("This build needs the Expansion Pak (8 MB).");
 
   int rom_size = 0;
-  uint8_t *rom = load_rom("rom:/game.sfc", &rom_size);
+  uint8_t *rom = load_rom(N64_ROM_PATH, &rom_size);
   if (!rom) Die("Could not read rom:/game.sfc. Rebuild with ROM=path/to/game.sfc.");
   n64_platform_log("[n64] ROM loaded: %d bytes\n", rom_size);
 
@@ -149,9 +153,16 @@ int main(void) {
     n64_platform_present(s_pixels, kSnesW, kSnesH, line);
     uint64_t t3 = n64_platform_time_us();
 
+    if (frame < 8 || frame % 50 == 0)
+      n64_platform_log("[n64] frame %lu: run %lu us, ppu %lu us\n", (unsigned long)frame,
+                       (unsigned long)(t1 - t0), (unsigned long)(t2 - t1));
     acc_run += t1 - t0;
     acc_draw += t2 - t1;
     acc_present += t3 - t2;
+#ifdef N64_PROFILE_FRAMES
+    if (frame == N64_PROFILE_START) n64_platform_profile_start(1000);
+    if (frame == N64_PROFILE_START + N64_PROFILE_FRAMES) n64_platform_profile_stop_and_dump();
+#endif
     if (++frame % 60 == 0) {
       n64_platform_log("[n64] frames %lu: avg/frame run %lu us, ppu %lu us, present %lu us\n",
                        (unsigned long)frame, (unsigned long)(acc_run / 60),

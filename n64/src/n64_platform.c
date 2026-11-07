@@ -5,11 +5,41 @@
 
 #include "n64_platform.h"
 
+/* ---- Sampling profiler ------------------------------------------------
+ * A continuous timer interrupt records COP0 EPC, the PC the CPU was
+ * executing when the interrupt fired. Samples are dumped over the debug log
+ * as "PROF <pc>" lines; map them to functions offline with the ELF
+ * (n64/profile/symbolize.py). */
+enum { kProfMax = 32768 };
+static uint32_t s_prof_pc[kProfMax];
+static volatile unsigned s_prof_n;
+static timer_link_t *s_prof_timer;
+
+static void prof_tick(int ovfl) {
+  (void)ovfl;
+  if (s_prof_n < kProfMax) s_prof_pc[s_prof_n++] = (uint32_t)C0_EPC();
+}
+
+void n64_platform_profile_start(unsigned interval_us) {
+  s_prof_n = 0;
+  if (!s_prof_timer)
+    s_prof_timer = new_timer(TICKS_FROM_US(interval_us), TF_CONTINUOUS, prof_tick);
+}
+
+void n64_platform_profile_stop_and_dump(void) {
+  if (s_prof_timer) { delete_timer(s_prof_timer); s_prof_timer = NULL; }
+  unsigned n = s_prof_n;
+  debugf("PROF_BEGIN %u\n", n);
+  for (unsigned i = 0; i < n; ++i) debugf("PROF %08lx\n", (unsigned long)s_prof_pc[i]);
+  debugf("PROF_END\n");
+}
+
 void n64_platform_init(void) {
   debug_init_isviewer();
   debug_init_usblog();
   display_init(RESOLUTION_320x240, DEPTH_16_BPP, 2, GAMMA_NONE, FILTERS_DISABLED);
   joypad_init();
+  timer_init();
   dfs_init(DFS_DEFAULT_LOCATION);
   debugf("[n64] snesrecomp interpreter-only host, expansion pak: %s\n",
          is_memory_expanded() ? "yes" : "no");
@@ -73,6 +103,7 @@ void n64_platform_present(const uint32_t *pixels, int width, int height,
     }
   }
   if (status && status[0]) {
+    graphics_draw_box(fb, 0, fb->height - 12, fb->width, 12, graphics_make_color(0, 0, 0, 255));
     graphics_set_color(graphics_make_color(255, 255, 0, 255), 0);
     graphics_draw_text(fb, 8, fb->height - 10, status);
   }

@@ -137,16 +137,66 @@ through host-order pointer casts. They now assemble bytes explicitly, which is
 identical on little-endian hosts. A full big-endian audit has not been done;
 running the build is the next check.
 
-### Not yet verified
+### First run (ares v148, 2026-11-07)
 
-The ROM builds but has not been run. mupen64plus 2.5.9 (Ubuntu package)
-shows no IS-Viewer log output and produced no screenshots even for
-libdragon's own examples, so it is not usable as a check here. Options: real
-hardware (EverDrive 64), or ares, which libdragon recommends.
+The interpreter-only build boots SMW in ares and reaches the title screen
+with correct graphics and colours, so the byte-order fixes hold for
+everything SMW exercises up to that point.
+
+Speed (N64 time per SNES frame, from the on-screen counters and log):
+
+| Frames | Guest CPU + APU (`RtlRunFrame`) | PPU | Present (CPU pixel copy) |
+|---|---|---|---|
+| 1-60 (boot) | 1,464 ms | 18 ms | 20 ms |
+| 300-360 (title) | ~1,275 ms | ~107 ms | 17 ms |
+
+The frame budget is 16.7 ms, so this is roughly **80-90x too slow**.
+
+The same configuration built for x86 (`n64/profile/build.sh`) takes about
+2.7 ms per frame for ~13,700 SNES instructions: about 200 ns, or ~800 x86
+cycles, per instruction. On the VR4300 that becomes ~10,000 cycles per
+instruction.
+
+N64 sampling profile, frames 3-13 (`make PROFILE=1`, 15,952 samples at 1 ms):
+
+| Share | Function |
+|---|---|
+| 18.6% | `_interp_run_core` |
+| 12.5% | `cpu_read8` |
+| 8.6% | `bridge_bus_read` |
+| 8.5% | `cart_getRomPtr` (+ `.part.0`) |
+| 5.4% | `RomPtr` |
+| 4.4% | `cpu_region_speed` |
+| 3.6% | `interp816_runOpcode` |
+| 2.6% | `cpu_sram_offset` |
+| 2.5% | `bridge_continuous_read` |
+| 2.1% | `cart_sync_coprocessors` |
+| ~1-2% each | APU sync, beam advance, `snes_refresh_charge`, master clock sync |
+
+No soft-float or 64-bit helper calls appear in the binary; the profile
+matches the x86 one in shape. The cost is general per-instruction overhead,
+not one pathology. About 40% is the memory path: every opcode byte goes
+through the full bus decode (`cpu_read8` -> `bridge_bus_read` ->
+`cart_getRomPtr` -> `RomPtr`, plus region-speed and SRAM checks).
+
+### Tools
+
+- `n64/profile/build.sh`: builds the N64 host's exact runtime configuration
+  natively, with a stub platform (`linux_platform.c`) that runs N frames and
+  can dump the last frame as PPM. Pass `-pg` for gprof.
+- `make PROFILE=1`: N64 sampling profiler (COP0 EPC on a 1 ms timer) for
+  frames 3-13, dumped as `PROF` lines over IS-Viewer;
+  `n64/profile/symbolize.py <elf> <log>` maps them to functions.
+- ares v148 built locally with SDL3 3.2.30 (Ubuntu 24.04 has no SDL3
+  package) and a one-line patch mirroring IS-Viewer output to stderr. The
+  development snapshot at the time crashed in RDRAM writes; v148 works.
 
 ## Next steps
 
-1. Run the interpreter-only ROM (hardware or ares). Fix boot and byte-order
-   problems; record the per-frame timings.
-2. Prototype selective AOT with a native-code budget.
-3. Replace the CPU frame conversion and software PPU output with an RDP path.
+1. Fast memory path for the interpreter: page-table reads for ROM and WRAM
+   instead of the full bus decode per byte.
+2. Measure the generated (AOT) code's speed on N64, then prototype selective
+   AOT with a native-code budget.
+3. Cut per-instruction bookkeeping (state syncs, beam, APU catch-up) to
+   per-block or per-scanline where correctness allows.
+4. Replace the CPU frame conversion and software PPU output with an RDP path.

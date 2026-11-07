@@ -24,4 +24,8 @@ uint32_t n64_platform_read_pad(void);
 void n64_platform_present(const uint32_t *pixels, int width, int height,
                           const char *status);
 
+/* Sampling profiler (see n64_platform.c). */
+void n64_platform_profile_start(unsigned interval_us);
+void n64_platform_profile_stop_and_dump(void);
+
 #endif

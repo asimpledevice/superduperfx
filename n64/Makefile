@@ -61,6 +61,12 @@ RUNTIME_RENAMES = -Ddma_read=snes_dma_read -Ddma_write=snes_dma_write \
 $(BUILD_DIR)/runner/%.o $(BUILD_DIR)/n64_host.o $(BUILD_DIR)/n64_stubs.o: \
 	CFLAGS += $(RUNTIME_RENAMES)
 
+# make PROFILE=1: sample PCs for 10 frames starting at frame 3 and dump them
+# over the debug log (see n64/profile/symbolize.py).
+ifeq ($(PROFILE),1)
+N64_CFLAGS += -DN64_PROFILE_START=3 -DN64_PROFILE_FRAMES=10
+endif
+
 N64_MKDFS_ROOT = $(BUILD_DIR)/filesystem
 N64_ROM_TITLE = "snesrecomp interp"
 N64_ROM_EXPANSIONPAK = required
