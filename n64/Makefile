@@ -117,11 +117,15 @@ $(BUILD_DIR)/filesystem/game.sfc: $(ROM)
 $(BUILD_DIR)/snesrecomp_interp.dfs: $(BUILD_DIR)/filesystem/game.sfc
 $(BUILD_DIR)/snesrecomp_interp.elf: $(OBJS)
 
-# ICACHE_ORDER: place functions as profile/icache_order.py decided (an ld
-# --section-ordering-file) to cut instruction-cache conflicts. The default,
-# icache_order.ld, places runtime code only (no per-game generated code).
+# ICACHE_ORDER: an ld --section-ordering-file placing hot code and data for
+# the caches. The default joins icache_order.ld (functions, from
+# profile/icache_order.py; runtime code only) and data_order.ld (hot static
+# variables pinned at fixed cache positions, from profile/dcache_order.py).
 # ICACHE_ORDER= (empty) links in the default order.
-ICACHE_ORDER ?= icache_order.ld
+ICACHE_ORDER ?= $(BUILD_DIR)/cache_order.ld
+$(BUILD_DIR)/cache_order.ld: icache_order.ld data_order.ld
+	@mkdir -p $(dir $@)
+	cat $^ > $@
 ifneq ($(ICACHE_ORDER),)
 $(BUILD_DIR)/snesrecomp_interp.elf: LDFLAGS += --section-ordering-file=$(abspath $(ICACHE_ORDER))
 $(BUILD_DIR)/snesrecomp_interp.elf: $(ICACHE_ORDER)

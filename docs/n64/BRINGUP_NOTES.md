@@ -493,6 +493,27 @@ best offsets depend on the game's sound driver and RAM use and it needs
 allocation hooks in the engine. The I-cache ordering predates these changes
 (main is now a trampoline to host_main); regenerate it after larger edits.
 
+### Pinned hot statics, and the deferred DSP re-measured
+
+The placement above was fragile: the deferred-DSP build adds a few statics,
+which moved two hot interpreter statics onto the stack's lines (49% of all
+misses) and made it look 26% slower. `profile/dcache_order.py` now pins
+the 47 hottest small statics (18% of static data accesses) in compact
+blocks at 8 KB-aligned starts of `.sdata`, `.sbss`, `.data` and `.bss`,
+taking consecutive cache positions (`n64/data_order.ld`, joined with
+`icache_order.ld` into `build/cache_order.ld`). `__bss_start` still
+precedes the pinned BSS blocks. The stack top was re-swept against that
+layout (trace sweep): 0x11e0 modulo 8 KB.
+
+Pinned vs the earlier tuned layout: ~1.5% slower (frame 600: 206 -> 209
+ms), but no longer dependent on unrelated statics.
+
+Deferred DSP vs eager on the pinned layout (ares, state hashes identical):
++1% to +5%, about +2% on average (frame 600: 209 -> 215 ms). On the CPU,
+batching's warmer cache does not pay for write logging and replay. Its
+value is as the base for the RSP DSP, which removes the eager DSP's
+~18 ms per frame from the CPU.
+
 ## Next steps
 
 1. Audio: RSP DSP on top of the deferred machinery (stage 2): batch replay

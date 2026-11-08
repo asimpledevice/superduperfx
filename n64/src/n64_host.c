@@ -206,7 +206,7 @@ static uint8_t *load_rom(const char *path, int *size_out) {
  * modulo 8 KB, chosen from a data-cache miss profile (see the notes);
  * -1 keeps libdragon's stack. */
 #ifndef N64_STACK_COLOR
-#define N64_STACK_COLOR 0x18e0
+#define N64_STACK_COLOR 0x11e0
 #endif
 static int host_main(void);
 #if N64_STACK_COLOR >= 0 && defined(__mips__)
