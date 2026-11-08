@@ -121,6 +121,12 @@ static const RtlGameInfo kN64GameInfo = {
 enum { kSnesW = 256, kSnesH = 224 };
 static uint32_t *s_pixels;  /* PPU output, XRGB8888, kSnesW x kSnesH */
 
+/* ---- Audio ----------------------------------------------------------- */
+
+static void render_audio(int16_t *stereo, int frames) {
+  RtlRenderAudio(stereo, frames, 2);
+}
+
 /* ---- ROM ------------------------------------------------------------- */
 
 #ifndef N64_ROM_PATH
@@ -167,6 +173,7 @@ int main(void) {
   if (!s_rdp_frame) Die("Out of memory for the RDP frame planes.");
 #endif
 
+  RtlSetAudioOutputRate(n64_platform_audio_init(32000));
   RtlRegisterGame(&kN64GameInfo);
   if (!SnesInit(rom, rom_size)) Die("SnesInit failed: unsupported or damaged ROM.");
   free(rom);  /* the cartridge keeps its own copy (cart_load) */
@@ -203,6 +210,7 @@ int main(void) {
 #else
     n64_platform_present(s_pixels, kSnesW, kSnesH, line);
 #endif
+    n64_platform_audio_pump(render_audio);
     uint64_t t3 = n64_platform_time_us();
 
     if (frame < 8 || frame % 50 == 0)

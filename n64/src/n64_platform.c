@@ -72,6 +72,19 @@ void n64_platform_fatal(const char *message) {
 
 uint64_t n64_platform_time_us(void) { return get_ticks_us(); }
 
+int n64_platform_audio_init(int rate) {
+  audio_init(rate, 4);
+  return audio_get_frequency();
+}
+
+void n64_platform_audio_pump(void (*render)(int16_t *stereo, int frames)) {
+  while (audio_can_write()) {
+    short *buf = audio_write_begin();
+    render(buf, audio_get_buffer_length());
+    audio_write_end();
+  }
+}
+
 uint32_t n64_platform_read_pad(void) {
   joypad_poll();
   joypad_buttons_t b = joypad_get_buttons(JOYPAD_PORT_1);
@@ -107,9 +120,9 @@ void n64_platform_present(const uint32_t *pixels, int width, int height,
     }
   }
   if (status && status[0]) {
-    graphics_draw_box(fb, 0, fb->height - 12, fb->width, 12, graphics_make_color(0, 0, 0, 255));
+    graphics_draw_box(fb, 16, N64_STATUS_Y - 2, fb->width - 32, 12, graphics_make_color(0, 0, 0, 255));
     graphics_set_color(graphics_make_color(255, 255, 0, 255), 0);
-    graphics_draw_text(fb, 8, fb->height - 10, status);
+    graphics_draw_text(fb, 24, N64_STATUS_Y, status);
   }
   display_show(fb);
 }

@@ -64,3 +64,17 @@ void n64_platform_present(const uint32_t *pixels, int width, int height,
 /* The sampling profiler is N64-only; use gprof or callgrind on desktop. */
 void n64_platform_profile_start(unsigned interval_us) { (void)interval_us; }
 void n64_platform_profile_stop_and_dump(void) {}
+
+/* Audio: pull one frame's worth of samples (32000 Hz / 60) per call and log
+ * a running hash every 30 frames, so APU changes can be checked like video. */
+int n64_platform_audio_init(int rate) { return rate; }
+void n64_platform_audio_pump(void (*render)(int16_t *stereo, int frames)) {
+  static uint32_t h = 2166136261u;
+  static unsigned calls;
+  int16_t buf[534 * 2];
+  const int n = (calls % 3 == 2) ? 534 : 533;
+  render(buf, n);
+  for (int i = 0; i < n * 2; ++i) h = (h ^ (uint16_t)buf[i]) * 16777619u;
+  if (calls % 30 == 0) printf("AUDIO %u %08x\n", calls, h);
+  calls++;
+}

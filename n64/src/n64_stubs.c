@@ -24,3 +24,4 @@ void msu1_init(void) {}
 bool msu1_enabled(void) { return false; }
 uint8_t msu1_read(uint16_t reg) { (void)reg; return 0; }
 void msu1_write(uint16_t reg, uint8_t val) { (void)reg; (void)val; }
+void msu1_mix(int16_t *buffer, int samples) { (void)buffer; (void)samples; }

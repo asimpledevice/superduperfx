@@ -24,6 +24,14 @@ uint32_t n64_platform_read_pad(void);
 void n64_platform_present(const uint32_t *pixels, int width, int height,
                           const char *status);
 
+/* Audio: open the audio interface near the requested rate and return the
+ * actual rate; pump fills every free output buffer with render(). */
+int n64_platform_audio_init(int rate);
+void n64_platform_audio_pump(void (*render)(int16_t *stereo, int frames));
+
+/* Status text position: inside the area TVs show (overscan). */
+enum { N64_STATUS_Y = 240 - 28 };
+
 /* Sampling profiler (see n64_platform.c). */
 void n64_platform_profile_start(unsigned interval_us);
 void n64_platform_profile_stop_and_dump(void);

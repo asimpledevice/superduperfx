@@ -212,9 +212,9 @@ int n64_ppu_draw_and_show(const N64PpuFrame *f, const char *status, int compare_
     memset(g_n64ppu_strips, 0, sizeof g_n64ppu_strips);
   }
   if (status && status[0]) {
-    graphics_draw_box(fb, 0, fb->height - 12, fb->width, 12, graphics_make_color(0, 0, 0, 255));
+    graphics_draw_box(fb, 16, N64_STATUS_Y - 2, fb->width - 32, 12, graphics_make_color(0, 0, 0, 255));
     graphics_set_color(graphics_make_color(255, 255, 0, 255), 0);
-    graphics_draw_text(fb, 8, fb->height - 10, status);
+    graphics_draw_text(fb, 24, N64_STATUS_Y, status);
   }
   display_show(fb);
   return mismatches;
