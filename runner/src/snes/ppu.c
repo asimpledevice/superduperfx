@@ -3775,6 +3775,7 @@ void ppu_write(Ppu* ppu, uint8_t adr, uint8_t val) {
         ppu->cgramBuffer = val;
       } else {
         ppu->cgram[ppu->cgramPointer++] = (val << 8) | ppu->cgramBuffer;
+        ppu->cgramWriteCount++;
       }
       ppu->cgramSecondWrite = !ppu->cgramSecondWrite;
       break;

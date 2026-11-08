@@ -20,10 +20,11 @@ for s in $SRCS; do
   OBJS+=("$o")
   while [ "$(jobs -r | wc -l)" -ge "$(nproc)" ]; do wait -n; done
 done
-for s in n64_host.c n64_stubs.c; do
+for s in n64_host.c n64_stubs.c n64_ppu_build.c; do
   o="$OUT/$s.o"; gcc "${CFLAGS[@]}" -w -c "$N64/src/$s" -o "$o"; OBJS+=("$o")
 done
 gcc "${CFLAGS[@]}" -w -c "$HERE/linux_platform.c" -o "$OUT/linux_platform.o"; OBJS+=("$OUT/linux_platform.o")
+gcc "${CFLAGS[@]}" -w -c "$HERE/rdp_reference.c" -o "$OUT/rdp_reference.o"; OBJS+=("$OUT/rdp_reference.o")
 wait
 gcc "${CFLAGS[@]}" -Wl,--gc-sections -o "$OUT/n64host_linux" "${OBJS[@]}" -lm -lpthread
 echo "built $OUT/n64host_linux"

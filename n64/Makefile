@@ -34,7 +34,8 @@ RUNNER_SRCS = \
 	snes/superfx.c snes/interp816.c snes/tier2_capture.c snes/interp_bridge.c \
 	snes/cx4.c
 
-HOST_SRCS = n64_host.c n64_platform.c n64_compat.c n64_stubs.c
+HOST_SRCS = n64_host.c n64_platform.c n64_compat.c n64_stubs.c \
+	n64_ppu_build.c n64_ppu_draw.c
 
 OBJS = $(addprefix $(BUILD_DIR)/runner/,$(RUNNER_SRCS:.c=.o)) \
        $(addprefix $(BUILD_DIR)/,$(HOST_SRCS:.c=.o))
@@ -77,11 +78,16 @@ N64_CFLAGS += -DSNESRECOMP_AUDIO_TRACE_HISTORY=0 -DSNESRECOMP_INTERP_PAGE_MAP=0 
 # (the only libdragon-facing unit) keeps libdragon's names.
 RUNTIME_RENAMES = -Ddma_read=snes_dma_read -Ddma_write=snes_dma_write \
 	-Dcart_init=snes_cart_init
-$(BUILD_DIR)/runner/%.o $(BUILD_DIR)/gen/%.o $(BUILD_DIR)/n64_host.o $(BUILD_DIR)/n64_stubs.o: \
+$(BUILD_DIR)/runner/%.o $(BUILD_DIR)/gen/%.o $(BUILD_DIR)/n64_host.o $(BUILD_DIR)/n64_stubs.o \
+	$(BUILD_DIR)/n64_ppu_build.o: \
 	CFLAGS += $(RUNTIME_RENAMES)
 
 # make PROFILE=1: sample PCs for PROFILE_FRAMES frames starting at frame
 # PROFILE_START and dump them over the debug log (n64/profile/symbolize.py).
+# RENDER: 0 software PPU, 1 RDP backend (default), 2 RDP + software compare.
+RENDER ?= 1
+N64_CFLAGS += -DN64_RENDER=$(RENDER) $(EXTRA_CFLAGS)
+
 PROFILE_START ?= 3
 PROFILE_FRAMES ?= 10
 ifeq ($(PROFILE),1)

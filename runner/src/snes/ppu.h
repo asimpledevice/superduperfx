@@ -352,6 +352,7 @@ struct Ppu {
    * host WHEN the sprite table it is drawing was uploaded, so it can pair it
    * with whatever produced it. */
   uint32_t oamWriteCount;
+  uint32_t cgramWriteCount; /* host-side change counter, like vram/oam above */
 
   // -- START OF SNAPSHOT, 0x10420 bytes
   uint16_t cgram[0x100];

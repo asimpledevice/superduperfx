@@ -27,6 +27,39 @@
 #include "common_rtl.h"
 #include "snes/ppu.h"
 #include "snes/snes.h"
+#include "snes/dma.h"
+#include "n64_ppu_build.h"
+
+/* N64_RENDER: 0 = software PPU only, 1 = RDP backend (software PPU for
+ * lines it cannot do), 2 = RDP backend plus the software PPU on every line,
+ * comparing the two and logging differences (debug). */
+#ifndef N64_RENDER
+#define N64_RENDER 1
+#endif
+static N64PpuFrame *s_rdp_frame;
+static uint32_t *s_pixels;  /* defined below: the software PPU output */
+
+/* The beam driver's raster replay (snes_beam_frame_driver_draw_ppu_frame),
+ * with each line expanded for the RDP and the software PPU run only where
+ * needed. */
+static void draw_frame_rdp(bool software_every_line) {
+  snes_set_hdma_beam_enabled(g_snes, false);
+  ppu_rasterRenderBegin(g_ppu);
+  dma_initHdma(g_snes->dma);
+  dma_doHdma(g_snes->dma);
+  n64_ppu_build_begin(s_rdp_frame, s_pixels);
+  for (int line = 1; line <= 224; line++) {
+    uint8_t hdmaen;
+    ppu_rasterApplyLine(g_ppu, line - 1);
+    if (ppu_rasterTakeHdmaen(&hdmaen))
+      dma_startDma(g_snes->dma, hdmaen, true);
+    const bool rdp_ok = n64_ppu_build_line(g_ppu, line);
+    if (software_every_line || !rdp_ok) ppu_runLine(g_ppu, line);
+    else ppu_runLineState(g_ppu, line);
+    dma_doHdma(g_snes->dma);
+  }
+  ppu_rasterRenderEnd(g_ppu);
+}
 
 /* ---- Host contract (see runner/src/desktop/host_main.h) -------------- */
 
@@ -128,6 +161,10 @@ int main(void) {
 
   s_pixels = calloc(kSnesW * kSnesH, sizeof(uint32_t));
   if (!s_pixels) Die("Out of memory for the PPU frame buffer.");
+#if N64_RENDER
+  s_rdp_frame = n64_ppu_build_frame_alloc();
+  if (!s_rdp_frame) Die("Out of memory for the RDP frame planes.");
+#endif
 
   RtlRegisterGame(&kN64GameInfo);
   if (!SnesInit(rom, rom_size)) Die("SnesInit failed: unsupported or damaged ROM.");
@@ -143,14 +180,28 @@ int main(void) {
     RtlRunFrame(inputs);
     uint64_t t1 = n64_platform_time_us();
     PpuBeginDrawing(g_ppu, (uint8_t *)s_pixels, kSnesW * 4, kPpuRenderFlags_NewRenderer);
+#if N64_RENDER
+    draw_frame_rdp(N64_RENDER == 2);
+#else
     n64_draw_ppu_frame();
+#endif
     uint64_t t2 = n64_platform_time_us();
 
     char line[64];
     snprintf(line, sizeof line, "f%lu cpu %lums ppu %lums",
              (unsigned long)frame, (unsigned long)((t1 - t0) / 1000),
              (unsigned long)((t2 - t1) / 1000));
+#if N64_RENDER
+    const int diff = n64_ppu_draw_and_show(s_rdp_frame, line, N64_RENDER == 2);
+    if (N64_RENDER == 2 && (frame < 8 || frame % 30 == 0 || diff > 0))
+      if (frame < 600 || frame % 30 == 0)
+        n64_platform_log("[rdp] frame %lu: rdp %d sw %d black %d lines, why %02lx, diff %d px\n",
+                         (unsigned long)frame, s_rdp_frame->rdp_lines,
+                         s_rdp_frame->software_lines, s_rdp_frame->black_lines,
+                         (unsigned long)s_rdp_frame->fallback_reasons, diff);
+#else
     n64_platform_present(s_pixels, kSnesW, kSnesH, line);
+#endif
     uint64_t t3 = n64_platform_time_us();
 
     if (frame < 8 || frame % 50 == 0)

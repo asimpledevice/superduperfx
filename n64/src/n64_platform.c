@@ -39,6 +39,10 @@ void n64_platform_init(void) {
   debug_init_usblog();
   display_init(RESOLUTION_320x240, DEPTH_16_BPP, 2, GAMMA_NONE, FILTERS_DISABLED);
   joypad_init();
+  rdpq_init();
+#ifdef N64PPU_RDP_VALIDATE
+  rdpq_debug_start();
+#endif
   timer_init();
   dfs_init(DFS_DEFAULT_LOCATION);
   debugf("[n64] snesrecomp interpreter-only host, expansion pak: %s\n",
