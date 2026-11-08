@@ -57,6 +57,10 @@ void apu_reset(Apu* apu) {
   apu->dspAdr = 0;
   apu->cycles = 0;
   apu->timerSyncCycle = 0;
+#if SNESRECOMP_APU_DEFER_DSP
+  apu->dspPending = 0;  /* owed samples belong to the machine being reset */
+  apu->dspLogN = 0;
+#endif
   memset(apu->inPorts, 0, sizeof(apu->inPorts));
   memset(apu->outPorts, 0, sizeof(apu->outPorts));
   for(int i = 0; i < 3; i++) {
@@ -234,11 +238,63 @@ void apu_port_sched_restore(Apu *apu, const ApuPortSched *in) {
   apu->portTimeValid = in->timeValid;
 }
 
+#if SNESRECOMP_APU_DEFER_DSP
+/* Replay the owed samples. ARAM is first returned to its state at the start
+ * of the batch (logged writes undone newest first), then each owed sample
+ * runs after the writes the SPC made before it, in their original order. */
+/* Sync statistics by reason (see APU_DSP_SYNC_* in apu.h). */
+uint32_t g_apu_dsp_sync_count[APU_DSP_SYNC_REASONS];
+uint32_t g_apu_dsp_sync_samples[APU_DSP_SYNC_REASONS];
+
+static void apu_dspSyncFor(Apu* apu, unsigned reason) {
+  const uint32_t pending = apu->dspPending, n = apu->dspLogN;
+  if (!pending && !n) return;
+  g_apu_dsp_sync_count[reason]++;
+  g_apu_dsp_sync_samples[reason] += pending;
+  apu->dspPending = 0;  /* dsp_cycle below must not log or recurse */
+  for (uint32_t i = n; i-- > 0;)
+    if (!apu->dspLog[i].isReg) apu->ram[apu->dspLog[i].adr] = apu->dspLog[i].old;
+  uint32_t i = 0;
+  for (uint32_t k = 0; k <= pending; k++) {
+    for (; i < n && apu->dspLog[i].tag == k; i++) {
+      const ApuDspLogEntry *e = &apu->dspLog[i];
+      if (e->isReg) dsp_write(apu->dsp, (uint8_t)e->adr, e->val);
+      else apu->ram[e->adr] = e->val;
+    }
+    if (k < pending) dsp_cycle(apu->dsp);
+  }
+  apu->dspLogN = 0;
+}
+
+void apu_dspSync(Apu* apu) { apu_dspSyncFor(apu, APU_DSP_SYNC_HOST); }
+void apu_dspLogFull(Apu* apu) { apu_dspSyncFor(apu, APU_DSP_SYNC_LOG_FULL); }
+void apu_dspEchoRead(Apu* apu) { apu_dspSyncFor(apu, APU_DSP_SYNC_ECHO_READ); }
+
+/* Echo writes land in [echoBufferAdr, + 4 * current loop length). FLG, ESA
+ * and EDL writes sync first, so the window is fixed for the batch. */
+static void apu_dspStartBatch(Apu* apu) {
+  const Dsp *d = apu->dsp;
+  uint32_t loop = d->echoDelay;
+  const uint32_t current = (uint32_t)d->echoBufferIndex + d->echoRemain;
+  if (current > loop) loop = current;
+  apu->dspEchoStart = d->echoBufferAdr;
+  apu->dspEchoLen = d->echoWrites ? loop * 4u : 0u;
+}
+
+static inline void apu_dspEdge(Apu* apu) {
+  if (!apu->dspPending) apu_dspStartBatch(apu);
+  if (++apu->dspPending >= APU_DSP_MAX_PENDING) apu_dspSyncFor(apu, APU_DSP_SYNC_FULL_BATCH);
+}
+#else
+void apu_dspSync(Apu* apu) { (void)apu; }
+#endif
+
 #if SNESRECOMP_APU_NATIVE
 static inline void apu_native_timers_sync(Apu *apu);
 #endif
 
 void apu_saveload(Apu *apu, SaveLoadInfo *sli) {
+  apu_dspSync(apu);  /* a save must see the DSP and ARAM up to date */
 #if SNESRECOMP_APU_NATIVE
   apu_native_timers_sync(apu);  /* a save must see current timers */
 #endif
@@ -256,6 +312,9 @@ extern uint64_t g_spc_pc_histogram[1];
 extern int g_spc_pc_max_seen;
 
 static inline void apu_cycle_reference(Apu* apu) {
+#if SNESRECOMP_APU_DEFER_DSP
+  apu_dspSync(apu);
+#endif
   apu_drainPortQueue(apu);
   if(apu->cpuCyclesLeft == 0) {
     /* Sample PC right BEFORE running the opcode — so PC reflects the
@@ -333,6 +392,21 @@ uint8_t apu_cpuRead(Apu* apu, uint16_t adr) {
       return apu->dspAdr;
     }
     case 0xf3: {
+#if SNESRECOMP_APU_DEFER_DSP
+      if (apu->dspPending) {
+        const uint8_t r = apu->dspAdr & 0x7f;
+        /* Only ENVX ($x8), OUTX ($x9) and ENDX ($7C) change as the DSP runs.
+         * Every other register reads back the SPC's latest write, which is
+         * either still in the log or already in the register file. */
+        if ((r & 0xf) == 8 || (r & 0xf) == 9 || r == 0x7c) {
+          apu_dspSyncFor(apu, APU_DSP_SYNC_REG_READ);
+        } else {
+          for (uint32_t i = apu->dspLogN; i-- > 0;)
+            if (apu->dspLog[i].isReg && apu->dspLog[i].adr == r) return apu->dspLog[i].val;
+          return dsp_read(apu->dsp, r);
+        }
+      }
+#endif
       return dsp_read(apu->dsp, apu->dspAdr & 0x7f);
     }
     case 0xf4:
@@ -371,6 +445,7 @@ uint8_t apu_cpuRead(Apu* apu, uint16_t adr) {
   if(apu->romReadable && adr >= 0xffc0) {
     return bootRom[adr - 0xffc0];
   }
+  apu_spcReadCheck(apu, adr);
   return apu->ram[adr];
 }
 
@@ -441,6 +516,21 @@ void apu_cpuWrite(Apu* apu, uint16_t adr, uint8_t val) {
       break;
     }
     case 0xf3: {
+#if SNESRECOMP_APU_DEFER_DSP
+      if(apu->dspAdr < 0x80 && apu->dspPending) {
+        const uint8_t r = apu->dspAdr;
+        if(r == 0x6c || r == 0x6d || r == 0x7d || apu->dspLogN == APU_DSP_LOG_LEN) {
+          /* FLG/ESA/EDL move the echo window */
+          apu_dspSyncFor(apu, apu->dspLogN == APU_DSP_LOG_LEN ? APU_DSP_SYNC_LOG_FULL
+                                                              : APU_DSP_SYNC_ECHO_REG);
+        } else {
+          ApuDspLogEntry *e = &apu->dspLog[apu->dspLogN++];
+          e->adr = r; e->val = val; e->old = 0;
+          e->tag = (uint16_t)apu->dspPending; e->isReg = 1;
+          break;
+        }
+      }
+#endif
       if(apu->dspAdr < 0x80) dsp_write(apu->dsp, apu->dspAdr, val);
       break;
     }
@@ -473,5 +563,5 @@ void apu_cpuWrite(Apu* apu, uint16_t adr, uint8_t val) {
     }
   }
 #endif
-  apu->ram[adr] = val;
+  apu_spcWriteRam(apu, adr, val);
 }

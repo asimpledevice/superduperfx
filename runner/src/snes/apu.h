@@ -29,6 +29,35 @@ typedef struct Timer {
  * force-applied before its guest timestamp. */
 #define APU_PORT_QUEUE_LEN 1024u
 
+/* SNESRECOMP_APU_DEFER_DSP (native APU runner only, default 0): the S-DSP
+ * runs in batches behind the SPC instead of at every sample edge. SPC writes
+ * to ARAM and DSP registers during a batch are logged with the number of
+ * samples then owed; apu_dspSync() unwinds the ARAM writes and replays the
+ * owed samples with the log reapplied in order, so the DSP sees exactly the
+ * memory and registers it would have. A sync is forced wherever the SPC or
+ * the host could observe the difference: SPC reads of DSP registers or of
+ * the echo window, writes to FLG/ESA/EDL, a full log or batch, save/load,
+ * and the host's audio and frame boundaries. */
+#ifndef SNESRECOMP_APU_DEFER_DSP
+#define SNESRECOMP_APU_DEFER_DSP 0
+#endif
+#if SNESRECOMP_APU_DEFER_DSP && !SNESRECOMP_APU_NATIVE
+#error SNESRECOMP_APU_DEFER_DSP requires SNESRECOMP_APU_NATIVE
+#endif
+#define APU_DSP_LOG_LEN 2048u
+enum { APU_DSP_SYNC_HOST, APU_DSP_SYNC_REG_READ, APU_DSP_SYNC_ECHO_READ,
+       APU_DSP_SYNC_ECHO_REG, APU_DSP_SYNC_LOG_FULL, APU_DSP_SYNC_FULL_BATCH,
+       APU_DSP_SYNC_REASONS };
+#define APU_DSP_MAX_PENDING 256u
+
+typedef struct ApuDspLogEntry {
+  uint16_t adr;   /* ARAM address, or DSP register for a register write */
+  uint8_t val;
+  uint8_t old;    /* ARAM value before the write (ARAM entries) */
+  uint16_t tag;   /* samples owed when written */
+  uint8_t isReg;
+} ApuDspLogEntry;
+
 typedef struct ApuPortWrite {
   uint64_t target_cycle; /* apply when portClock reaches this APU cycle */
   uint8_t port;          /* 0-3 */
@@ -62,6 +91,14 @@ struct Apu {
   /* Native APU builds advance the timers lazily: they are current through
    * cycle timerSyncCycle - 1. Host state, re-derived on load and reset. */
   uint32_t timerSyncCycle;
+#if SNESRECOMP_APU_DEFER_DSP
+  /* Deferred DSP (host state; empty after every sync, save and reset). */
+  uint32_t dspPending;
+  uint32_t dspLogN;
+  uint16_t dspEchoStart;   /* SPC reads in [start, start+len) force a sync */
+  uint32_t dspEchoLen;
+  ApuDspLogEntry dspLog[APU_DSP_LOG_LEN];
+#endif
 };
 
 /*
@@ -91,6 +128,38 @@ typedef struct ApuPortSched {
 
 void apu_port_sched_save(const Apu *apu, ApuPortSched *out);
 void apu_port_sched_restore(Apu *apu, const ApuPortSched *in);
+
+/* Bring a deferred DSP up to date (no-op without SNESRECOMP_APU_DEFER_DSP).
+ * Call before host code reads DSP output or writes ARAM directly. */
+void apu_dspSync(Apu* apu);
+#if SNESRECOMP_APU_DEFER_DSP
+void apu_dspLogFull(Apu* apu);
+void apu_dspEchoRead(Apu* apu);
+extern uint32_t g_apu_dsp_sync_count[APU_DSP_SYNC_REASONS];
+extern uint32_t g_apu_dsp_sync_samples[APU_DSP_SYNC_REASONS];
+/* An SPC write to plain ARAM. */
+static inline void apu_spcWriteRam(Apu* apu, uint16_t adr, uint8_t val) {
+  if (apu->dspPending) {
+    if (apu->dspLogN == APU_DSP_LOG_LEN) apu_dspLogFull(apu);
+    if (apu->dspPending) {
+      ApuDspLogEntry *e = &apu->dspLog[apu->dspLogN++];
+      e->adr = adr; e->val = val; e->old = apu->ram[adr];
+      e->tag = (uint16_t)apu->dspPending; e->isReg = 0;
+    }
+  }
+  apu->ram[adr] = val;
+}
+/* An SPC read of plain ARAM: the echo window may hold owed DSP writes. */
+static inline void apu_spcReadCheck(Apu* apu, uint16_t adr) {
+  if (apu->dspPending && (uint16_t)(adr - apu->dspEchoStart) < apu->dspEchoLen)
+    apu_dspEchoRead(apu);
+}
+#else
+static inline void apu_spcWriteRam(Apu* apu, uint16_t adr, uint8_t val) {
+  apu->ram[adr] = val;
+}
+static inline void apu_spcReadCheck(Apu* apu, uint16_t adr) { (void)apu; (void)adr; }
+#endif
 
 Apu* apu_init();
 void apu_free(Apu* apu);

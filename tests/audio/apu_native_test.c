@@ -32,14 +32,17 @@ static void equal(const void *a, const void *b, size_t n, const char *what) {
 }
 
 static void same(Apu *reference, Apu *native) {
+  apu_dspSync(native);  /* a deferred DSP catches up before comparison */
   equal(reference->ram, native->ram,
       offsetof(Apu, pad) + 6u - offsetof(Apu, ram), "APU RAM/ports/timers");
   equal(&reference->spc->a, &native->spc->a,
       sizeof(Spc) - offsetof(Spc, a), "SPC execution");
   equal(reference->dsp->ram, native->dsp->ram,
       sizeof(Dsp) - offsetof(Dsp, ram), "DSP state and PCM");
+  /* Host-only deferred-DSP state (when built) follows timerSyncCycle. */
   equal(reference->portQueue, native->portQueue,
-      sizeof(Apu) - offsetof(Apu, portQueue), "port queue and clock");
+      offsetof(Apu, timerSyncCycle) + sizeof(native->timerSyncCycle) -
+      offsetof(Apu, portQueue), "port queue and clock");
 }
 
 static void init(Apu *apu, unsigned mode) {

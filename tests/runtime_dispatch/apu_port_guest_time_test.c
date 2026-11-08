@@ -229,6 +229,7 @@ int main(void) {
                     apu->inPorts[2] == 0 && apu->inPorts[3] == 0,
                     "live upload completes CC acknowledgement and clears ports");
 
+  apu_dspSync(apu);  /* host code reads DSP output only after a sync */
   apu->dsp->sampleRead = 100;
   apu->dsp->sampleWrite = 419;
   failures += check(dsp_trimSamples(apu->dsp, 64) == 255 &&
@@ -248,6 +249,7 @@ int main(void) {
     uint64_t master = quarter * RTL_MASTER_CYCLES_PER_FRAME / 4;
     failures += check(apu_runToGuestCycle(apu, rtl_apu_clock_now(&clock, master),
                                           1u << 20), "progress inside long loader");
+    apu_dspSync(apu);
     apu->dsp->sampleRead = apu->dsp->sampleWrite;
   }
   uint64_t master_end = 40 * RTL_MASTER_CYCLES_PER_FRAME;
@@ -264,8 +266,9 @@ int main(void) {
     uint32_t samples_before = apu->dsp->sampleWrite;
     master_end += 100;  /* Mostly WAI. */
     end = rtl_apu_clock_finish(&clock, master_end);
-    failures += check(apu_runToGuestCycle(apu, end, 1u << 20) &&
-                      apu->dsp->sampleWrite - samples_before == 534,
+    const bool ran = apu_runToGuestCycle(apu, end, 1u << 20);
+    apu_dspSync(apu);
+    failures += check(ran && apu->dsp->sampleWrite - samples_before == 534,
                       "every following short frame produces its normal PCM");
     apu->dsp->sampleRead = apu->dsp->sampleWrite;
   }

@@ -858,6 +858,7 @@ bool RtlRunFrame(uint32 inputs) {
   // longjmp would dereference an uninitialized jmp_buf and crash.
   if (setjmp(g_watchdog_jmp) == 0) {
     g_rtl_game_info->run_frame();
+    apu_dspSync(g_snes->apu);
   }
 #ifdef SNES_COSIM
   /* DETERMINISTIC AUDIO CONSUMER (SNES_COSIM_AUDIO=1). Production is paced by the
@@ -984,6 +985,7 @@ bool RtlRunFrame(uint32 inputs) {
   snes_rb_probe_after_frame(inputs);
 #endif
 
+  apu_dspSync(g_snes->apu);  /* host code between frames sees a current DSP */
   if (g_rtl_game_info->frame_end) g_rtl_game_info->frame_end();
   return false;
 }
@@ -1133,6 +1135,7 @@ bool RtlLoadSnapshotFromMemory(const void *data, size_t size) {
    * out around the whole loader lets the consumer advance between copies,
    * or observe the snapshot's temporary/blanked queue. */
   DspOutputRing live_audio;
+  apu_dspSync(g_snes->apu);  /* owed samples belong to the live timeline */
   if (s_rollback_load) dsp_output_ring_save(g_snes->apu->dsp, &live_audio);
   MemorySli memory = {
     { &memory_sli_func, &memory_sli_peek }, (uint8 *)data, size, sizeof hdr, false, false
@@ -1548,6 +1551,7 @@ static DspOutputRing s_blank_ring_saved;
 static void rtl_ring_blank_begin(void) {
   static const DspOutputRing blank;
   RtlApuLock();
+  apu_dspSync(g_snes->apu);
   dsp_output_ring_save(g_snes->apu->dsp, &s_blank_ring_saved);
   dsp_output_ring_restore(g_snes->apu->dsp, &blank);
   RtlApuUnlock();
@@ -1642,6 +1646,7 @@ uint32_t RtlAudioProducerCursor(void) {
   if (!g_snes)
     return 0u;
   RtlApuLock();
+  apu_dspSync(g_snes->apu);
   w = dsp_output_ring_write(g_snes->apu->dsp);
   RtlApuUnlock();
   return w;
@@ -1651,6 +1656,7 @@ void RtlAudioRewindProducer(uint32_t cursor) {
   if (!g_snes)
     return;
   RtlApuLock();
+  apu_dspSync(g_snes->apu);
   dsp_output_ring_set_write(g_snes->apu->dsp, cursor);
   RtlApuUnlock();
 }
@@ -2218,6 +2224,7 @@ static bool RtlUploadSpcImageFromDpInternal(CpuState *cpu,
     return false;
   }
   apu_clearPortQueue(g_snes->apu);
+  apu_dspSync(g_snes->apu);  /* the upload below writes ARAM directly */
   for (;;) {
     uint16_t n = (uint16_t)p[0] | ((uint16_t)p[1] << 8);
     uint16_t target = (uint16_t)p[2] | ((uint16_t)p[3] << 8);
@@ -2387,6 +2394,7 @@ void RtlSetSpeculativeFrame(bool on) {
   }
   RtlApuLock();
   g_rtl_speculative_frame = on;
+  apu_dspSync(g_snes->apu);  /* owed samples were produced before the switch */
   dsp_set_output_suppressed(g_snes->apu->dsp, on);
   RtlApuUnlock();
 }
@@ -2422,6 +2430,7 @@ void RtlAudioSetFastForward(bool active) {
     g_audio_recovery_remaining = RTL_AUDIO_RECOVERY_RAMP;
   }
   if (!active && g_audio_recovery_frames != 0) {
+    apu_dspSync(g_snes->apu);
     uint32_t available = g_snes->apu->dsp->sampleWrite -
                          g_snes->apu->dsp->sampleRead;
     /* Preserve the consumer's startup cushion. A stage upload or starvation
@@ -2669,6 +2678,7 @@ void RtlRenderAudio(int16 *audio_buffer, int samples, int channels) {
    * schedule a second, competing emulation clock and is what let audio drift
    * behind visuals after turbo. */
   RtlApuLock();
+  apu_dspSync(g_snes->apu);
   rtl_render_native(g_snes->apu->dsp, audio_buffer, samples);
   /* Mix MSU-1 streaming audio on top of the S-DSP block. Inert (no-op)
    * unless a pack is armed and a track is playing. Runs under the APU

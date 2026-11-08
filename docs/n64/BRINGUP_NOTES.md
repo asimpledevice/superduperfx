@@ -356,6 +356,30 @@ Calibration build: `make EXTRA_CFLAGS="-DN64_DSP_CLOCK
 cycles per sample on the status line (refreshed every 4096 samples), for
 comparing ares with real hardware. ares at frame 731: 4756/3072.
 
+### Deferred S-DSP (option 2, stage 1)
+
+`SNESRECOMP_APU_DEFER_DSP=1` (native runner only; off by default, including
+on N64 for now) runs the C DSP in batches of up to 256 samples behind the
+SPC. SPC writes to ARAM and DSP registers are logged with the number of
+samples owed; a sync undoes the logged ARAM writes and replays the owed
+samples with the log reapplied in order. Forced syncs: SPC reads of ENVX,
+OUTX, ENDX (other register reads are answered from the log), SPC reads of
+the echo window, FLG/ESA/EDL writes, full log/batch, save/load, the end of
+`run_frame` and of `RtlRunFrame`, `RtlRenderAudio`, the HLE SPC upload,
+output suppression, trim and ring snapshots. Host code that reads DSP
+output or writes ARAM directly must call `apu_dspSync` first.
+
+Exact: x86 frame/audio hashes over 3000 frames, APU native contract test
+(new deferred variant), port scheduling test. SMW: no forced syncs besides
+host/frame boundaries; every batch is full. Its driver reads back pitch,
+volume and KON/KOF it wrote (~27 reads/frame), never ENVX/OUTX/ENDX.
+
+N64 (ares, cycle counter): DSP cost per sample including replay ~2700-2830
+cycles versus ~3500 eager (cold), about -20%. But the whole sound path per
+frame is unchanged (~44-45 ms both ways): logging every SPC write and the
+replay cost what the warmer cache saves. On the CPU it is break-even; its
+purpose is the RSP stage, where the batch leaves the CPU entirely.
+
 ### Code layout dominates small comparisons
 
 ares models the VR4300's direct-mapped 16 KB I-cache. Inserting only a
@@ -370,11 +394,10 @@ candidate.
 
 ## Next steps
 
-1. Audio: deferred S-DSP, exact. Stage 1 runs the C DSP in batches behind
-   the SPC, syncing when the SPC reads ENVX/OUTX/ENDX, touches the echo
-   window or writes ARAM the DSP will read; stage 2 moves the batch to RSP
-   microcode (8 voices across the vector lanes) as the N64 default, with
-   the C DSP as fallback when syncs are frequent.
+1. Audio: RSP DSP on top of the deferred machinery (stage 2): batch replay
+   on RSP microcode (8 voices across the vector lanes) as the N64 default,
+   C DSP as fallback when syncs are frequent. Needs a plan for the ARAM
+   view the RSP reads (BRR, echo) and for the per-write logging cost.
 2. Profile-guided function ordering for the I-cache.
 3. Interpreter share: promote more code (analysis of SMW's `$0086DF`
    dispatcher idiom), and gameplay captures for the native set.

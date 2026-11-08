@@ -277,6 +277,18 @@ int main(void) {
                        (unsigned long)h, (unsigned long)ha);
     }
 #endif
+#if SNESRECOMP_APU_DEFER_DSP
+    if (frame % 600 == 599) {
+      static const char *const why[APU_DSP_SYNC_REASONS] = {"host", "regread", "echoread", "echoreg", "logfull", "batch"};
+      char b[200]; int o = 0;
+      for (int r = 0; r < APU_DSP_SYNC_REASONS; ++r) {
+        o += snprintf(b + o, sizeof b - o, " %s %lu/%lu", why[r], (unsigned long)g_apu_dsp_sync_count[r],
+                      (unsigned long)g_apu_dsp_sync_samples[r]);
+        g_apu_dsp_sync_count[r] = g_apu_dsp_sync_samples[r] = 0;
+      }
+      n64_platform_log("[dspsync] 600 frames, syncs/samples:%s\n", b);
+    }
+#endif
     if (++frame % 60 == 0) {
       n64_platform_log("[n64] frames %lu: avg/frame run %lu us, ppu %lu us, present %lu us\n",
                        (unsigned long)frame, (unsigned long)(acc_run / 60),

@@ -13,9 +13,10 @@ $audioSources = @("$root\tests\audio\apu_native_test.c",
     "$root\runner\src\snes\spc.c", "$root\runner\src\snes\dsp.c",
     "$root\runner\src\snes\dsp_shadow.c", "$root\runner\src\snes\audio_shadow.c",
     "$root\runner\src\audio_trace.c")
-foreach ($native in @(0, 1)) {
+foreach ($native in @(0, 1, 2)) {
     $out = Join-Path $OutputDirectory "apu-native-$native.exe"
-    & $Compiler @common "-DSNESRECOMP_APU_NATIVE=$native" @audioSources '-Wl,--gc-sections' '-lm' '-o' $out
+    $mode = if ($native -eq 2) { @('-DSNESRECOMP_APU_NATIVE=1', '-DSNESRECOMP_APU_DEFER_DSP=1') } else { @("-DSNESRECOMP_APU_NATIVE=$native") }
+    & $Compiler @common @mode @audioSources '-Wl,--gc-sections' '-lm' '-o' $out
     if ($LASTEXITCODE -ne 0) { throw "APU build failed: $native" }
     & $out
     if ($LASTEXITCODE -ne 0) { throw "APU execution failed: $native" }

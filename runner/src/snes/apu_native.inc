@@ -72,7 +72,11 @@ static void apu_runCycles_native(Apu *apu, uint32_t clocks) {
       apu->cpuCyclesLeft = spc_runOpcode(apu->spc);
     }
     unsigned sample_phase = apu->cycles & 31u;
+#if SNESRECOMP_APU_DEFER_DSP
+    if (!sample_phase) apu_dspEdge(apu);
+#else
     if (!sample_phase) APU_NATIVE_DSP_CYCLE(apu->dsp);
+#endif
     uint32_t span = apu->cpuCyclesLeft;
     unsigned to_sample = 32u - sample_phase;
     if (span > to_sample) span = to_sample;
