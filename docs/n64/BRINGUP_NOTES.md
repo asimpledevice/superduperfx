@@ -514,6 +514,35 @@ batching's warmer cache does not pay for write logging and replay. Its
 value is as the base for the RSP DSP, which removes the eager DSP's
 ~18 ms per frame from the CPU.
 
+## S-DSP on the RSP (2026-11-08)
+
+`n64/rspdsp/`: `rsp_snesdsp.S` (rspq overlay), `snesdsp_rsp.c` (glue),
+`test/` (test ROM; `make` there, run with `profile/ares_run.sh`).
+
+One command runs a batch: the CPU packs the C `Dsp` into an RSP state block
+(per-voice values as 8-lane int16 vectors, decode buffers doubled), the RSP
+applies logged writes at their sample tags and runs every sample, the CPU
+unpacks and appends the output samples to the ring as `dsp_cycle` would.
+Register writes are decoded on the CPU by running the real `dsp_write` on a
+shadow and emitting stores of every field it assigns, so `dsp_write` stays
+the only definition. Exactness techniques: the Gaussian taps are
+`VMUDM(2s, 32g)` (= floor(g*s/1024)), the 16-bit wrap and clamp of the sum
+are `VADDC` and `VADD`, gain is `VMUDM(s, gain<<5)`; products C shifts after
+32-bit multiplication (`>>6`, `>>7`, FIR taps) come from `VMUDH`+`VSAR`
+and are shifted and saturated on the scalar unit in C's order. The C path
+handles batches with pitch modulation, the host shadow/output filter, or an
+echo buffer touching $0000-$000F or wrapping past $FFFF.
+
+Test (ares): 2000 random batches (random consistent register state via
+`dsp_write`, random dynamic state and ARAM, random logs of register and ARAM
+writes, up to 1024 samples): all identical to the C DSP in state, ARAM and
+every output sample. A planted error (`>>6` -> `>>5` in the mix) fails.
+
+Speed (ares): C `dsp_cycle` 2575 CPU cycles per sample; the RSP version
+3469 RSP cycles per sample, about 180% of the RSP at 32 kHz. It needs to
+get 4-5x faster: echo and log traffic as per-sample synchronous DMAs, and
+scalar per-voice loops, are the first targets. IMEM is full (4 KB).
+
 ## Next steps
 
 1. Audio: RSP DSP on top of the deferred machinery (stage 2): batch replay
