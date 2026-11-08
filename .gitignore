@@ -83,3 +83,5 @@ dsp1.bin
 /build-content-pack/
 # Local paired renderer qualification artifacts.
 /build-ppu-hle/
+n64/rspdsp/test/build/
+n64/rspdsp/test/*.z64
