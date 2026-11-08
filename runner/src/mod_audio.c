@@ -280,6 +280,11 @@ void snes_mod_audio_mix(int16_t *dst, int frame_count, uint32_t output_rate,
     if (!dst || frame_count <= 0 || output_rate < 8000 || output_rate > 192000 ||
         (output_channels != 1 && output_channels != 2))
         return;
+    /* With no voice playing the loop below rewrites dst unchanged. */
+    int any_voice = 0;
+    for (int i = 0; i < SNES_MOD_AUDIO_MAX_VOICES; ++i)
+        any_voice |= s_voices[i].clip != SNES_MOD_AUDIO_CLIP_INVALID;
+    if (!any_voice) return;
     for (int frame = 0; frame < frame_count; ++frame) {
         int64_t mixed[2] = { dst[(size_t)frame * output_channels], 0 };
         if (output_channels == 2) mixed[1] = dst[(size_t)frame * 2 + 1];

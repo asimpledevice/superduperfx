@@ -77,6 +77,7 @@ int main(int argc, char **argv) {
     init(reference, mode); init(native, mode);
     if (mode == 2) {
       reference->cycles = native->cycles = UINT32_MAX - 100u;
+      reference->timerSyncCycle = native->timerSyncCycle = UINT32_MAX - 100u;
       reference->timer[0].divider = native->timer[0].divider = 253;
     }
     for (unsigned step = 0; step < 4096; step++) {
@@ -92,7 +93,7 @@ int main(int argc, char **argv) {
       }
       uint32_t clocks = random32() % 257u;
       uint64_t ticks = g_apu_timer0_total_ticks;
-      for (uint32_t i = 0; i < clocks; i++) apu_cycle(reference);
+      for (uint32_t i = 0; i < clocks; i++) apu_cycle_reference(reference);
       uint64_t expected_ticks = g_apu_timer0_total_ticks;
       g_apu_timer0_total_ticks = ticks;
       apu_runCycles(native, clocks);
@@ -104,7 +105,7 @@ int main(int argc, char **argv) {
     const uint32_t clocks = 32040000;
     init(reference, 1); init(native, 1);
     clock_t begin = clock();
-    for (uint32_t i = 0; i < clocks; i++) apu_cycle(reference);
+    for (uint32_t i = 0; i < clocks; i++) apu_cycle_reference(reference);
     double scalar = (double)(clock()-begin) / CLOCKS_PER_SEC;
     begin = clock(); apu_runCycles(native, clocks);
     double batch = (double)(clock()-begin) / CLOCKS_PER_SEC;

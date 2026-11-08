@@ -28,6 +28,7 @@
 #include "snes/ppu.h"
 #include "snes/snes.h"
 #include "snes/dma.h"
+#include "snes/apu.h"
 #include "n64_ppu_build.h"
 
 /* N64_RENDER: 0 = software PPU only, 1 = RDP backend (software PPU for
@@ -222,6 +223,15 @@ int main(void) {
 #ifdef N64_PROFILE_FRAMES
     if (frame == N64_PROFILE_START) n64_platform_profile_start(1000);
     if (frame == N64_PROFILE_START + N64_PROFILE_FRAMES) n64_platform_profile_stop_and_dump();
+#endif
+#ifdef N64_STATE_HASH
+    if (frame % 60 == 0) {
+      uint32_t h = 2166136261u, ha = 2166136261u;
+      for (int i = 0; i < 0x20000; ++i) h = (h ^ g_snes->ram[i]) * 16777619u;
+      for (int i = 0; i < 0x10000; ++i) ha = (ha ^ g_snes->apu->ram[i]) * 16777619u;
+      n64_platform_log("[state] frame %lu wram %08lx aram %08lx\n", (unsigned long)frame,
+                       (unsigned long)h, (unsigned long)ha);
+    }
 #endif
     if (++frame % 60 == 0) {
       n64_platform_log("[n64] frames %lu: avg/frame run %lu us, ppu %lu us, present %lu us\n",

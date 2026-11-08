@@ -275,6 +275,22 @@ void audio_trace_on_spc_port_read(uint8_t port, uint8_t val);
 void audio_trace_on_spc_port_write(uint8_t port, uint8_t val);
 void audio_trace_on_cpu_port_read(uint8_t port, uint8_t val);
 
+/* SNESRECOMP_AUDIO_TRACE_HOOKS=0 compiles the per-sample, per-register and
+ * per-port hooks above out of the emulation hot paths. Only trace statistics
+ * and history depend on them; emulation state and output do not. Default 1. */
+#ifndef SNESRECOMP_AUDIO_TRACE_HOOKS
+#define SNESRECOMP_AUDIO_TRACE_HOOKS 1
+#endif
+#if !SNESRECOMP_AUDIO_TRACE_HOOKS && !defined(AUDIO_TRACE_IMPLEMENTATION)
+#define audio_trace_on_sample(l, r, dropped, fill) ((void)(dropped), (void)(fill))
+#define audio_trace_on_reg_write(addr, val) ((void)0)
+#define audio_trace_on_cpu_port_write(port, val) ((void)0)
+#define audio_trace_on_cpu_port_apply(port, val) ((void)0)
+#define audio_trace_on_spc_port_read(port, val) ((void)0)
+#define audio_trace_on_spc_port_write(port, val) ((void)0)
+#define audio_trace_on_cpu_port_read(port, val) ((void)0)
+#endif
+
 /* Authoritative native-sample clocks (produced = samples the DSP has
  * emitted; consumed = samples the audio callback has read). Exported so
  * the port-write scheduler anchors its targets on the same clock the

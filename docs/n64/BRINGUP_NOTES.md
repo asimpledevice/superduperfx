@@ -313,11 +313,49 @@ The PPU stage is now plane building (~28 ms), sprite expansion (~12 ms),
 the PPU's own per-line state/sprite evaluation (~12 ms), palettes and HDMA.
 Remaining frame cost is led by the APU (~25%) and the interpreter (~15%).
 
+## Audio (2026-11-08)
+
+Output goes through libdragon's audio interface (`n64_platform_audio_*`,
+`RtlRenderAudio`). The N64 build uses the native APU runner
+(`SNESRECOMP_APU_NATIVE=1`). Exact speedups, all output-identical (x86 frame
+and audio hashes over 3000 frames, native and LLE APU):
+
+- SPC plain-ARAM accesses inline in `spc.c`; only the I/O page and IPL ROM
+  go through `apu_cpuRead`/`apu_cpuWrite`.
+- The S-DSP skips Gaussian interpolation for a voice whose envelope is and
+  stays zero (the product is zero; key-on is computed as before).
+- `SNESRECOMP_AUDIO_TRACE_HOOKS=0` compiles the per-sample/register/port
+  trace hooks out (statistics only; N64 sets it).
+- The overlay mixer returns early when no voice plays.
+- Native runner: SPC timers advance lazily in closed form, synced before
+  any SPC access to `$F1`, `$FA-$FF` and at the end of every run. Cycle
+  counted A/B: 60.6 -> 55 ms per frame for the APU runner.
+
+APU runner per frame (ares, cycle counter, SMW title): ~55 ms, of which
+S-DSP ~26 ms, SPC700 ~14.5 ms, runner loop ~14.5 ms over ~5200 SPC
+instructions (the SMW driver polls timer 0, so syncs stay frequent).
+`N64_STATE_HASH` (via `EXTRA_CFLAGS`) logs WRAM/ARAM hashes every 60 frames;
+it confirmed identical emulation between builds on N64.
+
+### Code layout dominates small comparisons
+
+ares models the VR4300's direct-mapped 16 KB I-cache. Inserting only a
+padding function among the runtime objects moved the same code's frame
+time by ~16 ms (run) and ~7 ms (PPU stage): pad 1 KB 147/88 ms, pad 4 KB
+131/81 ms. Hot code is ~80 KB (`_interp_run_core` alone 15.7 KB,
+`spc_runOpcode` 16 KB), so whole-frame A/B tests under ~10% are not
+meaningful without controlling layout; measure the changed component with
+the cycle counter instead. Deliberate hot-function ordering (ld 2.45
+`--section-ordering-file`, from profile data) is itself an exact speedup
+candidate.
+
 ## Next steps
 
-1. Audio: the SPC700/DSP path is now the largest cost (~25%).
-2. Interpreter share: promote more code (analysis of SMW's `$0086DF`
+1. Audio step 2: S-DSP cost (~26 ms/frame) — exact C work versus an RSP
+   implementation (batched; accuracy trade-off to decide).
+2. Profile-guided function ordering for the I-cache.
+3. Interpreter share: promote more code (analysis of SMW's `$0086DF`
    dispatcher idiom), and gameplay captures for the native set.
-3. PPU stage: skip the PPU's duplicate per-line sprite evaluation when the
+4. PPU stage: skip the PPU's duplicate per-line sprite evaluation when the
    RDP path evaluates sprites itself (keep STAT77 flags exact).
-4. RDP coverage: layer colour math, mosaic, Mode 7 (a textured plane).
+5. RDP coverage: layer colour math, mosaic, Mode 7 (a textured plane).

@@ -28,8 +28,8 @@ static const int cyclesPerOpcode[256] = {
   2, 8, 4, 5, 4, 5, 5, 6, 3, 4, 5, 4, 2, 2, 4, 3
 };
 
-static uint8_t spc_read(Spc* spc, uint16_t adr);
-static void spc_write(Spc* spc, uint16_t adr, uint8_t val);
+static inline uint8_t spc_read(Spc* spc, uint16_t adr);
+static inline void spc_write(Spc* spc, uint16_t adr, uint8_t val);
 static uint8_t spc_readOpcode(Spc* spc);
 static uint16_t spc_readOpcodeWord(Spc* spc);
 static uint8_t spc_getFlags(Spc* spc);
@@ -46,11 +46,30 @@ static void spc_doOpcode(Spc* spc, uint8_t opcode);
 
 // addressing modes and opcode functions not declared, only used after defintions
 
-static uint8_t spc_read(Spc* spc, uint16_t adr) {
+#ifndef SNESRECOMP_TRACE
+#define SNESRECOMP_TRACE 0
+#endif
+#ifndef SNESRECOMP_SPC_DIAGNOSTICS
+#define SNESRECOMP_SPC_DIAGNOSTICS SNESRECOMP_TRACE
+#endif
+
+/* Plain ARAM accesses bypass apu_cpuRead/apu_cpuWrite. Those handle the I/O
+ * page $00F0-$00FF and the IPL ROM overlay at $FFC0-$FFFF, and otherwise read
+ * or write apu->ram exactly as done here. Trace and diagnostic builds keep
+ * the full path for their per-access instrumentation. */
+static inline uint8_t spc_read(Spc* spc, uint16_t adr) {
+  if ((adr & 0xfff0) != 0x00f0 && adr < 0xffc0)
+    return spc->apu->ram[adr];
   return apu_cpuRead(spc->apu, adr);
 }
 
-static void spc_write(Spc* spc, uint16_t adr, uint8_t val) {
+static inline void spc_write(Spc* spc, uint16_t adr, uint8_t val) {
+#if !SNESRECOMP_TRACE && !SNESRECOMP_SPC_DIAGNOSTICS
+  if ((adr & 0xfff0) != 0x00f0) {
+    spc->apu->ram[adr] = val;
+    return;
+  }
+#endif
   apu_cpuWrite(spc->apu, adr, val);
 }
 

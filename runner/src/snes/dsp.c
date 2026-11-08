@@ -412,8 +412,17 @@ static void dsp_cycleChannel(Dsp* dsp, int ch) {
   }
   dsp->channel[ch].pitchCounter = newCounter;
   int16_t sample = 0;
+  /* A silent voice's interpolated sample is multiplied by a zero envelope.
+   * Defer the interpolation past the envelope update and skip it if the
+   * envelope stays zero. Exact: only a key-on below changes the decode
+   * buffer before the sample would have been used, so that case is computed
+   * here as before. */
+  bool deferSample = false;
   if(dsp->channel[ch].useNoise) {
     sample = dsp->noiseSample;
+  } else if(dsp->channel[ch].gain == 0 &&
+            !(dsp->evenCycle && dsp->channel[ch].keyOn && !dsp->channel[ch].keyOff)) {
+    deferSample = true;
   } else {
     sample = dsp_getSample(dsp, ch, dsp->channel[ch].pitchCounter >> 12, (dsp->channel[ch].pitchCounter >> 4) & 0xff);
   }
@@ -484,6 +493,8 @@ static void dsp_cycleChannel(Dsp* dsp, int ch) {
     dsp_handleGain(dsp, ch, liveGain);
   }
   if(doingDirectGain) dsp->channel[ch].gain = dsp->channel[ch].gainValue;
+  if(deferSample && dsp->channel[ch].gain != 0)
+    sample = dsp_getSample(dsp, ch, dsp->channel[ch].pitchCounter >> 12, (dsp->channel[ch].pitchCounter >> 4) & 0xff);
   // set outputs
   dsp->ram[(ch << 4) | 8] = dsp->channel[ch].gain >> 4;
   sample = (sample * dsp->channel[ch].gain) >> 11;

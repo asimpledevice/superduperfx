@@ -2,35 +2,52 @@
  *
  * The SPC core already executes an instruction atomically at its first clock.
  * Between instruction starts, DSP sample edges and queued CPU port writes,
- * timer advancement is the only work. Advance that interval as a native job.
+ * timer advancement is the only work. The timers advance lazily: only when
+ * the SPC touches a timer register, and once at the end of each run.
  * Preserve the reference order at an edge: ports, SPC, DSP, then timers.
  * All state stays in Apu; no cached host pointer or unfinished job is saved.
  */
-static void apu_native_timer(Timer *timer, uint32_t clocks, unsigned period,
+/* Advance one timer by `clocks` APU cycles in closed form. Equivalent to the
+ * reference per-cycle step: when the prescaler reaches 0 it reloads with
+ * `period` and, if enabled, ticks the divider; the 4-bit counter increments
+ * when the 8-bit divider equals target (target 0 means every 256 ticks). */
+static void apu_native_timer(Timer *timer, uint32_t clocks, unsigned period_shift,
                              int first_timer) {
   if (clocks <= timer->cycles) {
     timer->cycles -= (uint8_t)clocks;
     return;
   }
-  clocks -= timer->cycles;
-  do {
-    if (timer->enabled) {
-      timer->divider++;
-      if (timer->divider == timer->target) {
-        timer->divider = 0;
-        timer->counter = (timer->counter + 1u) & 15u;
-        if (first_timer) {
-          extern uint64_t g_apu_timer0_total_ticks;
-          g_apu_timer0_total_ticks++;
-        }
-      }
-    }
-    if (clocks <= period) {
-      timer->cycles = (uint8_t)(period - clocks);
-      return;
-    }
-    clocks -= period;
-  } while (1);
+  const uint32_t period = 1u << period_shift;
+  const uint32_t rest = clocks - timer->cycles;
+  const uint32_t ticks = ((rest - 1u) >> period_shift) + 1u;
+  timer->cycles = (uint8_t)(ticks * period - rest);
+  if (!timer->enabled) return;
+  const uint32_t first = ((uint32_t)(timer->target - timer->divider - 1u) & 0xffu) + 1u;
+  if (ticks < first) {
+    timer->divider = (uint8_t)(timer->divider + ticks);
+    return;
+  }
+  const uint32_t every = timer->target ? timer->target : 256u;
+  const uint32_t after = ticks - first;
+  const uint32_t fires = 1u + after / every;
+  timer->divider = (uint8_t)(after % every);
+  timer->counter = (uint8_t)((timer->counter + fires) & 15u);
+  if (first_timer) {
+    extern uint64_t g_apu_timer0_total_ticks;
+    g_apu_timer0_total_ticks += fires;
+  }
+}
+
+/* Bring the timers up to date with apu->cycles. Called before any SPC access
+ * to a timer register and at the end of every native run, so the timers are
+ * exact wherever the SPC or the host can observe them. */
+static inline void apu_native_timers_sync(Apu *apu) {
+  const uint32_t clocks = apu->cycles - apu->timerSyncCycle;
+  if (!clocks) return;
+  apu->timerSyncCycle = apu->cycles;
+  apu_native_timer(&apu->timer[0], clocks, 7, 1);
+  apu_native_timer(&apu->timer[1], clocks, 7, 0);
+  apu_native_timer(&apu->timer[2], clocks, 4, 0);
 }
 
 static void apu_runCycles_native(Apu *apu, uint32_t clocks) {
@@ -56,12 +73,10 @@ static void apu_runCycles_native(Apu *apu, uint32_t clocks) {
       uint64_t distance = write->target_cycle - apu->portClock;
       if (span > distance) span = (uint32_t)distance;
     }
-    apu_native_timer(&apu->timer[0], span, 128u, 1);
-    apu_native_timer(&apu->timer[1], span, 128u, 0);
-    apu_native_timer(&apu->timer[2], span, 16u, 0);
     apu->cpuCyclesLeft -= (uint8_t)span;
     apu->cycles += span;
     apu->portClock += span;
     clocks -= span;
   }
+  apu_native_timers_sync(apu);
 }

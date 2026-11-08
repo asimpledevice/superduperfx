@@ -3,6 +3,7 @@
 #include <string.h>
 #include <stdint.h>
 
+#define AUDIO_TRACE_IMPLEMENTATION
 #include "audio_trace.h"
 
 #ifdef SNESRECOMP_AUDIO_TRACE_TEST_WALL_MS

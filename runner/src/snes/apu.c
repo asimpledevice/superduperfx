@@ -56,6 +56,7 @@ void apu_reset(Apu* apu) {
   memset(apu->ram, 0, sizeof(apu->ram));
   apu->dspAdr = 0;
   apu->cycles = 0;
+  apu->timerSyncCycle = 0;
   memset(apu->inPorts, 0, sizeof(apu->inPorts));
   memset(apu->outPorts, 0, sizeof(apu->outPorts));
   for(int i = 0; i < 3; i++) {
@@ -128,7 +129,7 @@ bool apu_schedulePortWrite(Apu* apu, uint8_t port, uint8_t val,
 }
 
 /* Apply all CPU bus events due before this SPC cycle executes. */
-static void apu_drainPortQueue(Apu* apu) {
+static inline void apu_drainPortQueue(Apu* apu) {
   while (apu->portQHead != apu->portQTail) {
     ApuPortWrite *w = &apu->portQueue[apu->portQHead & (APU_PORT_QUEUE_LEN - 1)];
     if (w->target_cycle > apu->portClock)
@@ -233,8 +234,16 @@ void apu_port_sched_restore(Apu *apu, const ApuPortSched *in) {
   apu->portTimeValid = in->timeValid;
 }
 
+#if SNESRECOMP_APU_NATIVE
+static inline void apu_native_timers_sync(Apu *apu);
+#endif
+
 void apu_saveload(Apu *apu, SaveLoadInfo *sli) {
+#if SNESRECOMP_APU_NATIVE
+  apu_native_timers_sync(apu);  /* a save must see current timers */
+#endif
   sli->func(sli, apu->ram, offsetof(Apu, pad) + 6 - offsetof(Apu, ram));
+  apu->timerSyncCycle = apu->cycles;  /* after a load, timers match cycles */
   dsp_saveload(apu->dsp, sli);
   spc_saveload(apu->spc, sli);
 }
@@ -246,7 +255,7 @@ extern uint64_t g_spc_pc_histogram[1];
 #endif
 extern int g_spc_pc_max_seen;
 
-void apu_cycle(Apu* apu) {
+static inline void apu_cycle_reference(Apu* apu) {
   apu_drainPortQueue(apu);
   if(apu->cpuCyclesLeft == 0) {
     /* Sample PC right BEFORE running the opcode — so PC reflects the
@@ -284,11 +293,20 @@ void apu_cycle(Apu* apu) {
 
   apu->cycles++;
   apu->portClock++;
+  apu->timerSyncCycle = apu->cycles;  /* timers are current (eager) */
 }
 
 #if SNESRECOMP_APU_NATIVE
 #include "apu_native.inc"
 #endif
+
+void apu_cycle(Apu* apu) {
+#if SNESRECOMP_APU_NATIVE
+  apu_runCycles_native(apu, 1);
+#else
+  apu_cycle_reference(apu);
+#endif
+}
 
 void apu_runCycles(Apu* apu, uint32_t clocks) {
 #if SNESRECOMP_APU_NATIVE
@@ -342,6 +360,9 @@ uint8_t apu_cpuRead(Apu* apu, uint16_t adr) {
     case 0xfd:
     case 0xfe:
     case 0xff: {
+#if SNESRECOMP_APU_NATIVE
+      apu_native_timers_sync(apu);
+#endif
       uint8_t ret = apu->timer[adr - 0xfd].counter;
       apu->timer[adr - 0xfd].counter = 0;
       return ret;
@@ -388,6 +409,9 @@ void apu_cpuWrite(Apu* apu, uint16_t adr, uint8_t val) {
     g_spc_recent_outport_writes[i].adr = (uint8_t)adr;
     g_spc_recent_outport_writes[i].val = val;
   }
+#endif
+#if SNESRECOMP_APU_NATIVE
+  if (adr == 0xf1 || (adr >= 0xfa && adr <= 0xfc)) apu_native_timers_sync(apu);
 #endif
   switch(adr) {
     case 0xf0: {

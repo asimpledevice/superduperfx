@@ -59,6 +59,9 @@ struct Apu {
   uint64_t portLastGuest;
   uint64_t portLastTarget;
   bool portTimeValid;
+  /* Native APU builds advance the timers lazily: they are current through
+   * cycle timerSyncCycle - 1. Host state, re-derived on load and reset. */
+  uint32_t timerSyncCycle;
 };
 
 /*
