@@ -45,6 +45,14 @@ typedef struct Timer {
 #error SNESRECOMP_APU_DEFER_DSP requires SNESRECOMP_APU_NATIVE
 #endif
 #define APU_DSP_LOG_LEN 2048u
+/* SNESRECOMP_APU_DEFER_DSP_VERIFY (debug): log every SPC write, replay each
+ * batch both from the full log and the way page-watch tracking would, and
+ * report any difference (g_apu_dsp_verify_mismatches). */
+#ifndef SNESRECOMP_APU_DEFER_DSP_VERIFY
+#define SNESRECOMP_APU_DEFER_DSP_VERIFY 0
+#endif
+#define APU_DSP_WATCH_LOG 1u
+#define APU_DSP_WATCH_SYNC 2u
 enum { APU_DSP_SYNC_HOST, APU_DSP_SYNC_REG_READ, APU_DSP_SYNC_ECHO_READ,
        APU_DSP_SYNC_ECHO_REG, APU_DSP_SYNC_LOG_FULL, APU_DSP_SYNC_FULL_BATCH,
        APU_DSP_SYNC_REASONS };
@@ -95,8 +103,6 @@ struct Apu {
   /* Deferred DSP (host state; empty after every sync, save and reset). */
   uint32_t dspPending;
   uint32_t dspLogN;
-  uint16_t dspEchoStart;   /* SPC reads in [start, start+len) force a sync */
-  uint32_t dspEchoLen;
   ApuDspLogEntry dspLog[APU_DSP_LOG_LEN];
 #endif
 };
@@ -133,32 +139,11 @@ void apu_port_sched_restore(Apu *apu, const ApuPortSched *in);
  * Call before host code reads DSP output or writes ARAM directly. */
 void apu_dspSync(Apu* apu);
 #if SNESRECOMP_APU_DEFER_DSP
-void apu_dspLogFull(Apu* apu);
+void apu_dspLogRam(Apu* apu, uint16_t adr, uint8_t val);
 void apu_dspEchoRead(Apu* apu);
+extern uint32_t g_apu_dsp_verify_mismatches;
 extern uint32_t g_apu_dsp_sync_count[APU_DSP_SYNC_REASONS];
 extern uint32_t g_apu_dsp_sync_samples[APU_DSP_SYNC_REASONS];
-/* An SPC write to plain ARAM. */
-static inline void apu_spcWriteRam(Apu* apu, uint16_t adr, uint8_t val) {
-  if (apu->dspPending) {
-    if (apu->dspLogN == APU_DSP_LOG_LEN) apu_dspLogFull(apu);
-    if (apu->dspPending) {
-      ApuDspLogEntry *e = &apu->dspLog[apu->dspLogN++];
-      e->adr = adr; e->val = val; e->old = apu->ram[adr];
-      e->tag = (uint16_t)apu->dspPending; e->isReg = 0;
-    }
-  }
-  apu->ram[adr] = val;
-}
-/* An SPC read of plain ARAM: the echo window may hold owed DSP writes. */
-static inline void apu_spcReadCheck(Apu* apu, uint16_t adr) {
-  if (apu->dspPending && (uint16_t)(adr - apu->dspEchoStart) < apu->dspEchoLen)
-    apu_dspEchoRead(apu);
-}
-#else
-static inline void apu_spcWriteRam(Apu* apu, uint16_t adr, uint8_t val) {
-  apu->ram[adr] = val;
-}
-static inline void apu_spcReadCheck(Apu* apu, uint16_t adr) { (void)apu; (void)adr; }
 #endif
 
 Apu* apu_init();

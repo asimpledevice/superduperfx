@@ -380,6 +380,34 @@ frame is unchanged (~44-45 ms both ways): logging every SPC write and the
 replay cost what the warmer cache saves. On the CPU it is break-even; its
 purpose is the RSP stage, where the batch leaves the CPU entirely.
 
+### Narrow write tracking (page marks)
+
+At batch start the DSP's reachable ARAM is marked per 256-byte page (bits
+in `Spc.dspWatchLog/dspWatchSync`, beside the registers the SPC touches on
+every instruction): the echo window, the directory, and per voice 585
+bytes (65 BRR blocks, the most a 256-sample batch can decode at pitch
+0x3fff) from its decode position and from its sample's start and loop
+addresses. SRCN writes and directory writes mark newly reachable data at
+that moment; DIR writes sync. Only writes to marked pages are logged
+(out of line); reads of echo pages sync.
+
+`SNESRECOMP_APU_DEFER_DSP_VERIFY=1` logs every write and replays each batch
+both ways (full log vs page marks), reporting differences. SMW over 3000
+frames: 0 differences. Mutation check: with marking disabled it reports
+mismatches, so the check is live.
+
+SMW still logs ~750 writes per frame: unused voices keep decoding "samples"
+from $0000 (their decode pointer after reset), so the SPC's direct page is
+genuinely DSP-read and must be logged.
+
+Speed is unresolved. Timing the APU components on N64 (ares) across
+variants: eager ~44-46 ms per frame; deferred with marks in Apu ~45 ms;
+deferred with no logging at all (inexact, timing only) ~40-42 ms; deferred
+with marks in Spc ~53 ms, where the unchanged DSP replay alone went from
+~15 to ~22 ms. Padding Spc in the eager build changed nothing. Component
+times swing by 20%+ with unrelated code/data placement, so 1-3 ms effects
+cannot be resolved one variable at a time. Deferral stays off.
+
 ### Code layout dominates small comparisons
 
 ares models the VR4300's direct-mapped 16 KB I-cache. Inserting only a
@@ -398,7 +426,10 @@ candidate.
    on RSP microcode (8 voices across the vector lanes) as the N64 default,
    C DSP as fallback when syncs are frequent. Needs a plan for the ARAM
    view the RSP reads (BRR, echo) and for the per-write logging cost.
-2. Profile-guided function ordering for the I-cache.
+2. Cache placement, to make N64 timing stable and fast: profile-guided
+   function ordering (I-cache) and deliberate placement of hot data
+   (APU/DSP/SPC structs, interpreter state) against the direct-mapped
+   D-cache. Then re-measure deferral before the RSP stage.
 3. Interpreter share: promote more code (analysis of SMW's `$0086DF`
    dispatcher idiom), and gameplay captures for the native set.
 4. PPU stage: skip the PPU's duplicate per-line sprite evaluation when the

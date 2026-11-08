@@ -8,6 +8,7 @@
 
 #include "spc.h"
 #include "apu.h"
+#include "apu_dsp_watch.h"
 
 static const int cyclesPerOpcode[256] = {
   2, 8, 4, 5, 3, 4, 3, 6, 2, 6, 5, 4, 5, 4, 6, 8,
