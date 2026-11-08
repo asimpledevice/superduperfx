@@ -10,7 +10,10 @@
  * executing when the interrupt fired. Samples are dumped over the debug log
  * as "PROF <pc>" lines; map them to functions offline with the ELF
  * (n64/profile/symbolize.py). */
-enum { kProfMax = 32768 };
+#ifndef N64_PROFILE_MAX
+#define N64_PROFILE_MAX 131072
+#endif
+enum { kProfMax = N64_PROFILE_MAX };
 static uint32_t s_prof_pc[kProfMax];
 static volatile unsigned s_prof_n;
 static timer_link_t *s_prof_timer;

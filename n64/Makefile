@@ -91,8 +91,10 @@ N64_CFLAGS += -DN64_RENDER=$(RENDER) $(EXTRA_CFLAGS)
 
 PROFILE_START ?= 3
 PROFILE_FRAMES ?= 10
+PROFILE_US ?= 1000
 ifeq ($(PROFILE),1)
-N64_CFLAGS += -DN64_PROFILE_START=$(PROFILE_START) -DN64_PROFILE_FRAMES=$(PROFILE_FRAMES)
+N64_CFLAGS += -DN64_PROFILE_START=$(PROFILE_START) -DN64_PROFILE_FRAMES=$(PROFILE_FRAMES) \
+	-DN64_PROFILE_US=$(PROFILE_US)
 endif
 
 N64_MKDFS_ROOT = $(BUILD_DIR)/filesystem
@@ -113,6 +115,16 @@ $(BUILD_DIR)/filesystem/game.sfc: $(ROM)
 
 $(BUILD_DIR)/snesrecomp_interp.dfs: $(BUILD_DIR)/filesystem/game.sfc
 $(BUILD_DIR)/snesrecomp_interp.elf: $(OBJS)
+
+# ICACHE_ORDER: place functions as profile/icache_order.py decided (an ld
+# --section-ordering-file) to cut instruction-cache conflicts. The default,
+# icache_order.ld, places runtime code only (no per-game generated code).
+# ICACHE_ORDER= (empty) links in the default order.
+ICACHE_ORDER ?= icache_order.ld
+ifneq ($(ICACHE_ORDER),)
+$(BUILD_DIR)/snesrecomp_interp.elf: LDFLAGS += --section-ordering-file=$(abspath $(ICACHE_ORDER))
+$(BUILD_DIR)/snesrecomp_interp.elf: $(ICACHE_ORDER)
+endif
 
 snesrecomp_interp.z64: $(BUILD_DIR)/snesrecomp_interp.dfs
 

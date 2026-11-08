@@ -420,16 +420,48 @@ the cycle counter instead. Deliberate hot-function ordering (ld 2.45
 `--section-ordering-file`, from profile data) is itself an exact speedup
 candidate.
 
+## Instruction-cache placement (2026-11-08)
+
+`n64/profile/icache_order.py` turns a PC profile into an ld
+`--section-ordering-file`: it measures heat per 32-byte line, then places
+the hottest functions greedily at the 16 KB cache offset where their hot
+lines overlap the least heat already placed (gaps are left empty; minor
+functions may move at most 2 KB). `.boot` stays first. The Makefile uses
+`n64/icache_order.ld` by default (`ICACHE_ORDER=` disables it); it holds
+runtime code only (`--runtime-only`), so it does not depend on one game's
+generated code.
+
+Profile: 131072 samples at 250 us, SMW attract frames 400-520
+(`make PROFILE=1 PROFILE_START=400 PROFILE_FRAMES=120 PROFILE_US=250`).
+Modelled conflict cost: 8% of the default link order. 262 functions,
+96% of samples, ~450 KB of code and gaps.
+
+ares, same build otherwise, state hashes identical:
+
+| frames | default order | ordered (runtime only) |
+|---|---|---|
+| 600 | 262 ms | 231 ms (-12%) |
+| 720 | 238 ms | 212 ms (-11%) |
+| 900 | 269 ms | 235 ms (-13%) |
+
+The CPU stage drops ~20%, the PPU stage ~4%. Placed functions sit at fixed
+addresses, so unrelated code changes no longer move them; whole-frame
+measurements should be steadier from here. Regenerate after large runtime
+changes:
+
+    make PROFILE=1 PROFILE_START=400 PROFILE_FRAMES=120 PROFILE_US=250 ...
+    profile/icache_order.py build/snesrecomp_interp.elf \
+        build/snesrecomp_interp.map isviewer.log -o icache_order.ld --runtime-only
+
 ## Next steps
 
 1. Audio: RSP DSP on top of the deferred machinery (stage 2): batch replay
    on RSP microcode (8 voices across the vector lanes) as the N64 default,
    C DSP as fallback when syncs are frequent. Needs a plan for the ARAM
    view the RSP reads (BRR, echo) and for the per-write logging cost.
-2. Cache placement, to make N64 timing stable and fast: profile-guided
-   function ordering (I-cache) and deliberate placement of hot data
-   (APU/DSP/SPC structs, interpreter state) against the direct-mapped
-   D-cache. Then re-measure deferral before the RSP stage.
+2. D-cache placement of hot data (APU/DSP/SPC structs, interpreter state)
+   against the direct-mapped 8 KB D-cache; then re-measure deferral before
+   the RSP stage.
 3. Interpreter share: promote more code (analysis of SMW's `$0086DF`
    dispatcher idiom), and gameplay captures for the native set.
 4. PPU stage: skip the PPU's duplicate per-line sprite evaluation when the

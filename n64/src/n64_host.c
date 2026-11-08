@@ -265,7 +265,7 @@ int main(void) {
     acc_draw += t2 - t1;
     acc_present += t3 - t2;
 #ifdef N64_PROFILE_FRAMES
-    if (frame == N64_PROFILE_START) n64_platform_profile_start(1000);
+    if (frame == N64_PROFILE_START) n64_platform_profile_start(N64_PROFILE_US);
     if (frame == N64_PROFILE_START + N64_PROFILE_FRAMES) n64_platform_profile_stop_and_dump();
 #endif
 #ifdef N64_STATE_HASH
