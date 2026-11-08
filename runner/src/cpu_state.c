@@ -41,7 +41,14 @@
 
 extern Snes *g_snes;
 
-CpuState g_cpu;
+/* SNESRECOMP_HOT_BSS (default empty) lets a host place the hottest
+ * zero-initialised state, e.g. in the small-data section next to the other
+ * hot runtime counters, so it does not alias them in a small direct-mapped
+ * data cache (the N64 build sets it; see n64/Makefile). */
+#ifndef SNESRECOMP_HOT_BSS
+#define SNESRECOMP_HOT_BSS
+#endif
+SNESRECOMP_HOT_BSS CpuState g_cpu;
 static CpuStageWindowStoreHook g_stage_window_store_hook;
 
 void cpu_set_stage_window_store_hook(CpuStageWindowStoreHook hook) {

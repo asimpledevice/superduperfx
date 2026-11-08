@@ -30,6 +30,9 @@
 #include "snes/dma.h"
 #include "snes/apu.h"
 #include "n64_ppu_build.h"
+#include "snes/cart.h"
+#include "snes/spc.h"
+#include "n64_ppu_rdp.h"
 
 /* N64_RENDER: 0 = software PPU only, 1 = RDP backend (software PPU for
  * lines it cannot do), 2 = RDP backend plus the software PPU on every line,
@@ -195,7 +198,32 @@ static uint8_t *load_rom(const char *path, int *size_out) {
 
 /* ---- Main loop ------------------------------------------------------- */
 
+/* The main loop runs on its own stack, placed so the stack's hot lines
+ * fall in data-cache sets the rest of the runtime uses least. The VR4300
+ * data cache is 8 KB and direct-mapped; libdragon's default stack top (the
+ * end of RDRAM, 0 mod 8 KB) put the deepest hot frames on the same lines as
+ * the PPU, sound and interpreter state. N64_STACK_COLOR is the stack top
+ * modulo 8 KB, chosen from a data-cache miss profile (see the notes);
+ * -1 keeps libdragon's stack. */
+#ifndef N64_STACK_COLOR
+#define N64_STACK_COLOR 0x18e0
+#endif
+static int host_main(void);
+#if N64_STACK_COLOR >= 0 && defined(__mips__)
+static uint8_t s_host_stack[256 * 1024] __attribute__((aligned(8192)));
+#endif
 int main(void) {
+#if N64_STACK_COLOR >= 0 && defined(__mips__)
+  /* host_main never returns. Leave a small argument area above sp. */
+  uintptr_t top = (uintptr_t)s_host_stack + sizeof s_host_stack - 8192 + (N64_STACK_COLOR & 8191);
+  __asm__ volatile("move $sp, %0\n\tjal %1\n\tnop" :: "r"(top - 64), "i"(host_main) : "memory");
+  __builtin_unreachable();
+#else
+  return host_main();
+#endif
+}
+
+static int host_main(void) {
   n64_platform_init();
   if (!n64_platform_has_expansion_pak())
     Die("This build needs the Expansion Pak (8 MB).");
@@ -267,6 +295,31 @@ int main(void) {
 #ifdef N64_PROFILE_FRAMES
     if (frame == N64_PROFILE_START) n64_platform_profile_start(N64_PROFILE_US);
     if (frame == N64_PROFILE_START + N64_PROFILE_FRAMES) n64_platform_profile_stop_and_dump();
+#endif
+#ifdef N64_DCPROF
+    /* Data-cache miss profile window for ares's local profiler (see
+     * n64/profile/dcache_report.py): heap objects first, then markers. */
+    if (frame == N64_DCPROF) {
+      Snes *sn = g_snes;
+      n64_platform_log("[heap] snes %08lx %lu\n", (unsigned long)(uintptr_t)sn, (unsigned long)sizeof(*sn));
+      n64_platform_log("[heap] wram %08lx %lu\n", (unsigned long)(uintptr_t)sn->ram, 0x20000ul);
+      n64_platform_log("[heap] apu %08lx %lu\n", (unsigned long)(uintptr_t)sn->apu, (unsigned long)sizeof(*sn->apu));
+      n64_platform_log("[heap] dsp %08lx %lu\n", (unsigned long)(uintptr_t)sn->apu->dsp, (unsigned long)sizeof(*sn->apu->dsp));
+      n64_platform_log("[heap] spc %08lx %lu\n", (unsigned long)(uintptr_t)sn->apu->spc, (unsigned long)sizeof(*sn->apu->spc));
+      n64_platform_log("[heap] ppu %08lx %lu\n", (unsigned long)(uintptr_t)g_ppu, (unsigned long)sizeof(*g_ppu));
+      n64_platform_log("[heap] cart_rom %08lx %lu\n", (unsigned long)(uintptr_t)sn->cart->rom, (unsigned long)sn->cart->romSize);
+      if (sn->cart->ram)
+        n64_platform_log("[heap] cart_sram %08lx %lu\n", (unsigned long)(uintptr_t)sn->cart->ram, (unsigned long)sn->cart->ramSize);
+#if N64_RENDER
+      n64_platform_log("[heap] rdp_frame %08lx %lu\n", (unsigned long)(uintptr_t)s_rdp_frame, (unsigned long)sizeof(*s_rdp_frame));
+      for (int p = 0; p < N64PPU_PLANES; ++p)
+        n64_platform_log("[heap] rdp_plane%d %08lx %lu\n", p, (unsigned long)(uintptr_t)s_rdp_frame->plane[p],
+                         (unsigned long)N64PPU_STRIDE * N64PPU_LINES);
+#endif
+      n64_platform_log("[heap] sw_pixels %08lx %lu\n", (unsigned long)(uintptr_t)s_pixels, (unsigned long)(kSnesW * kSnesH * 4));
+      n64_platform_log("DCPROF_START\n");
+    }
+    if (frame == N64_DCPROF + 60) n64_platform_log("DCPROF_STOP\n");
 #endif
 #ifdef N64_STATE_HASH
     if (frame % 60 == 0) {

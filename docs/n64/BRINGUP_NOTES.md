@@ -453,15 +453,54 @@ changes:
     profile/icache_order.py build/snesrecomp_interp.elf \
         build/snesrecomp_interp.map isviewer.log -o icache_order.ld --runtime-only
 
+## Data-cache placement (2026-11-08)
+
+Tools:
+- `n64/profile/ares-dcache-profiler.patch` (apply to the ares checkout and
+  rebuild): ares counts data-cache misses per line, evicted/evicting pairs,
+  missing PCs and all accesses between `DCPROF_START`/`DCPROF_STOP` lines on
+  the IS-Viewer, writing `$ARES_DCPROF`; with `$ARES_DCTRACE` it also writes
+  every access as a u32 trace. ares's JIT checks hits inline, so traces need
+  `ARES_ARGS="--setting General/ForceInterpreter=true"` (ares_run.sh).
+- Build with `EXTRA_CFLAGS=-DN64_DCPROF=400`: logs heap object addresses and
+  brackets frames 400-460.
+- `profile/dcache_report.py ELF LOG dcprof.txt`: misses by object and region,
+  eviction pairs, missing functions.
+- `profile/dcache_sim.c`: replays a trace through the 8 KB direct-mapped
+  write-back cache, with objects moved or swept over all 512 positions.
+  Miss-count or access-count heuristics mispredicted placements; replaying
+  the real access order did not.
+
+Changes (all layout only; emulated state hashes identical):
+1. Apu: port-queue scalars moved ahead of the 16 KB queue. After it they
+   sat exactly 16 KB from the APU control fields, the same cache line, both
+   touched on every SPC instruction (12% of all misses).
+2. Main loop on its own 256 KB stack whose top is placed at 0x18e0 modulo
+   8 KB (`N64_STACK_COLOR`, chosen by trace sweep). libdragon's stack top
+   (end of RDRAM, 0 mod 8 KB) was the worst position; the stack held 27% of
+   all misses. Sweep range over positions: 1.19M to 3.15M misses per trace.
+3. `g_cpu` placed in `.sbss` next to the hot runtime counters
+   (`SNESRECOMP_HOT_BSS`, empty by default; the N64 build sets it).
+4. PPU-build state: deferred-run fields first, not after the span array.
+
+Misses in frames 400-460: 6.43M -> 3.05M. ares frame time (no profiling
+hooks), with the I-cache ordering: 231 -> 217 ms at frame 600; against the
+original layout 262 -> 217 ms (-17%), -16% to -18% across frames 360-960.
+
+Not done: placing the large heap objects (APU, DSP, PPU, WRAM) by
+allocation offset would save about 3% of misses each in the trace, but the
+best offsets depend on the game's sound driver and RAM use and it needs
+allocation hooks in the engine. The I-cache ordering predates these changes
+(main is now a trampoline to host_main); regenerate it after larger edits.
+
 ## Next steps
 
 1. Audio: RSP DSP on top of the deferred machinery (stage 2): batch replay
    on RSP microcode (8 voices across the vector lanes) as the N64 default,
    C DSP as fallback when syncs are frequent. Needs a plan for the ARAM
    view the RSP reads (BRR, echo) and for the per-write logging cost.
-2. D-cache placement of hot data (APU/DSP/SPC structs, interpreter state)
-   against the direct-mapped 8 KB D-cache; then re-measure deferral before
-   the RSP stage.
+2. Re-measure the deferred DSP on the cache-placed build, then the RSP
+   stage.
 3. Interpreter share: promote more code (analysis of SMW's `$0086DF`
    dispatcher idiom), and gameplay captures for the native set.
 4. PPU stage: skip the PPU's duplicate per-line sprite evaluation when the

@@ -81,15 +81,19 @@ typedef struct {
   uint32_t vram_count;
 } BgRun;
 
+/* Field order matters on the N64: the run state and the PPU pointer are
+ * used on every tile of a deferred run, so they come first, next to the
+ * frame pointer, rather than after the 10 KB span array where they shared
+ * data-cache lines with the PPU's own state. */
 typedef struct {
   N64PpuFrame *frame;
+  const Ppu *ppu;                          /* VRAM source for deferred runs */
+  BgRun runs[2][4];                        /* [main/sub][layer] */
   /* Rows that may hold non-zero bytes (persistent across frames). A row that
    * is not rewritten on a line is cleared before it can be drawn again. */
   uint32_t dirty[N64PPU_PLANES][(N64PPU_LINES + 31) / 32];
   struct TlutKey keys[N64PPU_MAX_TLUTS];   /* parallel to frame->tlut */
   Spans spans[N64PPU_LINES];               /* per line, for deferred masks */
-  BgRun runs[2][4];                        /* [main/sub][layer] */
-  const Ppu *ppu;                          /* VRAM source for deferred runs */
 } BuildState;
 
 static BuildState s_state;

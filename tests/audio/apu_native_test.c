@@ -39,10 +39,11 @@ static void same(Apu *reference, Apu *native) {
       sizeof(Spc) - offsetof(Spc, a), "SPC execution");
   equal(reference->dsp->ram, native->dsp->ram,
       sizeof(Dsp) - offsetof(Dsp, ram), "DSP state and PCM");
-  /* Host-only deferred-DSP state (when built) follows timerSyncCycle. */
-  equal(reference->portQueue, native->portQueue,
-      offsetof(Apu, timerSyncCycle) + sizeof(native->timerSyncCycle) -
-      offsetof(Apu, portQueue), "port queue and clock");
+  /* Port scheduler scalars, timer sync point and queue; host-only
+   * deferred-DSP state (when built) follows the queue. */
+  equal(&reference->portQHead, &native->portQHead,
+      offsetof(Apu, portQueue) + sizeof(native->portQueue) -
+      offsetof(Apu, portQHead), "port queue and clock");
 }
 
 static void init(Apu *apu, unsigned mode) {

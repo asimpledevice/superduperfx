@@ -86,8 +86,10 @@ struct Apu {
   uint8_t pad[6];
   /* Port event state must stay after pad: apu_saveload snapshots [ram,pad+6),
    * and that savestate layout is frozen. Callback lead is host state, so the
-   * queue and its mapping are deliberately reset rather than serialized. */
-  ApuPortWrite portQueue[APU_PORT_QUEUE_LEN];
+   * queue and its mapping are deliberately reset rather than serialized.
+   * The scalars precede the 16 KB queue so they share cache lines with the
+   * fields above; after it they would sit exactly 16 KB from those fields and
+   * evict them on every SPC instruction in an 8 KB direct-mapped cache. */
   uint32_t portQHead;
   uint32_t portQTail;
   uint64_t portClock;        /* APU cycles executed since reset */
@@ -99,6 +101,7 @@ struct Apu {
   /* Native APU builds advance the timers lazily: they are current through
    * cycle timerSyncCycle - 1. Host state, re-derived on load and reset. */
   uint32_t timerSyncCycle;
+  ApuPortWrite portQueue[APU_PORT_QUEUE_LEN];
 #if SNESRECOMP_APU_DEFER_DSP
   /* Deferred DSP (host state; empty after every sync, save and reset). */
   uint32_t dspPending;

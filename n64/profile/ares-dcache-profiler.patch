@@ -1,0 +1,139 @@
+diff --git a/ares/n64/cartridge/isviewer.cpp b/ares/n64/cartridge/isviewer.cpp
+index 4f16eb3..0a3d553 100644
+--- a/ares/n64/cartridge/isviewer.cpp
++++ b/ares/n64/cartridge/isviewer.cpp
+@@ -1,3 +1,4 @@
++#include "../dcprof.hpp"
+ auto Cartridge::ISViewer::readHalf(u32 address) -> u16 {
+   address = (address & 0xffff);
+   return ram.read<Half>(address);
+@@ -9,6 +10,8 @@ auto Cartridge::ISViewer::readWord(u32 address) -> u32 {
+ }
+ 
+ auto Cartridge::ISViewer::messageChar(char c) -> void {
++  fputc(c, stderr);  // local patch: mirror IS-Viewer output for headless runs
++  dcprof::message(c);
+   if(!tracer->enabled()) return;
+   tracer->notify(c);
+ }
+diff --git a/ares/n64/cpu/dcache.cpp b/ares/n64/cpu/dcache.cpp
+index 5496d75..693626b 100644
+--- a/ares/n64/cpu/dcache.cpp
++++ b/ares/n64/cpu/dcache.cpp
+@@ -1,3 +1,4 @@
++#include "../dcprof.hpp"
+ auto CPU::DataCache::Line::hit(u32 paddr) const -> bool {
+   const u32 t = paddr & ~0x0000'0fffu;
+   return valid() && (tagKey & ~1u) == t;
+@@ -51,7 +52,9 @@ auto CPU::DataCache::Line::write(u32 paddr, u64 data) -> void {
+ template<u32 Size>
+ auto CPU::DataCache::read(u64 vaddr, u32 paddr) -> u64 {
+   auto& line = this->line(vaddr);
++  if(dcprof::on) dcprof::touch(paddr, false);
+   if(!line.hit(paddr)) {
++    if(dcprof::on) dcprof::record(paddr, line.valid(), (line.tagKey & ~0xfffu) | line.index, cpu.ipu.pc);
+     if(line.valid() && line.dirty) {
+       line.writeBack();
+       self.profile.dcacheWritebacks++;
+@@ -80,7 +83,9 @@ auto CPU::DataCache::readDebug(u64 vaddr, u32 paddr) -> u64 {
+ template<u32 Size>
+ auto CPU::DataCache::write(u64 vaddr, u32 paddr, u64 data) -> void {
+   auto& line = this->line(vaddr);
++  if(dcprof::on) dcprof::touch(paddr, true);
+   if(!line.hit(paddr)) {
++    if(dcprof::on) dcprof::record(paddr, line.valid(), (line.tagKey & ~0xfffu) | line.index, cpu.ipu.pc);
+     if(line.valid() && line.dirty) {
+       line.writeBack();
+       self.profile.dcacheWritebacks++;
+diff --git a/ares/n64/dcprof.hpp b/ares/n64/dcprof.hpp
+new file mode 100644
+index 0000000..2bfdce1
+--- /dev/null
++++ b/ares/n64/dcprof.hpp
+@@ -0,0 +1,86 @@
++#pragma once
++// Local patch: data-cache miss profiler for headless analysis. The game
++// toggles it by printing "DCPROF_START" / "DCPROF_STOP" lines on the
++// IS-Viewer; STOP writes the counts to $ARES_DCPROF (default dcprof.txt).
++// Included inside the Nintendo64 namespace (unity build): no std includes.
++namespace dcprof {
++inline bool on = false;
++inline u32* miss;     // per 16-byte RDRAM line, 8 MB
++inline u32* access;   // loads and stores per 16-byte line (hits and misses)
++inline u32* pcs;      // per 4-byte instruction in KSEG0 0x80000000-0x80800000
++enum : u32 { PairSlots = 1u << 20 };
++inline u64* pairKey;  // (old 256 B << 32 | new 256 B) + 1, open addressing
++inline u32* pairCount;
++
++inline auto alloc() -> void {
++  if(!miss) {
++    miss = new u32[1u << 19]();
++    pcs = new u32[1u << 21]();
++    pairKey = new u64[PairSlots]();
++    pairCount = new u32[PairSlots]();
++    access = new u32[1u << 19]();
++  }
++}
++
++// $ARES_DCTRACE: also write every access as a u32 (bit 31 = store) for
++// offline cache simulation, up to $ARES_DCTRACE_MAX accesses (default 64M).
++inline FILE* trace;
++inline u64 traceLeft;
++inline auto touch(u32 paddr, bool store) -> void {
++  alloc();
++  access[paddr >> 4 & 0x7ffff]++;
++  if(trace && traceLeft) {
++    u32 w = (paddr & 0x7fffffu) | (store ? 0x80000000u : 0);
++    fwrite(&w, 4, 1, trace);
++    if(!--traceLeft) { fclose(trace); trace = nullptr; }
++  }
++}
++
++inline auto record(u32 paddr, bool hadOld, u32 oldPaddr, u64 pc) -> void {
++  alloc();
++  miss[paddr >> 4 & 0x7ffff]++;
++  const u32 p = (u32)pc;
++  if(p >= 0x80000000u && p < 0x80800000u) pcs[(p - 0x80000000u) >> 2]++;
++  if(!hadOld) return;
++  const u64 key = ((u64)((oldPaddr >> 8) & 0xffffff) << 32 | ((paddr >> 8) & 0xffffff)) + 1;
++  u32 h = (u32)(key * 0x9e3779b97f4a7c15ull >> 44) & (PairSlots - 1);
++  while(pairKey[h] && pairKey[h] != key) h = (h + 1) & (PairSlots - 1);
++  pairKey[h] = key;
++  pairCount[h]++;
++}
++
++inline auto dump() -> void {
++  if(!miss) return;
++  const char* path = getenv("ARES_DCPROF");
++  FILE* f = fopen(path ? path : "dcprof.txt", "w");
++  if(!f) return;
++  for(u32 i = 0; i < (1u << 19); i++) if(miss[i]) fprintf(f, "MISS %08x %u\n", i << 4, miss[i]);
++  for(u32 i = 0; i < (1u << 19); i++) if(access[i]) fprintf(f, "ACC %08x %u\n", i << 4, access[i]);
++  for(u32 i = 0; i < PairSlots; i++) if(pairKey[i]) {
++    const u64 k = pairKey[i] - 1;
++    fprintf(f, "PAIR %06x %06x %u\n", (u32)(k >> 32), (u32)k, pairCount[i]);
++  }
++  for(u32 i = 0; i < (1u << 21); i++) if(pcs[i]) fprintf(f, "PC %08x %u\n", 0x80000000u + (i << 2), pcs[i]);
++  fclose(f);
++}
++
++inline auto message(char c) -> void {
++  static char buf[64]; static u32 n = 0;
++  if(c == '\n') {
++    buf[n] = 0;
++    if(!strcmp(buf, "DCPROF_START")) {
++      on = true;
++      if(const char* t = getenv("ARES_DCTRACE")) {
++        trace = fopen(t, "wb");
++        const char* m = getenv("ARES_DCTRACE_MAX");
++        traceLeft = m ? strtoull(m, nullptr, 0) : (64ull << 20);
++      }
++    }
++    if(!strcmp(buf, "DCPROF_STOP")) {
++      on = false; dump();
++      if(trace) { fclose(trace); trace = nullptr; }
++    }
++    n = 0;
++  } else if(n < sizeof(buf) - 1) buf[n++] = c;
++}
++}

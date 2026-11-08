@@ -5,7 +5,8 @@
 #
 #   n64/profile/ares_run.sh ROM OUTDIR "10 30 60"   # screenshot times in seconds
 #
-# Env: ARES (binary path), XDISP (X display number, default 77).
+# Env: ARES (binary path), XDISP (X display number, default 77),
+# ARES_ARGS (extra ares arguments, e.g. "--setting General/ForceInterpreter=true").
 # The run ends after the last screenshot time.
 set -u
 ROM="$1"; OUT="$2"; TIMES="$3"
@@ -19,7 +20,7 @@ XPID=$!
 for _ in $(seq 1 50); do xdpyinfo >/dev/null 2>&1 && break; sleep 0.1; done
 "$ARES" --system "Nintendo 64" --no-file-prompt \
   --setting Audio/Mute=true --setting Audio/Blocking=false \
-  --setting Input/Defocus=Allow --setting Nintendo64/ExpansionPak=true \
+  --setting Input/Defocus=Allow --setting Nintendo64/ExpansionPak=true ${ARES_ARGS:-} \
   "$ROM" > "$OUT/stdout.log" 2> "$OUT/isviewer.log" &
 APID=$!
 start=$(date +%s)
