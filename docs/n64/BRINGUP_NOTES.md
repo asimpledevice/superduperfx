@@ -337,6 +337,25 @@ instructions (the SMW driver polls timer 0, so syncs stay frequent).
 `N64_STATE_HASH` (via `EXTRA_CFLAGS`) logs WRAM/ARAM hashes every 60 frames;
 it confirmed identical emulation between builds on N64.
 
+### S-DSP on the CPU (option 1)
+
+Per DSP sample (ares, cycle counter, warm = rerun from restored state):
+cold ~3700 cycles, warm ~2700 before tuning. Split: voices ~290 cycles
+each (common path ~100 instructions plus five 5-cycle MULT stalls), echo
+~575, mixing ~95, output ~135. Rewriting the channel step and BRR decoder
+with locals (byte stores to `dsp->ram`/ARAM alias everything, forcing
+reloads) and per-filter BRR loops: warm 2700 -> ~2510 (-7%), exact.
+`SNESRECOMP_DSP_NATIVE_MIX=1` measured slower here (~2680), so it stays off.
+
+The code is near its intrinsic cost. The larger CPU-side lever is cache
+warmth (cold minus warm ~1000 cycles per sample), which batching the DSP
+recovers; that is the first stage of the deferred (RSP) DSP.
+
+Calibration build: `make EXTRA_CFLAGS="-DN64_DSP_CLOCK
+-DSNESRECOMP_DSP_CYCLE_HOOK=n64_dsp_cycle_timed"` shows `dsp cold/warm`
+cycles per sample on the status line (refreshed every 4096 samples), for
+comparing ares with real hardware. ares at frame 731: 4756/3072.
+
 ### Code layout dominates small comparisons
 
 ares models the VR4300's direct-mapped 16 KB I-cache. Inserting only a
@@ -351,8 +370,11 @@ candidate.
 
 ## Next steps
 
-1. Audio step 2: S-DSP cost (~26 ms/frame) — exact C work versus an RSP
-   implementation (batched; accuracy trade-off to decide).
+1. Audio: deferred S-DSP, exact. Stage 1 runs the C DSP in batches behind
+   the SPC, syncing when the SPC reads ENVX/OUTX/ENDX, touches the echo
+   window or writes ARAM the DSP will read; stage 2 moves the batch to RSP
+   microcode (8 voices across the vector lanes) as the N64 default, with
+   the C DSP as fallback when syncs are frequent.
 2. Profile-guided function ordering for the I-cache.
 3. Interpreter share: promote more code (analysis of SMW's `$0086DF`
    dispatcher idiom), and gameplay captures for the native set.

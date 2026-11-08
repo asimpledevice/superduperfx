@@ -50,6 +50,16 @@ static inline void apu_native_timers_sync(Apu *apu) {
   apu_native_timer(&apu->timer[2], clocks, 4, 0);
 }
 
+/* SNESRECOMP_DSP_CYCLE_HOOK names a host function to call in place of
+ * dsp_cycle (for example, to time it). It must leave the same state as one
+ * dsp_cycle call. */
+#ifdef SNESRECOMP_DSP_CYCLE_HOOK
+void SNESRECOMP_DSP_CYCLE_HOOK(Dsp *dsp);
+#define APU_NATIVE_DSP_CYCLE SNESRECOMP_DSP_CYCLE_HOOK
+#else
+#define APU_NATIVE_DSP_CYCLE dsp_cycle
+#endif
+
 static void apu_runCycles_native(Apu *apu, uint32_t clocks) {
   while (clocks) {
     apu_drainPortQueue(apu);
@@ -62,7 +72,7 @@ static void apu_runCycles_native(Apu *apu, uint32_t clocks) {
       apu->cpuCyclesLeft = spc_runOpcode(apu->spc);
     }
     unsigned sample_phase = apu->cycles & 31u;
-    if (!sample_phase) dsp_cycle(apu->dsp);
+    if (!sample_phase) APU_NATIVE_DSP_CYCLE(apu->dsp);
     uint32_t span = apu->cpuCyclesLeft;
     unsigned to_sample = 32u - sample_phase;
     if (span > to_sample) span = to_sample;

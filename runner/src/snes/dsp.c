@@ -397,20 +397,39 @@ static void dsp_handleEcho(Dsp* dsp, int* outputL, int* outputR, bool audit,
   }
 }
 
+/* Same arithmetic as dsp_getSample (kept exported for dsp_shadow), inlined
+ * into the channel step. */
+static inline int16_t dsp_interpolate(const int16_t *buf, unsigned counter) {
+  const int sampleNum = counter >> 12, offset = (counter >> 4) & 0xff;
+  int out = (gaussValues[0xff - offset] * buf[sampleNum]) >> 10;
+  out += (gaussValues[0x1ff - offset] * buf[sampleNum + 1]) >> 10;
+  out += (gaussValues[0x100 + offset] * buf[sampleNum + 2]) >> 10;
+  out = ((int16_t) (out & 0xffff)); // clip 16-bit
+  out += (gaussValues[offset] * buf[sampleNum + 3]) >> 10;
+  out = out < -0x8000 ? -0x8000 : (out > 0x7fff ? 0x7fff : out); // clamp 16-bit
+  return out >> 1;
+}
+
+/* One voice for one sample. Channel fields are read into locals and written
+ * back once: byte stores into dsp->ram and apu_ram may alias anything, so
+ * without locals the compiler reloads every field after each such store. */
 static void dsp_cycleChannel(Dsp* dsp, int ch) {
+  DspChannel *c = &dsp->channel[ch];
   // handle pitch counter
-  uint16_t pitch = dsp->channel[ch].pitch;
-  if(ch > 0 && dsp->channel[ch].pitchModulation) {
-    int factor = (dsp->channel[ch - 1].sampleOut >> 4) + 0x400;
+  uint16_t pitch = c->pitch;
+  if(ch > 0 && c->pitchModulation) {
+    int factor = (c[-1].sampleOut >> 4) + 0x400;
     pitch = (pitch * factor) >> 10;
     if(pitch > 0x3fff) pitch = 0x3fff;
   }
-  int newCounter = dsp->channel[ch].pitchCounter + pitch;
+  int newCounter = c->pitchCounter + pitch;
   if(newCounter > 0xffff) {
     // next sample
     dsp_decodeBrr(dsp, ch);
   }
-  dsp->channel[ch].pitchCounter = newCounter;
+  const uint16_t counter = (uint16_t)newCounter;
+  c->pitchCounter = counter;
+  const bool evenCycle = dsp->evenCycle;
   int16_t sample = 0;
   /* A silent voice's interpolated sample is multiplied by a zero envelope.
    * Defer the interpolation past the envelope update and skip it if the
@@ -418,88 +437,86 @@ static void dsp_cycleChannel(Dsp* dsp, int ch) {
    * buffer before the sample would have been used, so that case is computed
    * here as before. */
   bool deferSample = false;
-  if(dsp->channel[ch].useNoise) {
+  if(c->useNoise) {
     sample = dsp->noiseSample;
-  } else if(dsp->channel[ch].gain == 0 &&
-            !(dsp->evenCycle && dsp->channel[ch].keyOn && !dsp->channel[ch].keyOff)) {
+  } else if(c->gain == 0 && !(evenCycle && c->keyOn && !c->keyOff)) {
     deferSample = true;
   } else {
-    sample = dsp_getSample(dsp, ch, dsp->channel[ch].pitchCounter >> 12, (dsp->channel[ch].pitchCounter >> 4) & 0xff);
+    sample = dsp_interpolate(c->decodeBuffer, counter);
   }
   // Key-on/off is LATCHED and polled every other sample, KOF taking
   // priority — hardware behavior (and what the snes9x oracle does).
-  // The inherited port code (`MY_CHANGES`) instead applied KON/KOF
-  // immediately inside dsp_write, a hardware deviation kept here since
-  // the initial import with no recorded rationale; issue #4 made it a
-  // suspect for note-level divergence, so it was removed in favor of
-  // this latched path. A pending keyOn survives while keyOff is held
-  // (engine clears $5C later -> voice starts at the next poll), exactly
-  // as on hardware.
-  if(dsp->evenCycle) {
+  // A pending keyOn survives while keyOff is held (engine clears $5C later
+  // -> voice starts at the next poll), exactly as on hardware.
+  if(evenCycle) {
     // handle keyon/off (every other cycle)
-    if(dsp->channel[ch].keyOff) {
+    if(c->keyOff) {
       // go to release
-      dsp->channel[ch].adsrState = 4;
-    } else if(dsp->channel[ch].keyOn) {
-      dsp->channel[ch].keyOn = false;
+      c->adsrState = 4;
+    } else if(c->keyOn) {
+      c->keyOn = false;
       // restart current sample
-      dsp->channel[ch].previousFlags = 0;
-      uint16_t samplePointer = dsp->dirPage + 4 * dsp->channel[ch].srcn;
-      dsp->channel[ch].decodeOffset = dsp->apu_ram[samplePointer];
-      dsp->channel[ch].decodeOffset |= dsp->apu_ram[(samplePointer + 1) & 0xffff] << 8;
-      memset(dsp->channel[ch].decodeBuffer, 0, sizeof(dsp->channel[ch].decodeBuffer));
-      dsp->channel[ch].gain = 0;
+      c->previousFlags = 0;
+      uint16_t samplePointer = dsp->dirPage + 4 * c->srcn;
+      c->decodeOffset = dsp->apu_ram[samplePointer] |
+                        (dsp->apu_ram[(samplePointer + 1) & 0xffff] << 8);
+      memset(c->decodeBuffer, 0, sizeof(c->decodeBuffer));
+      c->gain = 0;
       // Key-on always enters the ATTACK stage; whether the envelope VALUE
       // follows ADSR or the GAIN program is decided live per tick (the
       // stage machine is source-independent — see dsp_handleGain).
-      dsp->channel[ch].adsrState = 0;
+      c->adsrState = 0;
     }
   }
   // handle reset
   if(dsp->reset) {
-    dsp->channel[ch].adsrState = 4;
-    dsp->channel[ch].gain = 0;
+    c->adsrState = 4;
+    c->gain = 0;
   }
   // Envelope. The SOURCE (ADSR vs GAIN) is re-read from the live register
   // state on EVERY tick — hardware behavior (bsnes/blargg run_envelope).
   // The Capcom driver's standard note-off is a mid-note source switch:
   // clear ADSR1.7 with GAIN preloaded to an exponential decrease, letting
-  // the note fade on the GAIN program. The previous code latched the
-  // source into adsrState at key-on only, so such voices stayed in
-  // ADSR-sustain (often rate 0 = frozen envelope) and sustained FOREVER —
-  // MMX issue #4's "stuck note". The adsrState value now tracks only the
-  // ADSR STAGE (0 attack / 1 decay / 2 sustain / 4 release); stage
-  // transitions keep running under GAIN so a switch back to ADSR resumes
-  // in the right stage. (Legacy state 3 from old savestates is treated
-  // as sustain; its voices necessarily have useGain set.)
-  bool releasing = dsp->channel[ch].adsrState == 4;
-  bool liveGain = !releasing && dsp->channel[ch].useGain;
-  bool doingDirectGain = liveGain && dsp->channel[ch].directGain;
-  uint16_t rate;
+  // the note fade on the GAIN program. adsrState tracks only the ADSR STAGE
+  // (0 attack / 1 decay / 2 sustain / 4 release); stage transitions keep
+  // running under GAIN so a switch back to ADSR resumes in the right stage.
+  // (Legacy state 3 from old savestates is treated as sustain; its voices
+  // necessarily have useGain set.)
+  const uint8_t adsrState = c->adsrState;
+  bool releasing = adsrState == 4;
+  bool liveGain = !releasing && c->useGain;
+  bool doingDirectGain = liveGain && c->directGain;
   if(releasing) {
-    rate = 0;
-  } else if(liveGain) {
-    rate = doingDirectGain ? 0 : dsp->channel[ch].adsrRates[3];
-  } else {
-    int stage = dsp->channel[ch].adsrState;
-    if(stage > 2) stage = 2;
-    rate = dsp->channel[ch].adsrRates[stage];
-  }
-  if(!releasing && !doingDirectGain && rate != 0) {
-    dsp->channel[ch].rateCounter++;
-  }
-  if(releasing || (!doingDirectGain && dsp->channel[ch].rateCounter >= rate && rate != 0)) {
-    if(!releasing) dsp->channel[ch].rateCounter = 0;
     dsp_handleGain(dsp, ch, liveGain);
+  } else if(!doingDirectGain) {
+    uint16_t rate;
+    if(liveGain) {
+      rate = c->adsrRates[3];
+    } else {
+      int stage = adsrState;
+      if(stage > 2) stage = 2;
+      rate = c->adsrRates[stage];
+    }
+    if(rate != 0) {
+      uint16_t rateCounter = c->rateCounter + 1;
+      if(rateCounter >= rate) {
+        c->rateCounter = 0;
+        dsp_handleGain(dsp, ch, liveGain);
+      } else {
+        c->rateCounter = rateCounter;
+      }
+    }
+  } else {
+    c->gain = c->gainValue;
   }
-  if(doingDirectGain) dsp->channel[ch].gain = dsp->channel[ch].gainValue;
-  if(deferSample && dsp->channel[ch].gain != 0)
-    sample = dsp_getSample(dsp, ch, dsp->channel[ch].pitchCounter >> 12, (dsp->channel[ch].pitchCounter >> 4) & 0xff);
+  const uint16_t gain = c->gain;
+  if(deferSample && gain != 0)
+    sample = dsp_interpolate(c->decodeBuffer, counter);
   // set outputs
-  dsp->ram[(ch << 4) | 8] = dsp->channel[ch].gain >> 4;
-  sample = (sample * dsp->channel[ch].gain) >> 11;
+  sample = (sample * gain) >> 11;
+  c->sampleOut = sample;
+  dsp->ram[(ch << 4) | 8] = gain >> 4;
   dsp->ram[(ch << 4) | 9] = sample >> 7;
-  dsp->channel[ch].sampleOut = sample;
 }
 
 static void dsp_handleGain(Dsp* dsp, int ch, bool liveGain) {
@@ -577,21 +594,62 @@ int16_t dsp_getSample(Dsp* dsp, int ch, int sampleNum, int offset) {
   return out >> 1;
 }
 
+/* One BRR nibble through shift, filter and clamping. `filter` is a constant
+ * at each call site, so each filter gets its own loop. */
+static inline __attribute__((always_inline)) int dsp_brrStep(int s, int shift, int filter,
+                                                            int old, int older) {
+  if(s > 7) s -= 16;
+  if(shift <= 0xc) {
+    s = (s << shift) >> 1;
+  } else {
+    /* Invalid/high BRR shifts (13-15) preserve only the sign contribution.
+     * This is the hardware/blargg operation in canon's half-scale domain:
+     * negative nybbles become -2048 and nonnegative nybbles become 0 before
+     * filtering. The old expression produced -4096, doubling these samples. */
+    s &= ~0x7ff;
+  }
+  switch(filter) {
+    case 1: s += old + (-old >> 4); break;
+    case 2: s += 2 * old + ((3 * -old) >> 5) - older + (older >> 4); break;
+    case 3: s += 2 * old + ((13 * -old) >> 6) - older + ((3 * older) >> 4); break;
+  }
+  s = s < -0x8000 ? -0x8000 : (s > 0x7fff ? 0x7fff : s); // clamp 16-bit
+  return ((int16_t) ((s & 0x7fff) << 1)) >> 1; // clip 15-bit
+}
+
+static inline __attribute__((always_inline)) void dsp_brrBlock(
+    const uint8_t *ram, uint16_t *offset, int16_t *out, int shift, int filter,
+    int *oldp, int *olderp) {
+  uint16_t off = *offset;
+  int old = *oldp, older = *olderp;
+  for(int i = 0; i < 16; i += 2) {
+    const uint8_t curByte = ram[off++];
+    int s = dsp_brrStep(curByte >> 4, shift, filter, old, older);
+    older = old; old = s; out[i] = (int16_t)s;
+    s = dsp_brrStep(curByte & 0xf, shift, filter, old, older);
+    older = old; old = s; out[i + 1] = (int16_t)s;
+  }
+  *offset = off;
+  *oldp = old; *olderp = older;
+}
+
 static void dsp_decodeBrr(Dsp* dsp, int ch) {
+  DspChannel *c = &dsp->channel[ch];
+  const uint8_t *ram = dsp->apu_ram;
   // copy last 3 samples (16-18) to first 3 for interpolation
-  dsp->channel[ch].decodeBuffer[0] = dsp->channel[ch].decodeBuffer[16];
-  dsp->channel[ch].decodeBuffer[1] = dsp->channel[ch].decodeBuffer[17];
-  dsp->channel[ch].decodeBuffer[2] = dsp->channel[ch].decodeBuffer[18];
+  c->decodeBuffer[0] = c->decodeBuffer[16];
+  c->decodeBuffer[1] = c->decodeBuffer[17];
+  c->decodeBuffer[2] = c->decodeBuffer[18];
   // handle flags from previous block
-  if(dsp->channel[ch].previousFlags == 1 || dsp->channel[ch].previousFlags == 3) {
+  if(c->previousFlags == 1 || c->previousFlags == 3) {
     // loop sample
-    uint16_t samplePointer = dsp->dirPage + 4 * dsp->channel[ch].srcn;
-    dsp->channel[ch].decodeOffset = dsp->apu_ram[(samplePointer + 2) & 0xffff];
-    dsp->channel[ch].decodeOffset |= (dsp->apu_ram[(samplePointer + 3) & 0xffff]) << 8;
-    if(dsp->channel[ch].previousFlags == 1) {
+    uint16_t samplePointer = dsp->dirPage + 4 * c->srcn;
+    c->decodeOffset = ram[(samplePointer + 2) & 0xffff] |
+                      (ram[(samplePointer + 3) & 0xffff] << 8);
+    if(c->previousFlags == 1) {
       // also release and clear gain
-      dsp->channel[ch].adsrState = 4;
-      dsp->channel[ch].gain = 0;
+      c->adsrState = 4;
+      c->gain = 0;
     }
     dsp->ram[0x7c] |= 1 << ch; // set ENDx
   }
@@ -599,50 +657,28 @@ static void dsp_decodeBrr(Dsp* dsp, int ch) {
   /* Dev faithful-reference: capture this BRR block's start + the two seed
    * samples before canon decodes, so the reference can re-decode the same block
    * (dsp_shadow_verify_brr below). */
-  uint16_t _brr_blk = dsp->channel[ch].decodeOffset;
-  int _brr_old = dsp->channel[ch].old, _brr_older = dsp->channel[ch].older;
+  uint16_t _brr_blk = c->decodeOffset;
+  int _brr_old = c->old, _brr_older = c->older;
 #endif
-  uint8_t header = dsp->apu_ram[dsp->channel[ch].decodeOffset++];
-  int shift = header >> 4;
-  int filter = (header & 0xc) >> 2;
-  dsp->channel[ch].previousFlags = header & 0x3;
-  uint8_t curByte = 0;
-  int old = dsp->channel[ch].old;
-  int older = dsp->channel[ch].older;
-  for(int i = 0; i < 16; i++) {
-    int s = 0;
-    if(i & 1) {
-      s = curByte & 0xf;
-    } else {
-      curByte = dsp->apu_ram[dsp->channel[ch].decodeOffset++];
-      s = curByte >> 4;
-    }
-    if(s > 7) s -= 16;
-    if(shift <= 0xc) {
-      s = (s << shift) >> 1;
-    } else {
-      /* Invalid/high BRR shifts (13-15) preserve only the sign contribution.
-       * This is the hardware/blargg operation in canon's half-scale domain:
-       * negative nybbles become -2048 and nonnegative nybbles become 0 before
-       * filtering. The old expression produced -4096, doubling these samples. */
-      s &= ~0x7ff;
-    }
-    switch(filter) {
-      case 1: s += old + (-old >> 4); break;
-      case 2: s += 2 * old + ((3 * -old) >> 5) - older + (older >> 4); break;
-      case 3: s += 2 * old + ((13 * -old) >> 6) - older + ((3 * older) >> 4); break;
-    }
-    s = s < -0x8000 ? -0x8000 : (s > 0x7fff ? 0x7fff : s); // clamp 16-bit
-    s = ((int16_t) ((s & 0x7fff) << 1)) >> 1; // clip 15-bit
-    older = old;
-    old = s;
-    dsp->channel[ch].decodeBuffer[i + 3] = s;
+  uint16_t off = c->decodeOffset;
+  const uint8_t header = ram[off++];
+  const int shift = header >> 4;
+  const int filter = (header & 0xc) >> 2;
+  c->previousFlags = header & 0x3;
+  int old = c->old, older = c->older;
+  int16_t *out = &c->decodeBuffer[3];
+  switch(filter) {
+    case 0: dsp_brrBlock(ram, &off, out, shift, 0, &old, &older); break;
+    case 1: dsp_brrBlock(ram, &off, out, shift, 1, &old, &older); break;
+    case 2: dsp_brrBlock(ram, &off, out, shift, 2, &old, &older); break;
+    default: dsp_brrBlock(ram, &off, out, shift, 3, &old, &older); break;
   }
-  dsp->channel[ch].older = older;
-  dsp->channel[ch].old = old;
+  c->decodeOffset = off;
+  c->older = older;
+  c->old = old;
 #if SNESRECOMP_DSP_FORENSICS
   dsp_shadow_verify_brr(dsp->apu_ram, _brr_blk, _brr_old, _brr_older,
-                        &dsp->channel[ch].decodeBuffer[3]);
+                        &c->decodeBuffer[3]);
 #endif
 }
 

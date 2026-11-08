@@ -63,6 +63,44 @@ static void draw_frame_rdp(bool software_every_line) {
   ppu_rasterRenderEnd(g_ppu);
 }
 
+/* N64_DSP_CLOCK (with -DSNESRECOMP_DSP_CYCLE_HOOK=n64_dsp_cycle_timed):
+ * times each S-DSP sample twice with the CPU cycle counter, first as it
+ * runs (cold cache), then again from a restored copy of its state (warm),
+ * and shows both on the status line. State afterwards is as if dsp_cycle
+ * ran once. */
+#ifdef N64_DSP_CLOCK
+#include <stddef.h>
+#include "snes/dsp.h"
+static uint32_t s_dsp_n, s_dsp_cold, s_dsp_warm, s_dsp_show_cold, s_dsp_show_warm;
+static inline uint32_t cycle_count(void) {
+  uint32_t c;
+  __asm__ volatile("mfc0 %0, $9" : "=r"(c));
+  return c * 2u;  /* COP0 Count runs at half the CPU clock */
+}
+void n64_dsp_cycle_timed(Dsp *d) {
+  static uint8_t save[sizeof(Dsp)];
+  const size_t off = offsetof(Dsp, ram);
+  const size_t len = offsetof(Dsp, sampleBuffer) - offsetof(Dsp, ram);
+  const uint16_t adr = d->echoBufferAdr + d->echoBufferIndex * 4;
+  uint8_t echo[4];
+  for (int i = 0; i < 4; ++i) echo[i] = d->apu_ram[(uint16_t)(adr + i)];
+  memcpy(save, (uint8_t *)d + off, len);
+  const uint32_t w = d->sampleWrite;
+  uint32_t t0 = cycle_count(); dsp_cycle(d); uint32_t t1 = cycle_count();
+  memcpy((uint8_t *)d + off, save, len);
+  d->sampleWrite = w;
+  for (int i = 0; i < 4; ++i) d->apu_ram[(uint16_t)(adr + i)] = echo[i];
+  uint32_t t2 = cycle_count(); dsp_cycle(d); uint32_t t3 = cycle_count();
+  s_dsp_n++; s_dsp_cold += t1 - t0; s_dsp_warm += t3 - t2;
+  if (s_dsp_n == 4096) {
+    s_dsp_show_cold = s_dsp_cold / s_dsp_n; s_dsp_show_warm = s_dsp_warm / s_dsp_n;
+    n64_platform_log("[dsp] cycles per sample: cold %lu warm %lu\n",
+                     (unsigned long)s_dsp_show_cold, (unsigned long)s_dsp_show_warm);
+    s_dsp_n = s_dsp_cold = s_dsp_warm = 0;
+  }
+}
+#endif
+
 /* ---- Host contract (see runner/src/desktop/host_main.h) -------------- */
 
 struct SpcPlayer *g_spc_player;
@@ -200,6 +238,12 @@ int main(void) {
     snprintf(line, sizeof line, "f%lu cpu %lums ppu %lums",
              (unsigned long)frame, (unsigned long)((t1 - t0) / 1000),
              (unsigned long)((t2 - t1) / 1000));
+#ifdef N64_DSP_CLOCK
+    snprintf(line, sizeof line, "f%lu cpu %lu ppu %lu dsp %lu/%lu",
+             (unsigned long)frame, (unsigned long)((t1 - t0) / 1000),
+             (unsigned long)((t2 - t1) / 1000), (unsigned long)s_dsp_show_cold,
+             (unsigned long)s_dsp_show_warm);
+#endif
 #if N64_RENDER
     const int diff = n64_ppu_draw_and_show(s_rdp_frame, line, N64_RENDER == 2);
     if (N64_RENDER == 2 && (frame < 8 || frame % 30 == 0 || diff > 0))
