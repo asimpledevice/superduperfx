@@ -21,4 +21,7 @@ void n64_ppu_build_begin(N64PpuFrame *frame, const uint32_t *sw_rows);
  * Returns false when the line needs the software PPU. */
 bool n64_ppu_build_line(const struct Ppu *ppu, int line);
 
+/* Finish the frame: expand background runs still deferred. */
+void n64_ppu_build_end(void);
+
 #endif

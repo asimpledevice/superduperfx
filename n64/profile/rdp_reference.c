@@ -1,8 +1,8 @@
 /* CPU stand-in for n64_ppu_draw.c: composites an N64PpuFrame with the same
  * rules the RDP path uses (fills, spans as scissors, palette lookups, alpha
- * transparency, plane order), so the build half can be checked against the
- * software PPU on the desktop in seconds instead of in an emulator.
- * Keep the composition rules in step with n64_ppu_draw.c. */
+ * transparency, plane order from kN64PpuOrder), so the build half can be
+ * checked against the software PPU on the desktop in seconds instead of in
+ * an emulator. Keep the composition rules in step with n64_ppu_draw.c. */
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -10,27 +10,9 @@
 
 #include "n64_ppu_rdp.h"
 
-static const int8_t kOrder[N64PPU_ORDERS][13] = {
-  [N64PPU_ORDER_MODE0] = {
-    N64PPU_BG4L, N64PPU_BG3L, N64PPU_OBJ0, N64PPU_BG4H, N64PPU_BG3H, N64PPU_OBJ1,
-    N64PPU_BG2L, N64PPU_BG1L, N64PPU_OBJ2, N64PPU_BG2H, N64PPU_BG1H, N64PPU_OBJ3, -1 },
-  [N64PPU_ORDER_MODE1] = {
-    N64PPU_BG3L, N64PPU_OBJ0, N64PPU_BG3H, N64PPU_OBJ1, N64PPU_BG2L, N64PPU_BG1L,
-    N64PPU_OBJ2, N64PPU_BG2H, N64PPU_BG1H, N64PPU_OBJ3, -1 },
-  [N64PPU_ORDER_MODE1_BG3TOP] = {
-    N64PPU_BG3L, N64PPU_OBJ0, N64PPU_OBJ1, N64PPU_BG2L, N64PPU_BG1L, N64PPU_OBJ2,
-    N64PPU_BG2H, N64PPU_BG1H, N64PPU_OBJ3, N64PPU_BG3H, -1 },
-};
-
-static int is_2bpp(int order, int p) {
-  if (p >= N64PPU_OBJ0) return 0;
-  if (order == N64PPU_ORDER_MODE0) return 1;
-  return p == N64PPU_BG3L || p == N64PPU_BG3H;
-}
-
-static void blit_plane(uint16_t *out, const N64PpuFrame *f, int p, int r,
-                       const uint16_t *tlut, int x0, int x1) {
-  if (!((f->rows[p][r >> 5] >> (r & 31)) & 1)) return;
+static void blit_plane(uint16_t *out, const N64PpuFrame *f, int p, const uint32_t *rows,
+                       int r, const uint16_t *tlut, int x0, int x1) {
+  if (!((rows[r >> 5] >> (r & 31)) & 1)) return;
   const uint8_t *row = f->plane[p] + (size_t)r * N64PPU_STRIDE + N64PPU_PAD;
   for (int x = x0; x < x1; ++x) {
     const uint16_t c = tlut[row[x]];
@@ -54,18 +36,20 @@ int n64_ppu_draw_and_show(const N64PpuFrame *f, const char *status, int compare_
                                      : (sp->clip ? L->fill_clip : L->fill);
       for (int x = sp->x0; x < sp->x1; ++x) out[x] = fill;
       if (sp->math && L->sub_layers)
-        for (const int8_t *o = kOrder[L->order]; *o >= 0; ++o) {
-          if (*o >= N64PPU_OBJ0) continue;
-          const int two = is_2bpp(L->order, *o);
-          const int t = sp->clip ? (two ? L->tl_math4_clip : L->tl_math16_clip)
-                                 : (two ? L->tl_math4 : L->tl_math16);
-          blit_plane(out, f, *o - N64PPU_BG1L + N64PPU_SUB_BG1L, r, f->tlut[t], sp->x0, sp->x1);
+        for (const int8_t *o = kN64PpuOrder[L->order]; *o >= 0; ++o) {
+          if ((*o & 0xf) >= N64PPU_OBJ0) continue;
+          const int p = (*o & 0xf) - N64PPU_BG1 + N64PPU_SUB_BG1;
+          const int sel = n64ppu_entry_sel(L->order, *o);
+          const int t = sp->clip ? L->tl_math_clip[sel] : L->tl_math[sel];
+          blit_plane(out, f, p, (*o & N64PPU_HI) ? f->rows_hi[p] : f->rows[p], r,
+                     f->tlut[t], sp->x0, sp->x1);
         }
-      for (const int8_t *o = kOrder[L->order]; *o >= 0; ++o) {
-        const int two = is_2bpp(L->order, *o);
-        const int t = sp->clip ? (two ? N64PPU_TLUT_BLACK4 : N64PPU_TLUT_BLACK16)
-                               : (two ? L->tl_main4 : L->tl_main16);
-        blit_plane(out, f, *o, r, f->tlut[t], sp->x0, sp->x1);
+      for (const int8_t *o = kN64PpuOrder[L->order]; *o >= 0; ++o) {
+        const int p = *o & 0xf;
+        const int sel = n64ppu_entry_sel(L->order, *o);
+        const int t = sp->clip ? N64PPU_TLUT_BLACK + sel : L->tl_main[sel];
+        blit_plane(out, f, p, (*o & N64PPU_HI) ? f->rows_hi[p] : f->rows[p], r,
+                   f->tlut[t], sp->x0, sp->x1);
       }
     }
     if (!compare_with_software) continue;

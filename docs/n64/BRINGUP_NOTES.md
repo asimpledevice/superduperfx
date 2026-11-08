@@ -266,12 +266,58 @@ Native code is already the cheapest part of the frame, so a leaner emitter
 does not pay for itself yet. Its value would be code size; selection
 already makes the native set fit.
 
+## RDP backend (2026-11-08)
+
+`n64/src/n64_ppu_build.c` + `n64_ppu_draw.c` replace the software PPU on
+the N64 (`make RENDER=1`, the default; `RENDER=0` keeps the software PPU,
+`RENDER=2` runs both and logs per-frame pixel differences).
+
+- The beam driver's raster replay runs unchanged; each line calls
+  `ppu_runLineState` (state, no pixels) and the RDP builder instead of
+  `ppu_runLine`.
+- CPU: each BG layer becomes one 8-bit palette-indexed plane
+  (`index = priority << 7 | palette index`); sprites become four planes, one
+  per priority, using `ppu_evaluateSprites`' rules. Bitplanes are converted
+  with lookup tables. Layers are expanded tile-major over runs of lines that
+  share their registers, so a tile's data is read once per 8 lines. Rows are
+  claimed in the cache with Create Dirty Exclusive before being rewritten.
+- Windows: up to five spans per line with the software PPU's rules, applied
+  by clearing spans and drawn as scissor rectangles.
+- Colour math: exact for math on backdrop pixels only (add/subtract/half,
+  subscreen or fixed colour): backdrop (+/-) subscreen pixel is a palette
+  lookup, so the subscreen is drawn under the main screen with a math
+  palette. Brightness is applied in the palettes.
+- RDP: per band of identical lines and per span, backdrop fill, subscreen
+  planes, then main planes in SNES priority order (each BG plane twice, low
+  and high half), in 8-line CI8 strips.
+- Fallback per line to the software PPU: layer colour math, mosaic, modes
+  2-7, hi-res/interlace, big tiles, subscreen sprites with math.
+
+Verification: the x86 reference compositor (`n64/profile/rdp_reference.c`)
+matches the software PPU on all 3000 SMW frames compared (boot, title,
+attract demo), and `RENDER=2` in ares matches on every compared frame
+through 1170. ares needs software Vulkan (`mesa-vulkan-drivers`) for its
+RDP (paraLLEl-RDP); without it RDP commands are silently dropped.
+
+Known limit: a VRAM write by HDMA during the visible frame would reach
+background lines already deferred in a run.
+
+### Speed (ares, SMW attract, frames 420-660, hot set native)
+
+| | Guest CPU + APU | PPU stage | Present |
+|---|---|---|---|
+| Software PPU | ~185 ms | ~150 ms | ~17 ms |
+| RDP backend | ~175 ms | ~81 ms | ~10 ms |
+
+The PPU stage is now plane building (~28 ms), sprite expansion (~12 ms),
+the PPU's own per-line state/sprite evaluation (~12 ms), palettes and HDMA.
+Remaining frame cost is led by the APU (~25%) and the interpreter (~15%).
+
 ## Next steps
 
-1. RDP graphics backend (PPU is 41% of the frame, plus the pixel copy).
-2. Audio: batched SPC700, DSP on the RSP (23%).
-3. Interpreter share (17%): promote more code. The analysis rejects some hot
-   callers for `truncated_call_continuation` (e.g. SMW's `$0086DF`
-   jump-table dispatcher, which pops its return address); a recognizer for
-   that idiom would be game-agnostic.
-4. Gameplay captures, not just attract mode, for the native set.
+1. Audio: the SPC700/DSP path is now the largest cost (~25%).
+2. Interpreter share: promote more code (analysis of SMW's `$0086DF`
+   dispatcher idiom), and gameplay captures for the native set.
+3. PPU stage: skip the PPU's duplicate per-line sprite evaluation when the
+   RDP path evaluates sprites itself (keep STAT77 flags exact).
+4. RDP coverage: layer colour math, mosaic, Mode 7 (a textured plane).

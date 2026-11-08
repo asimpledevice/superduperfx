@@ -58,6 +58,7 @@ static void draw_frame_rdp(bool software_every_line) {
     else ppu_runLineState(g_ppu, line);
     dma_doHdma(g_snes->dma);
   }
+  n64_ppu_build_end();
   ppu_rasterRenderEnd(g_ppu);
 }
 

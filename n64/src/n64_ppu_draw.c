@@ -7,27 +7,6 @@
 
 enum { kOx = 32, kOy = 8 };   /* SNES picture position in the 320x240 display */
 
-/* Back-to-front plane order per composition order. Mirrors the software
- * PPU's priority values (PpuDrawBackgrounds / SPRITE_PRIO_TO_PRIO). */
-static const int8_t kOrder[N64PPU_ORDERS][13] = {
-  [N64PPU_ORDER_MODE0] = {
-    N64PPU_BG4L, N64PPU_BG3L, N64PPU_OBJ0, N64PPU_BG4H, N64PPU_BG3H, N64PPU_OBJ1,
-    N64PPU_BG2L, N64PPU_BG1L, N64PPU_OBJ2, N64PPU_BG2H, N64PPU_BG1H, N64PPU_OBJ3, -1 },
-  [N64PPU_ORDER_MODE1] = {
-    N64PPU_BG3L, N64PPU_OBJ0, N64PPU_BG3H, N64PPU_OBJ1, N64PPU_BG2L, N64PPU_BG1L,
-    N64PPU_OBJ2, N64PPU_BG2H, N64PPU_BG1H, N64PPU_OBJ3, -1 },
-  [N64PPU_ORDER_MODE1_BG3TOP] = {
-    N64PPU_BG3L, N64PPU_OBJ0, N64PPU_OBJ1, N64PPU_BG2L, N64PPU_BG1L, N64PPU_OBJ2,
-    N64PPU_BG2H, N64PPU_BG1H, N64PPU_OBJ3, N64PPU_BG3H, -1 },
-};
-
-/* BG planes whose indices follow the 2bpp (every-4th-transparent) palette. */
-static bool plane_is_2bpp(int order, int bg_plane) {
-  if (bg_plane >= N64PPU_OBJ0) return false;
-  if (order == N64PPU_ORDER_MODE0) return true;
-  return bg_plane == N64PPU_BG3L || bg_plane == N64PPU_BG3H;
-}
-
 static bool rows_any(const uint32_t *bits, int a, int b) {
   for (int r = a; r < b; ++r)
     if (bits[r >> 5] & (1u << (r & 31))) return true;
@@ -59,12 +38,14 @@ static void draw_software_lines(const N64PpuFrame *f, int a, int b) {
 
 /* Draws one plane's rows [a, b) with palette tl (TLUT already loaded). */
 int g_n64ppu_strips[N64PPU_PLANES];
-static void draw_plane(const N64PpuFrame *f, int p, int a, int b) {
+/* Draws rows [a, b) of a plane in 8-row strips; rows selects which strips
+ * hold pixels for this pass. */
+static void draw_plane(const N64PpuFrame *f, int p, const uint32_t *rows, int a, int b) {
   surface_t s = surface_make(f->plane[p], FMT_CI8, N64PPU_STRIDE, N64PPU_LINES, N64PPU_STRIDE);
   for (int y = a & ~7; y < b; y += 8) {
     const int y0 = y < a ? a : y;
     const int y1 = y + 8 < b ? y + 8 : b;
-    if (!rows_any(f->rows[p], y0, y1)) continue;
+    if (!rows_any(rows, y0, y1)) continue;
     g_n64ppu_strips[p]++;
     /* An 8-row window of the plane, uploaded whole and sampled from (0,0).
      * Write back exactly the rows the RDP is about to read. */
@@ -100,39 +81,31 @@ static void draw_rdp_band(const N64PpuFrame *f, int a, int b) {
     rdpq_fill_rectangle(kOx + sp->x0, kOy + a, kOx + sp->x1, kOy + b);
 
     rdpq_mode_tlut(TLUT_RGBA16);
-#ifdef N64PPU_DBG_NOALPHA
-    rdpq_mode_alphacompare(0);
-#else
     rdpq_mode_alphacompare(1);
-#endif
     rdpq_mode_combiner(RDPQ_COMBINER_TEX);
     rdpq_mode_filter(FILTER_POINT);
     s_loaded_tlut = -1;
 
     /* Subscreen under the main screen, through the backdrop-math palette. */
     if (sp->math && L->sub_layers) {
-      for (const int8_t *o = kOrder[L->order]; *o >= 0; ++o) {
-        if (*o >= N64PPU_OBJ0) continue;
-        const int p = *o - N64PPU_BG1L + N64PPU_SUB_BG1L;
-        if (!rows_any(f->rows[p], a, b)) continue;
-        const bool two = plane_is_2bpp(L->order, *o);
-        use_tlut(f, sp->clip ? (two ? L->tl_math4_clip : L->tl_math16_clip)
-                             : (two ? L->tl_math4 : L->tl_math16));
-        draw_plane(f, p, a, b);
+      for (const int8_t *o = kN64PpuOrder[L->order]; *o >= 0; ++o) {
+        if ((*o & 0xf) >= N64PPU_OBJ0) continue;
+        const int p = (*o & 0xf) - N64PPU_BG1 + N64PPU_SUB_BG1;
+        const uint32_t *rows = (*o & N64PPU_HI) ? f->rows_hi[p] : f->rows[p];
+        if (!rows_any(rows, a, b)) continue;
+        const int sel = n64ppu_entry_sel(L->order, *o);
+        use_tlut(f, sp->clip ? L->tl_math_clip[sel] : L->tl_math[sel]);
+        draw_plane(f, p, rows, a, b);
       }
     }
     /* Main screen. */
-    for (const int8_t *o = kOrder[L->order]; *o >= 0; ++o) {
-      const int p = *o;
-      if (!rows_any(f->rows[p], a, b)) continue;
-      const bool two = plane_is_2bpp(L->order, p);
-#ifdef N64PPU_DEBUG_SWAP
-      use_tlut(f, L->tl_math16 ? L->tl_math16 : L->tl_main16);
-#else
-      use_tlut(f, sp->clip ? (two ? N64PPU_TLUT_BLACK4 : N64PPU_TLUT_BLACK16)
-                           : (two ? L->tl_main4 : L->tl_main16));
-#endif
-      draw_plane(f, p, a, b);
+    for (const int8_t *o = kN64PpuOrder[L->order]; *o >= 0; ++o) {
+      const int p = *o & 0xf;
+      const uint32_t *rows = (*o & N64PPU_HI) ? f->rows_hi[p] : f->rows[p];
+      if (!rows_any(rows, a, b)) continue;
+      const int sel = n64ppu_entry_sel(L->order, *o);
+      use_tlut(f, sp->clip ? N64PPU_TLUT_BLACK + sel : L->tl_main[sel]);
+      draw_plane(f, p, rows, a, b);
     }
   }
 }
@@ -162,21 +135,6 @@ static int compare(const N64PpuFrame *f, const surface_t *fb) {
       const uint32_t p = ref[x];
       const uint16_t want = (uint16_t)((((p >> 19) & 31) << 10) | (((p >> 11) & 31) << 5) | ((p >> 3) & 31));
       if (got != want) {
-        if (logged == 0) {
-          const N64PpuLine *L = &f->line[r];
-          n64_platform_log("[rdp] line %d: order %d spans %d sub %x tl %d/%d math %d/%d fill %04x\n",
-                           r + 1, L->order, L->nspans, L->sub_layers, L->tl_main16, L->tl_main4,
-                           L->tl_math16, L->tl_math4, L->fill);
-          for (int k = 0; k < L->nspans; ++k)
-            n64_platform_log("[rdp]   span %d-%d clip %d math %d\n", L->spans[k].x0,
-                             L->spans[k].x1, L->spans[k].clip, L->spans[k].math);
-          for (int p = 0; p < N64PPU_PLANES; ++p)
-            if ((f->rows[p][r >> 5] >> (r & 31)) & 1) {
-              const uint8_t *pr = f->plane[p] + (size_t)r * N64PPU_STRIDE + N64PPU_PAD;
-              n64_platform_log("[rdp]   plane %d px %d=%02x tlut16[%02x]=%04x\n", p, x, pr[x],
-                               pr[x], f->tlut[L->tl_main16][pr[x]]);
-            }
-        }
         if (logged++ < 4)
           n64_platform_log("[rdp] diff line %d x %d: rdp %04x sw %04x\n", r + 1, x, got, want);
         mismatches++;
