@@ -328,6 +328,24 @@ static bool batch_ok(const Dsp *dsp, uint32_t samples, bool mirror) {
   return !pmod_used(dsp) && (!mirror || echo_ok(dsp));
 }
 
+/* ENVX ($x8) and OUTX ($x9) are left to the CPU: only the last sample's
+ * values can be observed (the runtime joins before the SPC reads them),
+ * unless a write logged after the last sample replaced them. */
+static void set_envx_outx(Dsp *dsp, const Op *ops, uint32_t nops, uint32_t samples) {
+  if (!samples) return;
+  uint32_t keep = 0;
+  for (uint32_t i = nops; i-- > 0 && ops[i].tag == samples;)
+    if (ops[i].kind == RSPDSP_LOG_BYTE) {
+      const unsigned r = ops[i].adr - RSPDSP_RAM;
+      if ((r & 0xe) == 8) keep |= 1u << ((r >> 4) * 2 + (r & 1));
+    }
+  for (int c = 0; c < 8; c++) {
+    if (!(keep & (1u << (2 * c)))) dsp->ram[c * 16 + 8] = (uint8_t)(dsp->channel[c].gain >> 4);
+    if (!(keep & (2u << (2 * c))))
+      dsp->ram[c * 16 + 9] = (uint8_t)(dsp->channel[c].sampleOut >> 7);
+  }
+}
+
 /* Run the decoded batch (s_ops, nops) on `aram` (aram_len bytes covered by
  * cache maintenance) and publish its output. */
 static void run(Dsp *dsp, uint8_t *aram, uint32_t aram_len, Op *o, uint32_t samples) {
@@ -349,6 +367,7 @@ static void run(Dsp *dsp, uint8_t *aram, uint32_t aram_len, Op *o, uint32_t samp
   g_snesdsp_rsp_ticks += get_ticks() - t0;
   g_snesdsp_rsp_samples += samples;
   snesdsp_rsp_unpack(dsp, &s_block);
+  set_envx_outx(dsp, s_ops.op, nops, samples);
 
   /* Output ring, as dsp_cycle publishes each sample. */
   for (uint32_t i = 0; i < samples; i++) {
@@ -403,7 +422,7 @@ static struct {
   bool active, echoWrites;
   Dsp *dsp;
   uint8_t *aram;
-  uint32_t samples;
+  uint32_t samples, nops;
   uint16_t esa, index, remain, delay;
   rspq_syncpoint_t sync;
 } s_flight;
@@ -460,6 +479,7 @@ static bool launch(Dsp *dsp, uint8_t *aram, const ApuDspLogEntry *log, uint32_t 
   s_flight.dsp = dsp;
   s_flight.aram = aram;
   s_flight.samples = samples;
+  s_flight.nops = nops;
   s_flight.echoWrites = dsp->echoWrites;
   s_flight.esa = dsp->echoBufferAdr;
   s_flight.index = dsp->echoBufferIndex;
@@ -479,6 +499,7 @@ void snesdsp_rsp_apu_join(void) {
   g_snesdsp_rsp_samples += s_flight.samples;
   Dsp *dsp = s_flight.dsp;
   snesdsp_rsp_unpack(dsp, &s_block);
+  set_envx_outx(dsp, s_ops.op, s_flight.nops, s_flight.samples);
   for (uint32_t i = 0; i < s_flight.samples; i++) {
     const uint32_t fill = dsp->sampleWrite - dsp->sampleRead;
     if (fill >= DSP_SAMPLE_RING) continue;

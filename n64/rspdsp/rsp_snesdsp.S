@@ -251,24 +251,7 @@ Dir_Entry:
 1:
 .endm
 
-# One BRR nibble at bits 31..28 of s0: shift (a1, a0), filter (a3), clamp
-# to 16 bits, clip to 15, store doubled at t6. old t8, older t9.
-.macro BRR_NIBBLE off
-    srav s0, s0, a1
-    jalr a3
-    sllv s0, s0, a0                 # (delay slot)
-    sra t3, s0, 15                  # CLAMP16, with the delay slot used
-    sra t5, s0, 31
-    beq t3, t5, 1f
-    move t9, t8
-    li s0, 32767
-    xor s0, s0, t5
-1:  sll s0, s0, 17
-    sra s0, s0, 17
-    sll t3, s0, 1
-    move t8, s0
-    sh t3, \off(t6)
-.endm
+
 
 Dsp_Sample:
     move v1, ra
@@ -538,36 +521,14 @@ C_env:
 
 #endif
 #ifndef PROF_NO_D
-    # --- D: gain, ENVX/OUTX --------------------------------------------
+    # --- D: gain (ENVX/OUTX are set by the CPU from the final state) -----
     li t1, %lo(STG_T0)
     lqv $v01, 0x00, t1
     li t1, %lo(STG_G32)
     lqv $v02, 0x00, t1
     vmudm $v03, $v01, $v02          # (sample * gain) >> 11
-    li t1, %lo(DSP + RSPDSP_V_GAIN)
-    lqv $v09, 0x00, t1
     li t1, %lo(DSP + RSPDSP_V_SAMPLEOUT)
     sqv $v03, 0x00, t1
-    vmudm $v09, $v09, $v31, e(3)    # gain >> 4 ($v31 lane 3 = 0x1000)
-    vmudm $v10, $v03, $v31, e(6)    # sample >> 7 ($v31 lane 6 = 0x0200)
-    li t1, %lo(DSP + RSPDSP_RAM)    # ENVX ($x8) and OUTX ($x9): low bytes
-    li t3, %lo(DSP + RSPDSP_RAM + 0x40)
-    sbv $v09, 1, 0x08, t1
-    sbv $v10, 1, 0x09, t1
-    sbv $v09, 3, 0x18, t1
-    sbv $v10, 3, 0x19, t1
-    sbv $v09, 5, 0x28, t1
-    sbv $v10, 5, 0x29, t1
-    sbv $v09, 7, 0x38, t1
-    sbv $v10, 7, 0x39, t1
-    sbv $v09, 9, 0x08, t3
-    sbv $v10, 9, 0x09, t3
-    sbv $v09, 11, 0x18, t3
-    sbv $v10, 11, 0x19, t3
-    sbv $v09, 13, 0x28, t3
-    sbv $v10, 13, 0x29, t3
-    sbv $v09, 15, 0x38, t3
-    sbv $v10, 15, 0x39, t3
 
 #endif
 #ifndef PROF_NO_E
@@ -779,58 +740,83 @@ Brr_block:
     andi a0, a0, 0xffff
     sh a0, %lo(DSP + RSPDSP_V_DECOFF)(t4)
     lbu t1, 0(v0)                   # header
-    # Shift as one arithmetic right shift of the nibble placed at bits
-    # 31..28: (n << shift) >> 1 == (n << 28) >> (29 - shift). Invalid
-    # shifts (13-15) keep only the sign: (n << 28) >> 31 << 11.
+    addiu t5, v0, 1
+    li t3, %lo(ENV_K)
+    lpv $v03, 0, 0, t5              # data bytes << 8
+    lqv $v04, 0x00, t3
+    # All 16 nibbles shifted at once: n * 4096 (high nibbles masked, low
+    # ones moved up), then (n << shift) >> 1 = VMUDM(n * 4096,
+    # 2^(shift + 3)); invalid shifts (13-15) keep the sign, times 2048.
     srl a1, t1, 4
-    li t3, 29
-    subu a1, t3, a1
-    sltiu t3, t1, 0xd0
-    bnez t3, 1f
-    move a0, zero                   # post-shift
-    li a1, 31
-    li a0, 11
-1:  srl t3, t1, 2
+    addiu a1, a1, 3
+    li t3, 1
+    sllv a1, t3, a1
+    sltiu t5, t1, 0xd0
+    bnez t5, 1f
+    li a0, 1
+    li a1, 1
+    li a0, 2048
+1:  mtc2 a1, $v05.e0
+    mtc2 a0, $v05.e1
+    vand $v06, $v03, $v04, e(6)     # high nibbles * 4096 (& 0xf000)
+    vmudn $v07, $v03, $v30, e(3)    # low nibbles * 4096 (byte << 12, wrapped)
+    srl t3, t1, 2
     andi t3, t3, 3
     sll t3, t3, 2
-    lw a3, %lo(BRR_FILTERS)(t3)     # filter routine for this block
+    vmudm $v06, $v06, $v05, e(0)
+    vmudm $v07, $v07, $v05, e(0)
+    lw a3, %lo(BRR_FILTERS)(t3)     # decode loop for this block's filter
     andi t1, t1, 3
+    vmudn $v06, $v06, $v05, e(1)    # (x 1, or x 2048 for invalid shifts)
+    vmudn $v07, $v07, $v05, e(1)
     sh t1, %lo(DSP + RSPDSP_V_PREVFLAGS)(t4)
     lh t8, %lo(DSP + RSPDSP_V_OLD)(t4)
     lh t9, %lo(DSP + RSPDSP_V_OLDER)(t4)
+    li v0, %lo(STG_A)
+    sqv $v06, 0x00, v0              # samples 0, 2, 4, ...
+    sqv $v07, 0x10, v0              # samples 1, 3, 5, ...
     lw t6, %lo(BRR_DEC)
     addiu t6, t6, %lo(DSP + RSPDSP_DECODE + 6)   # output: sample 3
-    li t7, 8                         # bytes left
-Brr_byte:
-    lbu t1, 1(v0)
-    addiu v0, v0, 1
-    andi s0, t1, 0xf0
-    sll s0, s0, 24                   # high nibble first
-    BRR_NIBBLE 0
-    sll s0, t1, 28
-    BRR_NIBBLE 2
-    addiu t7, t7, -1
-    bnez t7, Brr_byte
-    addiu t6, t6, 4
-    lw t4, %lo(BRR_T4)
-    sh t8, %lo(DSP + RSPDSP_V_OLD)(t4)
-    sh t9, %lo(DSP + RSPDSP_V_OLDER)(t4)
-    lw ra, %lo(SAVE_RA2)
-    srl a2, t4, 1
-    jr ra
-    nop
+    addiu t7, t6, 32                # end
+    li a1, 16                       # input steps: +16, -14, +16, ...
+    jr a3
+    li a0, 2
 
-# Filters (s0 += prediction from old t8, older t9); called with jalr.
-Brr_F0:
-    jr ra
-    nop
-Brr_F1:                              # s += old + (-old >> 4)
+# One loop per filter: s = nibble + prediction from old t8, older t9;
+# clamp to 16 bits, clip to 15, store doubled.
+.macro BRR_TAIL loop
+    sra t3, s0, 15
+    sra t5, s0, 31
+    beq t3, t5, 1f
+    move t9, t8
+    li s0, 32767
+    xor s0, s0, t5
+1:  sll s0, s0, 17
+    sra s0, s0, 17
+    sll t3, s0, 1
+    move t8, s0
+    sh t3, 0(t6)
+    addiu t6, t6, 2
+    addu v0, v0, a1
+    bne t6, t7, \loop
+    subu a1, a0, a1
+.endm
+Brr_L0:
+    lh s0, 0(v0)
+    BRR_TAIL Brr_L0
+    b Brr_end
+    lw t4, %lo(BRR_T4)
+Brr_L1:                             # s += old + (-old >> 4)
+    lh s0, 0(v0)
     subu t3, zero, t8
     sra t3, t3, 4
     addu t3, t3, t8
-    jr ra
     addu s0, s0, t3
-Brr_F2:                              # s += 2*old + ((3 * -old) >> 5) - older + (older >> 4)
+    BRR_TAIL Brr_L1
+    b Brr_end
+    lw t4, %lo(BRR_T4)
+Brr_L2:                             # s += 2*old + ((3 * -old) >> 5) - older + (older >> 4)
+    lh s0, 0(v0)
     subu t3, zero, t8
     sll t5, t3, 1
     addu t5, t5, t3
@@ -840,9 +826,12 @@ Brr_F2:                              # s += 2*old + ((3 * -old) >> 5) - older + 
     subu t5, t5, t9
     sra s4, t9, 4
     addu t5, t5, s4
-    jr ra
     addu s0, s0, t5
-Brr_F3:                              # s += 2*old + ((13 * -old) >> 6) - older + ((3 * older) >> 4)
+    BRR_TAIL Brr_L2
+    b Brr_end
+    lw t4, %lo(BRR_T4)
+Brr_L3:                             # s += 2*old + ((13 * -old) >> 6) - older + ((3 * older) >> 4)
+    lh s0, 0(v0)
     subu t3, zero, t8
     sll t5, t3, 3
     sll s4, t3, 2
@@ -856,13 +845,21 @@ Brr_F3:                              # s += 2*old + ((13 * -old) >> 6) - older +
     addu s4, s4, t9
     sra s4, s4, 4
     addu t5, t5, s4
-    jr ra
     addu s0, s0, t5
+    BRR_TAIL Brr_L3
+    lw t4, %lo(BRR_T4)
+Brr_end:
+    sh t8, %lo(DSP + RSPDSP_V_OLD)(t4)
+    sh t9, %lo(DSP + RSPDSP_V_OLDER)(t4)
+    lw ra, %lo(SAVE_RA2)
+    srl a2, t4, 1
+    jr ra
+    nop
 
     .data
     .align 2
 BRR_DEC:    .word 0
-BRR_FILTERS: .word Brr_F0, Brr_F1, Brr_F2, Brr_F3
+BRR_FILTERS: .word Brr_L0, Brr_L1, Brr_L2, Brr_L3
 BRR_PF:     .word 0
 BRR_T4:     .word 0
     .text
@@ -905,7 +902,7 @@ Env_key_ret:
 
     .data
     .align 4
-ENV_K:      .half 0x600, 0x7e0, 0x7ff, 0x7fff, 0x1e, 0x3fc, 0, 0
+ENV_K:      .half 0x600, 0x7e0, 0x7ff, 0x7fff, 0x1e, 0x3fc, 0xf000, 0
 ENV_BITS:   .half 1, 2, 4, 8, 16, 32, 64, 128
 B_DECODE:   .half RSPDSP_DECODE + 0 * RSPDSP_DECODE_STRIDE, RSPDSP_DECODE + 1 * RSPDSP_DECODE_STRIDE
             .half RSPDSP_DECODE + 2 * RSPDSP_DECODE_STRIDE, RSPDSP_DECODE + 3 * RSPDSP_DECODE_STRIDE

@@ -550,15 +550,22 @@ sample with pitches like real music (`make RSPDSP_REAL_PITCH=1` in
 | Voice-major interpolation (`ldv`/`llv`, paired Gaussian table) | 1136 | 58% |
 | Background echo DMA + prefetch, vector FIR sums | 1069 | 55% |
 | BRR only for wrapped voices, delay slots filled | 960 | 49% |
+| ENVX/OUTX set by the CPU; BRR nibbles shifted by vector, filters inlined | 917 | 47% |
 
 Phase costs are measured by omission (`RSP_DEFS=-DPROF_NO_<A|B|C|D|E|G|LOG>`).
 ares's RSP model: a vector result read by the next instruction costs 3
 stalls (free after four), a load used next costs 2, each taken branch
 or jump 1; one scalar and one vector instruction can issue together.
-VCC is not a hazard, so compare/merge pairs are cheap. What is left is
-mostly BRR decoding (a serial recurrence: about 650 cycles per block,
-half of it the filter call); inlining the four filters needs IMEM the
-overlay no longer has (0xf58 of 4 KB used).
+VCC is not a hazard, so compare/merge pairs are cheap.
+
+BRR: the 16 nibbles of a block are shifted together (`lpv`, then
+VMUDM by 2^(shift+3) of the nibble times 4096; invalid shifts keep the
+sign times 2048) and a loop per filter adds the prediction, clamps and
+clips, with no call per sample. ENVX/OUTX are no longer stored by the
+RSP: the CPU sets them from the final gain and output at the join
+(`set_envx_outx`), except where a write logged after the last sample
+replaced them; the runtime joins before the SPC can read them. IMEM:
+0xfa0 of 4 KB used.
 
 ### Integration: asynchronous batches (default, `RSPDSP=1`)
 
@@ -598,8 +605,7 @@ faster than the C DSP build (frame 600: 209 -> 193 ms; run stage 120 ->
 
 1. Audio: check the RSP DSP by ear on hardware (output arrives later than
    with the eager DSP). Cheaper launches (fewer marked pages, decode).
-   BRR filter inlining if IMEM can be freed (e.g. ENVX/OUTX computed on
-   the CPU at the join).
+   The serial BRR filter recurrence is now the largest RSP cost.
 2. Placing the large heap objects by allocation offset, so builds stop
    needing their own stack colour.
 3. Interpreter share: promote more code (analysis of SMW's `$0086DF`
