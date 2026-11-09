@@ -538,12 +538,27 @@ Test (ares): 2000 random batches (random consistent register state via
 writes, up to 1024 samples): all identical to the C DSP in state, ARAM and
 every output sample. A planted error (`>>6` -> `>>5` in the mix) fails.
 
-Speed (ares): C `dsp_cycle` 2575 CPU cycles per sample. The first RSP
-version took 3469 RSP cycles per sample; the vector mix/echo, a scheduled
-Gaussian gather and branch-free BRR decoding brought it to about 2060 with
-the test's random pitches, and 1651 with pitches like real music
-(`make RSPDSP_REAL_PITCH=1` in `test/`; SMW decodes 0.47 BRR blocks per
-sample). That is about 85% of the RSP at 32 kHz; IMEM is nearly full.
+Speed (ares): C `dsp_cycle` 2575 CPU cycles per sample. RSP cycles per
+sample with pitches like real music (`make RSPDSP_REAL_PITCH=1` in
+`test/`; SMW decodes 0.47 BRR blocks per sample):
+
+| Version | RSP cycles/sample | Share of the RSP at 32 kHz |
+|---|---|---|
+| First exact version (random pitches) | 3469 | 178% |
+| Vector mix/echo, scheduled gather, branch-free BRR | 1651 | 85% |
+| Vector envelope (merges), key off as a lane merge | 1329 | 68% |
+| Voice-major interpolation (`ldv`/`llv`, paired Gaussian table) | 1136 | 58% |
+| Background echo DMA + prefetch, vector FIR sums | 1069 | 55% |
+| BRR only for wrapped voices, delay slots filled | 960 | 49% |
+
+Phase costs are measured by omission (`RSP_DEFS=-DPROF_NO_<A|B|C|D|E|G|LOG>`).
+ares's RSP model: a vector result read by the next instruction costs 3
+stalls (free after four), a load used next costs 2, each taken branch
+or jump 1; one scalar and one vector instruction can issue together.
+VCC is not a hazard, so compare/merge pairs are cheap. What is left is
+mostly BRR decoding (a serial recurrence: about 650 cycles per block,
+half of it the filter call); inlining the four filters needs IMEM the
+overlay no longer has (0xf58 of 4 KB used).
 
 ### Integration: asynchronous batches (default, `RSPDSP=1`)
 
@@ -582,9 +597,9 @@ faster than the C DSP build (frame 600: 209 -> 193 ms; run stage 120 ->
 ## Next steps
 
 1. Audio: check the RSP DSP by ear on hardware (output arrives later than
-   with the eager DSP). Then microcode speed (envelope ~445, gather ~355,
-   BRR ~355, echo ~275 RSP cycles per sample) to leave RSP time for
-   graphics, and cheaper launches (fewer marked pages, decode).
+   with the eager DSP). Cheaper launches (fewer marked pages, decode).
+   BRR filter inlining if IMEM can be freed (e.g. ENVX/OUTX computed on
+   the CPU at the join).
 2. Placing the large heap objects by allocation offset, so builds stop
    needing their own stack colour.
 3. Interpreter share: promote more code (analysis of SMW's `$0086DF`
