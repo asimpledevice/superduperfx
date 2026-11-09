@@ -43,6 +43,7 @@
 
 RSPQ_BeginOverlayHeader
     RSPQ_DefineCommand BgCmd_Job, 4
+    RSPQ_DefineCommand BgCmd_Copy, 12
 RSPQ_EndOverlayHeader
 
 RSPQ_BeginSavedState
@@ -524,4 +525,44 @@ Prefetch:
     lw t0, %lo(TLEN)
     sw s4, %lo(NBASE)
     jr v0
+    nop
+
+########################################################################
+# BgCmd_Copy: copy len bytes RDRAM -> RDRAM through DMEM (the VRAM snapshot
+# the jobs read while the CPU runs the next frame). a0: source, a1:
+# destination (both 8-aligned), a2: length (a multiple of 8).
+########################################################################
+BgCmd_Copy:
+    move s3, ra
+    li t0, 0xffffff
+    and s5, a0, t0
+    move s6, a1
+    move s7, a2
+    move t9, zero                   # which half of OUT
+Copy_loop:
+    beqz s7, Copy_done
+    li t3, 1024
+    sltu t6, s7, t3
+    beqz t6, 1f
+    nop
+    move t3, s7                     # last chunk
+1:  sll t4, t9, 10
+    addiu t4, t4, %lo(OUT)
+    addiu t5, t3, -1                # DMA_SIZE(len, 1)
+    move s0, s5
+    move s4, t4
+    jal DMAIn                       # also waits for the previous chunk's write
+    move t0, t5
+    move s0, s6
+    move s4, t4
+    jal DMAOutAsync
+    move t0, t5
+    addu s5, s5, t3
+    addu s6, s6, t3
+    subu s7, s7, t3
+    b Copy_loop
+    xori t9, t9, 1
+Copy_done:
+    move ra, s3
+    j DMAWaitIdle
     nop

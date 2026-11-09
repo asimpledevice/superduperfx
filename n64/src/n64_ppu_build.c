@@ -794,6 +794,18 @@ bool n64_ppu_build_line(const Ppu *ppu, int line) {
 void n64_ppu_build_end(void) {
   flush_all(s_state.frame);
 #if N64_RSPBG
+  n64_bgrsp_kick();
+#endif
+}
+
+void n64_ppu_build_finish(void) {
+#if N64_RSPBG
   merge_rsp_flags(s_state.frame);
+#endif
+}
+
+void n64_ppu_build_release_vram(void) {
+#if N64_RSPBG
+  n64_bgrsp_release_vram();
 #endif
 }

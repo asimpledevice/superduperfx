@@ -41,6 +41,16 @@
 #ifndef N64_RENDER
 #define N64_RENDER 1
 #endif
+/* Draw each frame after the next frame's emulation, so the RSP expands its
+ * backgrounds meanwhile (one frame more display latency; emulation is
+ * unchanged). Default with the RSP background path. */
+#ifndef N64_PIPELINE
+#if N64_RENDER && defined(N64_RSPBG)
+#define N64_PIPELINE 1
+#else
+#define N64_PIPELINE 0
+#endif
+#endif
 static N64PpuFrame *s_rdp_frame;
 static uint32_t *s_pixels;  /* defined below: the software PPU output */
 
@@ -66,6 +76,20 @@ static void draw_frame_rdp(bool software_every_line) {
   n64_ppu_build_end();
   ppu_rasterRenderEnd(g_ppu);
 }
+
+#if N64_RENDER
+/* Finish a built frame (the RSP's background rows) and show it. */
+static void present_rdp_frame(uint32_t frame, const char *line) {
+  n64_ppu_build_finish();
+  const int diff = n64_ppu_draw_and_show(s_rdp_frame, line, N64_RENDER == 2);
+  if (N64_RENDER == 2 && (frame < 8 || frame % 30 == 0 || diff > 0))
+    if (frame < 600 || frame % 30 == 0)
+      n64_platform_log("[rdp] frame %lu: rdp %d sw %d black %d lines, why %02lx, diff %d px\n",
+                       (unsigned long)frame, s_rdp_frame->rdp_lines,
+                       s_rdp_frame->software_lines, s_rdp_frame->black_lines,
+                       (unsigned long)s_rdp_frame->fallback_reasons, diff);
+}
+#endif
 
 /* N64_DSP_CLOCK (with -DSNESRECOMP_DSP_CYCLE_HOOK=n64_dsp_cycle_timed):
  * times each S-DSP sample twice with the CPU cycle counter, first as it
@@ -312,14 +336,29 @@ static int host_main(void) {
 
   uint32_t frame = 0;
   uint64_t acc_run = 0, acc_draw = 0, acc_present = 0;
+#if N64_PIPELINE
+  /* The frame built last iteration is drawn after this iteration's
+   * emulation, so the RSP expands its backgrounds while the CPU runs. */
+  bool pending = false;
+  uint32_t pending_frame = 0;
+  char pending_line[64] = "";
+#endif
   for (;;) {
     uint32_t inputs = n64_platform_read_pad();
 
     uint64_t t0 = n64_platform_time_us();
     g_n64_profile_phase = N64_PHASE_CPU;
+#if N64_RENDER
+    n64_ppu_build_release_vram();   /* the RSP has its VRAM snapshot */
+#endif
     RtlRunFrame(inputs);
-    g_n64_profile_phase = N64_PHASE_PPU;
     uint64_t t1 = n64_platform_time_us();
+    g_n64_profile_phase = N64_PHASE_PRESENT;
+#if N64_PIPELINE
+    if (pending) present_rdp_frame(pending_frame, pending_line);
+#endif
+    uint64_t t1p = n64_platform_time_us();
+    g_n64_profile_phase = N64_PHASE_PPU;
     PpuBeginDrawing(g_ppu, (uint8_t *)s_pixels, kSnesW * 4, kPpuRenderFlags_NewRenderer);
 #if N64_RENDER
     draw_frame_rdp(N64_RENDER == 2);
@@ -332,32 +371,30 @@ static int host_main(void) {
     char line[64];
     snprintf(line, sizeof line, "f%lu cpu %lums ppu %lums",
              (unsigned long)frame, (unsigned long)((t1 - t0) / 1000),
-             (unsigned long)((t2 - t1) / 1000));
+             (unsigned long)((t2 - t1p) / 1000));
 #ifdef N64_DSP_CLOCK
     snprintf(line, sizeof line, "f%lu cpu %lu ppu %lu dsp %lu/%lu",
              (unsigned long)frame, (unsigned long)((t1 - t0) / 1000),
-             (unsigned long)((t2 - t1) / 1000), (unsigned long)s_dsp_show_cold,
+             (unsigned long)((t2 - t1p) / 1000), (unsigned long)s_dsp_show_cold,
              (unsigned long)s_dsp_show_warm);
 #endif
-#if N64_RENDER
-    const int diff = n64_ppu_draw_and_show(s_rdp_frame, line, N64_RENDER == 2);
-    if (N64_RENDER == 2 && (frame < 8 || frame % 30 == 0 || diff > 0))
-      if (frame < 600 || frame % 30 == 0)
-        n64_platform_log("[rdp] frame %lu: rdp %d sw %d black %d lines, why %02lx, diff %d px\n",
-                         (unsigned long)frame, s_rdp_frame->rdp_lines,
-                         s_rdp_frame->software_lines, s_rdp_frame->black_lines,
-                         (unsigned long)s_rdp_frame->fallback_reasons, diff);
+#if N64_PIPELINE
+    pending = true;
+    pending_frame = frame;
+    memcpy(pending_line, line, sizeof line);
+#elif N64_RENDER
+    present_rdp_frame(frame, line);
 #else
     n64_platform_present(s_pixels, kSnesW, kSnesH, line);
 #endif
     n64_platform_audio_pump(render_audio);
-    uint64_t t3 = n64_platform_time_us();
+    uint64_t t3 = n64_platform_time_us() + (t1p - t1);   /* present: both parts */
 
     if (frame < 8 || frame % 50 == 0)
       n64_platform_log("[n64] frame %lu: run %lu us, ppu %lu us\n", (unsigned long)frame,
-                       (unsigned long)(t1 - t0), (unsigned long)(t2 - t1));
+                       (unsigned long)(t1 - t0), (unsigned long)(t2 - t1p));
     acc_run += t1 - t0;
-    acc_draw += t2 - t1;
+    acc_draw += t2 - t1p;
     acc_present += t3 - t2;
 #ifdef N64_PROFILE_FRAMES
     if (frame == N64_PROFILE_START) n64_platform_profile_start(N64_PROFILE_US);

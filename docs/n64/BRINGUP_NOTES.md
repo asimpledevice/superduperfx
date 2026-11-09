@@ -806,7 +806,21 @@ differing rows and `RENDER=2` 0 px through frame 1200.
 Cost (ares): 224 rows take 3.5 ms (4bpp), 4.4 ms (4bpp with fine
 scroll), 2.7 ms (2bpp) of RSP time. SMW attract: PPU stage 49 -> 37 ms,
 of which ~11 ms is the CPU waiting for the RSP at the end of the stage.
-Next: overlap that with the next frame's emulation.
+
+Pipelined (`N64_PIPELINE`, default with `RSPBG=1`): a frame is drawn after
+the next frame's emulation, so the RSP expands its backgrounds while the
+CPU emulates. The jobs read a VRAM snapshot that an RSP copy command takes
+at the first job of the frame (64 KB through DMEM, ~1 ms of RSP time); the
+CPU waits for that copy before emulation may write VRAM again, and VRAM
+changing within the PPU stage waits for the queued jobs and snapshots
+again. The snapshot sits at the PPU array's address modulo 8, so a plain
+DMA copy keeps every offset. Planes and the frame description have one
+owner at a time: the frame is drawn (and the RDP finishes) before the next
+frame's PPU stage reuses them. Emulation is unchanged; display latency
+grows by one frame. SMW attract (ares): PPU stage 37 -> 26 ms, CPU stage
+and present unchanged (no stall on audio batches queued behind the jobs),
+`RENDER=2` 0 px through frame 1320. Whole frame about 123 ms (was 177 ms
+at the start of 2026-11-09).
 
 See [LESSONS.md](LESSONS.md) for ideas collected from other projects
 (sodium64) and design notes, with how they apply here.

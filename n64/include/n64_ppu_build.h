@@ -21,7 +21,14 @@ void n64_ppu_build_begin(N64PpuFrame *frame, const uint32_t *sw_rows);
  * Returns false when the line needs the software PPU. */
 bool n64_ppu_build_line(const struct Ppu *ppu, int line);
 
-/* Finish the frame: expand background runs still deferred. */
+/* End the frame's lines: expand (or queue on the RSP) the background runs
+ * still deferred. */
 void n64_ppu_build_end(void);
+/* Complete the frame description: wait for the RSP's background rows and
+ * merge their row flags. Call before drawing the frame. */
+void n64_ppu_build_finish(void);
+/* Before VRAM may change again (the next frame's emulation): wait until
+ * the RSP has its snapshot of it. */
+void n64_ppu_build_release_vram(void);
 
 #endif

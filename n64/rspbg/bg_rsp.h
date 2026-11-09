@@ -9,9 +9,15 @@
 void n64_bgrsp_init(void);
 /* Start a frame's jobs. */
 void n64_bgrsp_frame_begin(void);
-/* Make VRAM visible to the RSP if it changed since the last call (by its
- * write counter); waits for this frame's queued jobs first. */
+/* Snapshot VRAM for the jobs if it changed since the last call (by its
+ * write counter): the jobs read the snapshot, so the CPU may change VRAM
+ * again once n64_bgrsp_release_vram has returned. Waits for this frame's
+ * queued jobs first. */
 void n64_bgrsp_sync_vram(const uint16_t *vram, uint32_t vram_count);
+/* Wait until the latest snapshot is taken (before VRAM may change). */
+void n64_bgrsp_release_vram(void);
+/* Start the queued jobs now (they otherwise wait for the next flush). */
+void n64_bgrsp_kick(void);
 /* The CPU wrote [p, p + n) of memory the RSP also writes (plane rows):
  * write it back and drop it from the cache, so no dirty line can later
  * overwrite what the RSP stores there. */
