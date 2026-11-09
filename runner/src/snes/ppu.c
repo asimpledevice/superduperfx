@@ -83,7 +83,7 @@ void ppu_sec_read(double *eval, double *line, double *bg, double *spr,
 
 static void PpuDrawWholeLine(Ppu *ppu, uint y);
 
-static bool ppu_evaluateSprites(Ppu* ppu, int line);
+static bool ppu_evaluateSprites(Ppu* ppu, int line, bool counts_only);
 static void SnesHdCaptureLine(SnesHdCapture *capture, Ppu *ppu, unsigned line);
 static void SnesHdCaptureDetach(SnesHdCapture *capture, Ppu *ppu);
 static uint16_t ppu_getVramRemap(Ppu* ppu);
@@ -830,11 +830,18 @@ static void PpuDrawVisibleLine(Ppu *ppu, int line, bool pixels, bool live) {
     memset(&ppu->brightnessMult[32], ppu->brightnessMult[31], 31);
   }
 
-  ClearBackdrop(ppu, &ppu->objBuffer);
+  /* A line evaluated without pixels (the RDP-drawn lines of a host that
+   * renders sprites itself) needs only what the evaluation leaves in guest
+   * state: the range/time-over flags and whether the line has sprites. The
+   * sprite buffer is not read before the next line clears it, so skip
+   * filling it -- unless a host overlay capture or extra objects read it. */
+  const bool counts_only = !pixels && !ppu->overlayRenderBuffer[kPpuOverlaySource_Obj] &&
+                           !ppu->extraObjectCount;
+  if (!counts_only) ClearBackdrop(ppu, &ppu->objBuffer);
   if (ppu->overlayRenderBuffer[kPpuOverlaySource_Obj])
     memset(&ppu->overlayBuffers[kPpuOverlaySource_Obj], 0,
            sizeof(ppu->overlayBuffers[kPpuOverlaySource_Obj]));
-  ppu->lineHasSprites = !PPU_forcedBlank(ppu) && ppu_evaluateSprites(ppu, line - 1);
+  ppu->lineHasSprites = !PPU_forcedBlank(ppu) && ppu_evaluateSprites(ppu, line - 1, counts_only);
 
   if (!pixels) return;
 
@@ -2957,7 +2964,7 @@ bool PpuComposeExtraObjects(const PpuExtraObject *objects,size_t count,
   return added;
 }
 
-static bool ppu_evaluateSprites(Ppu* ppu, int line) {
+static bool ppu_evaluateSprites(Ppu* ppu, int line, bool counts_only) {
   if(ppu->extraObjectCount) {
     memset(ppu->objectColors,0,sizeof(ppu->objectColors));
     memset(ppu->objectOrder,0xff,sizeof(ppu->objectOrder));
@@ -3038,6 +3045,7 @@ static bool ppu_evaluateSprites(Ppu* ppu, int line) {
               ppu->timeOver = true;
               break;
             }
+            if (counts_only) continue;        /* flags only: no tile fetch */
             int usedCol = oam1 & 0x4000 ? spriteSize - 1 - col : col;
       int usedTile = ((((oam1 & 0xff) >> 4) + (row >> 3)) << 4) |
                      (((oam1 & 0xf) + (usedCol >> 3)) & 0xf);
