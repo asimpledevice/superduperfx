@@ -888,6 +888,28 @@ naming the first one. It found one more in the committed build
 (`n64_ppu_draw_and_show` had outgrown its slot by 0x40; its RENDER=2-only
 compare routine is now out of line).
 
+### PPU stage: tried, no measurable value (not adopted)
+
+With the line caches in, both hit on 223 of 224 lines. PC samples of the
+PPU stage then put `memset` first (16%) and palette building (`get_tlut`,
+`math_color`) at 11%, from the first line of each frame. Tried, each
+exact (native compare 0 px), each reverted because ares frame averages
+over frames 420-1140 did not move (PPU stage 18.2 ms before and after):
+- palettes kept across frames (the pool restarted only when half used);
+- sprite scratch buffers and sprite-plane rows cleared only over the x
+  range the sprites covered (a `--wrap=memset` census of the PPU stage:
+  ~50 KB cleared per frame, 27 KB of it here).
+The sample shares overstate these: the writes miss in the cache whether
+or not a memset precedes them. Use stage timings, not sample shares, to
+pick PPU-stage work.
+
+Heap trap found on the way: a small host allocation made before
+`SnesInit` can take a free hole that an engine object (the `Snes` struct)
+would otherwise use; that object then comes from the top and every engine
+object after it moves (CPU stage 86 -> 96 ms). The anchor fixes the top,
+not the holes: allocate host buffers before `SnesInit` only if they are
+large, else lazily after it.
+
 See [LESSONS.md](LESSONS.md) for ideas collected from other projects
 (sodium64) and design notes, with how they apply here.
 
