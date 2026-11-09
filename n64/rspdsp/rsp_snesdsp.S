@@ -60,8 +60,9 @@ STG_MD2:    .ds.b 16
 SCR_BRR:    .ds.b 24        # BRR block window (8-byte aligned DMA)
     .align 3
 SCR_DIR:    .ds.b 16
-SCR_ECHO:   .ds.b 16
 SCR_RMW:    .ds.b 16
+    .align 5
+SCR_ECHO:   .ds.b 32        # two echo buffers (current, prefetch), 16 apart
     .align 3
 LOGBUF:     .ds.b 32 * RSPDSP_LOG_ENTRY
 OUTBUF:     .ds.b 32 * 4 + 8
@@ -92,6 +93,10 @@ SnesDspCmd_Run:
     lhu s2, %lo(DSP + RSPDSP_P_LOGN)
     lw s1, %lo(DSP + RSPDSP_P_LOG)
     sw zero, %lo(LOG_LEFT)
+    li t1, -1
+    sw t1, %lo(PREF_ADR)            # no echo prefetch yet
+    li t1, %lo(SCR_ECHO)
+    sw t1, %lo(PREF_BUF)
     move fp, zero
     move s5, zero
 
@@ -176,6 +181,8 @@ Log_ret:
 # to $0000-$000F arrive twice from the CPU: once more for the mirror.
 Aram_Rmw:                           # a0: ARAM offset (may be >= $10000), a1: value
     move t7, ra
+    li t1, -1
+    sw t1, %lo(PREF_ADR)            # an echo prefetch may be stale
     lw t1, %lo(DSP + RSPDSP_P_ARAM)
     li t3, ~7
     and t3, a0, t3
@@ -246,19 +253,21 @@ Dir_Entry:
 
 # One BRR nibble at bits 31..28 of s0: shift (a1, a0), filter (a3), clamp
 # to 16 bits, clip to 15, store doubled at t6. old t8, older t9.
-.macro BRR_NIBBLE
+.macro BRR_NIBBLE off
     srav s0, s0, a1
-    sllv s0, s0, a0
     jalr a3
-    nop
-    CLAMP16 s0, t3, t5
-    sll s0, s0, 17
-    sra s0, s0, 17
+    sllv s0, s0, a0                 # (delay slot)
+    sra t3, s0, 15                  # CLAMP16, with the delay slot used
+    sra t5, s0, 31
+    beq t3, t5, 1f
     move t9, t8
-    move t8, s0
+    li s0, 32767
+    xor s0, s0, t5
+1:  sll s0, s0, 17
+    sra s0, s0, 17
     sll t3, s0, 1
-    sh t3, 0(t6)
-    addiu t6, t6, 2
+    move t8, s0
+    sh t3, \off(t6)
 .endm
 
 Dsp_Sample:
@@ -276,21 +285,20 @@ Dsp_Sample:
     cfc2 t3, COP2_CTRL_VCO          # bit v: voice v wrapped
     ctc2 zero, COP2_CTRL_VCO
     andi t3, t3, 0xff
-    sw t3, %lo(A_MASK)
+    beqz t3, A_done                 # no voice needs a block (most samples)
     move a2, zero
 A_voice:
-    lw t3, %lo(A_MASK)
-    srlv t1, t3, a2
-    andi t1, t1, 1
+    andi t1, t3, 1
     beqz t1, A_next
-    nop
+    srl t3, t3, 1
+    sw t3, %lo(A_MASK)
     jal Brr_Decode
     nop
+    lw t3, %lo(A_MASK)
 A_next:
+    bnez t3, A_voice
     addiu a2, a2, 1
-    sltiu t1, a2, 8
-    bnez t1, A_voice
-    nop
+A_done:
 
 #endif
 #ifndef PROF_NO_B
@@ -798,12 +806,12 @@ Brr_byte:
     addiu v0, v0, 1
     andi s0, t1, 0xf0
     sll s0, s0, 24                   # high nibble first
-    BRR_NIBBLE
+    BRR_NIBBLE 0
     sll s0, t1, 28
-    BRR_NIBBLE
+    BRR_NIBBLE 2
     addiu t7, t7, -1
     bnez t7, Brr_byte
-    nop
+    addiu t6, t6, 4
     lw t4, %lo(BRR_T4)
     sh t8, %lo(DSP + RSPDSP_V_OLD)(t4)
     sh t9, %lo(DSP + RSPDSP_V_OLDER)(t4)
@@ -913,77 +921,93 @@ Echo:
     sw ra, %lo(SAVE_RA2)
     lhu t1, %lo(DSP + RSPDSP_ECHOINDEX)
     lhu t3, %lo(DSP + RSPDSP_ECHOADR)
+    lw t5, %lo(PREF_ADR)
     sll t1, t1, 2
     addu t1, t1, t3
     andi t1, t1, 0xffff
     sw t1, %lo(ECHO_ADR)
+    bne t5, t1, Echo_sync           # no prefetch of this address
+    lw t4, %lo(PREF_BUF)
+    jal DMAWaitIdle
+    nop
+    b Echo_have
+    nop
+Echo_sync:
     lw t3, %lo(DSP + RSPDSP_P_ARAM)
     li t5, ~7
     and t5, t1, t5
     addu s0, t3, t5
-    li s4, %lo(SCR_ECHO)
+    move s4, t4
     jal DMAIn
     li t0, DMA_SIZE(8, 1)
+Echo_have:
     lw t1, %lo(ECHO_ADR)
-    andi t1, t1, 4
-    addiu v1, t1, %lo(SCR_ECHO)      # v1 -> 4 echo bytes
     lhu t6, %lo(DSP + RSPDSP_FIRINDEX)
+    andi t1, t1, 4
+    addu v1, t1, t4                  # v1 -> 4 echo bytes (t4: buffer)
     sll t6, t6, 1
     # fir[fi] = (int16)(b0 | b1 << 8) >> 1, kept twice for rotation
     lbu t1, 0(v1)
     lbu t3, 1(v1)
+    lbu t5, 2(v1)
+    lbu t7, 3(v1)
     sll t3, t3, 8
     or t1, t1, t3
+    sll t7, t7, 8
+    or t5, t5, t7
     sll t1, t1, 16
     sra t1, t1, 17
+    sll t5, t5, 16
+    sra t5, t5, 17
     sh t1, %lo(DSP + RSPDSP_FIR_L)(t6)
     sh t1, %lo(DSP + RSPDSP_FIR_L + 16)(t6)
-    lbu t1, 2(v1)
-    lbu t3, 3(v1)
-    sll t3, t3, 8
-    or t1, t1, t3
-    sll t1, t1, 16
-    sra t1, t1, 17
-    sh t1, %lo(DSP + RSPDSP_FIR_R)(t6)
-    sh t1, %lo(DSP + RSPDSP_FIR_R + 16)(t6)
+    sh t5, %lo(DSP + RSPDSP_FIR_R)(t6)
+    sh t5, %lo(DSP + RSPDSP_FIR_R + 16)(t6)
     # Lane i = fir[(fi + i + 1) & 7]: a misaligned load of the doubled history.
     addiu t1, t6, %lo(DSP + RSPDSP_FIR_L + 2)
+    addiu t3, t6, %lo(DSP + RSPDSP_FIR_R + 2)
+    li t5, %lo(DSP + RSPDSP_FIR_U)
     lqv $v24, 0x00, t1
     lrv $v24, 0x10, t1
-    addiu t1, t6, %lo(DSP + RSPDSP_FIR_R + 2)
-    lqv $v25, 0x00, t1
-    lrv $v25, 0x10, t1
-    li t1, %lo(DSP + RSPDSP_FIR_U)
-    lqv $v26, 0x00, t1
-    lqv $v27, 0x10, t1               # FIR_C
+    lqv $v25, 0x00, t3
+    lrv $v25, 0x10, t3
+    lqv $v26, 0x00, t5
+    lqv $v27, 0x10, t5               # FIR_C
+    vnor $v12, vzero, $v30, e(7)     # 0xfffe
     vmudm $v28, $v24, $v26
     vmadh $v28, $v24, $v27
     vsar $v28, COP2_ACC_MD           # exact low 16 bits of (fir * coef) >> 6
     vmudm $v29, $v25, $v26
     vmadh $v29, $v25, $v27
     vsar $v29, COP2_ACC_MD
-    li t9, %lo(STG_HI)
-    sqv $v28, 0x00, t9
-    jal Fir_Sum
-    sqv $v29, 0x10, t9
-    move a2, t1                      # sum L
-    jal Fir_Sum
-    addiu t9, t9, 16                 # sum R in t1
-    mtc2 a2, $v19.e0
-    mtc2 t1, $v19.e1
+    # Sum in lane 0: taps 0-6 with 16-bit wrap, then tap 7 saturating,
+    # then the LSB cleared.
+    vaddc $v10, $v28, $v28, e(1q)    # pairs
+    vaddc $v11, $v29, $v29, e(1q)
+    vaddc $v13, $v10, $v10, e(2h)    # taps 0-3
+    vaddc $v14, $v11, $v11, e(2h)
+    vaddc $v13, $v13, $v10, e(4)     # + 4, 5
+    vaddc $v14, $v14, $v11, e(4)
+    vaddc $v13, $v13, $v28, e(6)     # + 6
+    vaddc $v14, $v14, $v29, e(6)
+    ctc2 zero, COP2_CTRL_VCO
+    vadd $v13, $v13, $v28, e(7)      # + 7, clamped
+    vadd $v14, $v14, $v29, e(7)
+    vand $v10, $v13, $v12
+    vand $v11, $v14, $v12
     # clamp(total + (sum * evol) >> 7) in lanes 2/3,
     # clamp(echo in + (sum * feedback) >> 7) in lanes 4/5.
-    vmudn $v04, $v20, $v19, e(0)
-    vmadh $v04, $v21, $v19, e(0)
+    vmudn $v04, $v20, $v10, e(0)
+    vmadh $v04, $v21, $v10, e(0)
     vmadh $v04, $v22, $v30, e(7)     # $v30 lane 7 = 1
-    vmudn $v05, $v20, $v19, e(0)
-    vmadh $v05, $v21, $v19, e(0)
+    vmudn $v05, $v20, $v10, e(0)
+    vmadh $v05, $v21, $v10, e(0)
     vmadh $v05, $v17, $v30, e(7)
-    vmudn $v06, $v20, $v19, e(1)
-    vmadh $v06, $v21, $v19, e(1)
+    vmudn $v06, $v20, $v11, e(0)
+    vmadh $v06, $v21, $v11, e(0)
     vmadh $v06, $v23, $v30, e(7)
-    vmudn $v07, $v20, $v19, e(1)
-    vmadh $v07, $v21, $v19, e(1)
+    vmudn $v07, $v20, $v11, e(0)
+    vmadh $v07, $v21, $v11, e(0)
     vmadh $v07, $v18, $v30, e(7)
     mfc2 a0, $v04.e2
     mfc2 a1, $v06.e3
@@ -992,9 +1016,6 @@ Echo:
     lhu t1, %lo(DSP + RSPDSP_ECHOWRITES)
     beqz t1, 2f
     nop
-    lw t1, %lo(ECHO_ADR)
-    andi t1, t1, 4
-    addiu v1, t1, %lo(SCR_ECHO)
     andi a3, a3, 0xfffe
     andi v0, v0, 0xfffe
     sb a3, 0(v1)
@@ -1003,63 +1024,58 @@ Echo:
     sb v0, 2(v1)
     srl t1, v0, 8
     sb t1, 3(v1)
+    # Written back in the background: DMA runs in order, so later reads
+    # of ARAM (BRR, directory, the next prefetch) see it.
     lw t1, %lo(ECHO_ADR)
     lw t3, %lo(DSP + RSPDSP_P_ARAM)
     li t5, ~7
     and t5, t1, t5
     addu s0, t3, t5
-    li s4, %lo(SCR_ECHO)
-    jal DMAOut
+    move s4, t4
+    jal DMAOutAsync
     li t0, DMA_SIZE(8, 1)
     # (Echo buffers at $0000 would also need the mirror after $FFFF; the
     # CPU runs such batches in C.)
 2:  # indices
     lhu t1, %lo(DSP + RSPDSP_FIRINDEX)
+    lhu t3, %lo(DSP + RSPDSP_ECHOINDEX)
+    lhu t5, %lo(DSP + RSPDSP_ECHOREMAIN)
     addiu t1, t1, 1
     andi t1, t1, 7
     sh t1, %lo(DSP + RSPDSP_FIRINDEX)
-    lhu t1, %lo(DSP + RSPDSP_ECHOINDEX)
-    addiu t1, t1, 1
-    sh t1, %lo(DSP + RSPDSP_ECHOINDEX)
-    lhu t1, %lo(DSP + RSPDSP_ECHOREMAIN)
-    addiu t1, t1, -1
+    addiu t3, t3, 1
+    addiu t5, t5, -1
+    andi t5, t5, 0xffff
+    bnez t5, 3f
+    sh t5, %lo(DSP + RSPDSP_ECHOREMAIN)
+    lhu t5, %lo(DSP + RSPDSP_ECHODELAY)
+    move t3, zero
+    sh t5, %lo(DSP + RSPDSP_ECHOREMAIN)
+3:  sh t3, %lo(DSP + RSPDSP_ECHOINDEX)
+    # Prefetch the next sample's echo bytes into the other buffer. Used
+    # only if the address still matches and no logged ARAM write came first.
+    lhu t1, %lo(DSP + RSPDSP_ECHOADR)
+    sll t3, t3, 2
+    addu t1, t1, t3
     andi t1, t1, 0xffff
-    bnez t1, 3f
-    sh t1, %lo(DSP + RSPDSP_ECHOREMAIN)
-    lhu t1, %lo(DSP + RSPDSP_ECHODELAY)
-    sh t1, %lo(DSP + RSPDSP_ECHOREMAIN)
-    sh zero, %lo(DSP + RSPDSP_ECHOINDEX)
-3:  lw ra, %lo(SAVE_RA2)
+    sw t1, %lo(PREF_ADR)
+    xori t4, t4, 16
+    sw t4, %lo(PREF_BUF)
+    lw t3, %lo(DSP + RSPDSP_P_ARAM)
+    li t5, ~7
+    and t5, t1, t5
+    addu s0, t3, t5
+    move s4, t4
+    jal DMAInAsync
+    li t0, DMA_SIZE(8, 1)
+    lw ra, %lo(SAVE_RA2)
     jr ra
     nop
-
-# FIR sum of 8 exact 16-bit taps at t9: (int16)(taps 0-6) + (int16) tap 7,
-# clamped, LSB cleared. Result t1.
-Fir_Sum:
-    lh t1, 0(t9)
-    lh t3, 2(t9)
-    addu t1, t1, t3
-    lh t3, 4(t9)
-    addu t1, t1, t3
-    lh t3, 6(t9)
-    addu t1, t1, t3
-    lh t3, 8(t9)
-    addu t1, t1, t3
-    lh t3, 10(t9)
-    addu t1, t1, t3
-    lh t3, 12(t9)
-    addu t1, t1, t3
-    sll t1, t1, 16
-    sra t1, t1, 16
-    lh t3, 14(t9)
-    addu t1, t1, t3
-    CLAMP16 t1, t6, t7
-    li t3, ~1
-    jr ra
-    and t1, t1, t3
 
     .data
     .align 2
 ECHO_ADR:   .word 0
+PREF_ADR:   .word 0
+PREF_BUF:   .word 0
 A_MASK:     .word 0
     .text
