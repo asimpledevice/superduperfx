@@ -40,19 +40,26 @@ static void init_tables(void) {
 
 static inline uint64_t splat8(uint8_t v) { return 0x0101010101010101ull * v; }
 
-/* Claim the 16-byte data-cache lines that a row write will overwrite in
- * full, without reading them from RDRAM first (VR4300 CACHE op 0x0D, Create
- * Dirty Exclusive). Lines 1..15 of a plane row are always fully rewritten by
- * a BG row (bytes [8-f, 272-f), f = fine scroll 0..7). No-op off the N64. */
+/* Claim the 16-byte data-cache lines of a plane row that a BG row write
+ * replaces, without reading them from RDRAM first (VR4300 CACHE op 0x0D,
+ * Create Dirty Exclusive). A BG row rewrites bytes [8-f, 272-f) (f = fine
+ * scroll 0..7), which covers lines 1..15 in full; lines 0 and 16 are
+ * claimed too: their other bytes are row margins outside [N64PPU_PAD,
+ * N64PPU_PAD + 256), which the RDP never uploads, so their contents do not
+ * matter. A row is exactly 17 lines (stride 272, 16-aligned planes), so no
+ * neighbouring row is touched. No-op off the N64. */
 static inline void claim_row_lines(uint8_t *row) {
 #if defined(__mips__) && defined(N64)
-  for (int i = 1; i <= 15; ++i)
+  _Static_assert(N64PPU_STRIDE == 17 * 16, "plane rows must be whole cache lines");
+  for (int i = 0; i <= 16; ++i)
     __asm__ volatile("cache 0x0D, 0(%0)" : : "r"(row + 16 * i) : "memory");
 #else
   (void)row;
 #endif
 }
-static inline void store8(uint8_t *dst, uint64_t v) { memcpy(dst, &v, 8); }
+/* Unaligned 8-byte store (sdl/sdr on MIPS; memcpy went through the stack). */
+typedef struct __attribute__((packed, may_alias)) { uint64_t v; } Unaligned64;
+static inline void store8(uint8_t *dst, uint64_t v) { ((Unaligned64 *)dst)->v = v; }
 
 /* ---- Frame state ------------------------------------------------------- */
 
