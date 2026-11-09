@@ -822,6 +822,16 @@ and present unchanged (no stall on audio batches queued behind the jobs),
 `RENDER=2` 0 px through frame 1320. Whole frame about 123 ms (was 177 ms
 at the start of 2026-11-09).
 
+Open: the CPU stage is ~2 ms slower with `RSPBG=1` than with `RSPBG=0`
+(88 vs 86 ms), also unpipelined, so it is layout, not RDRAM contention:
+the microcode blob and new statics move 365 static objects to new cache
+colours, among them large buffers too big for dcache_order.py's pinning
+(the DSP's ARAM view and op log, the builder state). Pinning those six at
+their old colours by hand made it worse (95 ms: everything else moved).
+A regenerated I-cache ordering models worse than the current one. Needs
+the measured data-cache placement pass (profiler and trace simulation)
+over the current build, with large objects included.
+
 See [LESSONS.md](LESSONS.md) for ideas collected from other projects
 (sodium64) and design notes, with how they apply here.
 
