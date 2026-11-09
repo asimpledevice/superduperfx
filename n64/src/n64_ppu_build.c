@@ -407,43 +407,97 @@ static void queue_bg(N64PpuFrame *f, const Ppu *ppu, int screen, int layer, int 
 
 /* ---- Sprites --------------------------------------------------------------- */
 
+/* Which sprites cover each line: bit s of line L set when sprite s is in
+ * range there and not wholly off the left edge. Built once per OAM upload
+ * and sprite size setting (oamWriteCount counts every OAM change), instead
+ * of testing all 128 sprites on every line. */
+static const uint8_t kObjSizes[8][2] = {
+  {8, 16}, {8, 32}, {8, 64}, {16, 32}, {16, 64}, {32, 64}, {16, 32}, {16, 32}
+};
+static struct {
+  const Ppu *ppu;
+  uint32_t oam_count;
+  uint8_t obj_size, valid;
+  uint32_t mask[N64PPU_LINES][4];
+} s_obj_lines;
+
+static inline int obj_size_of(const Ppu *ppu, unsigned index) {
+  return kObjSizes[PPU_objSize(ppu)][(ppu->highOam[index >> 3] >> ((index & 7) + 1)) & 1];
+}
+static inline int obj_x_of(const Ppu *ppu, unsigned index) {
+  int sx = (ppu->oam[index] & 0xff) | (((ppu->highOam[index >> 3] >> (index & 7)) & 1) << 8);
+  return sx >= 256 ? sx - 512 : sx;
+}
+
+static void obj_lines_build(const Ppu *ppu) {
+  memset(s_obj_lines.mask, 0, sizeof s_obj_lines.mask);
+  for (unsigned spr = 0; spr < 128; ++spr) {
+    const unsigned index = spr * 2;
+    const int size = obj_size_of(ppu, index);
+    if (obj_x_of(ppu, index) + size <= 0) continue;
+    const unsigned y = ppu->oam[index] >> 8;
+    for (int d = 0; d < size; ++d) {
+      const unsigned l = (y + (unsigned)d) & 255;   /* row = (uint8)(line - y) < size */
+      if (l < N64PPU_LINES) s_obj_lines.mask[l][spr >> 5] |= 1u << (spr & 31);
+    }
+  }
+  s_obj_lines.ppu = ppu;
+  s_obj_lines.oam_count = ppu->oamWriteCount;
+  s_obj_lines.obj_size = (uint8_t)PPU_objSize(ppu);
+  s_obj_lines.valid = 1;
+}
+
+/* Sprites in range on a line, in OAM rotation order from sprite `first`,
+ * at most 32 (the range-over limit); returns the count. */
+static int obj_lines_collect(const uint32_t m[4], unsigned first, uint8_t found[32]) {
+  int n = 0;
+  for (int pass = 0; pass < 2; ++pass) {
+    const unsigned lo = pass ? 0 : first, hi = pass ? first : 128;
+    for (unsigned w = lo >> 5; w < 4 && w * 32 < hi; ++w) {
+      uint32_t bits = m[w];
+      if (w * 32 < lo) bits &= ~0u << (lo & 31);
+      if ((w + 1) * 32 > hi) bits &= (1u << (hi & 31)) - 1;
+      while (bits) {
+        if (n == 32) return n;
+        found[n++] = (uint8_t)((w * 32 + (unsigned)__builtin_ctz(bits)) * 2);
+        bits &= bits - 1;
+      }
+    }
+  }
+  return n;
+}
+
 /* Sprites for one line, mirroring ppu_evaluateSprites without widescreen:
  * OAM rotation, 32 sprites and 34 tiles per line, lower index wins. */
 static void expand_obj(N64PpuFrame *f, const Ppu *ppu, int line) {
-  static const uint8_t kSizes[8][2] = {
-    {8, 16}, {8, 32}, {8, 64}, {16, 32}, {16, 64}, {32, 64}, {16, 32}, {16, 32}
-  };
   const int r = line - 1;
   const int eval_line = line - 1;            /* the PPU evaluates line - 1 */
-  uint8_t pix[256], pri[256];
+  if (!s_obj_lines.valid || s_obj_lines.ppu != ppu || s_obj_lines.oam_count != ppu->oamWriteCount ||
+      s_obj_lines.obj_size != PPU_objSize(ppu))
+    obj_lines_build(ppu);
   uint8_t found[32];
-  int n = 0;
-  uint8_t index = PPU_objPriority(ppu) ? (ppu->oamaddl & 0xfe) : 0;
-  for (int i = 0; i < 128; ++i, index += 2) {
-    const uint8_t row = (uint8_t)(eval_line - (ppu->oam[index] >> 8));
-    const int size = kSizes[PPU_objSize(ppu)][(ppu->highOam[index >> 3] >> ((index & 7) + 1)) & 1];
-    if (row >= size) continue;
-    int sx = (ppu->oam[index] & 0xff) | (((ppu->highOam[index >> 3] >> (index & 7)) & 1) << 8);
-    if (sx >= 256) sx -= 512;
-    if (sx + size <= 0) continue;
-    if (n == 32) break;                        /* range over */
-    found[n++] = index;
-  }
+  const unsigned first = PPU_objPriority(ppu) ? (ppu->oamaddl & 0xfe) >> 1 : 0;
+  const int n = obj_lines_collect(s_obj_lines.mask[eval_line], first, found);
   if (!n) return;
-  memset(pix, 0, sizeof(pix));
+  /* 8 bytes of margin each side: a tile is drawn 8 pixels at a time at any
+   * x in [-7, 255]; the margins take what falls off screen. */
+  uint8_t pixb[8 + 256 + 8], prib[8 + 256 + 8];
+  uint8_t *const pix = pixb + 8, *const pri = prib + 8;
+  memset(pixb, 0, sizeof(pixb));
+  memset(prib, 0, sizeof(prib));
   bool any = false;
   int tiles = 0;
   for (int i = n; i > 0 && tiles <= 34; --i) {
-    index = found[i - 1];
+    const unsigned index = found[i - 1];
     unsigned row = (uint8_t)(eval_line - (ppu->oam[index] >> 8));
-    const int size = kSizes[PPU_objSize(ppu)][(ppu->highOam[index >> 3] >> ((index & 7) + 1)) & 1];
-    int sx = (ppu->oam[index] & 0xff) | (((ppu->highOam[index >> 3] >> (index & 7)) & 1) << 8);
-    if (sx >= 256) sx -= 512;
+    const int size = obj_size_of(ppu, index);
+    const int sx = obj_x_of(ppu, index);
     const unsigned oam1 = ppu->oam[index + 1];
     const int obj_adr = (oam1 & 0x100) ? PPU_objTileAdr2(ppu) : PPU_objTileAdr1(ppu);
     if (oam1 & 0x8000) row = (unsigned)size - 1 - row;
-    const uint8_t pal = (uint8_t)(0x80 + 16 * ((oam1 >> 9) & 7));
-    const uint8_t prio = (uint8_t)((oam1 >> 12) & 3);
+    const uint64_t pal = splat8((uint8_t)(0x80 + 16 * ((oam1 >> 9) & 7)));
+    const uint64_t prio = splat8((uint8_t)((oam1 >> 12) & 3));
+    const uint64_t *tab = (oam1 & 0x4000) ? s_expand_rev : s_expand;
     for (int col = 0; col < size; col += 8) {
       if (col + sx <= -8 || col + sx >= 256) continue;
       if (++tiles > 34) break;                 /* time over */
@@ -451,28 +505,39 @@ static void expand_obj(N64PpuFrame *f, const Ppu *ppu, int line) {
       const int tile = ((((oam1 & 0xff) >> 4) + (int)(row >> 3)) << 4) |
                        (((oam1 & 0xf) + (used_col >> 3)) & 0xf);
       const int a = obj_adr + tile * 16 + (int)(row & 7);
-      const uint32_t plane = ppu->vram[a & 0x7fff] | (uint32_t)ppu->vram[(a + 8) & 0x7fff] << 16;
-      for (int px = 0; px < 8; ++px) {
-        const int x = col + sx + px;
-        if (x < 0 || x >= 256) continue;
-        const int shift = (oam1 & 0x4000) ? px : 7 - px;
-        const uint32_t bits = plane >> shift;
-        const int c = (bits & 1) | ((bits >> 7) & 2) | ((bits >> 14) & 4) | ((bits >> 21) & 8);
-        if (!c) continue;
-        pix[x] = (uint8_t)(pal + c);           /* lower OAM index drawn later wins */
-        pri[x] = prio;
-        any = true;
-      }
+      const uint16_t w0 = ppu->vram[a & 0x7fff], w1 = ppu->vram[(a + 8) & 0x7fff];
+      const uint64_t c = tab[w0 & 0xff] | tab[w0 >> 8] << 1 | tab[w1 & 0xff] << 2 | tab[w1 >> 8] << 3;
+      if (!c) continue;
+      /* Byte mask of the opaque pixels (colour 1-15 in each byte). */
+      const uint64_t m = ((c | c >> 1 | c >> 2 | c >> 3) & 0x0101010101010101ull) * 0xff;
+      uint8_t *const px = pix + col + sx, *const pr = pri + col + sx;
+      uint64_t v, q;
+      memcpy(&v, px, 8);
+      memcpy(&q, pr, 8);
+      v = (v & ~m) | ((c + pal) & m);          /* lower OAM index drawn later wins */
+      q = (q & ~m) | (prio & m);
+      memcpy(px, &v, 8);
+      memcpy(pr, &q, 8);
+      any = true;
     }
   }
   if (!any) return;
-  for (int x = 0; x < 256; ++x) {
-    if (!pix[x]) continue;
-    const int p = N64PPU_OBJ0 + pri[x];
-    plane_row(f, p, r)[N64PPU_PAD + x] = pix[x];
-    bit_set(f->rows[p], r);
-    bit_set(s_state.dirty[p], r);
+  unsigned used = 0;                         /* priority planes written */
+  for (int x0 = 0; x0 < 256; x0 += 8) {
+    uint64_t v;
+    memcpy(&v, pix + x0, 8);
+    if (!v) continue;
+    for (int x = x0; x < x0 + 8; ++x) {
+      if (!pix[x]) continue;
+      plane_row(f, N64PPU_OBJ0 + pri[x], r)[N64PPU_PAD + x] = pix[x];
+      used |= 1u << pri[x];
+    }
   }
+  for (int p = 0; p < 4; ++p)
+    if (used & (1u << p)) {
+      bit_set(f->rows[N64PPU_OBJ0 + p], r);
+      bit_set(s_state.dirty[N64PPU_OBJ0 + p], r);
+    }
 }
 
 /* ---- Lines --------------------------------------------------------------- */
