@@ -538,19 +538,55 @@ Test (ares): 2000 random batches (random consistent register state via
 writes, up to 1024 samples): all identical to the C DSP in state, ARAM and
 every output sample. A planted error (`>>6` -> `>>5` in the mix) fails.
 
-Speed (ares): C `dsp_cycle` 2575 CPU cycles per sample; the RSP version
-3469 RSP cycles per sample, about 180% of the RSP at 32 kHz. It needs to
-get 4-5x faster: echo and log traffic as per-sample synchronous DMAs, and
-scalar per-voice loops, are the first targets. IMEM is full (4 KB).
+Speed (ares): C `dsp_cycle` 2575 CPU cycles per sample. The first RSP
+version took 3469 RSP cycles per sample; the vector mix/echo, a scheduled
+Gaussian gather and branch-free BRR decoding brought it to about 2060 with
+the test's random pitches, and 1651 with pitches like real music
+(`make RSPDSP_REAL_PITCH=1` in `test/`; SMW decodes 0.47 BRR blocks per
+sample). That is about 85% of the RSP at 32 kHz; IMEM is nearly full.
+
+### Integration: asynchronous batches (default, `RSPDSP=1`)
+
+The N64 build defers the DSP (`SNESRECOMP_APU_DEFER_DSP`) and hands each
+batch to the RSP through `SNESRECOMP_DSP_LAUNCH_HOOK`/`_JOIN_HOOK`
+(`runner/src/snes/apu_dsp_batch.h`); `RSPDSP=0` builds the C DSP.
+- The RSP works on a private 64 KB view of ARAM: only the pages the batch
+  can read (page marks) are copied at launch, through the uncached segment,
+  then returned to their batch-start values by undoing the logged writes.
+  The SPC keeps running on the live ARAM. At the join the state and output
+  come back and the batch's echo bytes are copied into the live ARAM; SPC
+  accesses to the echo window, DIR entries and BRR spans of a running batch
+  join first (`apu_dspMarkAfterLaunch`).
+- Reads of DSP registers other than ENVX/OUTX/ENDX come from a register
+  shadow (`Apu.dspRegs`) and do not join.
+- Full batches (256 samples) run in the background; the frame-end flushes
+  (`apu_dspFrameSync`, `SNESRECOMP_DSP_HOST_ASYNC`) launch the remainder
+  but never wait for a running batch: the samples stay owed. Joining there
+  slept through the batch launched by the frame's last SPC catch-up
+  (6-7 ms per frame). Output reaches the ring when a batch is joined, up to
+  about a frame later than the eager DSP.
+- The register-write decoding copies only the `Dsp` fields before the
+  output ring (the whole struct copy was 9 ms per frame).
+- The heap objects sit at other cache positions in this build, so the main
+  stack's colour was re-swept for it (`N64_STACK_COLOR` 0x1b40; 0x11e0 for
+  `RSPDSP=0`): trace misses 1.65M -> 1.04M.
+
+Exactness: SMW's in-emulator WRAM/ARAM/DSP-output hashes are identical to
+the eager C DSP every 60 frames; all samples ran on the RSP.
+
+Speed (ares, frame times run+PPU+present, frames 300-660): 4.5-8.7%
+faster than the C DSP build (frame 600: 209 -> 193 ms; run stage 120 ->
+103 ms). CPU cost left per frame: launch 1.9 ms (page copies 0.9, decode
+0.5, pack 0.4), join 1.5 ms of which 0.9 ms waiting for the RSP.
 
 ## Next steps
 
-1. Audio: RSP DSP on top of the deferred machinery (stage 2): batch replay
-   on RSP microcode (8 voices across the vector lanes) as the N64 default,
-   C DSP as fallback when syncs are frequent. Needs a plan for the ARAM
-   view the RSP reads (BRR, echo) and for the per-write logging cost.
-2. Re-measure the deferred DSP on the cache-placed build, then the RSP
-   stage.
+1. Audio: check the RSP DSP by ear on hardware (output arrives later than
+   with the eager DSP). Then microcode speed (envelope ~445, gather ~355,
+   BRR ~355, echo ~275 RSP cycles per sample) to leave RSP time for
+   graphics, and cheaper launches (fewer marked pages, decode).
+2. Placing the large heap objects by allocation offset, so builds stop
+   needing their own stack colour.
 3. Interpreter share: promote more code (analysis of SMW's `$0086DF`
    dispatcher idiom), and gameplay captures for the native set.
 4. PPU stage: skip the PPU's duplicate per-line sprite evaluation when the

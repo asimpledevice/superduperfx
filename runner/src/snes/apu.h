@@ -55,16 +55,10 @@ typedef struct Timer {
 #define APU_DSP_WATCH_SYNC 2u
 enum { APU_DSP_SYNC_HOST, APU_DSP_SYNC_REG_READ, APU_DSP_SYNC_ECHO_READ,
        APU_DSP_SYNC_ECHO_REG, APU_DSP_SYNC_LOG_FULL, APU_DSP_SYNC_FULL_BATCH,
-       APU_DSP_SYNC_REASONS };
+       APU_DSP_SYNC_FRAME, APU_DSP_SYNC_REASONS };
 #define APU_DSP_MAX_PENDING 256u
 
-typedef struct ApuDspLogEntry {
-  uint16_t adr;   /* ARAM address, or DSP register for a register write */
-  uint8_t val;
-  uint8_t old;    /* ARAM value before the write (ARAM entries) */
-  uint16_t tag;   /* samples owed when written */
-  uint8_t isReg;
-} ApuDspLogEntry;
+#include "apu_dsp_batch.h"
 
 typedef struct ApuPortWrite {
   uint64_t target_cycle; /* apply when portClock reaches this APU cycle */
@@ -107,6 +101,16 @@ struct Apu {
   uint32_t dspPending;
   uint32_t dspLogN;
   ApuDspLogEntry dspLog[APU_DSP_LOG_LEN];
+  /* The last value written to each DSP register. Registers other than
+   * ENVX, OUTX and ENDX change only by writes, so reads of them are answered
+   * here without catching up a deferred (or in-flight) DSP. */
+  uint8_t dspRegs[0x80];
+  /* A batch running elsewhere (SNESRECOMP_DSP_LAUNCH_HOOK), and its echo
+   * window, [lo, lo + len) modulo 64 KB, which the SPC must not touch
+   * unjoined. */
+  bool dspInFlight;
+  uint16_t dspFlightEchoLo;
+  uint32_t dspFlightEchoLen;
 #endif
 };
 
@@ -141,6 +145,16 @@ void apu_port_sched_restore(Apu *apu, const ApuPortSched *in);
 /* Bring a deferred DSP up to date (no-op without SNESRECOMP_APU_DEFER_DSP).
  * Call before host code reads DSP output or writes ARAM directly. */
 void apu_dspSync(Apu* apu);
+/* Frame boundaries. Normally apu_dspSync. With SNESRECOMP_DSP_HOST_ASYNC
+ * (a host whose frame-boundary code reads no DSP state, e.g. the N64) the
+ * owed samples are started on the batch hook without waiting (or, while a
+ * batch is still running, left owed for the next one); the output reaches
+ * the ring when the batch is joined. Emulation is unaffected: the
+ * SPC only sees DSP results through syncs and joins. */
+#ifndef SNESRECOMP_DSP_HOST_ASYNC
+#define SNESRECOMP_DSP_HOST_ASYNC 0
+#endif
+void apu_dspFrameSync(Apu* apu);
 #if SNESRECOMP_APU_DEFER_DSP
 void apu_dspLogRam(Apu* apu, uint16_t adr, uint8_t val);
 void apu_dspEchoRead(Apu* apu);

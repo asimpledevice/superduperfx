@@ -21,6 +21,7 @@ typedef struct SnesDspLogIn {
   uint16_t adr;
 } SnesDspLogIn;
 
+/* Register the overlay; rspq must be initialised already. */
 void snesdsp_rsp_init(void);
 
 /* Run `samples` DSP samples on the RSP, with `log` applied at its tags,
@@ -34,6 +35,16 @@ void snesdsp_rsp_init(void);
  * the host shadow mixer or output filter, or more than the buffers hold). */
 bool snesdsp_rsp_batch(struct Dsp *dsp, uint8_t *aram, const SnesDspLogIn *log,
                        uint32_t n, uint32_t samples);
+
+struct ApuDspLogEntry;
+/* Runtime hook (see runner/src/snes/apu_dsp_batch.h). */
+bool snesdsp_rsp_apu_batch(struct Dsp *dsp, uint8_t *aram, const struct ApuDspLogEntry *log,
+                           uint32_t n, uint32_t samples, bool aramEndReachable);
+
+/* Asynchronous runtime hooks (see apu_dsp_batch.h). */
+bool snesdsp_rsp_apu_launch(struct Dsp *dsp, uint8_t *aram, const struct ApuDspLogEntry *log,
+                            uint32_t n, uint32_t samples, const uint8_t *pageMarks);
+void snesdsp_rsp_apu_join(void);
 
 /* Conversion between the C DSP and the RSP block (exposed for tests). */
 void snesdsp_rsp_pack(const struct Dsp *dsp, RspDspState *s);

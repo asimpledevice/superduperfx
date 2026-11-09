@@ -8,6 +8,7 @@
 
 #include "snesdsp_rsp.h"
 #include "dsp.h"
+#include "apu_dsp_batch.h"
 
 DEFINE_RSP_UCODE(rsp_snesdsp);
 
@@ -19,11 +20,18 @@ static struct __attribute__((aligned(16))) { int16_t s[kMaxSamples * 2 + 8]; } s
 typedef struct { uint16_t tag; uint8_t kind, pad; uint16_t adr, val; } Op;
 static struct __attribute__((aligned(16))) { Op op[kMaxOps + 32]; } s_ops;
 static Dsp s_shadow;
+/* The shadow decodes register writes; dsp_write touches nothing from the
+ * output ring on, so only the state before it is copied. */
+static inline void shadow_from(const Dsp *dsp) {
+  memcpy(&s_shadow, dsp, offsetof(Dsp, sampleBuffer));
+}
 uint32_t g_snesdsp_rsp_ticks, g_snesdsp_rsp_samples;
 
+/* The caller initialises rspq first (rspq_init, or rdpq_init). */
+static void view_init(void);
 void snesdsp_rsp_init(void) {
-  rspq_init();
   s_overlay_id = rspq_overlay_register(&rsp_snesdsp);
+  view_init();
 }
 
 static inline void put(RspDspState *s, unsigned off, int v) {
@@ -292,33 +300,39 @@ static Op *emit_reg(Op *o, uint16_t tag, uint8_t reg) {
   return o;
 }
 
-bool snesdsp_rsp_batch(Dsp *dsp, uint8_t *aram, const SnesDspLogIn *log, uint32_t n,
-                       uint32_t samples) {
-  if (samples > kMaxSamples || dsp->shadow || dsp->output_filter || dsp->suppressOutput)
-    return false;
-  if (pmod_used(dsp) || !echo_ok(dsp)) return false;
-  /* Decode the log against a shadow that sees only register writes. */
-  s_shadow = *dsp;
-  Op *o = s_ops.op, *end = s_ops.op + kMaxOps;
-  for (uint32_t i = 0; i < n; i++) {
-    if (o + 24 > end) return false;
-    if (log[i].isReg) {
-      dsp_write(&s_shadow, (uint8_t)log[i].adr, log[i].val);
-      if (pmod_used(&s_shadow) || !echo_ok(&s_shadow)) return false;
-      o = emit_reg(o, log[i].tag, (uint8_t)log[i].adr);
-    } else {
-      o->tag = log[i].tag; o->kind = RSPDSP_LOG_ARAM; o->pad = 0;
-      o->adr = log[i].adr; o->val = log[i].val; o++;
-      if (log[i].adr < 16) {  /* and its mirror after $FFFF: address bit 16 in pad */
-        o[0] = o[-1];
-        o->pad = 1;
-        o++;
-      }
+/* Decode one logged write into RSP operations. */
+static bool decode(Op **po, Op *end, uint16_t tag, bool isReg, uint16_t adr, uint8_t val,
+                   bool mirror) {
+  Op *o = *po;
+  if (o + 24 > end) return false;
+  if (isReg) {
+    dsp_write(&s_shadow, (uint8_t)adr, val);
+    if (pmod_used(&s_shadow) || (mirror && !echo_ok(&s_shadow))) return false;
+    o = emit_reg(o, tag, (uint8_t)adr);
+  } else {
+    o->tag = tag; o->kind = RSPDSP_LOG_ARAM; o->pad = 0;
+    o->adr = adr; o->val = val; o++;
+    if (mirror && adr < 16) {  /* and its mirror after $FFFF: address bit 16 in pad */
+      o[0] = o[-1];
+      o->pad = 1;
+      o++;
     }
   }
+  *po = o;
+  return true;
+}
+
+static bool batch_ok(const Dsp *dsp, uint32_t samples, bool mirror) {
+  if (samples > kMaxSamples || dsp->shadow || dsp->output_filter || dsp->suppressOutput)
+    return false;
+  return !pmod_used(dsp) && (!mirror || echo_ok(dsp));
+}
+
+/* Run the decoded batch (s_ops, nops) on `aram` (aram_len bytes covered by
+ * cache maintenance) and publish its output. */
+static void run(Dsp *dsp, uint8_t *aram, uint32_t aram_len, Op *o, uint32_t samples) {
   const uint32_t nops = (uint32_t)(o - s_ops.op);
   memset(o, 0, 32 * sizeof *o);  /* the RSP fetches whole chunks */
-
   snesdsp_rsp_pack(dsp, &s_block);
   put(&s_block, RSPDSP_P_SAMPLES, (int)samples);
   put(&s_block, RSPDSP_P_LOGN, (int)nops);
@@ -327,7 +341,7 @@ bool snesdsp_rsp_batch(Dsp *dsp, uint8_t *aram, const SnesDspLogIn *log, uint32_
   *(uint32_t *)(s_block.bytes + RSPDSP_P_OUT) = PhysicalAddr(s_out.s);
   data_cache_hit_writeback_invalidate(&s_block, sizeof s_block);
   data_cache_hit_writeback_invalidate(s_ops.op, (nops + 32) * sizeof(Op));
-  data_cache_hit_writeback_invalidate(aram, RSPDSP_ARAM_SIZE);
+  data_cache_hit_writeback_invalidate(aram, aram_len);
   data_cache_hit_writeback_invalidate(&s_out, sizeof s_out);
   const uint32_t t0 = get_ticks();
   rspq_write(s_overlay_id, 0, PhysicalAddr(&s_block), 0);
@@ -345,5 +359,144 @@ bool snesdsp_rsp_batch(Dsp *dsp, uint8_t *aram, const SnesDspLogIn *log, uint32_
     dsp->sampleBuffer[w * 2 + 1] = s_out.s[i * 2 + 1];
     dsp->sampleWrite++;
   }
+}
+
+bool snesdsp_rsp_batch(Dsp *dsp, uint8_t *aram, const SnesDspLogIn *log, uint32_t n,
+                       uint32_t samples) {
+  if (!batch_ok(dsp, samples, true)) return false;
+  shadow_from(dsp);  /* decodes register writes; sees only those */
+  Op *o = s_ops.op, *end = s_ops.op + kMaxOps;
+  for (uint32_t i = 0; i < n; i++)
+    if (!decode(&o, end, log[i].tag, log[i].isReg, log[i].adr, log[i].val, true)) return false;
+  run(dsp, aram, RSPDSP_ARAM_SIZE, o, samples);
   return true;
+}
+
+/* The runtime's deferred-DSP hook (SNESRECOMP_DSP_BATCH_HOOK): `aram` is the
+ * emulator's own ARAM, already at its batch-start state, with no mirror
+ * after $FFFF, so batches that may read page $FF stay in C. */
+bool snesdsp_rsp_apu_batch(Dsp *dsp, uint8_t *aram, const ApuDspLogEntry *log, uint32_t n,
+                           uint32_t samples, bool aramEndReachable) {
+  if (aramEndReachable || ((uintptr_t)aram & 7) || !batch_ok(dsp, samples, false))
+    return false;
+  shadow_from(dsp);
+  Op *o = s_ops.op, *end = s_ops.op + kMaxOps;
+  for (uint32_t i = 0; i < n; i++)
+    if (!decode(&o, end, log[i].tag, log[i].isReg == 1, log[i].adr, log[i].val, false))
+      return false;
+  run(dsp, aram, 0x10000, o, samples);
+  return true;
+}
+
+/* ---- Asynchronous batches (SNESRECOMP_DSP_LAUNCH_HOOK) ----------------
+ * The RSP works on a private view of ARAM: the pages the batch can read,
+ * copied at launch and returned to their batch-start values by undoing the
+ * logged writes, so the SPC keeps running on the live ARAM meanwhile. At the
+ * join the DSP state and output are taken back and the echo bytes the batch
+ * wrote are copied into the live ARAM (the runtime joins before the SPC can
+ * touch the echo window). */
+static uint8_t s_view[0x10000] __attribute__((aligned(16)));
+/* The view is only ever accessed uncached; drop any lines the startup BSS
+ * clear left dirty, so a later eviction cannot overwrite page copies. */
+static void view_init(void) { data_cache_hit_writeback_invalidate(s_view, sizeof s_view); }
+static struct {
+  bool active, echoWrites;
+  Dsp *dsp;
+  uint8_t *aram;
+  uint32_t samples;
+  uint16_t esa, index, remain, delay;
+  rspq_syncpoint_t sync;
+} s_flight;
+uint32_t g_snesdsp_rsp_async, g_snesdsp_rsp_joins, g_snesdsp_rsp_join_wait;
+uint32_t g_snesdsp_rsp_launch_ticks, g_snesdsp_rsp_join_ticks, g_snesdsp_rsp_pages;
+
+static bool launch(Dsp *dsp, uint8_t *aram, const ApuDspLogEntry *log, uint32_t n,
+                   uint32_t samples, const uint8_t *marks);
+bool snesdsp_rsp_apu_launch(Dsp *dsp, uint8_t *aram, const ApuDspLogEntry *log, uint32_t n,
+                            uint32_t samples, const uint8_t *marks) {
+  const uint32_t t0 = get_ticks();
+  const bool ok = launch(dsp, aram, log, n, samples, marks);
+  g_snesdsp_rsp_launch_ticks += get_ticks() - t0;
+  return ok;
+}
+static bool launch(Dsp *dsp, uint8_t *aram, const ApuDspLogEntry *log, uint32_t n,
+                   uint32_t samples, const uint8_t *marks) {
+  if ((marks[31] & 0x80) || ((uintptr_t)aram & 7) || !batch_ok(dsp, samples, false))
+    return false;  /* page $FF */
+  shadow_from(dsp);
+  Op *o = s_ops.op, *end = s_ops.op + kMaxOps;
+  for (uint32_t i = 0; i < n; i++)
+    if (!decode(&o, end, log[i].tag, log[i].isReg == 1, log[i].adr, log[i].val, false))
+      return false;
+  /* Pages go to the view through the uncached segment: no write-allocate
+   * misses, and nothing to write back. The view is never read cached
+   * outside the echo copy-back, which invalidates first. */
+  uint8_t *uview = UncachedAddr(s_view);
+  for (unsigned p = 0; p < 256; p++)
+    if (marks[p >> 3] & (1u << (p & 7))) {
+      const uint64_t *src = (const uint64_t *)(aram + p * 256);
+      uint64_t *dst = (uint64_t *)(uview + p * 256);
+      for (int i = 0; i < 32; i++) dst[i] = src[i];
+      g_snesdsp_rsp_pages++;
+    }
+  for (uint32_t i = n; i-- > 0;)
+    if (!log[i].isReg) uview[log[i].adr] = log[i].old;
+
+  const uint32_t nops = (uint32_t)(o - s_ops.op);
+  memset(o, 0, 32 * sizeof *o);
+  snesdsp_rsp_pack(dsp, &s_block);
+  put(&s_block, RSPDSP_P_SAMPLES, (int)samples);
+  put(&s_block, RSPDSP_P_LOGN, (int)nops);
+  *(uint32_t *)(s_block.bytes + RSPDSP_P_ARAM) = PhysicalAddr(s_view);
+  *(uint32_t *)(s_block.bytes + RSPDSP_P_LOG) = PhysicalAddr(s_ops.op);
+  *(uint32_t *)(s_block.bytes + RSPDSP_P_OUT) = PhysicalAddr(s_out.s);
+  data_cache_hit_writeback_invalidate(&s_block, sizeof s_block);
+  data_cache_hit_writeback_invalidate(s_ops.op, (nops + 32) * sizeof(Op));
+  data_cache_hit_writeback_invalidate(&s_out, sizeof s_out);
+  rspq_write(s_overlay_id, 0, PhysicalAddr(&s_block), 0);
+  s_flight.sync = rspq_syncpoint_new();
+  rspq_flush();
+  s_flight.active = true;
+  s_flight.dsp = dsp;
+  s_flight.aram = aram;
+  s_flight.samples = samples;
+  s_flight.echoWrites = dsp->echoWrites;
+  s_flight.esa = dsp->echoBufferAdr;
+  s_flight.index = dsp->echoBufferIndex;
+  s_flight.remain = dsp->echoRemain;
+  s_flight.delay = dsp->echoDelay;
+  g_snesdsp_rsp_async++;
+  return true;
+}
+
+void snesdsp_rsp_apu_join(void) {
+  if (!s_flight.active) return;
+  const uint32_t tj = get_ticks();
+  const uint32_t t0 = get_ticks();
+  rspq_syncpoint_wait(s_flight.sync);
+  g_snesdsp_rsp_join_wait += get_ticks() - t0;   /* time the CPU waited */
+  g_snesdsp_rsp_joins++;
+  g_snesdsp_rsp_samples += s_flight.samples;
+  Dsp *dsp = s_flight.dsp;
+  snesdsp_rsp_unpack(dsp, &s_block);
+  for (uint32_t i = 0; i < s_flight.samples; i++) {
+    const uint32_t fill = dsp->sampleWrite - dsp->sampleRead;
+    if (fill >= DSP_SAMPLE_RING) continue;
+    const uint32_t w = dsp->sampleWrite & (DSP_SAMPLE_RING - 1);
+    dsp->sampleBuffer[w * 2] = s_out.s[i * 2];
+    dsp->sampleBuffer[w * 2 + 1] = s_out.s[i * 2 + 1];
+    dsp->sampleWrite++;
+  }
+  if (s_flight.echoWrites) {
+    uint32_t index = s_flight.index, remain = s_flight.remain;
+    for (uint32_t i = 0; i < s_flight.samples; i++) {
+      const uint16_t adr = (uint16_t)(s_flight.esa + index * 4);
+      memcpy(s_flight.aram + adr, (const uint8_t *)UncachedAddr(s_view) + adr, 4);
+      index = (index + 1) & 0xffff;
+      remain = (remain - 1) & 0xffff;
+      if (!remain) { remain = s_flight.delay; index = 0; }
+    }
+  }
+  s_flight.active = false;
+  g_snesdsp_rsp_join_ticks += get_ticks() - tj;
 }

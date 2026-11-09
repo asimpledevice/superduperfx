@@ -858,7 +858,7 @@ bool RtlRunFrame(uint32 inputs) {
   // longjmp would dereference an uninitialized jmp_buf and crash.
   if (setjmp(g_watchdog_jmp) == 0) {
     g_rtl_game_info->run_frame();
-    apu_dspSync(g_snes->apu);
+    apu_dspFrameSync(g_snes->apu);
   }
 #ifdef SNES_COSIM
   /* DETERMINISTIC AUDIO CONSUMER (SNES_COSIM_AUDIO=1). Production is paced by the
@@ -985,7 +985,7 @@ bool RtlRunFrame(uint32 inputs) {
   snes_rb_probe_after_frame(inputs);
 #endif
 
-  apu_dspSync(g_snes->apu);  /* host code between frames sees a current DSP */
+  apu_dspFrameSync(g_snes->apu);  /* host code between frames sees a current DSP */
   if (g_rtl_game_info->frame_end) g_rtl_game_info->frame_end();
   return false;
 }
@@ -2678,7 +2678,9 @@ void RtlRenderAudio(int16 *audio_buffer, int samples, int channels) {
    * schedule a second, competing emulation clock and is what let audio drift
    * behind visuals after turbo. */
   RtlApuLock();
-  apu_dspSync(g_snes->apu);
+#if !SNESRECOMP_DSP_HOST_ASYNC
+  apu_dspSync(g_snes->apu);  /* else the output arrives as batches complete */
+#endif
   rtl_render_native(g_snes->apu->dsp, audio_buffer, samples);
   /* Mix MSU-1 streaming audio on top of the S-DSP block. Inert (no-op)
    * unless a pack is armed and a track is playing. Runs under the APU

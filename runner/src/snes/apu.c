@@ -12,6 +12,10 @@
 #include "spc.h"
 #include "dsp.h"
 #include "apu_dsp_watch.h"
+
+#if SNESRECOMP_APU_DEFER_DSP
+static inline void apu_dspJoin(Apu* apu);
+#endif
 #include "../audio_trace.h"
 
 #ifndef SNESRECOMP_TRACE
@@ -51,9 +55,15 @@ void apu_free(Apu* apu) {
 }
 
 void apu_reset(Apu* apu) {
+#if SNESRECOMP_APU_DEFER_DSP
+  apu_dspJoin(apu);
+#endif
   apu->romReadable = true; // before resetting spc, because it reads reset vector from it
   spc_reset(apu->spc);
   dsp_reset(apu->dsp);
+#if SNESRECOMP_APU_DEFER_DSP
+  memcpy(apu->dspRegs, apu->dsp->ram, sizeof(apu->dspRegs));
+#endif
   memset(apu->ram, 0, sizeof(apu->ram));
   apu->dspAdr = 0;
   apu->cycles = 0;
@@ -250,11 +260,14 @@ uint32_t g_apu_dsp_sync_samples[APU_DSP_SYNC_REASONS];
 /* isReg values: 0 ARAM write on a watched page, 1 DSP register write,
  * 2 ARAM write on an unwatched page (verify builds only; page-watch
  * tracking would not have logged it). */
-static void apu_dspReplay(Apu* apu, uint32_t pending, uint32_t n, bool narrow) {
+static void apu_dspRevert(Apu* apu, uint32_t n, bool narrow) {
   for (uint32_t i = n; i-- > 0;) {
     const ApuDspLogEntry *e = &apu->dspLog[i];
     if (e->isReg == 0 || (e->isReg == 2 && !narrow)) apu->ram[e->adr] = e->old;
   }
+}
+
+static void apu_dspForward(Apu* apu, uint32_t pending, uint32_t n, bool narrow) {
   uint32_t i = 0;
   for (uint32_t k = 0; k <= pending; k++) {
     for (; i < n && apu->dspLog[i].tag == k; i++) {
@@ -266,14 +279,82 @@ static void apu_dspReplay(Apu* apu, uint32_t pending, uint32_t n, bool narrow) {
   }
 }
 
+static void apu_dspReplay(Apu* apu, uint32_t pending, uint32_t n, bool narrow) {
+  apu_dspRevert(apu, n, narrow);
+  apu_dspForward(apu, pending, n, narrow);
+}
+
 uint32_t g_apu_dsp_verify_mismatches;
 
+static void apu_dspMark(Apu* apu, uint16_t start, uint32_t len, uint8_t bits);
+static void apu_dspMarkDirEntry(Apu* apu, uint8_t srcn);
+#define APU_DSP_BRR_SPAN (65u * 9u)
+
+uint32_t g_apu_dsp_join_why[8];
+static unsigned s_join_why;
+/* Wait for a batch running elsewhere and take its results. */
+static inline void apu_dspJoin(Apu* apu) {
+#ifdef SNESRECOMP_DSP_JOIN_HOOK
+  if (!apu->dspInFlight) return;
+  g_apu_dsp_join_why[s_join_why & 7]++;
+  SNESRECOMP_DSP_JOIN_HOOK();
+  apu->dspInFlight = false;
+  apu->dspFlightEchoLen = 0;
+  if (!apu->dspPending) {  /* marks left for the flight; none owed now */
+    memset(apu->spc->dspWatchLog, 0, sizeof(apu->spc->dspWatchLog));
+    memset(apu->spc->dspWatchSync, 0, sizeof(apu->spc->dspWatchSync));
+  }
+#else
+  (void)apu;
+#endif
+}
+
+#ifdef SNESRECOMP_DSP_LAUNCH_HOOK
+/* After a launch the Dsp shows the in-flight batch's start state until the
+ * join, so mark what the next batch can read from that state conservatively:
+ * two batches of BRR data per voice, the directory entries of every SRCN in
+ * play, and the echo window (writes logged, reads synced). */
+static void apu_dspMarkAfterLaunch(Apu* apu, uint32_t n) {
+  const Dsp *d = apu->dsp;
+  apu_dspMark(apu, d->dirPage, 0x400u, APU_DSP_WATCH_LOG);
+  for (int v = 0; v < 8; v++) {
+    apu_dspMark(apu, d->channel[v].decodeOffset, 2u * APU_DSP_BRR_SPAN, APU_DSP_WATCH_LOG);
+    apu_dspMarkDirEntry(apu, d->channel[v].srcn);
+  }
+  for (uint32_t i = 0; i < n; i++)
+    if (apu->dspLog[i].isReg && (apu->dspLog[i].adr & 0x0f) == 4)
+      apu_dspMarkDirEntry(apu, apu->dspLog[i].val);
+  uint32_t loop = d->echoDelay;
+  const uint32_t current = (uint32_t)d->echoBufferIndex + d->echoRemain;
+  if (current > loop) loop = current;
+  apu_dspMark(apu, d->echoBufferAdr, loop * 4u,
+              APU_DSP_WATCH_LOG | (d->echoWrites ? APU_DSP_WATCH_SYNC : 0u));
+  apu->dspFlightEchoLo = d->echoBufferAdr;
+  apu->dspFlightEchoLen = d->echoWrites ? loop * 4u : 0u;
+}
+#endif
+
 static void apu_dspSyncFor(Apu* apu, unsigned reason) {
+#ifdef SNESRECOMP_DSP_JOIN_HOOK
+  /* A frame-end flush never waits for a batch still running: its samples
+   * stay owed and go with the next batch. (After the frame's last SPC
+   * catch-up a full batch is usually just launched; joining it here put
+   * the CPU to sleep for the whole batch.) */
+  if (reason == APU_DSP_SYNC_FRAME && apu->dspInFlight) return;
+#endif
+  s_join_why = reason;
+  apu_dspJoin(apu);
   const uint32_t pending = apu->dspPending, n = apu->dspLogN;
   if (!pending && !n) return;
   g_apu_dsp_sync_count[reason]++;
   g_apu_dsp_sync_samples[reason] += pending;
   apu->dspPending = 0;
+  const bool aramEndReachable = APU_DSP_PAGE_BIT(apu->spc->dspWatchLog, 0xff00u) != 0;
+  (void)aramEndReachable;
+#ifdef SNESRECOMP_DSP_LAUNCH_HOOK
+  uint8_t marks[sizeof(apu->spc->dspWatchLog)];
+  memcpy(marks, apu->spc->dspWatchLog, sizeof marks);
+#endif
   memset(apu->spc->dspWatchLog, 0, sizeof(apu->spc->dspWatchLog));  /* nothing owed now */
   memset(apu->spc->dspWatchSync, 0, sizeof(apu->spc->dspWatchSync));
 #if SNESRECOMP_APU_DEFER_DSP_VERIFY
@@ -293,6 +374,23 @@ static void apu_dspSyncFor(Apu* apu, unsigned reason) {
       fprintf(stderr, "[apu] deferred DSP verify: page-watch replay differs (batch %u samples)\n",
               (unsigned)pending);
   }
+#elif defined(SNESRECOMP_DSP_LAUNCH_HOOK)
+  if (SNESRECOMP_DSP_LAUNCH_HOOK(apu->dsp, apu->ram, apu->dspLog, n, pending, marks)) {
+    apu->dspInFlight = true;
+    apu_dspMarkAfterLaunch(apu, n);
+    /* Only full batches run in the background; other syncs want results. */
+    if (reason != APU_DSP_SYNC_FULL_BATCH && reason != APU_DSP_SYNC_LOG_FULL &&
+        reason != APU_DSP_SYNC_FRAME) {
+      s_join_why = 6;
+      apu_dspJoin(apu);
+    }
+  } else {
+    apu_dspReplay(apu, pending, n, true);
+  }
+#elif defined(SNESRECOMP_DSP_BATCH_HOOK)
+  apu_dspRevert(apu, n, true);
+  if (!SNESRECOMP_DSP_BATCH_HOOK(apu->dsp, apu->ram, apu->dspLog, n, pending, aramEndReachable))
+    apu_dspForward(apu, pending, n, true);
 #else
   apu_dspReplay(apu, pending, n, true);
 #endif
@@ -300,12 +398,15 @@ static void apu_dspSyncFor(Apu* apu, unsigned reason) {
 }
 
 void apu_dspSync(Apu* apu) { apu_dspSyncFor(apu, APU_DSP_SYNC_HOST); }
+void apu_dspFrameSync(Apu* apu) {
+  apu_dspSyncFor(apu, SNESRECOMP_DSP_HOST_ASYNC ? APU_DSP_SYNC_FRAME : APU_DSP_SYNC_HOST);
+}
 void apu_dspEchoRead(Apu* apu) { apu_dspSyncFor(apu, APU_DSP_SYNC_ECHO_READ); }
 
-/* The most BRR data one voice can consume in a batch: at the maximum pitch
- * (0x3fff) the 16-bit sample counter wraps at most 64 times in 256 samples,
- * each wrap decoding one 9-byte block, plus the block in progress. */
-#define APU_DSP_BRR_SPAN (65u * 9u)
+/* APU_DSP_BRR_SPAN (above): the most BRR data one voice can consume in a
+ * batch: at the maximum pitch (0x3fff) the 16-bit sample counter wraps at
+ * most 64 times in 256 samples, each wrap decoding one 9-byte block, plus
+ * the block in progress. */
 _Static_assert(APU_DSP_MAX_PENDING * 0x3fffu / 0x10000u + 1u <= 65u, "BRR span");
 
 static void apu_dspMark(Apu* apu, uint16_t start, uint32_t len, uint8_t bits) {
@@ -348,6 +449,12 @@ static void apu_dspStartBatch(Apu* apu) {
 
 /* An SPC write to a page the DSP may read during the batch. */
 void apu_dspLogRam(Apu* apu, uint16_t adr, uint8_t val) {
+  if (apu->dspInFlight && (uint16_t)(adr - apu->dspFlightEchoLo) < apu->dspFlightEchoLen)
+    { s_join_why = 7; apu_dspJoin(apu); }  /* the batch's echo bytes come first */
+  if (!apu->dspPending) {  /* marks kept for a flight; nothing owed */
+    apu->ram[adr] = val;
+    return;
+  }
   if (apu->dspLogN == APU_DSP_LOG_LEN) {
     apu_dspSyncFor(apu, APU_DSP_SYNC_LOG_FULL);  /* clears the marks */
     apu->ram[adr] = val;
@@ -368,6 +475,7 @@ static inline void apu_dspEdge(Apu* apu) {
 }
 #else
 void apu_dspSync(Apu* apu) { (void)apu; }
+void apu_dspFrameSync(Apu* apu) { (void)apu; }
 #endif
 
 #if SNESRECOMP_APU_NATIVE
@@ -382,6 +490,9 @@ void apu_saveload(Apu *apu, SaveLoadInfo *sli) {
   sli->func(sli, apu->ram, offsetof(Apu, pad) + 6 - offsetof(Apu, ram));
   apu->timerSyncCycle = apu->cycles;  /* after a load, timers match cycles */
   dsp_saveload(apu->dsp, sli);
+#if SNESRECOMP_APU_DEFER_DSP
+  memcpy(apu->dspRegs, apu->dsp->ram, sizeof(apu->dspRegs));  /* after a load */
+#endif
   spc_saveload(apu->spc, sli);
 }
 
@@ -474,18 +585,15 @@ uint8_t apu_cpuRead(Apu* apu, uint16_t adr) {
     }
     case 0xf3: {
 #if SNESRECOMP_APU_DEFER_DSP
-      if (apu->dspPending) {
+      {
         const uint8_t r = apu->dspAdr & 0x7f;
-        /* Only ENVX ($x8), OUTX ($x9) and ENDX ($7C) change as the DSP runs.
-         * Every other register reads back the SPC's latest write, which is
-         * either still in the log or already in the register file. */
+        /* Only ENVX ($x8), OUTX ($x9) and ENDX ($7C) change as the DSP runs;
+         * every other register reads back the SPC's latest write. */
         if ((r & 0xf) == 8 || (r & 0xf) == 9 || r == 0x7c) {
-          apu_dspSyncFor(apu, APU_DSP_SYNC_REG_READ);
-        } else {
-          for (uint32_t i = apu->dspLogN; i-- > 0;)
-            if (apu->dspLog[i].isReg && apu->dspLog[i].adr == r) return apu->dspLog[i].val;
+          apu_dspSyncFor(apu, APU_DSP_SYNC_REG_READ);  /* also joins a flight */
           return dsp_read(apu->dsp, r);
         }
+        return apu->dspRegs[r];
       }
 #endif
       return dsp_read(apu->dsp, apu->dspAdr & 0x7f);
@@ -598,6 +706,9 @@ void apu_cpuWrite(Apu* apu, uint16_t adr, uint8_t val) {
     }
     case 0xf3: {
 #if SNESRECOMP_APU_DEFER_DSP
+      if(apu->dspAdr < 0x80)
+        apu->dspRegs[apu->dspAdr] = apu->dspAdr == 0x7c ? 0 : val;
+      if(!apu->dspPending) apu_dspJoin(apu);  /* direct write: Dsp must be current */
       if(apu->dspAdr < 0x80 && apu->dspPending) {
         const uint8_t r = apu->dspAdr;
         if(r == 0x6c || r == 0x6d || r == 0x7d || r == 0x5d || apu->dspLogN == APU_DSP_LOG_LEN) {

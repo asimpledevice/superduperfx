@@ -4,6 +4,9 @@
 #include <stdio.h>
 
 #include "n64_platform.h"
+#ifdef N64_RSPDSP
+#include "snesdsp_rsp.h"
+#endif
 
 /* ---- Sampling profiler ------------------------------------------------
  * A continuous timer interrupt records COP0 EPC, the PC the CPU was
@@ -43,6 +46,9 @@ void n64_platform_init(void) {
   display_init(RESOLUTION_320x240, DEPTH_16_BPP, 2, GAMMA_NONE, FILTERS_DISABLED);
   joypad_init();
   rdpq_init();
+#ifdef N64_RSPDSP
+  snesdsp_rsp_init();
+#endif
 #ifdef N64PPU_RDP_VALIDATE
   rdpq_debug_start();
 #endif

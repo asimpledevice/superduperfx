@@ -110,6 +110,7 @@ static uint32_t random_log(Dsp *d, uint32_t samples) {
 
 int main(void) {
   debug_init_isviewer();
+  rspq_init();
   snesdsp_rsp_init();
   static Dsp a, b;
   uint8_t *aram_ref = memalign(16, 0x10000);

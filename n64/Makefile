@@ -40,6 +40,26 @@ HOST_SRCS = n64_host.c n64_platform.c n64_compat.c n64_stubs.c \
 OBJS = $(addprefix $(BUILD_DIR)/runner/,$(RUNNER_SRCS:.c=.o)) \
        $(addprefix $(BUILD_DIR)/,$(HOST_SRCS:.c=.o))
 
+.DEFAULT_GOAL := all
+
+# RSPDSP=1 (default): deferred S-DSP whose batches run on the RSP
+# (n64/rspdsp), the C DSP covering what the RSP path does not.
+RSPDSP ?= 1
+ifeq ($(RSPDSP),1)
+N64_CFLAGS += -DSNESRECOMP_APU_DEFER_DSP=1 -DSNESRECOMP_DSP_LAUNCH_HOOK=snesdsp_rsp_apu_launch \
+	-DSNESRECOMP_DSP_JOIN_HOOK=snesdsp_rsp_apu_join -DSNESRECOMP_DSP_HOST_ASYNC=1 \
+	-DN64_RSPDSP=1 -Irspdsp
+OBJS += $(BUILD_DIR)/rspdsp/snesdsp_rsp.o $(BUILD_DIR)/rsp_snesdsp.o
+$(BUILD_DIR)/rspdsp/snesdsp_rsp.o: rspdsp/snesdsp_rsp.c
+	@mkdir -p $(dir $@)
+	@echo "    [CC] $<"
+	$(CC) -c $(CFLAGS) -o $@ $<
+# libdragon's RSP rule looks in SOURCE_DIR: run it on rspdsp/.
+$(BUILD_DIR)/rsp_snesdsp.o: rspdsp/rsp_snesdsp.S rspdsp/snesdsp_rsp_layout.h rspdsp/rsp_snesdsp_tables.inc
+	@$(MAKE) --no-print-directory -f $(N64_INST)/include/n64.mk SOURCE_DIR=rspdsp \
+		BUILD_DIR=$(BUILD_DIR) RSPASFLAGS="$(N64_RSPASFLAGS)" $@
+endif
+
 ifneq ($(GEN_DIR),)
 GEN_SRCS := $(notdir $(wildcard $(GEN_DIR)/*.c))
 GEN_OBJS := $(addprefix $(BUILD_DIR)/gen/,$(GEN_SRCS:.c=.o))

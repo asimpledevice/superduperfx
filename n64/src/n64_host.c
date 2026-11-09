@@ -206,7 +206,11 @@ static uint8_t *load_rom(const char *path, int *size_out) {
  * modulo 8 KB, chosen from a data-cache miss profile (see the notes);
  * -1 keeps libdragon's stack. */
 #ifndef N64_STACK_COLOR
+#ifdef N64_RSPDSP
+#define N64_STACK_COLOR 0x1b40  /* heap objects sit elsewhere in this build */
+#else
 #define N64_STACK_COLOR 0x11e0
+#endif
 #endif
 static int host_main(void);
 #if N64_STACK_COLOR >= 0 && defined(__mips__)
@@ -322,12 +326,41 @@ static int host_main(void) {
     if (frame == N64_DCPROF + 60) n64_platform_log("DCPROF_STOP\n");
 #endif
 #ifdef N64_STATE_HASH
-    if (frame % 60 == 0) {
-      uint32_t h = 2166136261u, ha = 2166136261u;
-      for (int i = 0; i < 0x20000; ++i) h = (h ^ g_snes->ram[i]) * 16777619u;
-      for (int i = 0; i < 0x10000; ++i) ha = (ha ^ g_snes->apu->ram[i]) * 16777619u;
-      n64_platform_log("[state] frame %lu wram %08lx aram %08lx\n", (unsigned long)frame,
-                       (unsigned long)h, (unsigned long)ha);
+    {
+      /* Every DSP output sample, as produced (the frame end has synced a
+       * deferred DSP), so builds with different DSP paths compare. */
+      static uint32_t s_out_hash = 2166136261u, s_out_pos;
+      apu_dspSync(g_snes->apu);  /* all samples so far, also with async batches */
+      const Dsp *d = g_snes->apu->dsp;
+      for (; s_out_pos != d->sampleWrite; ++s_out_pos) {
+        const uint32_t w = s_out_pos & (DSP_SAMPLE_RING - 1);
+        s_out_hash = (s_out_hash ^ (uint16_t)d->sampleBuffer[w * 2]) * 16777619u;
+        s_out_hash = (s_out_hash ^ (uint16_t)d->sampleBuffer[w * 2 + 1]) * 16777619u;
+      }
+      if (frame % 60 == 0) {
+        uint32_t h = 2166136261u, ha = 2166136261u;
+        for (int i = 0; i < 0x20000; ++i) h = (h ^ g_snes->ram[i]) * 16777619u;
+        for (int i = 0; i < 0x10000; ++i) ha = (ha ^ g_snes->apu->ram[i]) * 16777619u;
+        n64_platform_log("[state] frame %lu wram %08lx aram %08lx dsp-out %08lx (%lu samples)\n",
+                         (unsigned long)frame, (unsigned long)h, (unsigned long)ha,
+                         (unsigned long)s_out_hash, (unsigned long)s_out_pos);
+#ifdef N64_RSPDSP
+        { extern uint32_t g_snesdsp_rsp_samples, g_snesdsp_rsp_async, g_snesdsp_rsp_joins,
+                          g_snesdsp_rsp_join_wait;
+          n64_platform_log("[rspdsp] %lu of %lu samples ran on the RSP; %lu launches, %lu joins, "
+                           "%lu us waiting\n", (unsigned long)g_snesdsp_rsp_samples,
+                           (unsigned long)s_out_pos, (unsigned long)g_snesdsp_rsp_async,
+                           (unsigned long)g_snesdsp_rsp_joins,
+                           (unsigned long)(g_snesdsp_rsp_join_wait / 47));
+          extern uint32_t g_apu_dsp_join_why[8];
+          n64_platform_log("[rspdsp] joins by reason: host %lu regread %lu echoread %lu echoreg %lu "
+                           "logfull %lu batch %lu frame/immediate %lu echowrite %lu\n",
+                           (unsigned long)g_apu_dsp_join_why[0], (unsigned long)g_apu_dsp_join_why[1],
+                           (unsigned long)g_apu_dsp_join_why[2], (unsigned long)g_apu_dsp_join_why[3],
+                           (unsigned long)g_apu_dsp_join_why[4], (unsigned long)g_apu_dsp_join_why[5],
+                           (unsigned long)g_apu_dsp_join_why[6], (unsigned long)g_apu_dsp_join_why[7]); }
+#endif
+      }
     }
 #endif
 #if SNESRECOMP_APU_DEFER_DSP
@@ -340,6 +373,19 @@ static int host_main(void) {
         g_apu_dsp_sync_count[r] = g_apu_dsp_sync_samples[r] = 0;
       }
       n64_platform_log("[dspsync] 600 frames, syncs/samples:%s\n", b);
+    }
+#endif
+#if defined(N64_RSPDSP) && !defined(N64_STATE_HASH)
+    if (frame % 60 == 59) {
+      extern uint32_t g_snesdsp_rsp_launch_ticks, g_snesdsp_rsp_join_ticks, g_snesdsp_rsp_join_wait,
+                      g_snesdsp_rsp_pages, g_snesdsp_rsp_async;
+      n64_platform_log("[rspdsp] per frame: launch %lu us, join %lu us (waiting %lu us), %lu launches, %lu pages\n",
+                       (unsigned long)(g_snesdsp_rsp_launch_ticks / 60 / 47),
+                       (unsigned long)(g_snesdsp_rsp_join_ticks / 60 / 47),
+                       (unsigned long)(g_snesdsp_rsp_join_wait / 60 / 47),
+                       (unsigned long)(g_snesdsp_rsp_async / 60), (unsigned long)(g_snesdsp_rsp_pages / 60));
+      g_snesdsp_rsp_launch_ticks = g_snesdsp_rsp_join_ticks = g_snesdsp_rsp_join_wait = 0;
+      g_snesdsp_rsp_pages = g_snesdsp_rsp_async = 0;
     }
 #endif
     if (++frame % 60 == 0) {
