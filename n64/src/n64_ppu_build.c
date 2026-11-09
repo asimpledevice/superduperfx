@@ -80,6 +80,23 @@ typedef struct {
   uint8_t clip[N64PPU_MAX_SPANS], math[N64PPU_MAX_SPANS];
 } Spans;
 
+/* The previous RDP line's palettes and backdrop colours, and their inputs
+ * (palette slots are per frame: cleared in n64_ppu_build_begin). */
+typedef struct {
+  uint32_t cgram_count;
+  uint16_t bd, fixed;
+  uint8_t brightness, mode, sub, pad;
+} LinePalKey;
+typedef struct { LinePalKey key; N64PpuLine line; bool full, valid; } LinePalCache;
+
+/* The previous line's window spans and the registers they come from. */
+typedef struct {
+  uint32_t windowsel;
+  uint16_t wbgobjlog;
+  uint8_t w[4], windowed[2], cgwsel, pad;
+} SpanKey;
+typedef struct { SpanKey key; Spans spans; bool valid; } SpanCache;
+
 /* A deferred run of lines for one background layer of one screen. */
 typedef struct {
   bool active;
@@ -99,14 +116,27 @@ typedef struct {
   N64PpuFrame *frame;
   const Ppu *ppu;                          /* VRAM source for deferred runs */
   BgRun runs[2][4];                        /* [main/sub][layer] */
-  /* Sprite rows that may hold non-zero bytes (persistent across frames). A
-   * row that is not rewritten on a line is cleared before it can be drawn. */
-  uint32_t dirty[N64PPU_PLANES][(N64PPU_LINES + 31) / 32];
+  /* Sized as the per-plane dirty bits once were, so this struct (and every
+   * static placed after it) keeps its layout. */
+  union {
+    uint32_t layout_[N64PPU_PLANES][(N64PPU_LINES + 31) / 32];
+    struct {
+      /* Sprite rows that may hold non-zero bytes (persistent across
+       * frames), per OBJ plane. A row that is not rewritten on a line is
+       * cleared before it can be drawn. */
+      uint32_t dirty[4][(N64PPU_LINES + 31) / 32];
+      LinePalCache linepal;
+      SpanCache lastspans;
+    };
+  };
   struct TlutKey keys[N64PPU_MAX_TLUTS];   /* parallel to frame->tlut */
   Spans spans[N64PPU_LINES];               /* per line, for deferred masks */
 } BuildState;
 
 static BuildState s_state;
+_Static_assert(sizeof(((BuildState *)0)->layout_) >=
+               sizeof(uint32_t[4][(N64PPU_LINES + 31) / 32]) + sizeof(LinePalCache) + sizeof(SpanCache),
+               "per-line caches must fit the old dirty-bit space");
 
 N64PpuFrame *n64_ppu_build_frame_alloc(void) {
   init_tables();
@@ -134,10 +164,11 @@ static inline uint8_t *plane_row(N64PpuFrame *f, int plane, int r) {
 static inline void bit_set(uint32_t *bits, int r) { bits[r >> 5] |= 1u << (r & 31); }
 static inline bool bit_get(const uint32_t *bits, int r) { return (bits[r >> 5] >> (r & 31)) & 1; }
 
-static inline void clear_if_dirty(N64PpuFrame *f, int plane, int r) {
-  if (bit_get(s_state.dirty[plane], r)) {
+static inline void clear_if_dirty(N64PpuFrame *f, int plane, int r) {   /* OBJ planes */
+  uint32_t *dirty = s_state.dirty[plane - N64PPU_OBJ0];
+  if (bit_get(dirty, r)) {
     memset(plane_row(f, plane, r), 0, N64PPU_STRIDE);
-    s_state.dirty[plane][r >> 5] &= ~(1u << (r & 31));
+    dirty[r >> 5] &= ~(1u << (r & 31));
   }
 }
 
@@ -233,7 +264,10 @@ static uint8_t get_tlut(N64PpuFrame *f, const Ppu *ppu, uint8_t kind, uint8_t se
   return slot;
 }
 
+
 void n64_ppu_build_begin(N64PpuFrame *f, const uint32_t *sw_rows) {
+  s_state.linepal.valid = false;
+  s_state.lastspans.valid = false;
   s_state.frame = f;
 #if N64_RSPBG
   n64_bgrsp_frame_begin();
@@ -652,7 +686,7 @@ static void expand_obj(N64PpuFrame *f, const Ppu *ppu, int line) {
   for (int p = 0; p < 4; ++p)
     if (used & (1u << p)) {
       bit_set(f->rows[N64PPU_OBJ0 + p], r);
-      bit_set(s_state.dirty[N64PPU_OBJ0 + p], r);
+      bit_set(s_state.dirty[p], r);
     }
 }
 
@@ -692,37 +726,70 @@ static void flush_all(N64PpuFrame *f) {
     for (int layer = 0; layer < 4; ++layer) flush_run(f, screen, layer);
 }
 
-bool n64_ppu_build_line(const Ppu *ppu, int line) {
-  N64PpuFrame *f = s_state.frame;
-  s_state.ppu = ppu;
-  const int r = line - 1;
-  N64PpuLine *L = &f->line[r];
-  memset(L, 0, sizeof *L);
-  if (PPU_forcedBlank(ppu)) {
-    flush_all(f);
-    clear_line(f, r);
-    L->kind = N64PPU_LINE_BLACK;
-    f->black_lines++;
-    return true;
+/* Spans depend only on the window registers; most lines repeat the
+ * previous line's. (Out of line: n64_ppu_build_line must fit its slot in
+ * icache_order.ld, or every function placed after it moves.) */
+static __attribute__((noinline)) void line_spans(const Ppu *ppu, Spans *s) {
+  SpanKey key;
+  memset(&key, 0, sizeof key);
+  key.windowsel = ppu->windowsel;
+  key.wbgobjlog = ppu->wbgobjlog;
+  key.w[0] = ppu->window1left;
+  key.w[1] = ppu->window1right;
+  key.w[2] = ppu->window2left;
+  key.w[3] = ppu->window2right;
+  key.windowed[0] = ppu->screenWindowed[0];
+  key.windowed[1] = ppu->screenWindowed[1];
+  key.cgwsel = ppu->cgwsel;
+  if (s_state.lastspans.valid && !memcmp(&s_state.lastspans.key, &key, sizeof key)) {
+    *s = s_state.lastspans.spans;
+    return;
   }
-  Spans *s = &s_state.spans[r];
   compute_spans(ppu, s);
-  bool backdrop_math;
-  uint32_t why = line_unsupported(ppu, s, &backdrop_math);
+  s_state.lastspans.key = key;
+  s_state.lastspans.spans = *s;
+  s_state.lastspans.valid = true;
+}
 
-  if (!why) {
+/* A line's palettes and backdrop colours (out of line, see line_spans).
+ * Returns N64PPU_WHY_PALETTES when the palette pool ran out. */
+static __attribute__((noinline)) uint32_t line_palettes(N64PpuFrame *f, const Ppu *ppu,
+                                                        N64PpuLine *L, bool backdrop_math) {
+  uint32_t why = 0;
+  /* A line's palettes and backdrop colours depend only on CGRAM (by its
+   * write counter), brightness, the backdrop and fixed colours and the
+   * colour-math settings; most lines repeat the previous line's. */
+  const uint16_t bd = ppu->cgram[0];
+  const unsigned b = PPU_brightness(ppu);
+  const uint8_t mflags = (uint8_t)((PPU_subtractColor(ppu) ? kMathSubtract : 0) |
+                                   (PPU_halfColor(ppu) ? kMathHalf : 0));
+  const bool add_sub = PPU_addSubscreen(ppu);
+  LinePalKey key;
+  memset(&key, 0, sizeof key);
+  key.cgram_count = ppu->cgramWriteCount;
+  key.bd = bd;
+  key.fixed = ppu->fixedColor;
+  key.brightness = (uint8_t)b;
+  key.mode = (uint8_t)(mflags | (add_sub ? 4 : 0) | (backdrop_math ? 8 : 0));
+  key.sub = (uint8_t)(ppu->screenEnabled[1] & 0xf);
+  if (s_state.linepal.valid && !memcmp(&s_state.linepal.key, &key, sizeof key)) {
+    memcpy(L->tl_main, s_state.linepal.line.tl_main, sizeof L->tl_main);
+    memcpy(L->tl_math, s_state.linepal.line.tl_math, sizeof L->tl_math);
+    memcpy(L->tl_math_clip, s_state.linepal.line.tl_math_clip, sizeof L->tl_math_clip);
+    L->fill = s_state.linepal.line.fill;
+    L->fill_clip = s_state.linepal.line.fill_clip;
+    L->fill_math = s_state.linepal.line.fill_math;
+    L->fill_math_clip = s_state.linepal.line.fill_math_clip;
+    L->sub_layers = s_state.linepal.line.sub_layers;
+    why = s_state.linepal.full ? N64PPU_WHY_PALETTES : 0;
+  } else {
     bool full = false;
-    const uint16_t bd = ppu->cgram[0];
-    const unsigned b = PPU_brightness(ppu);
     for (int sel = 0; sel < N64PPU_SELS; ++sel)
       L->tl_main[sel] = get_tlut(f, ppu, kTlutNormal, (uint8_t)sel, 0, 0, &full);
     L->fill = pack5551(bright(bd & 31, b, false), bright((bd >> 5) & 31, b, false),
                        bright((bd >> 10) & 31, b, false));
     L->fill_clip = 1;   /* black, opaque */
     if (backdrop_math) {
-      const uint8_t mflags = (uint8_t)((PPU_subtractColor(ppu) ? kMathSubtract : 0) |
-                                       (PPU_halfColor(ppu) ? kMathHalf : 0));
-      const bool add_sub = PPU_addSubscreen(ppu);
       /* Where the subscreen is empty the fixed colour is used, halved only
        * without addSubscreen (PpuDrawWholeLine). Clipped: main colour 0 and
        * no halving. */
@@ -737,8 +804,34 @@ bool n64_ppu_build_line(const Ppu *ppu, int line) {
         }
       }
     }
-    if (full) why |= N64PPU_WHY_PALETTES;
+    if (full) why = N64PPU_WHY_PALETTES;
+    s_state.linepal.key = key;
+    s_state.linepal.line = *L;
+    s_state.linepal.full = full;
+    s_state.linepal.valid = true;
   }
+  return why;
+}
+
+bool n64_ppu_build_line(const Ppu *ppu, int line) {
+  N64PpuFrame *f = s_state.frame;
+  s_state.ppu = ppu;
+  const int r = line - 1;
+  N64PpuLine *L = &f->line[r];
+  memset(L, 0, sizeof *L);
+  if (PPU_forcedBlank(ppu)) {
+    flush_all(f);
+    clear_line(f, r);
+    L->kind = N64PPU_LINE_BLACK;
+    f->black_lines++;
+    return true;
+  }
+  Spans *s = &s_state.spans[r];
+  line_spans(ppu, s);
+  bool backdrop_math;
+  uint32_t why = line_unsupported(ppu, s, &backdrop_math);
+
+  if (!why) why |= line_palettes(f, ppu, L, backdrop_math);
   if (why) {
     memset(L, 0, sizeof *L);
     flush_all(f);

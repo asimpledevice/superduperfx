@@ -844,6 +844,29 @@ top chunk from `mallinfo().keepcost` below `sbrk(0)`, and grows its pad in
 a hole). ares, SMW attract: CPU stage 88 -> 86 ms (as with `RSPBG=0`),
 PPU stage 26 -> 23 ms; frame about 118 ms.
 
+### Per-line palette and window-span caches
+
+Measured inside the line builder (ares, SMW attract): palettes and
+backdrop colours 7.8 ms, window spans 4.3 ms, sprites 4.0 ms, BG queueing
+2.8 ms per frame, plus HDMA 3.0 and the PPU's per-line state 1.6. The
+first two are pure functions of a few registers that rarely change from
+one line to the next, so `line_palettes` reuses the previous line's
+palettes and fills when CGRAM (write counter), brightness, backdrop and
+fixed colours and the colour-math settings are unchanged, and
+`line_spans` reuses the previous spans when the window registers are.
+Palettes 7.8 -> 2.5 ms, spans 4.3 -> 2.9 ms; PPU stage 23 -> 17 ms, frame
+about 112 ms. Native compare (3,000 frames) and ares `RENDER=2`: 0 px.
+
+Layout trap, twice in one change: (1) `n64_ppu_build_line` grew past its
+slot in `icache_order.ld` (`. = MAX(., addr)` then pushes every later
+placed function: here `bridge_bus_read` and `interp816_runOpcode`, CPU
+stage +5 ms), so the new code lives in out-of-line helpers the ordering
+does not list; (2) the caches as new statics moved every later static by
+0x90, so they live in space the builder state already had (the per-plane
+dirty bits now cover only sprite planes; a union keeps the struct's size,
+with a static assert). Check `nm` positions modulo 16 KB / 8 KB against
+the tuned build before timing a change.
+
 See [LESSONS.md](LESSONS.md) for ideas collected from other projects
 (sodium64) and design notes, with how they apply here.
 
