@@ -41,6 +41,15 @@ static void random_state(Dsp *d, uint8_t *aram) {
     if (r == 0x3d) v &= (uint8_t)rnd() & (uint8_t)rnd();
     dsp_write(d, (uint8_t)r, v);
   }
+#ifdef RSPDSP_REAL_PITCH
+  /* Timing runs: pitches like real music (SMW decodes ~0.47 BRR blocks per
+   * sample across its voices). */
+  for (int c = 0; c < 8; c++) {
+    const unsigned p = 0x200 + rnd() % 0x1400;
+    dsp_write(d, (uint8_t)(c * 16 + 2), (uint8_t)p);
+    dsp_write(d, (uint8_t)(c * 16 + 3), (uint8_t)(p >> 8));
+  }
+#endif
   /* Echo window inside ARAM, not touching $0000-$000F. */
   const unsigned edl = rnd() % 16, pages = edl ? edl * 8 : 1;
   const unsigned esa = 1 + rnd() % (256 - pages);
@@ -81,6 +90,9 @@ static uint32_t random_log(Dsp *d, uint32_t samples) {
       if (r == 0x2d) v &= 1;
       if (r == 0x6d || r == 0x7d) r = 0x4c;      /* keep the echo window */
       if (r == 0x5d && (rnd() & 1)) r = 0x4c;    /* key on often */
+#ifdef RSPDSP_REAL_PITCH
+      if ((r & 0x0e) == 0x02) r = 0x4c;
+#endif
       s_log[i].isReg = 1; s_log[i].adr = r; s_log[i].val = v;
     } else {
       uint16_t a = (uint16_t)rnd();
