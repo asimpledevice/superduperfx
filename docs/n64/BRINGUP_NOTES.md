@@ -749,6 +749,29 @@ difference) over random and crowded sprite tables in both validation
 modes; it catches deliberately injected off-by-one errors.
 `SNESRECOMP_SPR_LINES=0` restores the old path.
 
+### Window masks on the RDP; heap colour anchor
+
+Window masks and per-line layer enables are no longer written into the
+planes: each span carries `hide`/`hide_sub` layer bits and each line its
+`main_layers`, and the compositor (RDP and `profile/rdp_reference.c`)
+skips a hidden layer in that span. A BG row is now only ever written whole
+by its expansion, and nothing clears BG rows (a row of a layer that is off
+on its line is never drawn). This is what lets the RSP own the BG planes.
+Sprite rows keep their clears (sprites write rows sparsely). Native
+compare over 3,000 frames and ares `RENDER=2`: 0 px; PPU stage -1.3 ms.
+
+That change grew the frame description by 3 KB, which moved every engine
+heap object (allocated after it) to a new data-cache colour: the CPU stage
+went 87 -> 104 ms at frame 600 with no code change in it. The host now
+pads the heap top to `N64_HEAP_COLOR` modulo 8 KB just before `SnesInit`
+(`heap_anchor` in n64_host.c; `-DN64_HEAP_COLOR=-1` only logs the
+colour). The engine's large objects come from the top; small ones may
+fill holes, so the anchor is the top, probed with a 32 KB block that is
+freed back into it. 0x1b58 reproduces the previous good layout exactly
+(PPU, APU and ROM copy at the same addresses, same frame times). Host
+allocations before `SnesInit` no longer move the engine's objects; engine
+struct size changes still can (re-tune the colour if a stage jumps).
+
 See [LESSONS.md](LESSONS.md) for ideas collected from other projects
 (sodium64) and design notes, with how they apply here.
 

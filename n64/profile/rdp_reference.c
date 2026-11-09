@@ -39,6 +39,8 @@ int n64_ppu_draw_and_show(const N64PpuFrame *f, const char *status, int compare_
         for (const int8_t *o = kN64PpuOrder[L->order]; *o >= 0; ++o) {
           if ((*o & 0xf) >= N64PPU_OBJ0) continue;
           const int p = (*o & 0xf) - N64PPU_BG1 + N64PPU_SUB_BG1;
+          const int layer = n64ppu_plane_layer(p);
+          if (!(L->sub_layers & (1 << layer)) || (sp->hide_sub & (1 << layer))) continue;
           const int sel = n64ppu_entry_sel(L->order, *o);
           const int t = sp->clip ? L->tl_math_clip[sel] : L->tl_math[sel];
           blit_plane(out, f, p, (*o & N64PPU_HI) ? f->rows_hi[p] : f->rows[p], r,
@@ -46,6 +48,8 @@ int n64_ppu_draw_and_show(const N64PpuFrame *f, const char *status, int compare_
         }
       for (const int8_t *o = kN64PpuOrder[L->order]; *o >= 0; ++o) {
         const int p = *o & 0xf;
+        const int layer = n64ppu_plane_layer(p);
+        if (!(L->main_layers & (1 << layer)) || (sp->hide & (1 << layer))) continue;
         const int sel = n64ppu_entry_sel(L->order, *o);
         const int t = sp->clip ? N64PPU_TLUT_BLACK + sel : L->tl_main[sel];
         blit_plane(out, f, p, (*o & N64PPU_HI) ? f->rows_hi[p] : f->rows[p], r,

@@ -91,6 +91,8 @@ static void draw_rdp_band(const N64PpuFrame *f, int a, int b) {
       for (const int8_t *o = kN64PpuOrder[L->order]; *o >= 0; ++o) {
         if ((*o & 0xf) >= N64PPU_OBJ0) continue;
         const int p = (*o & 0xf) - N64PPU_BG1 + N64PPU_SUB_BG1;
+        const int layer = n64ppu_plane_layer(p);
+        if (!(L->sub_layers & (1 << layer)) || (sp->hide_sub & (1 << layer))) continue;
         const uint32_t *rows = (*o & N64PPU_HI) ? f->rows_hi[p] : f->rows[p];
         if (!rows_any(rows, a, b)) continue;
         const int sel = n64ppu_entry_sel(L->order, *o);
@@ -101,6 +103,8 @@ static void draw_rdp_band(const N64PpuFrame *f, int a, int b) {
     /* Main screen. */
     for (const int8_t *o = kN64PpuOrder[L->order]; *o >= 0; ++o) {
       const int p = *o & 0xf;
+      const int layer = n64ppu_plane_layer(p);
+      if (!(L->main_layers & (1 << layer)) || (sp->hide & (1 << layer))) continue;
       const uint32_t *rows = (*o & N64PPU_HI) ? f->rows_hi[p] : f->rows[p];
       if (!rows_any(rows, a, b)) continue;
       const int sel = n64ppu_entry_sel(L->order, *o);

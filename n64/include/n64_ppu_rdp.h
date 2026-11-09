@@ -6,7 +6,11 @@
  *   one per sprite priority, and subscreen copies of the background layers.
  *   Tile bitplanes become 8-bit palette indices through lookup tables;
  *   per-line scroll, VRAM, OAM and window registers are read live, so HDMA
- *   effects come for free. Window masks are applied by clearing spans.
+ *   effects come for free. Window masks and per-line layer enables are not
+ *   applied to the planes: the compositor skips a layer in a span where it
+ *   is hidden (N64PpuSpan.hide/hide_sub, N64PpuLine.main_layers/sub_layers).
+ *   So a BG row is only ever written whole by its expansion, and a row of a
+ *   layer that is off on its line is never drawn (it may hold stale data).
  *
  *   n64_ppu_draw.c (libdragon side) composites the planes on the RDP in SNES
  *   priority order with 256-entry palettes built from CGRAM.
@@ -77,12 +81,21 @@ typedef struct N64PpuSpan {
   uint16_t x0, x1;           /* [x0, x1) in 0..256 */
   uint8_t clip;              /* colour window clips main pixels to black */
   uint8_t math;              /* backdrop math applies here */
+  uint8_t hide;              /* main screen: bit L = layer L windowed out (4 = OBJ) */
+  uint8_t hide_sub;          /* subscreen: bit L = BG layer L windowed out */
 } N64PpuSpan;
+
+/* Layer bit of a plane (BG1-4 and SUB_BG1-4: 0-3; OBJ planes: 4). */
+static inline int n64ppu_plane_layer(int plane) {
+  return plane >= N64PPU_SUB_BG1 ? plane - N64PPU_SUB_BG1
+       : plane >= N64PPU_OBJ0 ? 4 : plane;
+}
 
 /* Everything the RDP needs for one line besides the plane rows. Lines whose
  * N64PpuLine compares equal are drawn as one band. */
 typedef struct N64PpuLine {
   uint8_t kind, order, nspans, sub_layers;   /* sub_layers: subscreen BG mask */
+  uint8_t main_layers, pad_[3];              /* main screen: BG bits 0-3, OBJ bit 4 */
   N64PpuSpan spans[N64PPU_MAX_SPANS];
   uint8_t tl_main[N64PPU_SELS];               /* normal palettes */
   uint8_t tl_math[N64PPU_SELS];               /* subscreen math palettes */

@@ -170,6 +170,40 @@ static void render_audio(int16_t *stereo, int frames) {
   RtlRenderAudio(stereo, frames, 2);
 }
 
+/* ---- Heap colour --------------------------------------------------------- */
+
+/* The engine's large heap objects (PPU, APU, WRAM-side state, ...) come from
+ * the top of the heap; small ones may fill earlier holes. Pad the heap top
+ * to a fixed colour modulo the 8 KB data cache before SnesInit, so a change
+ * in what the host allocated earlier (the RDP frame description, buffers)
+ * cannot move them all to new cache conflicts. Measured 2026-11-09: a 3 KB
+ * larger host allocation made the CPU stage 17% slower. N64_HEAP_COLOR -1
+ * only logs the colour the top has. */
+#ifndef N64_HEAP_COLOR
+#define N64_HEAP_COLOR 0x1b58   /* SMW attract, 2026-11-09 */
+#endif
+#if defined(__mips__)
+static void *volatile s_heap_pad;
+static uintptr_t heap_top(void) {
+  void *p = malloc(32768);   /* larger than any hole: comes from the top */
+  const uintptr_t a = (uintptr_t)p;
+  free(p);                   /* merges back into the top chunk */
+  return a;
+}
+static void heap_anchor(long color) {
+  const uintptr_t top = heap_top();
+  if (color >= 0) {
+    uintptr_t d = ((uintptr_t)color - top) & 8191;
+    if (d) {
+      if (d < 32) d += 8192;
+      s_heap_pad = malloc(d - 8);   /* chunk = request + header, 8-aligned */
+    }
+  }
+  n64_platform_log("[heap] top colour %04lx -> %04lx (want %ld)\n", (unsigned long)(top & 8191),
+                   (unsigned long)(heap_top() & 8191), color);
+}
+#endif
+
 /* ---- ROM ------------------------------------------------------------- */
 
 #ifndef N64_ROM_PATH
@@ -261,8 +295,17 @@ static int host_main(void) {
 
   RtlSetAudioOutputRate(n64_platform_audio_init(32000));
   RtlRegisterGame(&kN64GameInfo);
+#if defined(__mips__)
+  /* Place the engine's heap objects at a fixed data-cache colour, so what
+   * the host allocated before (frame description, buffers) cannot move
+   * them. Measured 2026-11-09: a 3 KB larger host allocation made the CPU
+   * stage 17% slower through new cache conflicts between them. */
+  heap_anchor(N64_HEAP_COLOR);
+#endif
   if (!SnesInit(rom, rom_size)) Die("SnesInit failed: unsupported or damaged ROM.");
   free(rom);  /* the cartridge keeps its own copy (cart_load) */
+  n64_platform_log("[heap] snes %p ppu %p apu %p cart rom %p\n", (void *)g_snes, (void *)g_ppu,
+                   (void *)g_snes->apu, (void *)g_snes->cart->rom);
   /* All OAM changes here go through the PPU ports or a save-state load. */
   ppu_set_oam_write_tracking(g_ppu);
   n64_platform_log("[n64] SNES initialized, entering main loop\n");

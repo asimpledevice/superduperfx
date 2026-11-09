@@ -96,8 +96,8 @@ typedef struct {
   N64PpuFrame *frame;
   const Ppu *ppu;                          /* VRAM source for deferred runs */
   BgRun runs[2][4];                        /* [main/sub][layer] */
-  /* Rows that may hold non-zero bytes (persistent across frames). A row that
-   * is not rewritten on a line is cleared before it can be drawn again. */
+  /* Sprite rows that may hold non-zero bytes (persistent across frames). A
+   * row that is not rewritten on a line is cleared before it can be drawn. */
   uint32_t dirty[N64PPU_PLANES][(N64PPU_LINES + 31) / 32];
   struct TlutKey keys[N64PPU_MAX_TLUTS];   /* parallel to frame->tlut */
   Spans spans[N64PPU_LINES];               /* per line, for deferred masks */
@@ -307,15 +307,6 @@ static void compute_spans(const Ppu *ppu, Spans *s) {
   }
 }
 
-/* Clear the spans of row r of a plane where its layer is windowed out. */
-static void apply_mask(N64PpuFrame *f, const Spans *s, const uint8_t *masks, int layer,
-                       int plane, int r) {
-  if (!bit_get(f->rows[plane], r) && !bit_get(f->rows_hi[plane], r)) return;
-  for (int k = 0; k < s->n; ++k)
-    if (masks[k] & (1 << layer))
-      memset(plane_row(f, plane, r) + N64PPU_PAD + s->x0[k], 0, s->x1[k] - s->x0[k]);
-}
-
 /* ---- Backgrounds ----------------------------------------------------------- */
 
 /* Expand a deferred run, tile-major. */
@@ -382,11 +373,8 @@ static void flush_run(N64PpuFrame *f, int screen, int layer) {
     }
     for (int i = 0; i < n; ++i) {
       const int r = g0 - 1 + i;
-      bit_set(s_state.dirty[plane], r);
       if (any_lo[i]) bit_set(f->rows[plane], r);
       if (any_hi[i]) bit_set(f->rows_hi[plane], r);
-      const Spans *s = &s_state.spans[r];
-      apply_mask(f, s, screen ? s->mask_sub : s->mask_main, layer, plane, r);
     }
     g0 = g1;
   }
@@ -572,9 +560,10 @@ static uint32_t line_unsupported(const Ppu *ppu, const Spans *s, bool *backdrop_
   return why;
 }
 
-/* Clear a line's rows in every plane (BG runs for it are flushed first). */
+/* Clear a line's sprite rows (BG runs for it are flushed first). BG rows
+ * need no clearing: they are written whole wherever their layer is drawn. */
 static void clear_line(N64PpuFrame *f, int r) {
-  for (int p = 0; p < N64PPU_PLANES; ++p) clear_if_dirty(f, p, r);
+  for (int p = N64PPU_OBJ0; p <= N64PPU_OBJ3; ++p) clear_if_dirty(f, p, r);
 }
 
 static void flush_all(N64PpuFrame *f) {
@@ -648,6 +637,8 @@ bool n64_ppu_build_line(const Ppu *ppu, int line) {
     L->spans[k].x1 = s->x1[k];
     L->spans[k].clip = s->clip[k];
     L->spans[k].math = (uint8_t)(backdrop_math && s->math[k]);
+    L->spans[k].hide = s->mask_main[k];
+    L->spans[k].hide_sub = s->mask_sub[k];
   }
 
   /* Background layers of both screens: queued (rows rewritten at flush);
@@ -656,14 +647,16 @@ bool n64_ppu_build_line(const Ppu *ppu, int line) {
   const uint8_t enabled[2] = {ppu->screenEnabled[0], L->sub_layers};
   for (int screen = 0; screen < 2; ++screen) {
     for (int layer = 0; layer < 4; ++layer) {
-      const int plane = (screen ? N64PPU_SUB_BG1 : N64PPU_BG1) + layer;
       if (layer < nbg && (enabled[screen] & (1 << layer))) {
         const int bpp = (PPU_mode(ppu) == 0 || layer == 2) ? 2 : 4;
         const unsigned pal_base = PPU_mode(ppu) == 0 ? 32u * layer : 0;
         queue_bg(f, ppu, screen, layer, line, bpp, pal_base);
+        if (!screen) L->main_layers |= (uint8_t)(1 << layer);
       } else {
+        /* Not drawn on this line (main_layers/sub_layers): the row keeps
+         * whatever it held. */
         flush_run(f, screen, layer);
-        clear_if_dirty(f, plane, r);
+        if (screen) L->sub_layers &= (uint8_t)~(1 << layer);
       }
     }
   }
@@ -671,8 +664,7 @@ bool n64_ppu_build_line(const Ppu *ppu, int line) {
   for (int p = N64PPU_OBJ0; p <= N64PPU_OBJ3; ++p) clear_if_dirty(f, p, r);
   if (ppu->screenEnabled[0] & 0x10) {
     expand_obj(f, ppu, line);
-    for (int p = N64PPU_OBJ0; p <= N64PPU_OBJ3; ++p)
-      apply_mask(f, s, s->mask_main, 4, p, r);
+    L->main_layers |= 0x10;
   }
   f->rdp_lines++;
   return true;
