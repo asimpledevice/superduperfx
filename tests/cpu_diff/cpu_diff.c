@@ -115,6 +115,9 @@ RecompReturn interp_bridge_lle_yield_unwind(CpuState *c, uint32 pc) {
 int interp_bridge_lle_master_deadline_reached(const CpuState *c) {
     (void)c; return 0;
 }
+int interp_bridge_lle_deadline_pause(CpuState *c, uint32 pc) {
+    (void)c; (void)pc; return 0;
+}
 void snes_refresh_charge(void) {}
 void snes_refresh_exempt(void) {}
 int interp816_opcode_hook(uint32_t addr) { (void)addr; return 0; }

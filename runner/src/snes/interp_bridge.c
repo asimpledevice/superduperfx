@@ -7,6 +7,7 @@
 #include <string.h>
 #include <time.h>
 #include "interp_bridge.h"
+#include "../guest_fiber.h"
 #include "cpu_fast_map.h"
 #include "cpu_plain_rom_read.h"
 #include "interp816.h"
@@ -1167,6 +1168,98 @@ int interp_bridge_lle_master_deadline_reached(const CpuState *cpu) {
         }
     }
     return reached;
+}
+
+/* ── guest fibers (guest_fiber.c) ─────────────────────────────────────── */
+
+/* The bridge's host nesting state: which interpreter/scheduler frames and
+ * paired bounces are live on the host stack. A paused guest fiber keeps its
+ * own while the driver runs interrupts on the run-start state. */
+typedef struct {
+    int sched_depth, unwind_active, unwind_owner_depth, unwind_is_deadline;
+    int next_unwind_is_deadline, bridge_depth, bounce_owner_depth;
+    int owner_exit_valid, owner_is_scheduler, bounce_recomp_base;
+    int apu_driving, idle_poll_now, bus_timing_active;
+    uint32_t sched_yield_pc, unwind_pc24, wlog_pc24;
+    uint16_t sched_flag_addr, owner_exit_s;
+    uint8_t sched_flag_value;
+} InterpBridgeNest;
+
+size_t interp_bridge_nest_size(void) { return sizeof(InterpBridgeNest); }
+
+void interp_bridge_nest_save(void *out) {
+    InterpBridgeNest *n = (InterpBridgeNest *)out;
+    n->sched_depth = s_lle_sched_depth;
+    n->unwind_active = s_lle_unwind_active;
+    n->unwind_owner_depth = s_lle_unwind_owner_depth;
+    n->unwind_is_deadline = s_lle_unwind_is_deadline;
+    n->next_unwind_is_deadline = s_lle_next_unwind_is_deadline;
+    n->bridge_depth = s_interp_bridge_depth;
+    n->bounce_owner_depth = s_interp_bounce_owner_depth;
+    n->owner_exit_valid = s_interp_owner_exit_valid;
+    n->owner_is_scheduler = s_interp_owner_is_scheduler;
+    n->bounce_recomp_base = s_interp_bounce_recomp_base;
+    n->apu_driving = g_interp_apu_driving;
+    n->idle_poll_now = s_idle_poll_now;
+    n->bus_timing_active = s_interp_bus_timing_active;
+    n->sched_yield_pc = s_sched_yield_pc;
+    n->unwind_pc24 = s_lle_unwind_pc24;
+    n->wlog_pc24 = g_interp_wlog_pc24;
+    n->sched_flag_addr = s_sched_yield_flag_addr;
+    n->owner_exit_s = s_interp_owner_exit_s;
+    n->sched_flag_value = s_sched_yield_flag_value;
+}
+
+void interp_bridge_nest_load(const void *in) {
+    const InterpBridgeNest *n = (const InterpBridgeNest *)in;
+    s_lle_sched_depth = n->sched_depth;
+    s_lle_unwind_active = n->unwind_active;
+    s_lle_unwind_owner_depth = n->unwind_owner_depth;
+    s_lle_unwind_is_deadline = n->unwind_is_deadline;
+    s_lle_next_unwind_is_deadline = n->next_unwind_is_deadline;
+    s_interp_bridge_depth = n->bridge_depth;
+    s_interp_bounce_owner_depth = n->bounce_owner_depth;
+    s_interp_owner_exit_valid = n->owner_exit_valid;
+    s_interp_owner_is_scheduler = n->owner_is_scheduler;
+    s_interp_bounce_recomp_base = n->bounce_recomp_base;
+    g_interp_apu_driving = n->apu_driving;
+    s_idle_poll_now = n->idle_poll_now;
+    s_interp_bus_timing_active = n->bus_timing_active;
+    s_sched_yield_pc = n->sched_yield_pc;
+    s_lle_unwind_pc24 = n->unwind_pc24;
+    g_interp_wlog_pc24 = n->wlog_pc24;
+    s_sched_yield_flag_addr = n->sched_flag_addr;
+    s_interp_owner_exit_s = n->owner_exit_s;
+    s_sched_yield_flag_value = n->sched_flag_value;
+}
+
+/* Generated code's deadline check (every block and function entry). Without
+ * a guest fiber this is interp_bridge_lle_master_deadline_reached: 1 sends the
+ * code down its yield-unwind path. On a guest fiber the code pauses here
+ * instead, leaving what the unwind would leave for the driver (the resume
+ * PC, the APU flush, a current beam), and continues (0) when the driver
+ * resumes this PC. */
+int interp_bridge_lle_deadline_pause(CpuState *cpu, uint32_t resume_pc24) {
+    if (!interp_bridge_lle_master_deadline_reached(cpu)) return 0;
+#if SNESRECOMP_GUEST_FIBER
+    if (guest_fiber_on_guest()) {
+        s_lle_next_unwind_is_deadline = 0;
+        lle_resume_set(resume_pc24 & 0xFFFFFFu, INTERP_RESUME_SITE_DEADLINE_UNWIND, cpu->S);
+        bridge_apu_flush(cpu);
+        bridge_beam_catchup(cpu);
+        if (guest_fiber_pause(resume_pc24 & 0xFFFFFFu, cpu->S)) {
+            /* As a fresh run would: the driver moved the beam and may have
+             * changed the cartridge mapping. */
+#if SNESRECOMP_LAZY_BEAM
+            s_beam_next_event = 0;
+#endif
+            cpu_fast_map_validate();
+            return 0;
+        }
+        s_lle_next_unwind_is_deadline = 1;   /* the driver wants the unwind */
+    }
+#endif
+    return 1;
 }
 
 RecompReturn interp_bridge_lle_yield_unwind(CpuState *cpu, uint32 resume_pc24) {

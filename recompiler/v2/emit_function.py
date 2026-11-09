@@ -2109,7 +2109,9 @@ def emit_function(rom: bytes, bank: int, start: int,
     # calls to cross an event-driven host's frame deadline. Yield before
     # entering the next architectural callee so the owning interpreter can
     # deliver NMI/IRQ without discarding the already-pushed guest return frame.
-    src.append('  if (interp_bridge_lle_master_deadline_reached(cpu)) {')
+    # interp_bridge_lle_deadline_pause: on a guest fiber the call pauses here
+    # and returns 0 when resumed; otherwise it is the plain deadline test.
+    src.append(f'  if (interp_bridge_lle_deadline_pause(cpu, {_transfer_target_expr(fn_entry_pc, False)})) {{')
     src.append('    RecompStackPopYield();')
     src.append(
         f'    return interp_bridge_lle_yield_unwind(cpu, {_transfer_target_expr(fn_entry_pc, False)});'
@@ -2238,7 +2240,7 @@ def emit_function(rom: bytes, bank: int, start: int,
         # instruction boundary, so it is safe to unwind here and resume this
         # exact PC through the owning interpreter after host events run.
         src.append(
-            f'    if (interp_bridge_lle_master_deadline_reached(cpu)) {{')
+            f'    if (interp_bridge_lle_deadline_pause(cpu, {_transfer_target_expr(block_pc24, False)})) {{')
         src.append('      RecompStackPopYield();')
         src.append(
             f'      return interp_bridge_lle_yield_unwind('

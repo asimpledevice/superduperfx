@@ -369,7 +369,7 @@ def test_blockmove_mvn_increments():
     assert "while (cpu->A != 0xFFFF)" in s
     assert "cpu->cycles += 7" in s
     assert "cpu->master_cycles += 7 * ((g_memsel && (cpu->PB & 0x80)) ? 6 : 8)" in s
-    assert "interp_bridge_lle_master_deadline_reached(cpu)" in s
+    assert "interp_bridge_lle_deadline_pause(cpu, (((uint32)cpu->PB << 16) | 0x8e7au))" in s
     assert "interp_bridge_lle_yield_unwind(cpu, (((uint32)cpu->PB << 16) | 0x8e7au))" in s
     assert "cpu->X &= 0x00FFu" in s
 

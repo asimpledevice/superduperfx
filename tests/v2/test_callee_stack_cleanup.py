@@ -50,6 +50,9 @@ int cpu_resolve_ancestor_skip(uint16_t s) { (void)s; return ancestor_skip; }
 int interp_bridge_lle_master_deadline_reached(const CpuState *c) {
   (void)c; return 0;
 }
+int interp_bridge_lle_deadline_pause(CpuState *c, uint32 pc) {
+  (void)pc; return interp_bridge_lle_master_deadline_reached(c);
+}
 int interp_bridge_return_targets_owner(uint16 a, uint16 b) {
   (void)a; (void)b; return 0;
 }

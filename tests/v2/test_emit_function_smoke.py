@@ -167,7 +167,7 @@ def test_function_entry_yields_when_lle_frame_deadline_is_reached():
     rom = make_lorom_bank0({0x8000: bytes([0x60])})
     src = emit_function(rom, bank=0, start=0x8000,
                         entry_m=1, entry_x=1)
-    check = "if (interp_bridge_lle_master_deadline_reached(cpu)) {"
+    check = "if (interp_bridge_lle_deadline_pause(cpu, (((uint32)cpu->PB << 16) | 0x8000u))) {"
     unwind = "return interp_bridge_lle_yield_unwind(cpu, (((uint32)cpu->PB << 16) | 0x8000u));"
     assert check in src, src
     assert unwind in src, src

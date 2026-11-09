@@ -787,6 +787,9 @@ RecompReturn interp_tier_dispatch_bank_miss(CpuState *cpu, uint32 addr_pc24,
 #define RECOMP_RETURN_LLE_UNWIND_BASE 0x40000000
 int interp_bridge_in_lle_scheduler(void);
 int interp_bridge_lle_master_deadline_reached(const CpuState *cpu);
+/* Generated code's deadline check: 1 = take the yield-unwind path. Pauses
+ * on a guest fiber instead (guest_fiber.h) and returns 0 when resumed. */
+int interp_bridge_lle_deadline_pause(CpuState *cpu, uint32 resume_pc24);
 int interp_bridge_lle_unwind_pending(void);
 RecompReturn interp_bridge_lle_yield_unwind(CpuState *cpu, uint32 resume_pc24);
 uint32 interp_bridge_lle_resume_pc(void);

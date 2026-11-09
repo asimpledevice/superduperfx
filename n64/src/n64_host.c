@@ -16,6 +16,7 @@
  */
 
 #include "n64_platform.h"
+#include "guest_fiber.h"
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -220,6 +221,11 @@ static volatile uint32_t s_dcprof_start = 0xffffffffu, s_dcprof_stop = 0xfffffff
 static int host_main(void);
 #if N64_STACK_COLOR >= 0 && defined(__mips__)
 static uint8_t s_host_stack[256 * 1024] __attribute__((aligned(8192)));
+#if SNESRECOMP_GUEST_FIBER
+/* The guest runs on its own stack (guest_fiber.h); its frames are the hot
+ * ones, so it gets the placement the main stack was tuned for. */
+static uint8_t s_guest_stack[256 * 1024] __attribute__((aligned(8192)));
+#endif
 #endif
 int main(void) {
 #if N64_STACK_COLOR >= 0 && defined(__mips__)
@@ -233,6 +239,10 @@ int main(void) {
 }
 
 static int host_main(void) {
+#if N64_STACK_COLOR >= 0 && defined(__mips__) && SNESRECOMP_GUEST_FIBER
+  guest_fiber_set_stack(s_guest_stack, s_guest_stack + sizeof s_guest_stack - 8192 +
+                                           (N64_STACK_COLOR & 8191) - 64);
+#endif
   n64_platform_init();
   if (!n64_platform_has_expansion_pak())
     Die("This build needs the Expansion Pak (8 MB).");
@@ -342,7 +352,10 @@ static int host_main(void) {
         s_out_hash = (s_out_hash ^ (uint16_t)d->sampleBuffer[w * 2]) * 16777619u;
         s_out_hash = (s_out_hash ^ (uint16_t)d->sampleBuffer[w * 2 + 1]) * 16777619u;
       }
-      if (frame % 60 == 0) {
+#ifndef N64_STATE_HASH_PERIOD
+#define N64_STATE_HASH_PERIOD 60
+#endif
+      if (frame % N64_STATE_HASH_PERIOD == 0) {
         uint32_t h = 2166136261u, ha = 2166136261u;
         for (int i = 0; i < 0x20000; ++i) h = (h ^ g_snes->ram[i]) * 16777619u;
         for (int i = 0; i < 0x10000; ++i) ha = (ha ^ g_snes->apu->ram[i]) * 16777619u;
@@ -378,6 +391,13 @@ static int host_main(void) {
         g_apu_dsp_sync_count[r] = g_apu_dsp_sync_samples[r] = 0;
       }
       n64_platform_log("[dspsync] 600 frames, syncs/samples:%s\n", b);
+    }
+#endif
+#if SNESRECOMP_GUEST_FIBER
+    if (frame % 60 == 59) {
+      n64_platform_log("[fiber] %lu pauses, %lu resumed, %lu unwound\n",
+                       (unsigned long)g_guest_fiber_pauses, (unsigned long)g_guest_fiber_resumes,
+                       (unsigned long)g_guest_fiber_unwinds);
     }
 #endif
 #if defined(N64_RSPDSP) && !defined(N64_STATE_HASH)

@@ -18,6 +18,7 @@
 #include "snes/cx4.h"
 #include "snes/dma.h"
 #include "snes/interp_bridge.h"
+#include "guest_fiber.h"
 #include "snes/ppu.h"
 #include "snes/sa1.h"
 #include "snes/snes.h"
@@ -176,7 +177,9 @@ void snes_beam_frame_driver_run_frame(void) {
       s_wai_halted = false;
     if (!s_wai_halted && !irq_wanted()) {
       interp_bridge_set_master_deadline(frame_end);
-      (void)interp_bridge_run_until_quiescent(&g_cpu, s_resume_pc);
+      /* On a guest fiber (SNESRECOMP_GUEST_FIBER) a deadline pauses the
+       * guest instead of unwinding it; the next run here resumes it. */
+      (void)guest_fiber_run_until_quiescent(&g_cpu, s_resume_pc);
       interp_bridge_set_master_deadline(0);
       update_resume_pc();
       if (interp_bridge_lle_took_wai())

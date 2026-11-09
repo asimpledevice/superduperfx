@@ -23,7 +23,7 @@ RUNNER_SRCS = \
 	state_dump.c host_paths.c rom_image_verify.c rom_identity.c sha1.c \
 	crc32.c snapshot_guard.c sha256.c snes_overlay_draw.c snes_runahead.c \
 	snes_rewind.c cpu_state.c program_module.c rom_patch.c \
-	generic_frame_driver.c beam_frame_driver.c beam_frame_driver_state.c \
+	generic_frame_driver.c beam_frame_driver.c beam_frame_driver_state.c guest_fiber.c \
 	content_variant.c variant_selector.c cpu_trace.c audio_trace.c \
 	ppu_dma_trace.c execution_mode.c mod_audio.c host_mesh.c cpu_fast_map.c \
 	host_mesh_builder.c guarded_patch.c util.c \
@@ -82,6 +82,7 @@ N64_CFLAGS += -DSNESRECOMP_FAST_READ_MAP=1 -DSNESRECOMP_QUIESCENT_BACKEDGE=1 \
 	-DSNESRECOMP_LAZY_BEAM=1 -DSNESRECOMP_REVERSE_DEBUG=0 -DSNESRECOMP_INTERP_EDGE_TRACE=0 \
 	-DSNESRECOMP_WRAM_POLL_QUIESCENT=1 -DSNESRECOMP_PARK_TO_VBLANK=1 \
 	-DSNESRECOMP_FRAME_FINGERPRINTS=0 -DSNESRECOMP_PPU_DMA_HISTORY=0 -DSNESRECOMP_INTERP_DIAG=0 \
+	-DSNESRECOMP_GUEST_FIBER=0 \
 	-DSNESRECOMP_APU_NATIVE=1 -DSNESRECOMP_AUDIO_TRACE_HOOKS=0 \
 	'-DSNESRECOMP_HOT_BSS=__attribute__((section(".sbss.hot")))'
 

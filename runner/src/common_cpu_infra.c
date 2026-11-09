@@ -1169,3 +1169,53 @@ Snes *SnesInit(const uint8 *data, int data_size) {
   return g_snes;
 #endif /* SNESRECOMP_SETUP_HOST */
 }
+
+/* Host call-chain state of generated code (the shadow stack and what hangs
+ * off it). A guest fiber paused inside generated code keeps its own copy
+ * while the scheduler runs interrupts on the base state (guest_fiber.c). */
+struct RecompNestState {
+  int top;
+  unsigned interrupt_depth;
+  uint8_t tailcall_valid, tailcall_hrv, host_return_valid;
+  uint16_t tailcall_entry_s;
+  const char *last_func;
+  int wlog_slot;
+  const char *names[RECOMP_STACK_DEPTH];
+  uint16_t entry_s[RECOMP_STACK_DEPTH];
+  uint8_t entry_s_valid[RECOMP_STACK_DEPTH];
+  uint8_t entry_return_frame[RECOMP_STACK_DEPTH];
+  uint8_t entry_tailcall[RECOMP_STACK_DEPTH];
+};
+size_t recomp_nest_state_size(void) { return sizeof(struct RecompNestState); }
+void recomp_nest_state_save(void *out) {
+  struct RecompNestState *n = (struct RecompNestState *)out;
+  n->top = g_recomp_stack_top;
+  n->interrupt_depth = g_interrupt_context_depth;
+  n->tailcall_valid = g_tailcall_context_valid;
+  n->tailcall_hrv = g_tailcall_hrv;
+  n->tailcall_entry_s = g_tailcall_entry_s;
+  n->host_return_valid = g_cpu.host_return_valid;
+  n->last_func = g_last_recomp_func;
+  n->wlog_slot = g_wlog_aot_slot;
+  memcpy(n->names, g_recomp_stack, sizeof n->names);
+  memcpy(n->entry_s, g_cpu_entry_s, sizeof n->entry_s);
+  memcpy(n->entry_s_valid, g_cpu_entry_s_valid, sizeof n->entry_s_valid);
+  memcpy(n->entry_return_frame, g_cpu_entry_return_frame, sizeof n->entry_return_frame);
+  memcpy(n->entry_tailcall, g_cpu_entry_tailcall, sizeof n->entry_tailcall);
+}
+void recomp_nest_state_load(const void *in) {
+  const struct RecompNestState *n = (const struct RecompNestState *)in;
+  g_recomp_stack_top = n->top;
+  g_interrupt_context_depth = n->interrupt_depth;
+  g_tailcall_context_valid = n->tailcall_valid;
+  g_tailcall_hrv = n->tailcall_hrv;
+  g_tailcall_entry_s = n->tailcall_entry_s;
+  g_cpu.host_return_valid = n->host_return_valid;
+  g_last_recomp_func = n->last_func;
+  g_wlog_aot_slot = n->wlog_slot;
+  memcpy(g_recomp_stack, n->names, sizeof n->names);
+  memcpy(g_cpu_entry_s, n->entry_s, sizeof n->entry_s);
+  memcpy(g_cpu_entry_s_valid, n->entry_s_valid, sizeof n->entry_s_valid);
+  memcpy(g_cpu_entry_return_frame, n->entry_return_frame, sizeof n->entry_return_frame);
+  memcpy(g_cpu_entry_tailcall, n->entry_tailcall, sizeof n->entry_tailcall);
+}

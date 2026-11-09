@@ -626,17 +626,37 @@ instructions, by the routine and CPU mode containing each PC):
 
 | | Share |
 |---|---|
-| Inside routines that have a native body for that mode | 40% |
+| Inside routines that have a native body for that mode (mostly boot) | 40% |
 | Routines with no native body in this selection | 37% |
 | No routine at all in the manifest | 13.5% |
 | A routine, but not for this mode | 10% |
 
-The first row is the scheduler: native code checks the master-clock
-deadline at every block and unwinds with a resume PC; the frame driver
-resumes in the interpreter, which cannot enter a native body mid-routine,
-so the rest of that routine and its callers run interpreted
-(`DecompressTo` $00B8DE alone is 15%). Native resume entries would move
-this back to native code; it is an exact-core recompiler change.
+### Guest fibers (`SNESRECOMP_GUEST_FIBER`, off by default)
+
+Generated code's deadline checks now call `interp_bridge_lle_deadline_pause(cpu, pc)`
+(same result as `..._master_deadline_reached` without fibers; all hashes
+unchanged). With `SNESRECOMP_GUEST_FIBER=1` the frame driver runs the guest
+on its own stack (`runner/src/guest_fiber.c`; MIPS context switch on the
+N64, ucontext elsewhere): at a deadline the native code pauses instead of
+unwinding, the driver sees exactly what an unwind leaves (resume PC, APU
+flush, beam catch-up, bridge nesting state and shadow stack at their
+run-start values), and a run at the same PC/S resumes the native code.
+
+Measured on SMW: every pause resumed (125), none unwound, but all 125 are
+during boot (decompression). After boot no native code spans a deadline,
+interpreted work is unchanged (2,880 instructions per frame), and ares
+frame time is +1% (with the guest stack at the tuned cache colour; +15%
+without). Off by default; kept as an engine mechanism for titles with long
+native stretches. Hashes differ with it on, as they do between any two
+native selections: interpreted and native code already disagree on cycle
+timing (an interpreter-only build differs from the normal build by
+200-2,000 WRAM bytes per frame), so this class of change needs gameplay
+validation, not hash equality.
+
+Where interpreted work comes from after boot (frames 300-1200): routines
+with no native body in this selection 52%, routines entered by `JMP`
+(tail jumps: never bounced to native, no return frame) 29% (e.g.
+`$00A2F0: JMP $8494`), code outside any routine 18%.
 
 ## Next steps
 

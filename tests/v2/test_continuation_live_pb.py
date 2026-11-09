@@ -40,6 +40,9 @@ static uint32 resume;
 static int interp_bridge_lle_master_deadline_reached(CpuState *cpu) {
     (void)cpu; return deadline;
 }
+static int interp_bridge_lle_deadline_pause(CpuState *cpu, uint32 pc) {
+    (void)pc; return interp_bridge_lle_master_deadline_reached(cpu);
+}
 static int interp_bridge_in_lle_scheduler(void) { return 1; }
 static RecompReturn interp_bridge_lle_yield_unwind(CpuState *cpu, uint32 pc) {
     (void)cpu; resume = pc; return 99;

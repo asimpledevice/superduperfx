@@ -244,6 +244,10 @@ void interp_bridge_reset_dynamic_cache(void);
  * architecturally interruptible instructions use this at their legal byte
  * boundaries before unwinding to the owning interpreter. */
 int interp_bridge_lle_master_deadline_reached(const CpuState *cpu);
+/* Bridge host nesting state, for guest fibers. */
+size_t interp_bridge_nest_size(void);
+void interp_bridge_nest_save(void *out);
+void interp_bridge_nest_load(const void *in);
 int interp_bridge_lle_unwind_pending(void);
 
 /* Execute an architectural interrupt handler through its terminal RTI. The

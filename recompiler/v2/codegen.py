@@ -2764,7 +2764,7 @@ def _emit_blockmove(op: BlockMove) -> List[str]:
         "    if (cpu->x_flag) { cpu->X &= 0x00FFu; cpu->Y &= 0x00FFu; }",
         "    cpu->A = (uint16)(cpu->A - 1);",
         "    if (cpu->A != 0xFFFF) {",
-        "      if (interp_bridge_lle_master_deadline_reached(cpu)) {",
+        f"      if (interp_bridge_lle_deadline_pause(cpu, {_transfer_target_expr(_CURRENT_SOURCE_PC24, False)})) {{",
         f"        return interp_bridge_lle_yield_unwind(cpu, {_transfer_target_expr(_CURRENT_SOURCE_PC24, False)});",
         "      }",
         "      cpu->cycles += 7;",

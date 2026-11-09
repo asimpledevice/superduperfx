@@ -263,6 +263,9 @@ int cpu_resolve_ancestor_skip(uint16_t ret_s) { (void)ret_s; return -1; }
 int interp_bridge_lle_master_deadline_reached(const CpuState *cpu) {
   (void)cpu; return 0;
 }
+int interp_bridge_lle_deadline_pause(CpuState *cpu, uint32 pc) {
+  (void)pc; return interp_bridge_lle_master_deadline_reached(cpu);
+}
 int interp_bridge_lle_unwind_pending(void) { return 0; }
 int interp_bridge_return_targets_owner(uint16 a, uint16 b) {
   (void)a; (void)b; return 0;

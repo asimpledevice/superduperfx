@@ -112,6 +112,10 @@ typedef struct CpuTailcallContextSave {
 void cpu_tailcall_inherit_return_context(uint16_t entry_s, uint8_t hrv);
 int cpu_take_tailcall_return_context(uint16_t *entry_s, uint8_t *hrv);
 void cpu_tailcall_context_save(CpuTailcallContextSave *out);
+/* Save/load the generated-code call-chain state (guest fibers). */
+size_t recomp_nest_state_size(void);
+void recomp_nest_state_save(void *out);
+void recomp_nest_state_load(const void *in);
 void cpu_tailcall_context_restore(const CpuTailcallContextSave *in);
 /* Architectural interrupt handlers may cross AOT/LLE boundaries before their
  * terminal RTI.  Keep that host-boundary context independent of any one
