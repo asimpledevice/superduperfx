@@ -85,3 +85,6 @@ dsp1.bin
 /build-ppu-hle/
 n64/rspdsp/test/build/
 n64/rspdsp/test/*.z64
+n64/rspbg/test/build/
+n64/rspbg/test/*.z64
+n64/rspbg/test/build.log

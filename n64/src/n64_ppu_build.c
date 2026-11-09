@@ -17,6 +17,9 @@
 
 #include "snes/ppu.h"
 #include "snes/ppu_brightness.h"
+#if N64_RSPBG
+#include "bg_rsp.h"
+#endif
 
 /* ---- Bitplane expansion ------------------------------------------------ */
 
@@ -113,7 +116,14 @@ N64PpuFrame *n64_ppu_build_frame_alloc(void) {
     f->plane[p] = memalign(16, (size_t)N64PPU_STRIDE * N64PPU_LINES);
     if (!f->plane[p]) return NULL;
     memset(f->plane[p], 0, (size_t)N64PPU_STRIDE * N64PPU_LINES);
+#if N64_RSPBG
+    if (p < N64PPU_OBJ0 || p >= N64PPU_SUB_BG1)   /* BG planes: the RSP writes them */
+      n64_bgrsp_cpu_wrote(f->plane[p], (unsigned)N64PPU_STRIDE * N64PPU_LINES);
+#endif
   }
+#if N64_RSPBG
+  n64_bgrsp_init();
+#endif
   return f;
 }
 
@@ -225,6 +235,9 @@ static uint8_t get_tlut(N64PpuFrame *f, const Ppu *ppu, uint8_t kind, uint8_t se
 
 void n64_ppu_build_begin(N64PpuFrame *f, const uint32_t *sw_rows) {
   s_state.frame = f;
+#if N64_RSPBG
+  n64_bgrsp_frame_begin();
+#endif
   f->sw_rows = sw_rows;
   f->rdp_lines = f->software_lines = f->black_lines = 0;
   f->fallback_reasons = 0;
@@ -309,12 +322,117 @@ static void compute_spans(const Ppu *ppu, Spans *s) {
 
 /* ---- Backgrounds ----------------------------------------------------------- */
 
+#if N64_RSPBG
+/* Runs queued on the RSP this frame; their row flags are merged at the end. */
+static struct { int16_t job; uint8_t plane, r0, n; } s_pend[64];
+static int s_npend;
+#ifdef N64_RSPBG_CHECK
+static struct { BgRun run; } s_pend_run[64];
+#endif
+
+static bool flush_run_rsp(N64PpuFrame *f, const BgRun *run, int plane) {
+  const Ppu *ppu = s_state.ppu;
+  if (s_npend == (int)(sizeof s_pend / sizeof s_pend[0])) return false;
+  n64_bgrsp_sync_vram(ppu->vram, ppu->vramWriteCount);
+  const int r0 = run->l0 - 1, n = run->l1 - run->l0;
+  const int job = n64_bgrsp_submit(ppu->vram, plane_row(f, plane, r0) + N64PPU_PAD, n,
+                                   (uint16_t)(run->l0 + run->vs), run->hs, run->tileadr,
+                                   run->xsc, run->bpp, run->pal_base);
+  if (job < 0) return false;
+  s_pend[s_npend].job = (int16_t)job;
+  s_pend[s_npend].plane = (uint8_t)plane;
+  s_pend[s_npend].r0 = (uint8_t)r0;
+  s_pend[s_npend].n = (uint8_t)n;
+#ifdef N64_RSPBG_CHECK
+  s_pend_run[s_npend].run = *run;
+#endif
+  s_npend++;
+  return true;
+}
+
+#ifdef N64_RSPBG_CHECK
+/* Debug build option: after the RSP finishes, compare every row it wrote
+ * with a CPU expansion of the same run (the rules of flush_run below), and
+ * log a per-frame count and the first difference. */
+extern void n64_platform_log(const char *, ...);
+static unsigned s_chk_bad, s_chk_rows, s_chk_frame;
+static void check_rsp_rows(N64PpuFrame *f, int k) {
+  const BgRun *run = &s_pend_run[k].run;
+  const uint16_t *vram = s_state.ppu->vram;
+  const bool wider = run->xsc & 1, higher = run->xsc & 2;
+  const int tilemap = (run->xsc & 0xfc) << 8;
+  for (int i = 0; i < s_pend[k].n; ++i) {
+    const unsigned y = (unsigned)(run->l0 + i) + run->vs;
+    int sc = tilemap + (((y >> 3) & 0x1f) << 5);
+    if ((y & 0x100) && higher) sc += wider ? 0x800 : 0x400;
+    uint8_t want[N64PPU_STRIDE];
+    memset(want, 0, sizeof want);
+    for (int t = 0; t < 33; ++t) {
+      const unsigned mx = (run->hs >> 3) + (unsigned)t;
+      const int map = ((mx >> 5) & 1) && wider ? sc + 0x400 : sc;
+      const uint16_t entry = vram[(map & 0x7fff) + (mx & 31)];
+      const unsigned yy = y & 7, row = (entry & 0x8000) ? 7 - yy : yy;
+      const int base = run->tileadr + (entry & 0x3ff) * (run->bpp == 4 ? 16 : 8);
+      const uint16_t w0 = vram[(base + row) & 0x7fff];
+      const uint16_t w1 = run->bpp == 4 ? vram[(base + row + 8) & 0x7fff] : 0;
+      const uint8_t pal = (uint8_t)(((entry & 0x2000) ? 128 : 0) + run->pal_base +
+                                    ((entry >> 10) & 7) * (run->bpp == 4 ? 16 : 4));
+      for (int j = 0; j < 8; ++j) {
+        const int b = (entry & 0x4000) ? j : 7 - j;
+        const unsigned c = ((w0 >> b) & 1) | ((w0 >> (b + 8)) & 1) << 1 |
+                           ((w1 >> b) & 1) << 2 | ((w1 >> (b + 8)) & 1) << 3;
+        const int pos = N64PPU_PAD - (int)(run->hs & 7) + t * 8 + j;
+        if (pos >= 0 && pos < N64PPU_STRIDE) want[pos] = (uint8_t)(c | pal);
+      }
+    }
+    const uint8_t *got = (const uint8_t *)((uintptr_t)plane_row(f, s_pend[k].plane, s_pend[k].r0 + i) |
+                                           0x20000000u);   /* uncached */
+    s_chk_rows++;
+    if (memcmp(got + N64PPU_PAD, want + N64PPU_PAD, 256)) {
+      if (!s_chk_bad++) {
+        int x = 0;
+        while (got[N64PPU_PAD + x] == want[N64PPU_PAD + x]) ++x;
+        n64_platform_log("[bgchk] plane %d row %d x %d: rsp %02x cpu %02x (bpp %d hs %u y %u)\n",
+                         s_pend[k].plane, s_pend[k].r0 + i, x, got[N64PPU_PAD + x],
+                         want[N64PPU_PAD + x], run->bpp, run->hs, y);
+      }
+    }
+  }
+}
+#endif
+
+static void merge_rsp_flags(N64PpuFrame *f) {
+  if (!s_npend) return;
+  n64_bgrsp_wait();
+#ifdef N64_RSPBG_CHECK
+  for (int k = 0; k < s_npend; ++k) check_rsp_rows(f, k);
+  if (s_chk_bad || s_chk_frame % 120 == 0)
+    n64_platform_log("[bgchk] frame %u: %u of %u rows differ\n", s_chk_frame, s_chk_bad, s_chk_rows);
+  s_chk_frame++;
+  s_chk_bad = s_chk_rows = 0;
+#endif
+  for (int k = 0; k < s_npend; ++k) {
+    const uint8_t *fl = n64_bgrsp_flags(s_pend[k].job);
+    const int plane = s_pend[k].plane;
+    for (int i = 0; i < s_pend[k].n; ++i) {
+      const int r = s_pend[k].r0 + i;
+      if (fl[i] & 1) bit_set(f->rows[plane], r);
+      if (fl[i] & 2) bit_set(f->rows_hi[plane], r);
+    }
+  }
+  s_npend = 0;
+}
+#endif
+
 /* Expand a deferred run, tile-major. */
 static void flush_run(N64PpuFrame *f, int screen, int layer) {
   BgRun *run = &s_state.runs[screen][layer];
   if (!run->active) return;
   run->active = false;
   const int plane = (screen ? N64PPU_SUB_BG1 : N64PPU_BG1) + layer;
+#if N64_RSPBG
+  if (flush_run_rsp(f, run, plane)) return;
+#endif
   /* VRAM as of the flush. Only registers are journaled per line; VRAM
    * changes during the raster replay only through HDMA to $2118/9, which
    * would also end the run (vram_count) but after the write. */
@@ -373,6 +491,9 @@ static void flush_run(N64PpuFrame *f, int screen, int layer) {
     }
     for (int i = 0; i < n; ++i) {
       const int r = g0 - 1 + i;
+#if N64_RSPBG
+      n64_bgrsp_cpu_wrote(plane_row(f, plane, r), N64PPU_STRIDE);
+#endif
       if (any_lo[i]) bit_set(f->rows[plane], r);
       if (any_hi[i]) bit_set(f->rows_hi[plane], r);
     }
@@ -672,4 +793,7 @@ bool n64_ppu_build_line(const Ppu *ppu, int line) {
 
 void n64_ppu_build_end(void) {
   flush_all(s_state.frame);
+#if N64_RSPBG
+  merge_rsp_flags(s_state.frame);
+#endif
 }

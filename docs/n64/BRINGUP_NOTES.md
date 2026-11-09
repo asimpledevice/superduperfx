@@ -772,6 +772,42 @@ freed back into it. 0x1b58 reproduces the previous good layout exactly
 allocations before `SnesInit` no longer move the engine's objects; engine
 struct size changes still can (re-tune the colour if a stage jumps).
 
+### Background layers on the RSP (`RSPBG=1`, default)
+
+`n64/rspbg/rsp_bg.S` expands a BG run (one layer, consecutive lines with
+the same registers) into plane rows, exactly as `flush_run` does on the
+CPU; `RSPBG=0` keeps the CPU expansion. The CPU queues one job per run as
+runs close and merges the per-row "has low/high-priority pixels" flags
+after waiting at the end of the PPU stage. The RSP owns the BG planes:
+nothing on the CPU writes them (window masks and layer enables moved to
+the compositor first), the planes' boot-time contents are written back and
+dropped from the cache, and a run the CPU must expand (jobs used up) is
+written back at once.
+
+Decode: 8 pixels per vector; VMUDN by per-lane powers of two moves each
+pixel's bit to bit 15, VAND 0x8000, VMUDL/VMADL by 2^(9+p) assemble the
+index in the high byte, SPV stores it. Full tile rows (8 lines) load the
+tile's eight row words at once and broadcast one per line, fully unrolled;
+the next tile's tilemap entry, attributes and DMA are interleaved with
+that decode (`gen_full.py` generates it) so scalar and vector instructions
+issue in pairs. Fine scroll is a 16-bit-lane shift through a carry buffer.
+
+Two traps: the VRAM image is the Ppu struct's array, at 4 mod 8 in RDRAM,
+and RSP DMA drops the low 3 address bits (reads fetch 8 more bytes and use
+the adjusted DMEM pointer); and every DMEM buffer used by DMA or LQV needs
+explicit alignment (two bugs here were alignment that had held by luck).
+
+Validation: `n64/rspbg/test` (ROM-free test ROM: random VRAM at the same
+misalignment, random runs incl. flips, 2/4 bpp, fine scroll, the SMW
+title's sub-BG3 case; 18,312 rows and flags exact) plus timing; in SMW a
+check build (`-DN64_RSPBG_CHECK`, CPU re-expands every row) reports 0
+differing rows and `RENDER=2` 0 px through frame 1200.
+
+Cost (ares): 224 rows take 3.5 ms (4bpp), 4.4 ms (4bpp with fine
+scroll), 2.7 ms (2bpp) of RSP time. SMW attract: PPU stage 49 -> 37 ms,
+of which ~11 ms is the CPU waiting for the RSP at the end of the stage.
+Next: overlap that with the next frame's emulation.
+
 See [LESSONS.md](LESSONS.md) for ideas collected from other projects
 (sodium64) and design notes, with how they apply here.
 

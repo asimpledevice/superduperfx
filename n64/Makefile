@@ -60,6 +60,21 @@ $(BUILD_DIR)/rsp_snesdsp.o: rspdsp/rsp_snesdsp.S rspdsp/snesdsp_rsp_layout.h rsp
 		BUILD_DIR=$(BUILD_DIR) RSPASFLAGS="$(N64_RSPASFLAGS)" $@
 endif
 
+# RSPBG=1 (default): background layers are expanded on the RSP (n64/rspbg);
+# RSPBG=0 keeps the CPU expansion (the reference).
+RSPBG ?= 1
+ifeq ($(RSPBG),1)
+N64_CFLAGS += -DN64_RSPBG=1 -Irspbg
+OBJS += $(BUILD_DIR)/rspbg/bg_rsp.o $(BUILD_DIR)/rsp_bg.o
+$(BUILD_DIR)/rspbg/bg_rsp.o: rspbg/bg_rsp.c rspbg/bg_rsp.h rspbg/bg_rsp_layout.h
+	@mkdir -p $(dir $@)
+	@echo "    [CC] $<"
+	$(CC) -c $(CFLAGS) -o $@ $<
+$(BUILD_DIR)/rsp_bg.o: rspbg/rsp_bg.S rspbg/bg_rsp_layout.h rspbg/rsp_bg_full.inc
+	@$(MAKE) --no-print-directory -f $(N64_INST)/include/n64.mk SOURCE_DIR=rspbg \
+		BUILD_DIR=$(BUILD_DIR) RSPASFLAGS="$(N64_RSPASFLAGS)" $@
+endif
+
 ifneq ($(GEN_DIR),)
 GEN_SRCS := $(notdir $(wildcard $(GEN_DIR)/*.c))
 GEN_OBJS := $(addprefix $(BUILD_DIR)/gen/,$(GEN_SRCS:.c=.o))
