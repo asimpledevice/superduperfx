@@ -116,6 +116,44 @@ are not mistaken for techniques).
 - IPL ROM overlay through a per-page offset table (ROM stored right after
   ARAM), writes always to RAM: no branch on reads.
 
+## From a generic SNES-on-N64 design note (2026-11-09)
+
+Status against this project, so the list is not re-evaluated from scratch.
+
+- **Budget framing:** a 60 Hz frame is about 1.56M VR4300 cycles; our
+  frame costs about 16.6M (177 ms in ares). The order of attack the note
+  gives (profile, then the PPU and blocking waits, then helpers and flags)
+  matches our measurements: generated native code is a small share, the
+  PPU stage is about 72 ms and guest emulation about 118 ms.
+- **Measure on hardware with CP0 Count.** `n64_platform_time_us` is
+  libdragon `get_ticks_us` (CP0 Count), so the stage timers already work
+  on the EverDrive. ares does not model VR4300 cache and RDRAM timing
+  exactly: confirm any cache-layout win on hardware before promoting it.
+- **Avoid blocking waits; pipeline across units.** Done for audio (async
+  RSP DSP batches). Still open: present (~10 ms) waits on the RDP, and the
+  PPU builder runs serially after emulation. Avoid busy-polling RCP
+  registers through KSEG1 in hot loops; prefer interrupts or one check per
+  batch.
+- **Coarse timing sync instead of per-instruction sync.** Native code
+  charges cycles per block; the interpreter bridge still checks per
+  instruction (option 3: one down-counter per line).
+- **Cache:** D-cache collisions are handled (`n64/profile/dcache_order.py`,
+  pinned statics, stack colour). Create Dirty Exclusive (CACHE 0x0D) is
+  used for whole BG rows in `n64_ppu_build.c`; any other output buffer that
+  is rewritten whole is a candidate. Hot/cold splitting and selective
+  inlining matter more for the interpreter than for generated code.
+- **Codegen ideas** (global flag liveness, CMP/Bcc fusion, M/X propagation
+  and cloning, DBR/D constant propagation, a pinned WRAM base register,
+  JSR/RTS as jal/jr, jump tables, idiom recognition): low priority while
+  generated code is a small share of frame time. Revisit after more
+  interpreted work is translated (option 2).
+- **Game-specific shortcuts** (HLE of hot routines or the sound driver,
+  DMA as a plain block copy, 30 Hz rendering): outside the engine queue
+  and the accuracy policy by default. At most opt-in, with an LLE
+  reference (docs/HLE policy). Rendering every other frame would roughly
+  halve the PPU stage's average cost but changes output, so it can only be
+  a user setting.
+
 ## Not techniques: sodium64's accuracy shortcuts
 
 Internal CPU cycles and FastROM timing not counted; IRQ/NMI/HDMA only at
