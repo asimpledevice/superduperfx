@@ -606,6 +606,38 @@ faster than the C DSP build (frame 600: 209 -> 193 ms; run stage 120 ->
 103 ms). CPU cost left per frame: launch 1.9 ms (page copies 0.9, decode
 0.5, pack 0.4), join 1.5 ms of which 0.9 ms waiting for the RSP.
 
+## CPU-side speed round (2026-11-09)
+
+All exact (state hashes, RDP-vs-software diff 0 px); ares frame times, SMW.
+
+| Change | Frame time |
+|---|---|
+| Interpreter bridge: diagnostics compiled out (`SNESRECOMP_INTERP_DIAG=0`), bus read fast path a leaf, per-step tests hoisted/reordered, opcode class table | -0.5% to -1.4% (native host instructions -5.2%) |
+| RDP renderer sprites: per-line sprite masks rebuilt only on OAM change, 8-pixel decode | -5.4% to -6.2% |
+| RDP renderer BG rows: whole rows claimed in the cache, direct unaligned stores | -1.1% |
+| Software PPU: counts-only sprite evaluation on lines drawn without pixels | -0.6% |
+
+Frame 600: 193 -> 179 ms. Flag elimination in generated code was measured
+first and dropped for now: generated code is under 0.1% of the time
+(N/Z writes are 78-80% dead, C/V 40-44%, but rare).
+
+Where interpreted work comes from (1200 frames, 3.78M interpreted
+instructions, by the routine and CPU mode containing each PC):
+
+| | Share |
+|---|---|
+| Inside routines that have a native body for that mode | 40% |
+| Routines with no native body in this selection | 37% |
+| No routine at all in the manifest | 13.5% |
+| A routine, but not for this mode | 10% |
+
+The first row is the scheduler: native code checks the master-clock
+deadline at every block and unwinds with a resume PC; the frame driver
+resumes in the interpreter, which cannot enter a native body mid-routine,
+so the rest of that routine and its callers run interpreted
+(`DecompressTo` $00B8DE alone is 15%). Native resume entries would move
+this back to native code; it is an exact-core recompiler change.
+
 ## Next steps
 
 1. Audio: check the RSP DSP by ear on hardware (output arrives later than
