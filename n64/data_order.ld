@@ -57,3 +57,12 @@
   *(.bss.s_wlog)
   *(.bss.s_expand)
 }
+/* Appended by hand after the blocks above (cache positions from 0x1480):
+ * PPU sprite sizes, read per sprite. At their default address they shared
+ * a cache line with PPU state read in the same loop (16% of all data-cache
+ * misses, 2026-11-09 profile). dcache_order.py now also picks .rodata. */
+.rodata : {
+  . = ALIGN(8192);
+  . += 0x1480;
+  *(.rodata.spriteSizes.*)
+}

@@ -463,7 +463,12 @@ Tools:
   every access as a u32 trace. ares's JIT checks hits inline, so traces need
   `ARES_ARGS="--setting General/ForceInterpreter=true"` (ares_run.sh).
 - Build with `EXTRA_CFLAGS=-DN64_DCPROF=400`: logs heap object addresses and
-  brackets frames 400-460.
+  brackets frames 400-460. The hooks are always compiled in and the define
+  only sets two data words, so a profiling build has exactly the shipped
+  layout (symbol tables identical). Before 2026-11-09 the hooks' strings
+  shifted .rodata by 0x150 bytes in profiling builds only: the profile then
+  showed a conflict (PPU state against `spriteSizes`, 16% of misses) that
+  the shipped build did not have.
 - `profile/dcache_report.py ELF LOG dcprof.txt`: misses by object and region,
   eviction pairs, missing functions.
 - `profile/dcache_sim.c`: replays a trace through the 8 KB direct-mapped

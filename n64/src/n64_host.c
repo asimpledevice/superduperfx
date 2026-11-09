@@ -212,6 +212,11 @@ static uint8_t *load_rom(const char *path, int *size_out) {
 #define N64_STACK_COLOR 0x11e0
 #endif
 #endif
+#ifdef N64_DCPROF
+static volatile uint32_t s_dcprof_start = N64_DCPROF, s_dcprof_stop = N64_DCPROF + 60;
+#else
+static volatile uint32_t s_dcprof_start = 0xffffffffu, s_dcprof_stop = 0xffffffffu;
+#endif
 static int host_main(void);
 #if N64_STACK_COLOR >= 0 && defined(__mips__)
 static uint8_t s_host_stack[256 * 1024] __attribute__((aligned(8192)));
@@ -300,10 +305,11 @@ static int host_main(void) {
     if (frame == N64_PROFILE_START) n64_platform_profile_start(N64_PROFILE_US);
     if (frame == N64_PROFILE_START + N64_PROFILE_FRAMES) n64_platform_profile_stop_and_dump();
 #endif
-#ifdef N64_DCPROF
     /* Data-cache miss profile window for ares's local profiler (see
-     * n64/profile/dcache_report.py): heap objects first, then markers. */
-    if (frame == N64_DCPROF) {
+     * n64/profile/dcache_report.py): heap objects first, then markers.
+     * Always compiled in; N64_DCPROF=<frame> only changes the two data
+     * words below, so a profiling build has the shipped memory layout. */
+    if (frame == s_dcprof_start) {
       Snes *sn = g_snes;
       n64_platform_log("[heap] snes %08lx %lu\n", (unsigned long)(uintptr_t)sn, (unsigned long)sizeof(*sn));
       n64_platform_log("[heap] wram %08lx %lu\n", (unsigned long)(uintptr_t)sn->ram, 0x20000ul);
@@ -323,8 +329,7 @@ static int host_main(void) {
       n64_platform_log("[heap] sw_pixels %08lx %lu\n", (unsigned long)(uintptr_t)s_pixels, (unsigned long)(kSnesW * kSnesH * 4));
       n64_platform_log("DCPROF_START\n");
     }
-    if (frame == N64_DCPROF + 60) n64_platform_log("DCPROF_STOP\n");
-#endif
+    if (frame == s_dcprof_stop) n64_platform_log("DCPROF_STOP\n");
 #ifdef N64_STATE_HASH
     {
       /* Every DSP output sample, as produced (the frame end has synced a

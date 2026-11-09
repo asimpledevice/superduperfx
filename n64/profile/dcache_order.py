@@ -11,7 +11,8 @@ This tool takes an access profile (ACC lines from ares's local data-cache
 profiler, see ares-dcache-profiler.patch), the ELF and the link map, picks
 the hottest small static variables and writes ld --section-ordering-file
 statements that put them in a compact block at an 8 KB-aligned start of
-their output section (.sdata, .sbss, .data, .bss). The blocks take
+their output section (.sdata, .sbss, .data, .bss, .rodata: constant
+tables collide like variables). The blocks take
 consecutive cache positions, so pinned variables never collide with each
 other, and their positions no longer depend on the rest of the program.
 
@@ -25,7 +26,7 @@ import bisect
 import re
 import subprocess
 
-SECTIONS = (".sdata", ".sbss", ".data", ".bss")
+SECTIONS = (".sdata", ".sbss", ".data", ".bss", ".rodata")
 
 
 def main():
@@ -47,11 +48,11 @@ def main():
     insec = {}
     pending = None
     for l in open(a.map, errors="replace"):
-        m = re.match(r"^ ((?:\.sdata|\.sbss|\.data|\.bss)\.\S+)\s*$", l)
+        m = re.match(r"^ ((?:\.sdata|\.sbss|\.data|\.bss|\.rodata)\.\S+)\s*$", l)
         if m:
             pending = m.group(1)
             continue
-        m = re.match(r"^ ((?:\.sdata|\.sbss|\.data|\.bss)\.\S+)\s+0x([0-9a-f]+)\s+0x([0-9a-f]+)\s", l)
+        m = re.match(r"^ ((?:\.sdata|\.sbss|\.data|\.bss|\.rodata)\.\S+)\s+0x([0-9a-f]+)\s+0x([0-9a-f]+)\s", l)
         if m:
             insec[int(m.group(2), 16)] = (m.group(1), int(m.group(3), 16))
             pending = None
@@ -66,7 +67,7 @@ def main():
     objs = []
     for l in out.splitlines():
         p = l.split()
-        if len(p) == 4 and p[2] in "bBdDsSgG":
+        if len(p) == 4 and p[2] in "bBdDsSgGrR":
             objs.append((int(p[0], 16), int(p[1], 16), p[3]))
     objs.sort()
     starts = [o[0] for o in objs]
@@ -80,9 +81,12 @@ def main():
         v = int(p[1], 16) | 0x80000000
         c = int(p[2])
         total += c
-        i = bisect.bisect_right(starts, v) - 1
-        if i >= 0 and v < objs[i][0] + max(objs[i][1], 1):
+        # A profiled address is a 16-byte line: credit every object in it
+        # (a small table can share its line with a cold string).
+        i = bisect.bisect_right(starts, v + 15) - 1
+        while i >= 0 and objs[i][0] + max(objs[i][1], 1) > v:
             acc[i] = acc.get(i, 0) + c
+            i -= 1
 
     picks = {s: [] for s in SECTIONS}
     used = 0
