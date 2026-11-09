@@ -676,6 +676,9 @@ about -1% after the title. No bridge warnings; RDP-vs-software diff 0 px;
 the attract demo plays correctly. (Hashes move, as with any change in
 what runs compiled.)
 
+See [LESSONS.md](LESSONS.md) for ideas collected from other projects
+(sodium64) and design notes, with how they apply here.
+
 ## Next steps
 
 1. Audio: check the RSP DSP by ear on hardware (output arrives later than
