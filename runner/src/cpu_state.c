@@ -359,21 +359,7 @@ static inline void cpu_pace_cycles_word(uint16 addr) {
  * (interp_bridge.c bridge_region_speed) and the AOT paced accessors below
  * share this single C implementation so both tiers price transfers
  * identically. */
-uint32_t cpu_region_speed(uint32_t adr) {
-    uint8_t bank = (uint8_t)(adr >> 16);
-    uint16_t a = (uint16_t)adr;
-    if (bank >= 0x40 && bank <= 0x7f) return 8;
-    if (bank >= 0xc0) return g_memsel ? 6 : 8;
-    if (a >= 0x8000) {
-        if (bank <= 0x3f) return 8;
-        return g_memsel ? 6 : 8;
-    }
-    if (a < 0x2000) return 8;
-    if (a < 0x4000) return 6;
-    if (a < 0x4200) return 12;
-    if (a < 0x6000) return 6;
-    return 8;
-}
+uint32_t cpu_region_speed(uint32_t adr) { return cpu_region_speed_inline(adr); }
 
 /* Optional debug — disabled in release. Set BUILD_CPU_HW_LOG=1 in the
  * build to enable verbose per-touch logging. */

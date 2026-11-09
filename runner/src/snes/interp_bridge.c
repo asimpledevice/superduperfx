@@ -185,7 +185,7 @@ static unsigned bridge_region_speed(uint32_t adr) {
     /* Single C implementation shared with the AOT paced accessors
      * (cpu_state.c cpu_region_speed) so both tiers price transfers
      * identically. */
-    return (unsigned)cpu_region_speed(adr);
+    return (unsigned)cpu_region_speed_inline(adr);
 }
 
 /* Index of the lowest set bit; v must be non-zero. */
@@ -346,6 +346,9 @@ static inline void bridge_beam_after_step(const CpuState *cpu) {
 #endif
 }
 
+/* The general path, out of line: the fast path below stays a small leaf
+ * function, without the register saves this one needs. */
+static uint8_t bridge_bus_read_slow(CpuState *cpu, uint32_t adr) __attribute__((noinline));
 static uint8_t bridge_bus_read(void *mem, uint32_t adr) {
     CpuState *cpu = (CpuState *)mem;
     bridge_timing_bus(adr);
@@ -386,6 +389,11 @@ static uint8_t bridge_bus_read(void *mem, uint32_t adr) {
         }
     }
 #endif
+    return bridge_bus_read_slow(cpu, adr);
+}
+
+static uint8_t bridge_bus_read_slow(CpuState *cpu, uint32_t adr) {
+    uint8_t value;
     bridge_beam_catchup(cpu);
     int stable_rom = 0;
 #if SNESRECOMP_INTERP_FUSED_ROM_READ
@@ -706,6 +714,13 @@ static int      s_lle_unwind_owner_depth = 0;
 static int      s_lle_unwind_is_deadline = 0;
 static int      s_lle_next_unwind_is_deadline = 0;
 static uint32_t s_lle_resume_pc24   = 0;
+/* SNESRECOMP_INTERP_DIAG=0 compiles out the run loop's env-gated
+ * diagnostics (traces, watches, the pc hook, tier-2 coverage capture), for
+ * builds that never arm them (the N64). They only observe, so execution is
+ * identical either way; with 1 (default) they stay switchable at run time. */
+#ifndef SNESRECOMP_INTERP_DIAG
+#define SNESRECOMP_INTERP_DIAG 1
+#endif
 static int      s_interp_pctrace    = 0;
 static int      s_lle_wai_yield     = 0;
 static int      s_lle_quiescent_yield = 0;
@@ -1698,6 +1713,15 @@ static void interp_hist_init(void) {
 }
 #endif
 
+/* Opcode classes the run loop tests on every step. */
+enum { BRIDGE_OP_CALL = 1, BRIDGE_OP_RET = 2, BRIDGE_OP_JMP_INDIRECT = 4 };
+static const uint8_t k_bridge_op_class[256] = {
+    [0x20] = BRIDGE_OP_CALL, [0x22] = BRIDGE_OP_CALL, [0xFC] = BRIDGE_OP_CALL,  /* JSR, JSL, JSR (a,X) */
+    [0x60] = BRIDGE_OP_RET, [0x6B] = BRIDGE_OP_RET,                             /* RTS, RTL */
+    [0x6C] = BRIDGE_OP_JMP_INDIRECT, [0x7C] = BRIDGE_OP_JMP_INDIRECT,           /* JMP (a), (a,X) */
+    [0xDC] = BRIDGE_OP_JMP_INDIRECT,                                            /* JML [a] */
+};
+
 static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
                                  uint16_t s_exit, uint32_t *out_landing,
                                  uint32_t *out_return_pc,
@@ -1717,6 +1741,9 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
         (g_snes->cart->superfx || g_snes->cart->cx4 || g_snes->cart->dsp1 ||
          g_snes->cart->sdd1 || g_snes->cart->sa1);
     const uint64_t apu_flush_thresh = bridge_bounce_flush_thresh();
+    /* The per-step APU batching test below is always true without an SA-1
+     * (the absolute timeline is only used for SA-1 or mapped extended frames). */
+    const int apu_batch_always = !(g_snes && cart_has_sa1(g_snes->cart));
     /* Local interpreter context → nesting (an AOT bounce that itself traps and
      * re-enters the bridge) gets its own frame; no shared mutable interp. */
     Interp816 in;
@@ -1727,7 +1754,7 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
     in.read_word = bridge_bus_read_word;
     in.write_word = bridge_bus_write_word;
     in.brkHookEnabled = true;
-    const int wlog_state_sync = getenv("SNESRECOMP_WLOG_STATE") != NULL;
+    const int wlog_state_sync = SNESRECOMP_INTERP_DIAG && getenv("SNESRECOMP_WLOG_STATE") != NULL;
 
     sync_cpu_to_interp(cpu, &in);
     in.k  = (uint8)((entry_pc24 >> 16) & 0xFF);
@@ -1754,7 +1781,7 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
             if (_e) _iw_has_range = sscanf(_e, "%lx-%lx", &_iw_lo, &_iw_hi) == 2;
             if (_f && *_f) _iw_frame = strtol(_f, NULL, 0);
         }
-        if (_iw_has_range && (unsigned long)entry_pc24 >= _iw_lo &&
+        if (SNESRECOMP_INTERP_DIAG && _iw_has_range && (unsigned long)entry_pc24 >= _iw_lo &&
             (unsigned long)entry_pc24 <= _iw_hi &&
             (_iw_frame < 0 || snes_frame_counter == _iw_frame)) {
             _ibrw = 1;
@@ -1765,9 +1792,9 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
         }
     }
 
-    const int trace = itrace_enabled();
+    const int trace = SNESRECOMP_INTERP_DIAG && itrace_enabled();
     static int dtrace = -1;
-    if (dtrace < 0)
+    if (SNESRECOMP_INTERP_DIAG && dtrace < 0)
         dtrace = getenv("SNESRECOMP_INTERP_DTRACE") ? 1 : 0;
     ITraceEnt head[8], ring[256];
     long itn = 0;
@@ -1900,10 +1927,10 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
          * the bail-time trace cannot reach -- a run that never bails and never
          * returns, where the question is simply "where is it". */
         { static long pct = -1;
-          if (pct < 0) { const char *e = getenv("SNESRECOMP_INTERP_PCTRACE");
+          if (SNESRECOMP_INTERP_DIAG && pct < 0) { const char *e = getenv("SNESRECOMP_INTERP_PCTRACE");
                          pct = e ? atol(e) : 0; if (pct < 0) pct = 0;
                          s_interp_pctrace = pct != 0; }
-          if (pct && (steps % pct) == 0)
+          if (SNESRECOMP_INTERP_DIAG && pct && (steps % pct) == 0)
             fprintf(stderr, "[pctrace] step=%ld pc=%06X op=%02X\n", steps,
                     (unsigned)pc_before, bridge_bus_read(cpu, pc_before)); }
 #if SNESRECOMP_REVERSE_DEBUG
@@ -1923,8 +1950,8 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
          * perfectly live hardware-poll loop can monopolize the bridge and
          * starve the handler forever. */
         if (auto_quiescent && steps && !in.i && g_snes &&
-            (g_snes->inIrq ||
-             (g_snes->cart && g_snes->cart->superfx &&
+            (g_snes->inIrq || (has_coprocessor &&
+             ((g_snes->cart && g_snes->cart->superfx &&
               g_snes->cart->superfx->irq_pending) ||
              /* The Cx4 asserts the CPU IRQ line when its program halts with
               * interrupts enabled ($7F51 bit 0 clear). Same shape as the GSU
@@ -1932,7 +1959,7 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
              (g_snes->cart && g_snes->cart->cx4 &&
               cx4_irq_pending(g_snes->cart->cx4)) ||
              (g_snes->cart && g_snes->cart->sa1 &&
-              sa1_cpu_irq_pending(g_snes->cart->sa1)))) {
+              sa1_cpu_irq_pending(g_snes->cart->sa1)))))) {
             lle_resume_set(pc_before, INTERP_RESUME_SITE_IRQ_PENDING, in.sp);
             sync_interp_to_cpu(&in,cpu);
             bridge_apu_flush(cpu);
@@ -1949,9 +1976,9 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
          * the wait; it executes the LDA $00D9 / BEQ loop with the same master
          * timing and IRQ/deadline sampling, but avoids the full interpreter bus
          * dispatch overhead in the battle vIRQ case. */
-        if (s_d9ff && auto_quiescent && g_snes && !in.i &&
+        if (in.k == 0xC0u && (in.pc == 0x84B2u || in.pc == 0x84B4u) &&
+            s_d9ff && auto_quiescent && g_snes && !in.i &&
             !s_interp_bus_timing_active && in.mf && !in.e && !in.dp &&
-            in.k == 0xC0u && (in.pc == 0x84B2u || in.pc == 0x84B4u) &&
             g_snes->vIrqEnabled && g_snes->vTimer == 216u) {
             static int s_d9_bytes_ok = -1;
             if (s_d9_bytes_ok < 0) {
@@ -2697,8 +2724,8 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
          * frame in emulation mode when an A/B run splits on the E flag. */
         {
             static int _xt = -1;
-            if (_xt < 0) _xt = getenv("SNESRECOMP_XCE_TRACE") ? 1 : 0;
-            if (_xt && op == 0xFB) {
+            if (SNESRECOMP_INTERP_DIAG && _xt < 0) _xt = getenv("SNESRECOMP_XCE_TRACE") ? 1 : 0;
+            if (SNESRECOMP_INTERP_DIAG && _xt && op == 0xFB) {
                 extern int snes_frame_counter;
                 /* post-XCE e = pre-XCE carry */
                 fprintf(stderr, "[xce] f=%d pc=$%06X e=%d->%d sp=$%04X\n",
@@ -2735,8 +2762,8 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
          * at 3000 entries; off by default, zero cost when off. Reads happen
          * outside the bus-timing window (pre-runOpcode), so no cycle effect. */
         static int s_c2w = -1;
-        if (s_c2w < 0) s_c2w = getenv("SNESRECOMP_C2WATCH") ? 1 : 0;
-        if (s_c2w) {
+        if (SNESRECOMP_INTERP_DIAG && s_c2w < 0) s_c2w = getenv("SNESRECOMP_C2WATCH") ? 1 : 0;
+        if (SNESRECOMP_INTERP_DIAG && s_c2w) {
             static int s_c2w_n = 0;
             if (s_c2w_n < 3000 && pc_before >= 0xC2FC40u &&
                 pc_before <= 0xC2FF00u) {
@@ -2805,9 +2832,10 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
 
         /* Subroutine calls: JSR abs (0x20, 3B), JSL (0x22, 4B),
          * JSR (abs,X) (0xFC, 3B). RTS (0x60) / RTL (0x6B) are returns. */
-        const int is_call  = (op == 0x20 || op == 0x22 || op == 0xFC);
+        const uint8_t op_class = k_bridge_op_class[op];
+        const int is_call  = op_class & BRIDGE_OP_CALL;
         const int call_len = (op == 0x22) ? 4 : 3;
-        const int is_ret   = (op == 0x60 || op == 0x6B);
+        const int is_ret   = op_class & BRIDGE_OP_RET;
 
         const uint8_t coverage_mx = (uint8_t)((in.mf << 1) | in.xf);
         const uint8_t coverage_e = in.e;
@@ -2825,20 +2853,20 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
         if (wlog_state_sync)
             sync_interp_to_cpu(&in, cpu);
         cpu->coprocessor_master_cycles = cpu->master_cycles;
-        if (s_interp_pctrace && steps < 4)
+        if (SNESRECOMP_INTERP_DIAG && s_interp_pctrace && steps < 4)
             fprintf(stderr, "[pctrace] step=%ld pre-runOpcode pc=%06X\n",
                     steps, (unsigned)pc_before);
-        if (g_interp_bridge_pc_hook)
+        if (SNESRECOMP_INTERP_DIAG && g_interp_bridge_pc_hook)
             g_interp_bridge_pc_hook(pc_before & 0xFFFFFFu,
                                     in.mf ? 1 : 0, in.xf ? 1 : 0);
         if (s_idle_poll_count) s_idle_poll_now = bridge_is_idle_poll(pc_before);
         int _cyc = interp816_runOpcode(&in);   /* executes the opcode; pushes/pops frames */
         s_idle_poll_now = 0;
-        if (s_interp_pctrace && steps < 4)
+        if (SNESRECOMP_INTERP_DIAG && s_interp_pctrace && steps < 4)
             fprintf(stderr, "[pctrace] step=%ld post-runOpcode cyc=%d pc=%02X:%04X\n",
                     steps, _cyc, in.k, in.pc);
         s_interp_bus_timing_active=0;
-        if (dtrace && in.dp != dp_before) {
+        if (SNESRECOMP_INTERP_DIAG && dtrace && in.dp != dp_before) {
             extern int snes_frame_counter;
             fprintf(stderr,
                     "[interp_d] f=%d pc=$%06X op=$%02X D=$%04X->$%04X "
@@ -2855,7 +2883,7 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
          * g_apu_last_sync_master current so a later AOT bounce's accurate-mode
          * catch-up delta excludes what we already advanced here. */
         if (_cyc <= 0) _cyc = 1;
-        if (g_tier2_capture_active) {
+        if (SNESRECOMP_INTERP_DIAG && g_tier2_capture_active) {
             tier2_capture_instruction(pc_before, coverage_mx, coverage_e, (unsigned)_cyc);
             static unsigned checkpoint_opcodes;
             if (!(++checkpoint_opcodes & 16383u)) Tier2CoverageTick(snes_frame_counter);
@@ -2886,7 +2914,7 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
             {
                 /* Guest-time APU, batched (see bridge_apu_flush): accumulate;
                  * convert on APU-port access / ~4096 master / exits. */
-                if (rtl_apu_extended_frame_timing() ||
+                if (apu_batch_always || rtl_apu_extended_frame_timing() ||
                     !interp_bridge_use_absolute_apu_timeline(
                         rtl_apu_frame_timeline_active(),
                         g_snes && cart_has_sa1(g_snes->cart), false)) {
@@ -2905,12 +2933,12 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
          * cycle-accounting mismatches (e.g. the C2 blit AOT drift). */
         static int s_cycw = -1;
         static unsigned long s_cycw_lo = 0, s_cycw_hi = 0;
-        if (s_cycw < 0) {
+        if (SNESRECOMP_INTERP_DIAG && s_cycw < 0) {
             const char *_e = getenv("SNESRECOMP_CYC_WATCH");
             s_cycw = (_e && _e[0] &&
                       sscanf(_e, "%lx-%lx", &s_cycw_lo, &s_cycw_hi) == 2) ? 1 : 0;
         }
-        if (s_cycw && pc_before >= s_cycw_lo && pc_before <= s_cycw_hi) {
+        if (SNESRECOMP_INTERP_DIAG && s_cycw && pc_before >= s_cycw_lo && pc_before <= s_cycw_hi) {
             extern int snes_frame_counter;
             fprintf(stderr,
                     "[cyc] f=%d pc=$%06X op=$%02X cyc=%d bus_xfers=%u "
@@ -2984,7 +3012,7 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
          * never bounced (no return-frame contract), so without this record
          * they leave no trail at all. JMP (abs)=$6C, JMP (abs,X)=$7C,
          * JML [abs]=$DC. */
-        if (op == 0x6C || op == 0x7C || op == 0xDC) {
+        if (op_class & BRIDGE_OP_JMP_INDIRECT) {
             const uint32_t landing = ((uint32_t)in.k << 16) | in.pc;
             sync_interp_to_cpu(&in, cpu);   /* live (m,x) for the probe */
             if (!cpu_dispatch_has_entry(cpu, landing))

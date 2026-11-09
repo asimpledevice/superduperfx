@@ -421,6 +421,24 @@ void   cpu_write16(CpuState *cpu, uint8 bank, uint16 addr, uint16 v);
  * model exactly. Only generated (AOT) code calls the _paced forms; the
  * interpreter's bridge shims use the plain accessors (they account
  * transfers themselves). */
+/* Master clocks for one bus transfer at adr (FastROM per $420D). Inline for
+ * the interpreter's per-transfer timing; cpu_region_speed is the same. */
+extern uint8_t g_memsel;
+static inline uint32_t cpu_region_speed_inline(uint32_t adr) {
+    uint8_t bank = (uint8_t)(adr >> 16);
+    uint16_t a = (uint16_t)adr;
+    if (bank >= 0x40 && bank <= 0x7f) return 8;
+    if (bank >= 0xc0) return g_memsel ? 6 : 8;
+    if (a >= 0x8000) {
+        if (bank <= 0x3f) return 8;
+        return g_memsel ? 6 : 8;
+    }
+    if (a < 0x2000) return 8;
+    if (a < 0x4000) return 6;
+    if (a < 0x4200) return 12;
+    if (a < 0x6000) return 6;
+    return 8;
+}
 uint32_t  cpu_region_speed(uint32_t adr);
 /* SNESRECOMP_WLOG_ADDR hook for direct-WRAM stores that bypass cpu_write8/16
  * (DMA A-bus writes in snes_write, WMDATA $2180). wa = g_ram offset. */
