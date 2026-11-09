@@ -353,9 +353,9 @@ static uint8_t bridge_bus_read_slow(CpuState *cpu, uint32_t adr) __attribute__((
 static uint8_t bridge_bus_read(void *mem, uint32_t adr) {
     CpuState *cpu = (CpuState *)mem;
     bridge_timing_bus(adr);
-    uint8_t value;
 #if SNESRECOMP_FAST_READ_MAP
     {
+        uint8_t value;
         /* Plain WRAM / ROM page (cpu_fast_map.h). Same observable effects as
          * the general path below for these pages: stable (no volatile-epoch
          * bump), not an APU port, cpu_read8's bus note and open-bus latch, and
@@ -1807,12 +1807,13 @@ static void interp_hist_init(void) {
 #endif
 
 /* Opcode classes the run loop tests on every step. */
-enum { BRIDGE_OP_CALL = 1, BRIDGE_OP_RET = 2, BRIDGE_OP_JMP_INDIRECT = 4 };
+enum { BRIDGE_OP_CALL = 1, BRIDGE_OP_RET = 2, BRIDGE_OP_JMP_INDIRECT = 4, BRIDGE_OP_JMP_DIRECT = 8 };
 static const uint8_t k_bridge_op_class[256] = {
     [0x20] = BRIDGE_OP_CALL, [0x22] = BRIDGE_OP_CALL, [0xFC] = BRIDGE_OP_CALL,  /* JSR, JSL, JSR (a,X) */
     [0x60] = BRIDGE_OP_RET, [0x6B] = BRIDGE_OP_RET,                             /* RTS, RTL */
     [0x6C] = BRIDGE_OP_JMP_INDIRECT, [0x7C] = BRIDGE_OP_JMP_INDIRECT,           /* JMP (a), (a,X) */
     [0xDC] = BRIDGE_OP_JMP_INDIRECT,                                            /* JML [a] */
+    [0x4C] = BRIDGE_OP_JMP_DIRECT, [0x5C] = BRIDGE_OP_JMP_DIRECT,               /* JMP a, JML al */
 };
 
 static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
@@ -1979,6 +1980,14 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
         const char *_e = getenv("SNESRECOMP_NO_POLLGATE");
         s_poll_gate = (_e && _e[0] && _e[0] != '0') ? 0 : 1;
     }
+    /* Calls this run interpreted, innermost last: S after the return frame
+     * was pushed, its size (0: not usable, e.g. inline arguments) and the
+     * return PC. A jump that lands on a compiled routine while S is exactly
+     * where the innermost call left it runs that routine compiled under the
+     * call's return contract (tail jump). Cleared whenever the stack is not
+     * balanced the way these entries say. */
+    struct { uint16_t s_after; uint8_t size; uint32_t ret_pc24; } tail_frames[16];
+    int tail_n = 0;
     for (; steps < step_cap; steps++) {
         RtlGuestScopeCheckpoint();
         const uint32_t pc_before = ((uint32_t)in.k << 16) | in.pc;
@@ -3113,7 +3122,28 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
                              TIER2_KIND_GOTO_GAP, 2);
         }
 
-        if (is_call) {
+        /* Tail jump into a compiled routine: the innermost recorded call
+         * whose frame is the live top of stack, holding exactly that call's
+         * return address (frames above it were consumed, e.g. PLA PLA to
+         * take inline arguments). See tail_frames. */
+        int tail_j = -1;
+        if ((op_class & (BRIDGE_OP_JMP_DIRECT | BRIDGE_OP_JMP_INDIRECT)) && tail_n > 0 &&
+            (uint32_t)in.sp + 3u < 0x2000u) {
+            for (int j = tail_n - 1; j >= 0; --j) {
+                if (tail_frames[j].s_after != in.sp) continue;
+                const uint8_t fs = tail_frames[j].size;
+                const uint32_t r = tail_frames[j].ret_pc24;
+                const uint16_t pushed = (uint16_t)((r & 0xFFFFu) - 1u);
+                const uint8_t *st = cpu->ram + in.sp + 1u;   /* bank 0 stack page in WRAM */
+                if (fs && st[0] == (uint8_t)pushed && st[1] == (uint8_t)(pushed >> 8) &&
+                    (fs == 2 || st[2] == (uint8_t)(r >> 16)))
+                    tail_j = j;
+                break;
+            }
+        }
+        const int tail_ok = tail_j >= 0;
+        int tail_bounced = 0;
+        if (is_call || tail_ok) {
             /* The interp just pushed the real hardware return frame (return-1)
              * and set pc to the target. If the target has a compiled body for
              * the current (m,x), run it compiled. */
@@ -3131,6 +3161,7 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
                 !lle_bounce_target_excluded(target);
             const int has_body  = cpu_dispatch_has_entry(cpu, target);
             if (bounce_ok && has_body) {
+                tail_bounced = tail_ok;
                 /* Paired-call ABI: the interp already pushed the return frame, so
                  * run the target with hrv=frame_size and let its RTS/RTL
                  * HOST-RETURN to us (frame popped, S restored to pre-call). We
@@ -3140,7 +3171,7 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
                  * itself a registered function entry (e.g. $90:EB55 sub_90EB55
                  * right after HandleChargingBeamGfxAudio's JSR), the Samus-draw
                  * +2 leak. frame: JSL(0x22)=3, JSR/JSR(abs,X)=2. */
-                const uint8_t _fs = (op == 0x22) ? 3 : 2;
+                const uint8_t _fs = tail_ok ? tail_frames[tail_j].size : (op == 0x22) ? 3 : 2;
                 uint16_t _sp_pre = in.sp;
                 /* Compiled body paces its own APU (RtlApuRead/Write); un-suppress
                  * the per-touch catch-up for its duration, then restore the
@@ -3183,6 +3214,7 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
                                  (uint16_t)_sp_pre);
                 g_interp_wlog_pc24 = 0;
                 RecompReturn _air = cpu_dispatch_pc_paired(cpu, target, _fs);
+                if (_air != RECOMP_RETURN_NORMAL) tail_n = 0;   /* stack no longer as recorded */
                 s_interp_bounce_owner_depth = _saved_bounce_owner;
                 s_interp_bounce_recomp_base = _saved_bounce_base;
                 g_interp_apu_driving = _apu_drv;
@@ -3192,7 +3224,7 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
                             "sp_pre=$%04X aot_ret=%d sp_post=$%04X\n",
                             op, (unsigned)pc_before, (unsigned)target,
                             (unsigned)_sp_pre, (int)_air, (unsigned)in.sp);
-                const uint32_t ret =
+                const uint32_t ret = tail_ok ? tail_frames[tail_j].ret_pc24 :
                     (pc_before + (uint32_t)call_len +
                      (uint32_t)cpu_dispatch_inline_arg_bytes(target)) & 0xFFFFFF;
                 edge_expect = ret;
@@ -3320,12 +3352,23 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
                 }
                 in.k  = (uint8)((ret >> 16) & 0xFF);
                 in.pc = (uint16)(ret & 0xFFFF);
+                if (tail_ok) tail_n = tail_j;   /* that call (and any inside it) has returned */
                 /* Resume-task mode: a successful bounce is forward progress
                  * (incl. a bounced yield that just slept a frame on its fiber);
                  * the cap should only catch interp-side wedges, not bound the
                  * resumed task's lifetime. */
                 if (reset_cap_on_bounce) steps = 0;
-            } else {
+            } else if (is_call) {
+                /* Interpreted call: record its frame for tail jumps. */
+                if (tail_n == (int)(sizeof tail_frames / sizeof tail_frames[0])) {
+                    memmove(&tail_frames[0], &tail_frames[1], sizeof tail_frames - sizeof tail_frames[0]);
+                    tail_n--;
+                }
+                tail_frames[tail_n].s_after = in.sp;
+                tail_frames[tail_n].size = cpu_dispatch_inline_arg_bytes(target) ? 0
+                                           : (op == 0x22) ? 3 : 2;
+                tail_frames[tail_n].ret_pc24 = (pc_before + (uint32_t)call_len) & 0xFFFFFF;
+                tail_n++;
                 /* No compiled variant for the live (m,x) → keep interpreting
                  * into the target (coverage-gap path). Recorded independent
                  * of bounce POLICY (a bounce-off harvest soak must still see
@@ -3339,7 +3382,9 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
                             "(interp into target) sp=$%04X\n",
                             op, (unsigned)pc_before, (unsigned)target, (unsigned)in.sp);
             }
-            continue;
+            /* A jump that was not run compiled carries on through the rest
+             * of the step like any other instruction. */
+            if (is_call || tail_bounced) continue;
         }
 
         /* Host-invoked interrupt handlers (stop_on_rti) must NOT use the
@@ -3349,6 +3394,13 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
          * the handler mid-flight — leaving re-entrancy guards stuck (Metal
          * Warriors: TSB $12=#$8000, never TRB) and DMA queues unserviced.
          * Interrupt runs exit only on the architectural RTI below. */
+        if (is_ret) {   /* pop the matching interpreted call, or forget them all */
+            if (tail_n > 0 && tail_frames[tail_n - 1].s_after == sp_before &&
+                tail_frames[tail_n - 1].size == (op == 0x6B ? 3 : 2))
+                tail_n--;
+            else
+                tail_n = 0;
+        }
         if (is_ret && !yield_pc && !stop_on_rti) {
             if (_ibrw)
                 fprintf(stderr, "[ibr] ret  op=$%02X pc=$%06X sp=$%04X "

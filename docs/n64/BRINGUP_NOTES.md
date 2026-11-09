@@ -658,6 +658,24 @@ with no native body in this selection 52%, routines entered by `JMP`
 (tail jumps: never bounced to native, no return frame) 29% (e.g.
 `$00A2F0: JMP $8494`), code outside any routine 18%.
 
+### Tail jumps into compiled routines
+
+The bridge records the calls it interprets (S after the push, frame size,
+return PC). A `JMP`/`JML` (direct or indirect) that lands on a compiled
+routine for the live (m,x) runs it compiled when the stack top is a
+recorded call's frame holding exactly that call's return address (the
+innermost such frame: code like `PLA / PLA / JMP` pops its own data
+first). The routine then returns through that call's paired contract, as
+a JSR bounce would. Unbalanced returns clear the record.
+
+SMW: 4,117 of 5,119 jumps onto compiled routines (frames 0-1200) now run
+compiled; the rest start in a scheduler run whose calls happened in
+compiled code (not recorded). Interpreted work after boot: 2,877 -> 2,569
+instructions per frame; native host instructions -2.8%; ares frame time
+about -1% after the title. No bridge warnings; RDP-vs-software diff 0 px;
+the attract demo plays correctly. (Hashes move, as with any change in
+what runs compiled.)
+
 ## Next steps
 
 1. Audio: check the RSP DSP by ear on hardware (output arrives later than
