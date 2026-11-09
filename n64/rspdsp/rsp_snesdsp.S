@@ -96,8 +96,10 @@ SnesDspCmd_Run:
     move s5, zero
 
 Run_loop:
+#ifndef PROF_NO_LOG
     jal Log_ApplyDue                # writes logged before sample s5
     nop
+#endif
     beq s5, s6, Run_done
     nop
     jal Dsp_Sample
@@ -263,6 +265,7 @@ Dsp_Sample:
     move v1, ra
     sw v1, %lo(SAVE_RA)
 
+#ifndef PROF_NO_A
     # --- A: pitch counters; decode a BRR block on wrap -----------------
     # counter += pitch for all voices; the add's carries are the wraps.
     li t1, %lo(DSP + RSPDSP_V_PITCH)
@@ -289,88 +292,244 @@ A_next:
     bnez t1, A_voice
     nop
 
+#endif
+#ifndef PROF_NO_B
     # --- B: Gaussian interpolation for all voices -----------------------
-    # Gather each voice's four samples and coefficients into tap-major
-    # vectors. Scheduled for the RSP pipeline: loads are used no sooner than
-    # two instructions later, and stores wait two instructions after loads.
-    move a2, zero
-    move t4, zero                   # voice * 2
-    move t6, zero                   # voice * 40
-    li t2, 0x1fe
-B_voice:
-    lhu t1, %lo(DSP + RSPDSP_V_COUNTER)(t4)
-    addiu a2, a2, 1
-    sltiu t9, a2, 8
-    srl t3, t1, 12                  # sample index
-    srl t5, t1, 4
-    sll t3, t3, 1
-    andi t5, t5, 0xff               # offset
-    addu t3, t3, t6
-    sll t5, t5, 1
-    subu t7, t2, t5                 # (0xff - offset) * 2
-    lh a0, %lo(DSP + RSPDSP_DECODE + 0)(t3)
-    lh a1, %lo(DSP + RSPDSP_DECODE + 2)(t3)
-    lh a3, %lo(DSP + RSPDSP_DECODE + 4)(t3)
-    lh v0, %lo(DSP + RSPDSP_DECODE + 6)(t3)
-    lhu t0, %lo(GAUSS32)(t7)        # 0xff - offset
-    lhu t8, %lo(GAUSS32 + 0x200)(t7) # 0x1ff - offset
-    lhu v1, %lo(GAUSS32 + 0x200)(t5) # 0x100 + offset
-    lhu s0, %lo(GAUSS32)(t5)        # offset
-    addiu t6, t6, RSPDSP_DECODE_STRIDE
-    addiu t4, t4, 2
-    sh a0, %lo(STG_T0 - 2)(t4)
-    sh a1, %lo(STG_T1 - 2)(t4)
-    sh a3, %lo(STG_T2 - 2)(t4)
-    sh v0, %lo(STG_T3 - 2)(t4)
-    sh t0, %lo(STG_G0 - 2)(t4)
-    sh t8, %lo(STG_G1 - 2)(t4)
-    sh v1, %lo(STG_G2 - 2)(t4)
-    bnez t9, B_voice
-    sh s0, %lo(STG_G3 - 2)(t4)
-    li t1, %lo(STG_T0)
-    lqv $v01, 0x00, t1
-    lqv $v02, 0x10, t1
-    lqv $v03, 0x20, t1
-    lqv $v04, 0x30, t1
-    lqv $v05, 0x40, t1
-    lqv $v06, 0x50, t1
-    lqv $v07, 0x60, t1
-    lqv $v08, 0x70, t1
+    # Two voices per vector, voice-major: one ldv takes a voice's four
+    # doubled samples into lanes 0-3 (or 4-7); the coefficients g0,g1 come
+    # by llv from GAUSSP[0xff - offset] and g2,g3 by two lsv from
+    # GAUSSP[offset]. The C sum (p0 + p1 + p2 with 16-bit wrap, then + p3
+    # with saturation) is formed across lanes: lane 0 (and 4) holds it.
+    # Addresses for all voices: sample index * 2 + the voice's decode
+    # buffer, GAUSSP + offset * 4 and GAUSSP + (0xff - offset) * 4.
+    li t1, %lo(DSP)
+    li t3, %lo(ENV_K)
+    li t9, %lo(STG_T1)
+    li t2, %lo(GAUSSP)
+    lqv $v20, RSPDSP_V_COUNTER, t1
+    lqv $v21, 0x00, t3
+    lqv $v23, 0x20, t3              # B_DECODE (offsets in the state)
+    mtc2 t1, $v19.e0
+    mtc2 t2, $v19.e1
+    vmudl $v16, $v20, $v30, e(2)    # counter >> 11
+    vmudl $v17, $v20, $v31, e(1)    # counter >> 2
+    vand $v16, $v16, $v21, e(4)     # & 0x1e
+    vand $v17, $v17, $v21, e(5)     # & 0x3fc
+    vaddc $v23, $v23, $v19, e(0)    # + DSP
+    vxor $v18, $v17, $v21, e(5)
+    vaddc $v17, $v17, $v19, e(1)    # + GAUSSP
+    vaddc $v18, $v18, $v19, e(1)
+    vaddc $v16, $v16, $v23
+    sqv $v16, 0x00, t9              # STG_T1: sample addresses
+    sqv $v17, 0x10, t9              # STG_T2: GAUSSP[offset]
+    sqv $v18, 0x20, t9              # STG_T3: GAUSSP[0xff - offset]
+    li t8, %lo(STG_T0)
+    li t7, 2
+    lhu t1, 0x00(t9)
+    lhu t2, 0x10(t9)
+    lhu t3, 0x20(t9)
+B_quad:
+    lhu t4, 0x02(t9)
+    lhu t5, 0x12(t9)
+    lhu t6, 0x22(t9)
+    ldv $v01, 0, 0, t1
+    llv $v05, 0, 0, t3
+    lsv $v05, 4, 2, t2
+    lsv $v05, 6, 0, t2
+    lhu t1, 0x04(t9)
+    ldv $v01, 8, 0, t4
+    lhu t2, 0x14(t9)
+    llv $v05, 8, 0, t6
+    lhu t3, 0x24(t9)
+    lsv $v05, 12, 2, t5
+    lsv $v05, 14, 0, t5
+    lhu t4, 0x06(t9)
+    lhu t5, 0x16(t9)
     vmudm $v09, $v01, $v05          # floor(2s * 32g / 65536) = (g*s) >> 10
-    vmudm $v10, $v02, $v06
-    vmudm $v11, $v03, $v07
-    vmudm $v12, $v04, $v08
-    vaddc $v13, $v09, $v10          # 16-bit wrap: the (int16) cast in C
-    vaddc $v13, $v13, $v11
+    lhu t6, 0x26(t9)
+    ldv $v02, 0, 0, t1
+    llv $v06, 0, 0, t3
+    vaddc $v10, $v09, $v09, e(1q)   # p0 + p1 (wrapping)
+    lsv $v06, 4, 2, t2
+    lsv $v06, 6, 0, t2
+    ldv $v02, 8, 0, t4
+    llv $v06, 8, 0, t6
+    vaddc $v10, $v10, $v09, e(2h)   # + p2
+    lsv $v06, 12, 2, t5
+    lsv $v06, 14, 0, t5
     ctc2 zero, COP2_CTRL_VCO
-    vadd $v13, $v13, $v12           # saturating add: the clamp
-    vmudm $v13, $v13, $v31,e(0)     # * 0x8000 >> 16: >> 1 (arithmetic)
-    sqv $v13, 0x00, t1              # STG_T0 doubles as the raw sample
-    # Noise voices take the noise sample instead.
+    vadd $v10, $v10, $v09, e(3h)    # + p3, saturating
+    addiu t9, t9, 8
+    vmudm $v11, $v02, $v06
+    lhu t1, 0x00(t9)
+    lhu t2, 0x10(t9)
+    lhu t3, 0x20(t9)
+    ssv $v10, 0, 0, t8
+    vaddc $v12, $v11, $v11, e(1q)
+    ssv $v10, 8, 2, t8
+    addiu t7, t7, -1
+    vaddc $v12, $v12, $v11, e(2h)
+    ctc2 zero, COP2_CTRL_VCO
+    vadd $v12, $v12, $v11, e(3h)
+    ssv $v12, 0, 4, t8
+    ssv $v12, 8, 6, t8
+    bnez t7, B_quad
+    addiu t8, t8, 8
+    # >> 1, and noise voices take the noise sample.
+    li t1, %lo(STG_T0)
     lhu t3, %lo(DSP + RSPDSP_M_NOISE)
     lh t5, %lo(DSP + RSPDSP_NOISE_SAMPLE)
-    move a2, zero
-B_noise:
-    andi t6, t3, 1
-    beqz t6, 1f
-    sll t4, a2, 1
-    sh t5, %lo(STG_T0)(t4)
-1:  srl t3, t3, 1
-    addiu a2, a2, 1
-    sltiu t1, a2, 8
-    bnez t1, B_noise
-    nop
-
+    lqv $v13, 0x00, t1
+    li t2, %lo(ENV_BITS)
+    lqv $v22, 0x00, t2
+    mtc2 t3, $v14.e0
+    mtc2 t5, $v15.e0
+    vmudm $v13, $v13, $v31, e(0)    # * 0x8000 >> 16: >> 1 (arithmetic)
+    vand $v14, $v22, $v14, e(0)
+    veq $v25, $v14, vzero
+    vmrg $v13, $v13, $v15, e(0)
+    sqv $v13, 0x00, t1              # STG_T0 doubles as the raw sample
+#endif
+#ifndef PROF_NO_C
     # --- C: key on/off, reset, envelope ------------------------------
+    # Key on (even samples, without key off): per voice, rare.
+    lhu t1, %lo(DSP + RSPDSP_EVENCYCLE)
+    lhu t3, %lo(DSP + RSPDSP_M_KEYOFF)
+    beqz t1, C_reset
+    lhu t5, %lo(DSP + RSPDSP_M_KEYON)
+    nor t3, t3, zero
+    and t5, t5, t3
+    beqz t5, C_reset
     move a2, zero
 C_voice:
-    jal Envelope
+    andi t1, t5, 1
+    beqz t1, 1f
+    srl t5, t5, 1
+    sw t5, %lo(KON_LEFT)
+    jal Env_KeyOn
     nop
+    lw t5, %lo(KON_LEFT)
+1:  bnez t5, C_voice
     addiu a2, a2, 1
-    sltiu t1, a2, 8
-    bnez t1, C_voice
-    nop
+C_reset:
+    lhu t1, %lo(DSP + RSPDSP_RESET)
+    beqz t1, C_env
+    li t3, %lo(DSP + RSPDSP_V_ADSRSTATE)
+    vor $v01, vzero, $v30, e(5)     # 4: release
+    sqv $v01, 0x00, t3
+    li t3, %lo(DSP + RSPDSP_V_GAIN)
+    sqv vzero, 0x00, t3
+C_env:
+    # The envelope for all voices: each case is computed in every lane and
+    # merges pick the lane's own ($v30 lanes 0x80..1, $v31 0x8000..0x100).
+    # Compares only set VCC for the merge after them. Ordered so a vector
+    # result is read no sooner than four instructions later.
+    li t1, %lo(DSP)
+    li t3, %lo(ENV_K)
+    lhu t5, %lo(DSP + RSPDSP_M_USEGAIN)
+    lhu t6, %lo(DSP + RSPDSP_M_DIRECTGAIN)
+    lhu t7, %lo(DSP + RSPDSP_EVENCYCLE)
+    lhu t8, %lo(DSP + RSPDSP_M_KEYOFF)
+    lqv $v22, 0x10, t3                  # 1 << lane
+    subu t7, zero, t7
+    and t8, t8, t7                      # key off acts on even samples
+    mtc2 t8, $v05.e0
+    lqv $v02, RSPDSP_V_GAIN, t1         # G
+    mtc2 t5, $v09.e0
+    mtc2 t6, $v10.e0
+    lqv $v01, RSPDSP_V_ADSRSTATE, t1    # S
+    lqv $v21, 0x00, t3                  # 0x600 0x7e0 0x7ff 0x7fff
+    lqv $v06, RSPDSP_V_RATE0, t1
+    lqv $v04, RSPDSP_V_RATE2, t1
+    vor $v29, vzero, $v30, e(2)         # 32
+    lqv $v07, RSPDSP_V_RATE1, t1
+    vand $v09, $v22, $v09, e(0)         # useGain bits
+    lqv $v03, RSPDSP_V_RATECTR, t1
+    vand $v10, $v22, $v10, e(0)         # directGain bits
+    lqv $v08, RSPDSP_V_RATE3, t1
+    vand $v05, $v22, $v05, e(0)         # key off bits
+    vsub $v12, $v02, $v30, e(7)         # g - 1
+    lqv $v28, RSPDSP_V_GAINMODE, t1
+    vsub $v13, $v02, $v30, e(2)         # g - 32
+    lqv $v27, RSPDSP_V_SUSTAIN, t1
+    vadd $v14, $v02, $v30, e(2)         # g + 32
+    lqv $v26, RSPDSP_V_GAINVAL, t1
+    vsub $v24, $v02, $v30, e(4)         # g - 8
+    veq $v25, $v05, vzero
+    vmrg $v01, $v01, $v30, e(5)         # key off: release (4)
+    vand $v11, $v09, $v10               # direct gain (with useGain)
+    vmudm $v12, $v12, $v31, e(7)        # (g - 1) >> 8
+    vge $v13, $v13, vzero               # linear decrease, floor 0
+    vlt $v14, $v14, $v21, e(2)          # linear increase, ceiling 0x7ff
+    vge $v24, $v24, vzero               # release step
+    veq $v25, $v01, vzero
+    vmrg $v04, $v06, $v04               # rate: attack
+    vlt $v25, $v02, $v21, e(0)
+    vmrg $v15, $v29, $v30, e(4)         # bent: 32 below 0x600, else 8
+    vadd $v12, $v12, $v30, e(7)
+    vne $v25, $v06, $v30, e(7)
+    vmrg $v16, $v29, $v31, e(5)         # attack: 32, or 1024 at rate 1
+    veq $v25, $v01, $v30, e(7)
+    vmrg $v04, $v07, $v04               # rate: decay
+    vadd $v15, $v02, $v15
+    vsub $v12, $v02, $v12               # exponential decrease
+    vadd $v16, $v02, $v16
+    vne $v25, $v09, vzero
+    vmrg $v04, $v08, $v04               # rate: gain mode (rate3)
+    vlt $v15, $v15, $v21, e(2)          # bent increase
+    vlt $v16, $v16, $v21, e(2)          # attack
+    vadd $v05, $v03, $v30, e(7)         # counter + 1
+    veq $v25, $v28, vzero
+    vmrg $v18, $v13, $v15               # gain mode 0 / 3
+    veq $v25, $v01, vzero
+    vmrg $v17, $v16, $v12               # ADSR step: attack / decrease
+    vlt $v25, $v05, $v04
+    vmrg $v23, $v05, vzero              # counter: +1, or 0 on a step
+    veq $v25, $v28, $v30, e(7)
+    vmrg $v18, $v12, $v18               # gain mode 1
+    veq $v25, $v04, vzero
+    vmrg $v23, $v03, $v23               # rate 0: frozen
+    veq $v25, $v28, $v30, e(6)
+    vmrg $v18, $v14, $v18               # gain mode 2
+    vne $v25, $v11, vzero
+    vmrg $v23, $v03, $v23               # direct gain: counter kept
+    vne $v25, $v09, vzero
+    vmrg $v17, $v18, $v17               # stepped gain
+    veq $v25, $v01, $v30, e(5)
+    vmrg $v23, $v03, $v23               # release: counter kept
+    veq $v25, $v01, vzero
+    vmrg $v06, $v17, vzero              # attack lanes: stepped gain, else 0
+    veq $v25, $v01, $v30, e(7)
+    vmrg $v07, $v17, $v21, e(3)         # decay lanes: stepped gain, else 0x7fff
+    sqv $v23, RSPDSP_V_RATECTR, t1
+    vlt $v25, $v06, $v21, e(1)
+    vmrg $v20, $v01, $v30, e(7)         # attack -> decay at 0x7e0
+    vlt $v25, $v05, $v04
+    vmrg $v19, $v02, $v17               # no step: gain kept
+    vge $v25, $v07, $v27
+    vmrg $v20, $v20, $v30, e(6)         # decay -> sustain below the level
+    veq $v25, $v04, vzero
+    vmrg $v19, $v02, $v19
+    vlt $v25, $v05, $v04
+    vmrg $v20, $v01, $v20               # no step: state kept
+    vne $v25, $v11, vzero
+    vmrg $v19, $v26, $v19               # direct gain
+    veq $v25, $v04, vzero
+    vmrg $v20, $v01, $v20
+    veq $v25, $v01, $v30, e(5)
+    vmrg $v19, $v24, $v19               # release
+    vne $v25, $v11, vzero
+    vmrg $v20, $v01, $v20
+    li t3, %lo(STG_G32)
+    vmudn $v18, $v19, $v29, e(0)        # gain << 5 (low product, unclamped)
+    veq $v25, $v01, $v30, e(5)
+    vmrg $v20, $v01, $v20
+    sqv $v19, RSPDSP_V_GAIN, t1
+    sqv $v18, 0x00, t3
+    sqv $v20, RSPDSP_V_ADSRSTATE, t1
 
+#endif
+#ifndef PROF_NO_D
     # --- D: gain, ENVX/OUTX --------------------------------------------
     li t1, %lo(STG_T0)
     lqv $v01, 0x00, t1
@@ -402,6 +561,8 @@ C_voice:
     sbv $v09, 15, 0x38, t3
     sbv $v10, 15, 0x39, t3
 
+#endif
+#ifndef PROF_NO_E
     # --- E: voice volumes; dry mix and echo input -----------------------
     # $v03 = sample out. Terms (s * vol) >> 6 for all voices at once (exact:
     # see RSPDSP_V_VOLL_U), then four accumulators (dry L/R, echo L/R) add
@@ -456,6 +617,7 @@ C_voice:
     vadd $v17, $v17, $v13, e(7)
     vadd $v18, $v18, $v14, e(7)
 
+#endif
     # --- F: master volume (clamped by VMADH) -----------------------------
     li t1, %lo(DSP + RSPDSP_SC_U)
     lqv $v20, 0x00, t1
@@ -465,10 +627,12 @@ C_voice:
     vmudm $v23, $v16, $v20, e(1)
     vmadh $v23, $v16, $v21, e(1)    # total R
 
+#ifndef PROF_NO_G
     # --- G: echo -------------------------------------------------------
     jal Echo
     nop
 
+#endif
     # --- H: mute, noise, output, even/odd ------------------------------
     lhu t1, %lo(DSP + RSPDSP_MUTE)
     beqz t1, 1f
@@ -500,6 +664,7 @@ SAVE_RA2:   .word 0
 SAVE_RA3:   .word 0
 LOG_PTR:    .word 0
 LOG_LEFT:   .word 0
+KON_LEFT:   .word 0
     .text
 
 # Write OUTBUF (fp samples) to P_OUT and advance it.
@@ -695,26 +860,14 @@ BRR_T4:     .word 0
     .text
 
 ########################################################################
-# Key on/off, reset and envelope for voice a2 (dsp_cycleChannel part 2)
+# Key on for voice a2 (even samples, key off clear; dsp_cycleChannel)
 ########################################################################
-Envelope:
+Env_KeyOn:
     sw ra, %lo(SAVE_RA3)
     sll t4, a2, 1
     li t5, 1
     sllv t5, t5, a2                  # voice bit
-    lhu t1, %lo(DSP + RSPDSP_EVENCYCLE)
-    beqz t1, Env_reset
-    nop
-    lhu t1, %lo(DSP + RSPDSP_M_KEYOFF)
-    and t1, t1, t5
-    beqz t1, 1f
-    li t3, 4
-    b Env_reset
-    sh t3, %lo(DSP + RSPDSP_V_ADSRSTATE)(t4)
-1:  lhu t1, %lo(DSP + RSPDSP_M_KEYON)
-    and t3, t1, t5
-    beqz t3, Env_reset
-    nop
+    lhu t1, %lo(DSP + RSPDSP_M_KEYON)
     xor t1, t1, t5                   # keyOn = false
     sh t1, %lo(DSP + RSPDSP_M_KEYON)
     sh zero, %lo(DSP + RSPDSP_V_PREVFLAGS)(t4)
@@ -737,141 +890,20 @@ Envelope:
     addiu t6, t6, 4
     sh zero, %lo(DSP + RSPDSP_V_GAIN)(t4)
     sh zero, %lo(DSP + RSPDSP_V_ADSRSTATE)(t4)
-    li t5, 1
-    sllv t5, t5, a2
-Env_reset:
-    lhu t1, %lo(DSP + RSPDSP_RESET)
-    beqz t1, 1f
-    li t3, 4
-    sh t3, %lo(DSP + RSPDSP_V_ADSRSTATE)(t4)
-    sh zero, %lo(DSP + RSPDSP_V_GAIN)(t4)
-1:  # envelope
-    lhu a0, %lo(DSP + RSPDSP_V_ADSRSTATE)(t4)
-    lhu a1, %lo(DSP + RSPDSP_V_GAIN)(t4)
-    li t3, 4
-    beq a0, t3, Env_release
-    nop
-    lhu t1, %lo(DSP + RSPDSP_M_USEGAIN)
-    and t1, t1, t5
-    sltu a3, zero, t1                # a3 = liveGain
-    beqz a3, 2f
-    nop
-    lhu t1, %lo(DSP + RSPDSP_M_DIRECTGAIN)
-    and t1, t1, t5
-    beqz t1, 3f
-    nop
-    lhu a1, %lo(DSP + RSPDSP_V_GAINVAL)(t4)   # direct gain
-    b Env_store
-    nop
-3:  lhu t1, %lo(DSP + RSPDSP_V_RATE3)(t4)
-    b 4f
-    nop
-2:  sltiu t3, a0, 3
-    bnez t3, 5f
-    move t3, a0
-    li t3, 2
-5:  sll t3, t3, 4                    # stage * 16: rate vectors are 16 bytes apart
-    addu t3, t3, t4
-    lhu t1, %lo(DSP + RSPDSP_V_RATE0)(t3)
-4:  beqz t1, Env_store               # rate 0: frozen
-    nop
-    lhu t3, %lo(DSP + RSPDSP_V_RATECTR)(t4)
-    addiu t3, t3, 1
-    andi t3, t3, 0xffff
-    sltu t6, t3, t1
-    beqz t6, 6f
-    nop
-    b Env_store
-    sh t3, %lo(DSP + RSPDSP_V_RATECTR)(t4)
-6:  sh zero, %lo(DSP + RSPDSP_V_RATECTR)(t4)
-    # handleGain (not releasing)
-    beqz a3, Env_adsr
-    nop
-    lhu t1, %lo(DSP + RSPDSP_V_GAINMODE)(t4)
-    beqz t1, Env_lindec
-    li t3, 1
-    beq t1, t3, Env_expdec
-    li t3, 2
-    beq t1, t3, Env_lininc
-    nop
-    # bent increase
-    sltiu t3, a1, 0x600
-    li t1, 8
-    beqz t3, 7f
-    nop
-    li t1, 32
-7:  b Env_inc
-    addu a1, a1, t1
-Env_lininc:
-    addiu a1, a1, 32
-Env_inc:
-    sltiu t3, a1, 0x800
-    bnez t3, Env_stage
-    nop
-    b Env_stage
-    li a1, 0x7ff
-Env_lindec:
-    addiu a1, a1, -32
-    andi a1, a1, 0xffff
-    sltiu t3, a1, 0x800
-    bnez t3, Env_stage
-    nop
-    b Env_stage
-    move a1, zero
-Env_expdec:
-    addiu t3, a1, -1
-    sra t3, t3, 8
-    addiu t3, t3, 1
-    subu a1, a1, t3
-    b Env_stage
-    andi a1, a1, 0xffff
-Env_adsr:
-    bnez a0, Env_expdec              # decay and sustain
-    nop
-    lhu t1, %lo(DSP + RSPDSP_V_RATE0)(t4)   # attack
-    li t3, 1
-    li t6, 32
-    bne t1, t3, 8f
-    nop
-    li t6, 1024
-8:  b Env_inc
-    addu a1, a1, t6
-Env_stage:
-    bnez a0, 9f
-    nop
-    sltiu t3, a1, 0x7e0              # attack -> decay
-    bnez t3, Env_store
-    nop
-    li t3, 1
-    sh t3, %lo(DSP + RSPDSP_V_ADSRSTATE)(t4)
-    sltiu t3, a1, 0x800
-    bnez t3, Env_store
-    nop
-    b Env_store
-    li a1, 0x7ff
-9:  li t3, 1
-    bne a0, t3, Env_store
-    nop
-    lhu t1, %lo(DSP + RSPDSP_V_SUSTAIN)(t4)
-    sltu t3, a1, t1
-    beqz t3, Env_store
-    li t3, 2
-    b Env_store
-    sh t3, %lo(DSP + RSPDSP_V_ADSRSTATE)(t4)
-Env_release:
-    addiu a1, a1, -8
-    andi a1, a1, 0xffff
-    sltiu t3, a1, 0x800
-    bnez t3, Env_store
-    nop
-    move a1, zero
-Env_store:
-    sh a1, %lo(DSP + RSPDSP_V_GAIN)(t4)
-    sll t1, a1, 5
-    sh t1, %lo(STG_G32)(t4)
+Env_key_ret:
     lw ra, %lo(SAVE_RA3)
     jr ra
     nop
+
+    .data
+    .align 4
+ENV_K:      .half 0x600, 0x7e0, 0x7ff, 0x7fff, 0x1e, 0x3fc, 0, 0
+ENV_BITS:   .half 1, 2, 4, 8, 16, 32, 64, 128
+B_DECODE:   .half RSPDSP_DECODE + 0 * RSPDSP_DECODE_STRIDE, RSPDSP_DECODE + 1 * RSPDSP_DECODE_STRIDE
+            .half RSPDSP_DECODE + 2 * RSPDSP_DECODE_STRIDE, RSPDSP_DECODE + 3 * RSPDSP_DECODE_STRIDE
+            .half RSPDSP_DECODE + 4 * RSPDSP_DECODE_STRIDE, RSPDSP_DECODE + 5 * RSPDSP_DECODE_STRIDE
+            .half RSPDSP_DECODE + 6 * RSPDSP_DECODE_STRIDE, RSPDSP_DECODE + 7 * RSPDSP_DECODE_STRIDE
+    .text
 
 ########################################################################
 # Echo (dsp_handleEcho). In: $v22/$v23 totals after master volume, $v17/
