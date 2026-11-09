@@ -204,23 +204,31 @@ static void render_audio(int16_t *stereo, int frames) {
  * larger host allocation made the CPU stage 17% slower. N64_HEAP_COLOR -1
  * only logs the colour the top has. */
 #ifndef N64_HEAP_COLOR
-#define N64_HEAP_COLOR 0x1b58   /* SMW attract, 2026-11-09 */
+#define N64_HEAP_COLOR 0x1998   /* SMW attract, trace sweep 2026-11-09 */
 #endif
 #if defined(__mips__)
+#include <malloc.h>
+#include <unistd.h>
 static void *volatile s_heap_pad;
+/* Where the next block from the top of the heap starts: the top chunk is
+ * the last mallinfo().keepcost bytes below the break, and a block's data
+ * follows its 8-byte header. (A probe allocation would be served from any
+ * large enough hole instead.) */
 static uintptr_t heap_top(void) {
-  void *p = malloc(32768);   /* larger than any hole: comes from the top */
-  const uintptr_t a = (uintptr_t)p;
-  free(p);                   /* merges back into the top chunk */
-  return a;
+  const struct mallinfo mi = mallinfo();
+  return (uintptr_t)sbrk(0) - (uintptr_t)mi.keepcost + 8;
 }
 static void heap_anchor(long color) {
   const uintptr_t top = heap_top();
   if (color >= 0) {
     uintptr_t d = ((uintptr_t)color - top) & 8191;
-    if (d) {
-      if (d < 32) d += 8192;
-      s_heap_pad = malloc(d - 8);   /* chunk = request + header, 8-aligned */
+    if (d && d < 32) d += 8192;
+    /* The pad must come from the top: a smaller free hole would serve a
+     * small request. Grow it in 8 KB steps (same colour) until it does. */
+    for (int k = 0; d && k < 64; ++k, d += 8192) {
+      void *p = malloc(d - 8);   /* chunk = request + header, 8-aligned */
+      if ((uintptr_t)p == top) { s_heap_pad = p; break; }
+      free(p);
     }
   }
   n64_platform_log("[heap] top colour %04lx -> %04lx (want %ld)\n", (unsigned long)(top & 8191),
@@ -266,7 +274,7 @@ static uint8_t *load_rom(const char *path, int *size_out) {
  * -1 keeps libdragon's stack. */
 #ifndef N64_STACK_COLOR
 #ifdef N64_RSPDSP
-#define N64_STACK_COLOR 0x1b40  /* heap objects sit elsewhere in this build */
+#define N64_STACK_COLOR 0x1820  /* trace sweep 2026-11-09 (with data_order.ld) */
 #else
 #define N64_STACK_COLOR 0x11e0
 #endif

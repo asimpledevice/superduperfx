@@ -832,6 +832,18 @@ A regenerated I-cache ordering models worse than the current one. Needs
 the measured data-cache placement pass (profiler and trace simulation)
 over the current build, with large objects included.
 
+Done the same day: `data_order.ld` regenerated from a profile of the
+current build (145 statics, 51% of static-data accesses; it now pins
+`cyclesPerOpcode`, which the stack top had been evicting: 9% of misses),
+then the heap anchor and stack colour swept over a recorded trace with
+`dcache_sim` (heap +0xd0 -> `N64_HEAP_COLOR` 0x1998; stack 0x1820). The
+heap anchor had silently stopped working: its 32 KB probe allocation was
+served from a free hole, so it measured the wrong place. It now reads the
+top chunk from `mallinfo().keepcost` below `sbrk(0)`, and grows its pad in
+8 KB steps until the pad really comes from the top (a small pad also fit
+a hole). ares, SMW attract: CPU stage 88 -> 86 ms (as with `RSPBG=0`),
+PPU stage 26 -> 23 ms; frame about 118 ms.
+
 See [LESSONS.md](LESSONS.md) for ideas collected from other projects
 (sodium64) and design notes, with how they apply here.
 

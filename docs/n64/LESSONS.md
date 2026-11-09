@@ -154,6 +154,32 @@ Status against this project, so the list is not re-evaluated from scratch.
   halve the PPU stage's average cost but changes output, so it can only be
   a user setting.
 
+## Code placement notes (2026-11-09)
+
+- **Reserved I-cache slices.** The I-cache index is address bits 5-13, so
+  code only evicts code at the same offset within 16 KB. Reserve a slice
+  of every 16 KB window (say the first 2 KB) for the always-hot runtime
+  (helpers, slow-path entries, interrupt code) and pack everything else
+  around those slices: the runtime can then never be evicted. The holes in
+  the other windows still hold data that is never executed (tables, tile
+  caches, paged ROM data); about 214 KB for 1.5 MB of code. Here:
+  `icache_order.py` minimises overlap per frame stage but guarantees
+  nothing; a reserved slice for the hottest runtime functions would be the
+  stronger form (follow-up).
+- **Outlining.** Replace repeated sequences in generated code (unaligned
+  16-bit loads, rarely used flag materialisation) with a `jal` to one
+  pinned copy: smaller call sites, one cached copy, a few cycles per call;
+  keep tight loops inline. Applies to the recompiler's output, which is a
+  small share of frame time today; revisit as more code runs natively.
+- **Threaded code for cold paths.** Compile cold guest code to handler
+  pointers plus operands (data), with a few handlers in the pinned slice:
+  instruction fetches become D-cache reads, so cold code cannot evict hot
+  code from the I-cache. About 8 bytes per op against ~24 for native code,
+  plus ~8 cycles of dispatch; the speed gain is modest and it can sweep the
+  8 KB D-cache instead. The stronger benefits are memory, paging and no
+  I-cache pollution: use it only for rarely run code (a middle tier between
+  the interpreter and native code for option 2).
+
 ## Not techniques: sodium64's accuracy shortcuts
 
 Internal CPU cycles and FastROM timing not counted; IRQ/NMI/HDMA only at
