@@ -169,6 +169,17 @@ endif
 
 snesrecomp_interp.z64: $(BUILD_DIR)/snesrecomp_interp.dfs
 
+# After linking, warn when a function icache_order.ld places is not at its
+# planned address (one placed before it outgrew its gap and shifted the rest):
+# that build's timings are not comparable. The warning does not stop the build.
+ifneq ($(ICACHE_ORDER),)
+snesrecomp_interp.z64: $(BUILD_DIR)/placement.check
+$(BUILD_DIR)/placement.check: $(BUILD_DIR)/snesrecomp_interp.elf icache_order.ld
+	@python3 profile/check_placement.py $< icache_order.ld --nm $(N64_INST)/bin/mips64-elf-nm \
+		|| echo "*** WARNING: code placement shifted (see above) ***"
+	@touch $@
+endif
+
 clean:
 	rm -rf $(BUILD_DIR) snesrecomp_interp.z64
 

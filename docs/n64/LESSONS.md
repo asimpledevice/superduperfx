@@ -164,8 +164,11 @@ Status against this project, so the list is not re-evaluated from scratch.
   the other windows still hold data that is never executed (tables, tile
   caches, paged ROM data); about 214 KB for 1.5 MB of code. Here:
   `icache_order.py` minimises overlap per frame stage but guarantees
-  nothing; a reserved slice for the hottest runtime functions would be the
-  stronger form (follow-up).
+  nothing. Measured 2026-11-09 (`--slice`): worse here, +6 ms per frame
+  with a 2 KB slice, because each stage's hot code is far larger than the
+  cache; the guarantee costs the rest more than it saves. The fragility it
+  addresses is now checked after every link instead
+  (`profile/check_placement.py`).
 - **Outlining.** Replace repeated sequences in generated code (unaligned
   16-bit loads, rarely used flag materialisation) with a `jal` to one
   pinned copy: smaller call sites, one cached copy, a few cycles per call;

@@ -114,7 +114,9 @@ static void draw_rdp_band(const N64PpuFrame *f, int a, int b) {
   }
 }
 
-static int compare(const N64PpuFrame *f, const surface_t *fb) {
+/* Out of line: only RENDER=2 runs it, and n64_ppu_draw_and_show must fit its
+ * slot in icache_order.ld (profile/check_placement.py). */
+static __attribute__((noinline)) int compare(const N64PpuFrame *f, const surface_t *fb) {
   int mismatches = 0, logged = 0;
   static int s_cmp_frame;
   const bool map = ++s_cmp_frame == 90;

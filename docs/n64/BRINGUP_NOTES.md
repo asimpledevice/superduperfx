@@ -867,6 +867,27 @@ dirty bits now cover only sprite planes; a union keeps the struct's size,
 with a static assert). Check `nm` positions modulo 16 KB / 8 KB against
 the tuned build before timing a change.
 
+### Reserved I-cache slices: measured, not adopted; placement check
+
+`icache_order.py --slice N` reserves the first N bytes of every 16 KB
+window of the placed region for the densest hot functions (nothing else
+placed maps there). Profile of the current build: the hottest 2 KB of
+runtime code lines take 40% of samples, 4 KB 56%. Modelled conflict cost:
+plain regeneration 61% of the current ordering, 2 KB slice 210%, 4 KB
+330%. ares (frame 540, CPU/PPU/present ms): current 86/17/9, regenerated
+84/18/9 (a wash, not adopted), 2 KB slice 88/20/9 (about +6 ms per frame).
+Each stage's hot code is hundreds of KB, far beyond the 16 KB cache, so
+walling off 2 KB for a few functions makes everything else conflict more.
+Off by default; kept for other workloads (a small hot core).
+
+What the slices were meant to fix, that a growing function shifts the
+tuned positions of the hottest ones, is now caught instead:
+`profile/check_placement.py` runs after every link (Makefile) and warns
+when any function the ordering places is not at its planned address,
+naming the first one. It found one more in the committed build
+(`n64_ppu_draw_and_show` had outgrown its slot by 0x40; its RENDER=2-only
+compare routine is now out of line).
+
 See [LESSONS.md](LESSONS.md) for ideas collected from other projects
 (sodium64) and design notes, with how they apply here.
 
