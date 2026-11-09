@@ -263,6 +263,8 @@ static int host_main(void) {
   RtlRegisterGame(&kN64GameInfo);
   if (!SnesInit(rom, rom_size)) Die("SnesInit failed: unsupported or damaged ROM.");
   free(rom);  /* the cartridge keeps its own copy (cart_load) */
+  /* All OAM changes here go through the PPU ports or a save-state load. */
+  ppu_set_oam_write_tracking(g_ppu);
   n64_platform_log("[n64] SNES initialized, entering main loop\n");
 
   uint32_t frame = 0;

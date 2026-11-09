@@ -676,6 +676,40 @@ about -1% after the title. No bridge warnings; RDP-vs-software diff 0 px;
 the attract demo plays correctly. (Hashes move, as with any change in
 what runs compiled.)
 
+### PPU stage: sprite evaluation from a line table
+
+The PPU stage (ares, after the title) measured: build 25 ms, final flush
+of BG runs 25 ms, software PPU per-line state 15 ms, HDMA 6 ms. The 15 ms
+was the PPU's own sprite evaluation (STAT77 range/time-over flags and
+"line has sprites"), which tests all 128 sprites on every line.
+
+`ppu_evaluateSpritesFromLines` (runner/src/snes/ppu.c) answers lines
+evaluated without pixels from a table of in-range sprites and visible
+8-pixel slivers for all 256 line values, built once per OAM content and
+sprite size/interlace setting. Without widescreen margins those two
+counts decide everything such a line leaves behind; a line with more than
+32 sprites in range (where the rotation start matters) and widescreen
+margins use the full evaluation. The table is validated by a copy of OAM
+by default; a host whose OAM only changes through the ports can name its
+PPU with `ppu_set_oam_write_tracking` to validate by `oamWriteCount`
+instead (the N64 host does).
+
+Two N64 traps found on the way: newlib's `memcmp` is byte-wise, and the
+data cache is direct-mapped, so the OAM copy has to sit half the cache
+away from the live OAM (it is placed at run time) or every compare load
+evicts its partner. Even then, reading 544 bytes per line costs ~70
+misses because the line builder evicts OAM between lines, hence the
+counter opt-in.
+
+Result: per-line state 15.4 -> 3.8 ms; PPU stage about 73 -> 57 ms per
+frame. Native state hashes are identical to the full evaluation (it is
+exact, not a timing change); host instructions -8.6%.
+`tests/ppu/ppu_sprite_lines_test.c` builds ppu.c with
+`SNESRECOMP_SPR_LINES_CHECK` (both paths on every line, abort on any
+difference) over random and crowded sprite tables in both validation
+modes; it catches deliberately injected off-by-one errors.
+`SNESRECOMP_SPR_LINES=0` restores the old path.
+
 See [LESSONS.md](LESSONS.md) for ideas collected from other projects
 (sodium64) and design notes, with how they apply here.
 
@@ -688,6 +722,6 @@ See [LESSONS.md](LESSONS.md) for ideas collected from other projects
    needing their own stack colour.
 3. Interpreter share: promote more code (analysis of SMW's `$0086DF`
    dispatcher idiom), and gameplay captures for the native set.
-4. PPU stage: skip the PPU's duplicate per-line sprite evaluation when the
-   RDP path evaluates sprites itself (keep STAT77 flags exact).
+4. PPU stage: decoded-tile cache for BG expansion, then BG line building
+   on the RSP overlapped with emulation (see LESSONS.md).
 5. RDP coverage: layer colour math, mosaic, Mode 7 (a textured plane).

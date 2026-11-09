@@ -98,12 +98,15 @@ Ppu* ppu_init(void) {
   return ppu;
 }
 
+static void ppu_spr_lines_forget(const Ppu *ppu, bool freeing);
 void ppu_free(Ppu* ppu) {
+  ppu_spr_lines_forget(ppu, true);
   if (ppu && ppu->hdCapture) SnesHdCaptureDetach(ppu->hdCapture, ppu);
   free(ppu);
 }
 
 void ppu_reset(Ppu* ppu) {
+  ppu_spr_lines_forget(ppu, false);
   {
     size_t pitch = ppu->renderPitch;
     uint8_t *renderBuffer = ppu->renderBuffer;
@@ -2964,7 +2967,164 @@ bool PpuComposeExtraObjects(const PpuExtraObject *objects,size_t count,
   return added;
 }
 
+/* Counts-only evaluation from a per-line table.
+ *
+ * With no widescreen margins, what a counts-only evaluation leaves behind
+ * (range over, time over, whether the line has sprites) depends only on OAM,
+ * the sprite size setting and interlace -- unless more than 32 sprites are in
+ * range, when the rotation start decides which 32 count. So build, once per
+ * OAM content, the number of in-range sprites and their visible 8-pixel
+ * slivers for all 256 line values, and answer each line with a lookup.
+ *
+ * By default the table is validated against a copy of OAM, so every writer
+ * (ports, save states, raster replays, debuggers, tests) is covered. A PPU
+ * named by ppu_set_oam_write_tracking is validated by oamWriteCount instead,
+ * which saves reading 544 bytes of OAM per line (on the N64 those are cache
+ * misses: the line builder evicts them between lines). Either way a changed
+ * OAM is rebuilt only once it has stayed the same for one more line, so OAM
+ * rewritten on every line costs no more than before. Returns -1 when the
+ * caller must run the full evaluation. SNESRECOMP_SPR_LINES=0 turns it off;
+ * SNESRECOMP_SPR_LINES_CHECK runs both and aborts on any difference. */
+#ifndef SNESRECOMP_SPR_LINES
+#define SNESRECOMP_SPR_LINES 1
+#endif
+enum { s_spr_lines_off = !SNESRECOMP_SPR_LINES };
+static struct {
+  const Ppu *ppu;
+  uint32_t *copy;             /* OAM then high OAM as of the table, 544 bytes */
+  uint32_t oam_count;         /* oamWriteCount as of the table (tracked PPU) */
+  uint8_t key, valid;
+  uint8_t count[256];
+  uint16_t tiles[256];
+} s_spr_lines;
+/* The copy is compared with the live OAM on every line. The VR4300's data
+ * cache is direct-mapped (8 KB), so a copy at the same cache index as the
+ * live OAM would evict it word by word. Place it half the cache away from
+ * wherever the PPU was allocated. */
+static uint32_t s_spr_copy_pool[(8192 + 1024) / 4] __attribute__((aligned(16)));
+/* A PPU whose OAM only changes through ppu_write and ppu_saveload, which
+ * bump oamWriteCount: its table is validated by the counter instead of by
+ * reading all of OAM on every line. */
+static const Ppu *s_oam_tracked_ppu;
+void ppu_set_oam_write_tracking(const Ppu *ppu) { s_oam_tracked_ppu = ppu; s_spr_lines.ppu = NULL; }
+static void ppu_spr_lines_forget(const Ppu *ppu, bool freeing) {
+  if (s_spr_lines.ppu == ppu) s_spr_lines.ppu = NULL;
+  if (freeing && s_oam_tracked_ppu == ppu) s_oam_tracked_ppu = NULL;
+}
+static uint32_t *spr_copy_for(const Ppu *ppu) {
+  const uintptr_t base = (uintptr_t)s_spr_copy_pool;
+  const uintptr_t want = ((uintptr_t)ppu->oam + 4096 - base) & 0x1ffc;
+  return (uint32_t *)(base + want);
+}
+
+static int ppu_evaluateSpritesFromLines(Ppu *ppu, int line) {
+  static const uint8 spriteSizes[8][2] = {
+    {8, 16}, {8, 32}, {8, 64}, {16, 32},
+    {16, 64}, {32, 64}, {16, 32}, {16, 32}
+  };
+  if (ppu->extraLeftCur || ppu->extraRightCur || ppu->wsHudOamHeight) return -1;
+  const uint8_t key = (uint8_t)(PPU_objSize(ppu) | (PPU_objInterlace(ppu) ? 8 : 0) | 0x80);
+  bool same = s_spr_lines.ppu == ppu && s_spr_lines.key == key;
+  if (ppu == s_oam_tracked_ppu) {
+    if (same && s_spr_lines.oam_count == ppu->oamWriteCount) goto table;
+    s_spr_lines.ppu = ppu;
+    s_spr_lines.key = key;
+    s_spr_lines.valid = 0;
+    s_spr_lines.copy = NULL;
+    s_spr_lines.oam_count = ppu->oamWriteCount;
+    return -1;
+  }
+  same = same && s_spr_lines.copy;
+  const bool aligned = (((uintptr_t)ppu->oam | (uintptr_t)ppu->highOam) & 3) == 0 &&
+                       (const uint8_t *)ppu->highOam == (const uint8_t *)ppu->oam + 512;
+  if (same) {
+    /* Word compare without early exit: newlib's memcmp is byte-wise on MIPS.
+     * OAM is only 2-aligned by type, so check before using 32-bit loads. */
+    const uint32_t *b = s_spr_lines.copy;
+    if (aligned) {
+      typedef uint32_t __attribute__((may_alias)) A32;
+      const A32 *a = (const A32 *)ppu->oam;
+      uint32_t diff = 0;
+      for (int i = 0; i < 136; i += 4)
+        diff |= (a[i] ^ b[i]) | (a[i + 1] ^ b[i + 1]) | (a[i + 2] ^ b[i + 2]) | (a[i + 3] ^ b[i + 3]);
+      same = diff == 0;
+    } else {
+      same = memcmp(b, ppu->oam, 512) == 0 && memcmp((const uint8_t *)b + 512, ppu->highOam, 32) == 0;
+    }
+  }
+  if (!same) {
+    s_spr_lines.ppu = ppu;
+    s_spr_lines.key = key;
+    s_spr_lines.valid = 0;
+    s_spr_lines.copy = spr_copy_for(ppu);
+    memcpy(s_spr_lines.copy, ppu->oam, 512);
+    memcpy((uint8_t *)s_spr_lines.copy + 512, ppu->highOam, 32);
+    return -1;
+  }
+table:
+  if (!s_spr_lines.valid) {
+    memset(s_spr_lines.count, 0, sizeof s_spr_lines.count);
+    memset(s_spr_lines.tiles, 0, sizeof s_spr_lines.tiles);
+    const bool interlace = (key & 8) != 0;
+    for (int index = 0; index < 256; index += 2) {
+      const unsigned hi = ppu->highOam[index >> 3] >> (index & 7);
+      const int size = spriteSizes[key & 7][(hi >> 1) & 1];
+      int x = (ppu->oam[index] & 0xff) | (int)(hi & 1) << 8;
+      if (x >= 256) x -= 512;
+      if (x + size <= 0) continue;            /* entirely left of the screen */
+      int slivers = 0;
+      for (int col = 0; col < size; col += 8)
+        if (col + x > -8 && col + x < 256) slivers++;
+      const unsigned y = ppu->oam[index] >> 8;
+      const int height = interlace ? size / 2 : size;
+      for (int r = 0; r < height; r++) {
+        const unsigned l = (y + (unsigned)r) & 255;
+        s_spr_lines.count[l]++;
+        s_spr_lines.tiles[l] += (uint16_t)slivers;
+      }
+    }
+    s_spr_lines.valid = 1;
+  }
+  const unsigned l = (unsigned)line & 255;
+  const unsigned count = s_spr_lines.count[l];
+  const bool limits = !(ppu->renderFlags & kPpuRenderFlags_NoSpriteLimits);
+  if (count > 32 && limits) return -1;
+  if (limits && s_spr_lines.tiles[l] > 34) ppu->timeOver = true;
+  return count != 0;
+}
+
+#ifdef SNESRECOMP_SPR_LINES_CHECK
+unsigned long g_ppu_spr_lines_checked;   /* lines answered by the table */
+static bool ppu_evaluateSpritesSlow(Ppu* ppu, int line, bool counts_only);
+#endif
 static bool ppu_evaluateSprites(Ppu* ppu, int line, bool counts_only) {
+  if (counts_only && !ppu->extraObjectCount && !s_spr_lines_off) {
+#ifdef SNESRECOMP_SPR_LINES_CHECK
+    const bool s_spr_chk_to = ppu->timeOver, s_spr_chk_ro = ppu->rangeOver;
+#endif
+    const int r = ppu_evaluateSpritesFromLines(ppu, line);
+#ifdef SNESRECOMP_SPR_LINES_CHECK
+    if (r >= 0) {
+      const bool to = ppu->timeOver, ro = ppu->rangeOver;
+      ppu->timeOver = s_spr_chk_to; ppu->rangeOver = s_spr_chk_ro;
+      const bool slow = ppu_evaluateSpritesSlow(ppu, line, true);
+      if (slow != (r != 0) || to != ppu->timeOver || ro != ppu->rangeOver) {
+        fprintf(stderr, "[spr-lines] MISMATCH line %d fast %d/%d/%d slow %d/%d/%d\n", line,
+                r, to, ro, slow, ppu->timeOver, ppu->rangeOver);
+        abort();
+      }
+      g_ppu_spr_lines_checked++;
+      return slow;
+    }
+#else
+    if (r >= 0) return r != 0;
+#endif
+  }
+#ifdef SNESRECOMP_SPR_LINES_CHECK
+  return ppu_evaluateSpritesSlow(ppu, line, counts_only);
+}
+static bool ppu_evaluateSpritesSlow(Ppu* ppu, int line, bool counts_only) {
+#endif
   if(ppu->extraObjectCount) {
     memset(ppu->objectColors,0,sizeof(ppu->objectColors));
     memset(ppu->objectOrder,0xff,sizeof(ppu->objectOrder));

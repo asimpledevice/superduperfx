@@ -566,6 +566,13 @@ void ppu_runLine(Ppu* ppu, int line);
 /* Native image producers still need the live PPU's line/status work. Omit
  * color rasterization only when the caller owns that line's final pixels. */
 void ppu_runLineState(Ppu* ppu, int line);
+/* Opt-in for a host whose PPU's OAM changes only through ppu_write ($2104
+ * and DMA to it) and ppu_saveload, which bump oamWriteCount: per-line sprite
+ * evaluation without pixels then validates its cached line table by that
+ * counter instead of comparing all of OAM on every line. Do not call it for a
+ * PPU whose OAM is written directly (tests, debuggers, raster replays). One
+ * PPU at a time; NULL turns it off. */
+void ppu_set_oam_write_tracking(const Ppu *ppu);
 /* Render an immutable caller-owned PPU copy, without recording another live
  * hardware line. Used for explicit reference-image/readback requests. */
 void ppu_drawCapturedLine(Ppu* ppu, int line, bool pixels);
