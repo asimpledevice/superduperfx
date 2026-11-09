@@ -22,6 +22,9 @@ static uint32_t rnd(void) {
 }
 static int16_t rnd15(void) { return (int16_t)((int32_t)(rnd() << 17) >> 17); }
 
+#ifndef RSPDSP_TESTS
+#define RSPDSP_TESTS 2000
+#endif
 enum { kMaxLog = 64 };
 static SnesDspLogIn s_log[kMaxLog];
 
@@ -99,7 +102,7 @@ int main(void) {
   static Dsp a, b;
   uint8_t *aram_ref = memalign(16, 0x10000);
   uint8_t *aram_rsp = memalign(16, RSPDSP_ARAM_SIZE);
-  int fails = 0, fallbacks = 0, tests = 2000;
+  int fails = 0, fallbacks = 0, tests = RSPDSP_TESTS;
   extern uint32_t g_snesdsp_rsp_ticks, g_snesdsp_rsp_samples;
   uint32_t c_ticks = 0, c_samples = 0;
   for (int t = 0; t < tests; t++) {

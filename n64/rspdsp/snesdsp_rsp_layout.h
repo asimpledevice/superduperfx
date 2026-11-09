@@ -68,7 +68,22 @@
 #define RSPDSP_P_ARAM       (RSPDSP_G + 0x38)  /* u32 RDRAM address */
 #define RSPDSP_P_LOG        (RSPDSP_G + 0x3c)  /* u32 RDRAM address */
 #define RSPDSP_P_OUT        (RSPDSP_G + 0x40)  /* u32 RDRAM address */
-#define RSPDSP_STATE_SIZE   0x3a0  /* multiple of 16 */
+/* Coefficients split for exact vector multiplies: for a coefficient k
+ * scaled to K = k << (16 - shift), u = K & 0xffff (unsigned) and
+ * c = K >> 16 (signed), so VMUDM(s, u) + VMADH(s, c) leaves exactly
+ * floor(s * k / 2^shift) in the accumulator (shift 6 for voice volumes and
+ * FIR taps, 7 for master/echo volume and feedback). Kept in step with the
+ * coefficients by the CPU (pack and decoded register writes). */
+#define RSPDSP_V_VOLL_U     0x3a0
+#define RSPDSP_V_VOLL_C     0x3b0
+#define RSPDSP_V_VOLR_U     0x3c0
+#define RSPDSP_V_VOLR_C     0x3d0
+#define RSPDSP_V_ECHOMASK   0x3e0  /* 0xffff where echo is enabled */
+#define RSPDSP_FIR_U        0x3f0
+#define RSPDSP_FIR_C        0x400
+#define RSPDSP_SC_U         0x410  /* lanes: mvolL mvolR evolL evolR fb fb */
+#define RSPDSP_SC_C         0x420
+#define RSPDSP_STATE_SIZE   0x430  /* multiple of 16 */
 
 /* Log entries (8 bytes): u16 tag (samples owed when written), u8 kind,
  * u8 unused, u16 address, u16 value. Entries are in time order. Kinds:

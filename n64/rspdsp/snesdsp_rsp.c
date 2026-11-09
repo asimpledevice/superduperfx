@@ -36,8 +36,30 @@ static inline uint16_t getu(const RspDspState *s, unsigned off) {
   return *(const uint16_t *)(s->bytes + off);
 }
 
+/* u/c split of coefficient k for a product shifted right by `shift`. */
+static inline void put_uc(RspDspState *s, unsigned off_u, unsigned off_c, int k, int shift) {
+  const int32_t K = (int32_t)k * (1 << (16 - shift));
+  put(s, off_u, (int)(uint16_t)(K & 0xffff));
+  put(s, off_c, (int)(K >> 16));
+}
+
 #define MASK(field) ({ unsigned m_ = 0; \
   for (int c_ = 0; c_ < 8; c_++) if (dsp->channel[c_].field) m_ |= 1u << c_; m_; })
+
+static void pack_coefficients(const Dsp *dsp, RspDspState *s) {
+  for (int c = 0; c < 8; c++) {
+    put_uc(s, RSPDSP_V_VOLL_U + 2 * c, RSPDSP_V_VOLL_C + 2 * c, dsp->channel[c].volumeL, 6);
+    put_uc(s, RSPDSP_V_VOLR_U + 2 * c, RSPDSP_V_VOLR_C + 2 * c, dsp->channel[c].volumeR, 6);
+    put(s, RSPDSP_V_ECHOMASK + 2 * c, dsp->channel[c].echoEnable ? -1 : 0);
+    put_uc(s, RSPDSP_FIR_U + 2 * c, RSPDSP_FIR_C + 2 * c, dsp->firValues[c], 6);
+  }
+  put_uc(s, RSPDSP_SC_U + 0, RSPDSP_SC_C + 0, dsp->masterVolumeL, 7);
+  put_uc(s, RSPDSP_SC_U + 2, RSPDSP_SC_C + 2, dsp->masterVolumeR, 7);
+  put_uc(s, RSPDSP_SC_U + 4, RSPDSP_SC_C + 4, dsp->echoVolumeL, 7);
+  put_uc(s, RSPDSP_SC_U + 6, RSPDSP_SC_C + 6, dsp->echoVolumeR, 7);
+  put_uc(s, RSPDSP_SC_U + 8, RSPDSP_SC_C + 8, dsp->feedbackVolume, 7);
+  put_uc(s, RSPDSP_SC_U + 10, RSPDSP_SC_C + 10, dsp->feedbackVolume, 7);
+}
 
 void snesdsp_rsp_pack(const Dsp *dsp, RspDspState *s) {
   memset(s, 0, sizeof *s);
@@ -100,6 +122,7 @@ void snesdsp_rsp_pack(const Dsp *dsp, RspDspState *s) {
   put(s, RSPDSP_M_ECHO, MASK(echoEnable));
   put(s, RSPDSP_M_USEGAIN, MASK(useGain));
   put(s, RSPDSP_M_DIRECTGAIN, MASK(directGain));
+  pack_coefficients(dsp, s);
 }
 
 void snesdsp_rsp_unpack(Dsp *dsp, const RspDspState *s) {
@@ -184,12 +207,10 @@ static bool pmod_used(const Dsp *d) {
 /* Emit stores for every state field register `reg` assigns, taken from
  * the shadow after dsp_write ran on it. */
 static Op *emit_reg(Op *o, uint16_t tag, uint8_t reg) {
-  RspDspState *t = &s_block;  /* scratch: pack only the touched values */
   const Dsp *d = &s_shadow;
   const unsigned c = reg >> 4, lo = reg & 15, v = 2 * c;
 #define HALF(off, value) do { o->tag = tag; o->kind = RSPDSP_LOG_HALF; o->pad = 0; \
     o->adr = (off); o->val = (uint16_t)(int16_t)(value); o++; } while (0)
-  (void)t;
   const DspChannel *ch = &d->channel[c];
   unsigned m;
   switch (lo) {
@@ -251,6 +272,20 @@ static Op *emit_reg(Op *o, uint16_t tag, uint8_t reg) {
     case 0xf: HALF(RSPDSP_FIR_VALS + v, d->firValues[c]); break;
     default: break;
   }
+  /* Split coefficients that follow the fields above. */
+  {
+    RspDspState tmp;
+    pack_coefficients(d, &tmp);
+#define COPY(off) HALF(off, *(int16_t *)(tmp.bytes + (off)))
+    if (lo == 0) { COPY(RSPDSP_V_VOLL_U + v); COPY(RSPDSP_V_VOLL_C + v); }
+    if (lo == 1) { COPY(RSPDSP_V_VOLR_U + v); COPY(RSPDSP_V_VOLR_C + v); }
+    if (lo == 0xf) { COPY(RSPDSP_FIR_U + v); COPY(RSPDSP_FIR_C + v); }
+    if (lo == 0xc && c < 4) { COPY(RSPDSP_SC_U + 2 * c); COPY(RSPDSP_SC_C + 2 * c); }
+    if (reg == 0x0d) { COPY(RSPDSP_SC_U + 8); COPY(RSPDSP_SC_C + 8);
+                       COPY(RSPDSP_SC_U + 10); COPY(RSPDSP_SC_C + 10); }
+    if (reg == 0x4d) for (int i = 0; i < 8; i++) COPY(RSPDSP_V_ECHOMASK + 2 * i);
+#undef COPY
+  }
 #undef HALF
   o->tag = tag; o->kind = RSPDSP_LOG_BYTE; o->pad = 0;
   o->adr = RSPDSP_RAM + reg; o->val = d->ram[reg]; o++;
@@ -266,7 +301,7 @@ bool snesdsp_rsp_batch(Dsp *dsp, uint8_t *aram, const SnesDspLogIn *log, uint32_
   s_shadow = *dsp;
   Op *o = s_ops.op, *end = s_ops.op + kMaxOps;
   for (uint32_t i = 0; i < n; i++) {
-    if (o + 12 > end) return false;
+    if (o + 24 > end) return false;
     if (log[i].isReg) {
       dsp_write(&s_shadow, (uint8_t)log[i].adr, log[i].val);
       if (pmod_used(&s_shadow) || !echo_ok(&s_shadow)) return false;

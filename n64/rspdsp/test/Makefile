@@ -5,7 +5,7 @@ SOURCE_DIR = ..
 include $(N64_INST)/include/n64.mk
 
 RUNNER = ../../../runner/src
-N64_CFLAGS += -I.. -I$(RUNNER) -I$(RUNNER)/snes -I../../include -DSNESRECOMP_TRACE=0 -DSNESRECOMP_AUDIO_TRACE_HOOKS=0 -include ../../include/n64_compat.h -Wno-error
+N64_CFLAGS += -I.. -I$(RUNNER) -I$(RUNNER)/snes -I../../include -DSNESRECOMP_TRACE=0 -DSNESRECOMP_AUDIO_TRACE_HOOKS=0 -include ../../include/n64_compat.h -Wno-error $(TEST_CFLAGS)
 
 all: rspdsp_test.z64
 
@@ -29,6 +29,7 @@ $(BUILD_DIR)/n64_compat.o: ../../src/n64_compat.c
 $(BUILD_DIR)/rspdsp_test.elf: $(BUILD_DIR)/n64_compat.o $(BUILD_DIR)/test_main.o $(BUILD_DIR)/snesdsp_rsp.o $(BUILD_DIR)/rsp_snesdsp.o $(DSP_OBJS)
 
 rspdsp_test.z64: N64_ROM_TITLE = "RSP DSP test"
+$(BUILD_DIR)/rsp_snesdsp.o: RSPASFLAGS += $(RSP_DEFS)
 
 clean:
 	rm -rf $(BUILD_DIR) rspdsp_test.z64

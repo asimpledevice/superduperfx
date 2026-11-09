@@ -242,19 +242,43 @@ Dir_Entry:
 1:
 .endm
 
+# One BRR nibble at bits 31..28 of s0: shift (a1, a0), filter (a3), clamp
+# to 16 bits, clip to 15, store doubled at t6. old t8, older t9.
+.macro BRR_NIBBLE
+    srav s0, s0, a1
+    sllv s0, s0, a0
+    jalr a3
+    nop
+    CLAMP16 s0, t3, t5
+    sll s0, s0, 17
+    sra s0, s0, 17
+    move t9, t8
+    move t8, s0
+    sll t3, s0, 1
+    sh t3, 0(t6)
+    addiu t6, t6, 2
+.endm
+
 Dsp_Sample:
     move v1, ra
     sw v1, %lo(SAVE_RA)
 
     # --- A: pitch counters; decode a BRR block on wrap -----------------
-    move a2, zero                   # voice
+    # counter += pitch for all voices; the add's carries are the wraps.
+    li t1, %lo(DSP + RSPDSP_V_PITCH)
+    lqv $v01, 0x00, t1
+    lqv $v02, 0x10, t1              # V_COUNTER
+    vaddc $v02, $v02, $v01
+    sqv $v02, 0x10, t1
+    cfc2 t3, COP2_CTRL_VCO          # bit v: voice v wrapped
+    ctc2 zero, COP2_CTRL_VCO
+    andi t3, t3, 0xff
+    sw t3, %lo(A_MASK)
+    move a2, zero
 A_voice:
-    sll t4, a2, 1
-    lhu t1, %lo(DSP + RSPDSP_V_PITCH)(t4)
-    lhu t3, %lo(DSP + RSPDSP_V_COUNTER)(t4)
-    addu t1, t1, t3
-    sh t1, %lo(DSP + RSPDSP_V_COUNTER)(t4)
-    srl t1, t1, 16
+    lw t3, %lo(A_MASK)
+    srlv t1, t3, a2
+    andi t1, t1, 1
     beqz t1, A_next
     nop
     jal Brr_Decode
@@ -266,43 +290,43 @@ A_next:
     nop
 
     # --- B: Gaussian interpolation for all voices -----------------------
+    # Gather each voice's four samples and coefficients into tap-major
+    # vectors. Scheduled for the RSP pipeline: loads are used no sooner than
+    # two instructions later, and stores wait two instructions after loads.
     move a2, zero
+    move t4, zero                   # voice * 2
+    move t6, zero                   # voice * 40
+    li t2, 0x1fe
 B_voice:
-    sll t4, a2, 1
     lhu t1, %lo(DSP + RSPDSP_V_COUNTER)(t4)
-    srl t3, t1, 12                  # sample index
-    sll t3, t3, 1
-    li t5, RSPDSP_DECODE_STRIDE
-    # t6 = voice * 40 (= voice * 32 + voice * 8)
-    sll t6, a2, 5
-    sll t7, a2, 3
-    addu t6, t6, t7
-    addu t6, t6, t3
-    lh t5, %lo(DSP + RSPDSP_DECODE + 0)(t6)
-    sh t5, %lo(STG_T0)(t4)
-    lh t5, %lo(DSP + RSPDSP_DECODE + 2)(t6)
-    sh t5, %lo(STG_T1)(t4)
-    lh t5, %lo(DSP + RSPDSP_DECODE + 4)(t6)
-    sh t5, %lo(STG_T2)(t4)
-    lh t5, %lo(DSP + RSPDSP_DECODE + 6)(t6)
-    sh t5, %lo(STG_T3)(t4)
-    srl t1, t1, 4
-    andi t1, t1, 0xff               # offset
-    sll t1, t1, 1
-    li t5, 0x1fe
-    subu t6, t5, t1                 # (0xff - offset) * 2
-    lhu t5, %lo(GAUSS32)(t6)
-    sh t5, %lo(STG_G0)(t4)
-    lhu t5, %lo(GAUSS32 + 0x200)(t6) # 0x1ff - offset
-    sh t5, %lo(STG_G1)(t4)
-    lhu t5, %lo(GAUSS32 + 0x200)(t1) # 0x100 + offset
-    sh t5, %lo(STG_G2)(t4)
-    lhu t5, %lo(GAUSS32)(t1)        # offset
-    sh t5, %lo(STG_G3)(t4)
     addiu a2, a2, 1
-    sltiu t1, a2, 8
-    bnez t1, B_voice
-    nop
+    sltiu t9, a2, 8
+    srl t3, t1, 12                  # sample index
+    srl t5, t1, 4
+    sll t3, t3, 1
+    andi t5, t5, 0xff               # offset
+    addu t3, t3, t6
+    sll t5, t5, 1
+    subu t7, t2, t5                 # (0xff - offset) * 2
+    lh a0, %lo(DSP + RSPDSP_DECODE + 0)(t3)
+    lh a1, %lo(DSP + RSPDSP_DECODE + 2)(t3)
+    lh a3, %lo(DSP + RSPDSP_DECODE + 4)(t3)
+    lh v0, %lo(DSP + RSPDSP_DECODE + 6)(t3)
+    lhu t0, %lo(GAUSS32)(t7)        # 0xff - offset
+    lhu t8, %lo(GAUSS32 + 0x200)(t7) # 0x1ff - offset
+    lhu v1, %lo(GAUSS32 + 0x200)(t5) # 0x100 + offset
+    lhu s0, %lo(GAUSS32)(t5)        # offset
+    addiu t6, t6, RSPDSP_DECODE_STRIDE
+    addiu t4, t4, 2
+    sh a0, %lo(STG_T0 - 2)(t4)
+    sh a1, %lo(STG_T1 - 2)(t4)
+    sh a3, %lo(STG_T2 - 2)(t4)
+    sh v0, %lo(STG_T3 - 2)(t4)
+    sh t0, %lo(STG_G0 - 2)(t4)
+    sh t8, %lo(STG_G1 - 2)(t4)
+    sh v1, %lo(STG_G2 - 2)(t4)
+    bnez t9, B_voice
+    sh s0, %lo(STG_G3 - 2)(t4)
     li t1, %lo(STG_T0)
     lqv $v01, 0x00, t1
     lqv $v02, 0x10, t1
@@ -353,96 +377,93 @@ C_voice:
     li t1, %lo(STG_G32)
     lqv $v02, 0x00, t1
     vmudm $v03, $v01, $v02          # (sample * gain) >> 11
+    li t1, %lo(DSP + RSPDSP_V_GAIN)
+    lqv $v09, 0x00, t1
     li t1, %lo(DSP + RSPDSP_V_SAMPLEOUT)
     sqv $v03, 0x00, t1
-    move a2, zero
-D_voice:
-    sll t4, a2, 1
-    sll t6, a2, 4                   # register base $x0
-    lhu t1, %lo(DSP + RSPDSP_V_GAIN)(t4)
-    srl t1, t1, 4
-    sb t1, %lo(DSP + RSPDSP_RAM + 8)(t6)
-    lh t1, %lo(DSP + RSPDSP_V_SAMPLEOUT)(t4)
-    sra t1, t1, 7
-    sb t1, %lo(DSP + RSPDSP_RAM + 9)(t6)
-    addiu a2, a2, 1
-    sltiu t1, a2, 8
-    bnez t1, D_voice
-    nop
+    vmudm $v09, $v09, $v31, e(3)    # gain >> 4 ($v31 lane 3 = 0x1000)
+    vmudm $v10, $v03, $v31, e(6)    # sample >> 7 ($v31 lane 6 = 0x0200)
+    li t1, %lo(DSP + RSPDSP_RAM)    # ENVX ($x8) and OUTX ($x9): low bytes
+    li t3, %lo(DSP + RSPDSP_RAM + 0x40)
+    sbv $v09, 1, 0x08, t1
+    sbv $v10, 1, 0x09, t1
+    sbv $v09, 3, 0x18, t1
+    sbv $v10, 3, 0x19, t1
+    sbv $v09, 5, 0x28, t1
+    sbv $v10, 5, 0x29, t1
+    sbv $v09, 7, 0x38, t1
+    sbv $v10, 7, 0x39, t1
+    sbv $v09, 9, 0x08, t3
+    sbv $v10, 9, 0x09, t3
+    sbv $v09, 11, 0x18, t3
+    sbv $v10, 11, 0x19, t3
+    sbv $v09, 13, 0x28, t3
+    sbv $v10, 13, 0x29, t3
+    sbv $v09, 15, 0x38, t3
+    sbv $v10, 15, 0x39, t3
 
-    # --- E: voice volumes, dry mix and echo input ----------------------
-    li t1, %lo(DSP + RSPDSP_V_VOLL)
-    lqv $v02, 0x00, t1
-    lqv $v04, 0x10, t1              # V_VOLR follows V_VOLL
-    vmudh $v05, $v03, $v02          # 32-bit products sample * volL
-    vsar $v06, COP2_ACC_HI
-    vsar $v07, COP2_ACC_MD
-    li t1, %lo(STG_HI)
-    sqv $v06, 0x00, t1
-    sqv $v07, 0x10, t1              # STG_MD
-    vmudh $v05, $v03, $v04
-    vsar $v06, COP2_ACC_HI
-    vsar $v07, COP2_ACC_MD
-    sqv $v06, 0x20, t1              # STG_HI2
-    sqv $v07, 0x30, t1              # STG_MD2
-    move a0, zero                   # totalL
-    move a1, zero                   # totalR
-    move a3, zero                   # echo inL
-    move v0, zero                   # echo inR
-    move a2, zero
-E_voice:
-    sll t4, a2, 1
-    lh t1, %lo(STG_HI)(t4)
-    lhu t3, %lo(STG_MD)(t4)
-    sll t1, t1, 16
-    or t1, t1, t3
-    sra t8, t1, 6                   # (sample * volL) >> 6
-    lh t5, %lo(STG_HI2)(t4)
-    lhu t3, %lo(STG_MD2)(t4)
-    sll t5, t5, 16
-    or t5, t5, t3
-    sra t5, t5, 6                   # (sample * volR) >> 6
-    jal Clamp_t1
-    addu t1, a0, t8
-    move a0, t1
-    jal Clamp_t1
-    addu t1, a1, t5
-    move a1, t1
-    lhu t3, %lo(DSP + RSPDSP_M_ECHO)
-    srlv t3, t3, a2
-    andi t3, t3, 1
-    beqz t3, E_next
-    nop
-    jal Clamp_t1
-    addu t1, a3, t8
-    move a3, t1
-    jal Clamp_t1
-    addu t1, v0, t5
-    move v0, t1
-E_next:
-    addiu a2, a2, 1
-    sltiu t1, a2, 8
-    bnez t1, E_voice
-    nop
+    # --- E: voice volumes; dry mix and echo input -----------------------
+    # $v03 = sample out. Terms (s * vol) >> 6 for all voices at once (exact:
+    # see RSPDSP_V_VOLL_U), then four accumulators (dry L/R, echo L/R) add
+    # the voices in order with saturation, as C clamps after each voice.
+    li t1, %lo(DSP + RSPDSP_V_VOLL_U)
+    lqv $v04, 0x00, t1
+    lqv $v05, 0x10, t1
+    lqv $v06, 0x20, t1
+    lqv $v07, 0x30, t1
+    lqv $v08, 0x40, t1              # echo mask
+    vmudm $v11, $v03, $v04
+    vmadh $v11, $v03, $v05          # TL
+    vmudm $v12, $v03, $v06
+    vmadh $v12, $v03, $v07          # TR
+    vand $v13, $v11, $v08
+    vand $v14, $v12, $v08
+    vxor $v15, $v15, $v15
+    vxor $v16, $v16, $v16
+    vxor $v17, $v17, $v17
+    vxor $v18, $v18, $v18
+    ctc2 zero, COP2_CTRL_VCO
+    vadd $v15, $v15, $v11, e(0)
+    vadd $v16, $v16, $v12, e(0)
+    vadd $v17, $v17, $v13, e(0)
+    vadd $v18, $v18, $v14, e(0)
+    vadd $v15, $v15, $v11, e(1)
+    vadd $v16, $v16, $v12, e(1)
+    vadd $v17, $v17, $v13, e(1)
+    vadd $v18, $v18, $v14, e(1)
+    vadd $v15, $v15, $v11, e(2)
+    vadd $v16, $v16, $v12, e(2)
+    vadd $v17, $v17, $v13, e(2)
+    vadd $v18, $v18, $v14, e(2)
+    vadd $v15, $v15, $v11, e(3)
+    vadd $v16, $v16, $v12, e(3)
+    vadd $v17, $v17, $v13, e(3)
+    vadd $v18, $v18, $v14, e(3)
+    vadd $v15, $v15, $v11, e(4)
+    vadd $v16, $v16, $v12, e(4)
+    vadd $v17, $v17, $v13, e(4)
+    vadd $v18, $v18, $v14, e(4)
+    vadd $v15, $v15, $v11, e(5)
+    vadd $v16, $v16, $v12, e(5)
+    vadd $v17, $v17, $v13, e(5)
+    vadd $v18, $v18, $v14, e(5)
+    vadd $v15, $v15, $v11, e(6)
+    vadd $v16, $v16, $v12, e(6)
+    vadd $v17, $v17, $v13, e(6)
+    vadd $v18, $v18, $v14, e(6)
+    vadd $v15, $v15, $v11, e(7)
+    vadd $v16, $v16, $v12, e(7)
+    vadd $v17, $v17, $v13, e(7)
+    vadd $v18, $v18, $v14, e(7)
 
-    # --- F: master volume ---------------------------------------------
-    sh a0, %lo(STG_A + 0)
-    sh a1, %lo(STG_A + 2)
-    lh t1, %lo(DSP + RSPDSP_MVOLL)
-    sh t1, %lo(STG_B + 0)
-    lh t1, %lo(DSP + RSPDSP_MVOLR)
-    jal Mul_AB
-    sh t1, %lo(STG_B + 2)
-    jal Prod
-    li t4, 0
-    jal Clamp_t1
-    sra t1, t1, 7
-    move a0, t1
-    jal Prod
-    li t4, 2
-    jal Clamp_t1
-    sra t1, t1, 7
-    move a1, t1
+    # --- F: master volume (clamped by VMADH) -----------------------------
+    li t1, %lo(DSP + RSPDSP_SC_U)
+    lqv $v20, 0x00, t1
+    lqv $v21, 0x10, t1              # SC_C
+    vmudm $v22, $v15, $v20, e(0)
+    vmadh $v22, $v15, $v21, e(0)    # total L (all lanes)
+    vmudm $v23, $v16, $v20, e(1)
+    vmadh $v23, $v16, $v21, e(1)    # total R
 
     # --- G: echo -------------------------------------------------------
     jal Echo
@@ -480,56 +501,6 @@ SAVE_RA3:   .word 0
 LOG_PTR:    .word 0
 LOG_LEFT:   .word 0
     .text
-
-# STG_HI/STG_MD = 32-bit products of STG_A and STG_B (lanes).
-Mul_AB:
-    li t1, %lo(STG_A)
-    lqv $v01, 0x00, t1
-    lqv $v02, 0x10, t1              # STG_B
-    vmudh $v03, $v01, $v02
-    vsar $v04, COP2_ACC_HI
-    vsar $v05, COP2_ACC_MD
-    sqv $v04, 0x20, t1              # STG_HI
-    jr ra
-    sqv $v05, 0x30, t1              # STG_MD
-
-# t1 = 32-bit product in lane at byte offset t4 of STG_HI/STG_MD.
-Prod:
-    lh t1, %lo(STG_HI)(t4)
-    lhu t3, %lo(STG_MD)(t4)
-    sll t1, t1, 16
-    jr ra
-    or t1, t1, t3
-
-# Echo helper: t1 = clamp16(base + (product(t4) >> 7)); base is a0, a1 or
-# a2 for lanes 0, 2 and 4/6.
-Prod_Clamp7:
-    lh t1, %lo(STG_HI)(t4)
-    lhu t3, %lo(STG_MD)(t4)
-    sll t1, t1, 16
-    or t1, t1, t3
-    sra t1, t1, 7
-    move t3, a2
-    bnez t4, 1f
-    nop
-    move t3, a0
-1:  li t5, 2
-    bne t4, t5, 2f
-    nop
-    move t3, a1
-2:  addu t1, t1, t3
-    # fall through
-
-# Saturate t1 to int16 (uses t6, t7).
-Clamp_t1:
-    sra t6, t1, 15
-    sra t7, t1, 31
-    beq t6, t7, 1f
-    nop
-    li t1, 32767
-    xor t1, t1, t7
-1:  jr ra
-    nop
 
 # Write OUTBUF (fp samples) to P_OUT and advance it.
 Out_Flush:
@@ -635,26 +606,37 @@ Brr_block:
     andi a0, a0, 0xffff
     sh a0, %lo(DSP + RSPDSP_V_DECOFF)(t4)
     lbu t1, 0(v0)                   # header
-    srl a1, t1, 4                   # shift
-    srl a3, t1, 2
-    andi a3, a3, 3                  # filter
+    # Shift as one arithmetic right shift of the nibble placed at bits
+    # 31..28: (n << shift) >> 1 == (n << 28) >> (29 - shift). Invalid
+    # shifts (13-15) keep only the sign: (n << 28) >> 31 << 11.
+    srl a1, t1, 4
+    li t3, 29
+    subu a1, t3, a1
+    sltiu t3, t1, 0xd0
+    bnez t3, 1f
+    move a0, zero                   # post-shift
+    li a1, 31
+    li a0, 11
+1:  srl t3, t1, 2
+    andi t3, t3, 3
+    sll t3, t3, 2
+    lw a3, %lo(BRR_FILTERS)(t3)     # filter routine for this block
     andi t1, t1, 3
     sh t1, %lo(DSP + RSPDSP_V_PREVFLAGS)(t4)
     lh t8, %lo(DSP + RSPDSP_V_OLD)(t4)
     lh t9, %lo(DSP + RSPDSP_V_OLDER)(t4)
     lw t6, %lo(BRR_DEC)
     addiu t6, t6, %lo(DSP + RSPDSP_DECODE + 6)   # output: sample 3
-    li t7, 16                        # nibbles left
+    li t7, 8                         # bytes left
 Brr_byte:
     lbu t1, 1(v0)
     addiu v0, v0, 1
-    srl s0, t1, 4                    # high nibble first
-    jal Brr_Nibble
-    nop
-    andi s0, t1, 0x0f
-    jal Brr_Nibble
-    nop
-    addiu t7, t7, -2
+    andi s0, t1, 0xf0
+    sll s0, s0, 24                   # high nibble first
+    BRR_NIBBLE
+    sll s0, t1, 28
+    BRR_NIBBLE
+    addiu t7, t7, -1
     bnez t7, Brr_byte
     nop
     lw t4, %lo(BRR_T4)
@@ -665,71 +647,49 @@ Brr_byte:
     jr ra
     nop
 
-# One nibble s0 (0..15): shift a1, filter a3, old t8, older t9; stores the
-# doubled result at t6 and advances it. Keeps t1.
-Brr_Nibble:
-    sll s0, s0, 28
-    sra s0, s0, 28                   # sign-extend 4 bits
-    sltiu t3, a1, 13
-    beqz t3, 1f
+# Filters (s0 += prediction from old t8, older t9); called with jalr.
+Brr_F0:
+    jr ra
     nop
-    sllv s0, s0, a1
-    b 2f
-    sra s0, s0, 1
-1:  li t3, ~0x7ff
-    and s0, s0, t3
-2:  beqz a3, 5f
-    li t3, 1
-    beq a3, t3, 3f
-    li t3, 2
-    beq a3, t3, 4f
-    nop
-    # filter 3: s += 2*old + ((13 * -old) >> 6) - older + ((3 * older) >> 4)
-    subu t3, zero, t8                # -old
-    sll t5, t3, 3
-    sll s4, t3, 2
-    addu t5, t5, s4
-    addu t5, t5, t3                  # 13 * -old
-    sra t5, t5, 6
-    sll s4, t8, 1
-    addu t5, t5, s4
-    subu t5, t5, t9
-    sll s4, t9, 1
-    addu s4, s4, t9                  # 3 * older
-    sra s4, s4, 4
-    addu t5, t5, s4
-    b 5f
-    addu s0, s0, t5
-3:  # filter 1: s += old + (-old >> 4)
+Brr_F1:                              # s += old + (-old >> 4)
     subu t3, zero, t8
     sra t3, t3, 4
     addu t3, t3, t8
-    b 5f
+    jr ra
     addu s0, s0, t3
-4:  # filter 2: s += 2*old + ((3 * -old) >> 5) - older + (older >> 4)
+Brr_F2:                              # s += 2*old + ((3 * -old) >> 5) - older + (older >> 4)
     subu t3, zero, t8
     sll t5, t3, 1
-    addu t5, t5, t3                  # 3 * -old
+    addu t5, t5, t3
     sra t5, t5, 5
     sll s4, t8, 1
     addu t5, t5, s4
     subu t5, t5, t9
     sra s4, t9, 4
     addu t5, t5, s4
-    addu s0, s0, t5
-5:  CLAMP16 s0, t3, t5
-    sll s0, s0, 17
-    sra s0, s0, 17                   # clip to 15 bits
-    move t9, t8
-    move t8, s0
-    sll t3, s0, 1                    # stored doubled
-    sh t3, 0(t6)
     jr ra
-    addiu t6, t6, 2
+    addu s0, s0, t5
+Brr_F3:                              # s += 2*old + ((13 * -old) >> 6) - older + ((3 * older) >> 4)
+    subu t3, zero, t8
+    sll t5, t3, 3
+    sll s4, t3, 2
+    addu t5, t5, s4
+    addu t5, t5, t3
+    sra t5, t5, 6
+    sll s4, t8, 1
+    addu t5, t5, s4
+    subu t5, t5, t9
+    sll s4, t9, 1
+    addu s4, s4, t9
+    sra s4, s4, 4
+    addu t5, t5, s4
+    jr ra
+    addu s0, s0, t5
 
     .data
     .align 2
 BRR_DEC:    .word 0
+BRR_FILTERS: .word Brr_F0, Brr_F1, Brr_F2, Brr_F3
 BRR_PF:     .word 0
 BRR_T4:     .word 0
     .text
@@ -914,13 +874,11 @@ Env_store:
     nop
 
 ########################################################################
-# Echo (dsp_handleEcho). In: a0/a1 totals, a3/v0 echo input.
-# Out: a0/a1 totals with echo.
+# Echo (dsp_handleEcho). In: $v22/$v23 totals after master volume, $v17/
+# $v18 echo input (all lanes). Out: a0/a1 totals with echo.
 ########################################################################
 Echo:
     sw ra, %lo(SAVE_RA2)
-    sw a3, %lo(ECHO_INL)
-    sw v0, %lo(ECHO_INR)
     lhu t1, %lo(DSP + RSPDSP_ECHOINDEX)
     lhu t3, %lo(DSP + RSPDSP_ECHOADR)
     sll t1, t1, 2
@@ -939,7 +897,7 @@ Echo:
     addiu v1, t1, %lo(SCR_ECHO)      # v1 -> 4 echo bytes
     lhu t6, %lo(DSP + RSPDSP_FIRINDEX)
     sll t6, t6, 1
-    # firL[fi] = (int16)(b0 | b1 << 8) >> 1, kept twice for rotation
+    # fir[fi] = (int16)(b0 | b1 << 8) >> 1, kept twice for rotation
     lbu t1, 0(v1)
     lbu t3, 1(v1)
     sll t3, t3, 8
@@ -956,69 +914,49 @@ Echo:
     sra t1, t1, 17
     sh t1, %lo(DSP + RSPDSP_FIR_R)(t6)
     sh t1, %lo(DSP + RSPDSP_FIR_R + 16)(t6)
-    # rotated history: lane i = fir[(fi + i + 1) & 7]
-    addiu t6, t6, 2
-    li t7, 0
-1:  lh t1, %lo(DSP + RSPDSP_FIR_L)(t6)
-    sh t1, %lo(STG_A)(t7)
-    lh t1, %lo(DSP + RSPDSP_FIR_R)(t6)
-    sh t1, %lo(STG_T1)(t7)
-    addiu t6, t6, 2
-    addiu t7, t7, 2
-    sltiu t1, t7, 16
-    bnez t1, 1b
-    nop
-    li t1, %lo(DSP + RSPDSP_FIR_VALS)
-    lqv $v02, 0x00, t1
-    li t1, %lo(STG_A)
-    lqv $v01, 0x00, t1
-    vmudh $v03, $v01, $v02
-    vsar $v04, COP2_ACC_HI
-    vsar $v05, COP2_ACC_MD
-    li t1, %lo(STG_HI)
-    sqv $v04, 0x00, t1
-    sqv $v05, 0x10, t1               # STG_MD
-    li t1, %lo(STG_T1)
-    lqv $v01, 0x00, t1
-    vmudh $v03, $v01, $v02
-    vsar $v04, COP2_ACC_HI
-    vsar $v05, COP2_ACC_MD
-    li t1, %lo(STG_HI2)
-    sqv $v04, 0x00, t1
-    sqv $v05, 0x10, t1               # STG_MD2
-    jal Fir_Sum
+    # Lane i = fir[(fi + i + 1) & 7]: a misaligned load of the doubled history.
+    addiu t1, t6, %lo(DSP + RSPDSP_FIR_L + 2)
+    lqv $v24, 0x00, t1
+    lrv $v24, 0x10, t1
+    addiu t1, t6, %lo(DSP + RSPDSP_FIR_R + 2)
+    lqv $v25, 0x00, t1
+    lrv $v25, 0x10, t1
+    li t1, %lo(DSP + RSPDSP_FIR_U)
+    lqv $v26, 0x00, t1
+    lqv $v27, 0x10, t1               # FIR_C
+    vmudm $v28, $v24, $v26
+    vmadh $v28, $v24, $v27
+    vsar $v28, COP2_ACC_MD           # exact low 16 bits of (fir * coef) >> 6
+    vmudm $v29, $v25, $v26
+    vmadh $v29, $v25, $v27
+    vsar $v29, COP2_ACC_MD
     li t9, %lo(STG_HI)
-    move a2, t1                      # sumL
+    sqv $v28, 0x00, t9
     jal Fir_Sum
-    li t9, %lo(STG_HI2)
-    move t8, t1                      # sumR
-    # echo volumes and feedback: [sumL*evolL, sumR*evolR, sumL*fb, sumR*fb]
-    sh a2, %lo(STG_A + 0)
-    sh t8, %lo(STG_A + 2)
-    sh a2, %lo(STG_A + 4)
-    sh t8, %lo(STG_A + 6)
-    lh t1, %lo(DSP + RSPDSP_EVOLL)
-    sh t1, %lo(STG_B + 0)
-    lh t1, %lo(DSP + RSPDSP_EVOLR)
-    sh t1, %lo(STG_B + 2)
-    lh t1, %lo(DSP + RSPDSP_FEEDBACK)
-    sh t1, %lo(STG_B + 4)
-    jal Mul_AB
-    sh t1, %lo(STG_B + 6)
-    jal Prod_Clamp7
-    li t4, 0
-    move a0, t1
-    jal Prod_Clamp7
-    li t4, 2
-    move a1, t1
-    lw a2, %lo(ECHO_INL)
-    jal Prod_Clamp7
-    li t4, 4
-    move a3, t1
-    lw a2, %lo(ECHO_INR)
-    jal Prod_Clamp7
-    li t4, 6
-    move v0, t1
+    sqv $v29, 0x10, t9
+    move a2, t1                      # sum L
+    jal Fir_Sum
+    addiu t9, t9, 16                 # sum R in t1
+    mtc2 a2, $v19.e0
+    mtc2 t1, $v19.e1
+    # clamp(total + (sum * evol) >> 7) in lanes 2/3,
+    # clamp(echo in + (sum * feedback) >> 7) in lanes 4/5.
+    vmudn $v04, $v20, $v19, e(0)
+    vmadh $v04, $v21, $v19, e(0)
+    vmadh $v04, $v22, $v30, e(7)     # $v30 lane 7 = 1
+    vmudn $v05, $v20, $v19, e(0)
+    vmadh $v05, $v21, $v19, e(0)
+    vmadh $v05, $v17, $v30, e(7)
+    vmudn $v06, $v20, $v19, e(1)
+    vmadh $v06, $v21, $v19, e(1)
+    vmadh $v06, $v23, $v30, e(7)
+    vmudn $v07, $v20, $v19, e(1)
+    vmadh $v07, $v21, $v19, e(1)
+    vmadh $v07, $v18, $v30, e(7)
+    mfc2 a0, $v04.e2
+    mfc2 a1, $v06.e3
+    mfc2 a3, $v05.e4
+    mfc2 v0, $v07.e5
     lhu t1, %lo(DSP + RSPDSP_ECHOWRITES)
     beqz t1, 2f
     nop
@@ -1063,31 +1001,26 @@ Echo:
     jr ra
     nop
 
-# FIR sum from products at t9 (HI) / t9+16 (MD): taps 0-6 summed, cast to
-# int16, tap 7 cast to int16 and added, clamped, LSB cleared. Result t1.
+# FIR sum of 8 exact 16-bit taps at t9: (int16)(taps 0-6) + (int16) tap 7,
+# clamped, LSB cleared. Result t1.
 Fir_Sum:
-    move t3, zero                    # sum
-    move t4, zero
-1:  addu t5, t9, t4
-    lh t6, 0(t5)
-    lhu t7, 16(t5)
-    sll t6, t6, 16
-    or t6, t6, t7
-    sra t6, t6, 6
-    addiu t4, t4, 2
-    sltiu t7, t4, 14
-    bnez t7, 1b
-    addu t3, t3, t6
-    sll t3, t3, 16
-    sra t3, t3, 16                   # (int16) sum of taps 0-6
-    lh t6, 14(t9)
-    lhu t7, 30(t9)
-    sll t6, t6, 16
-    or t6, t6, t7
-    sra t6, t6, 6
-    sll t6, t6, 16
-    sra t6, t6, 16                   # (int16) tap 7
-    addu t1, t3, t6
+    lh t1, 0(t9)
+    lh t3, 2(t9)
+    addu t1, t1, t3
+    lh t3, 4(t9)
+    addu t1, t1, t3
+    lh t3, 6(t9)
+    addu t1, t1, t3
+    lh t3, 8(t9)
+    addu t1, t1, t3
+    lh t3, 10(t9)
+    addu t1, t1, t3
+    lh t3, 12(t9)
+    addu t1, t1, t3
+    sll t1, t1, 16
+    sra t1, t1, 16
+    lh t3, 14(t9)
+    addu t1, t1, t3
     CLAMP16 t1, t6, t7
     li t3, ~1
     jr ra
@@ -1096,6 +1029,5 @@ Fir_Sum:
     .data
     .align 2
 ECHO_ADR:   .word 0
-ECHO_INL:   .word 0
-ECHO_INR:   .word 0
+A_MASK:     .word 0
     .text
