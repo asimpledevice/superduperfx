@@ -3,527 +3,525 @@
   *(.boot)
   . = ALIGN(16);
   . = MAX(., 0x3c00);
-  *(.text._interp_run_core)
-  . = MAX(., 0xa0c0);
   *(.text.flush_run.part.0)
-  . = MAX(., 0xa7e0);
-  *(.text.expand_obj)
-  . = MAX(., 0xada0);
-  *(.text.dsp_cycle)
-  . = MAX(., 0xc2a0);
-  *(.text.apu_runCycles_native)
-  . = MAX(., 0xc6e0);
-  *(.text.bridge_bus_read)
-  . = MAX(., 0xd620);
-  *(.text.interp816_runOpcode)
-  . = MAX(., 0xe760);
+  . = MAX(., 0x42c0);
+  *(.text._interp_run_core)
+  . = MAX(., 0x9de0);
   *(.text.spc_runOpcode)
-  . = MAX(., 0x156e0);
-  *(.text.PpuDrawVisibleLine)
-  . = MAX(., 0x1af20);
+  . = MAX(., 0xd8e0);
   *(.text.n64_ppu_build_line)
-  . = MAX(., 0x1dc80);
-  *(.text.ppu_write)
-  . = MAX(., 0x1f9e0);
-  *(.text.dma_doDma.part.0)
-  . = MAX(., 0x207c0);
+  . = MAX(., 0xe880);
+  *(.text.bridge_bus_read)
+  . = MAX(., 0xe920);
   *(.text.get_tlut)
-  . = MAX(., 0x23240);
+  . = MAX(., 0xefc0);
+  *(.text.dma_doDma.part.0)
+  . = MAX(., 0xf220);
+  *(.text.interp816_runOpcode)
+  . = MAX(., 0x118c0);
+  *(.text.apu_runCycles_native)
+  . = MAX(., 0x12ea0);
+  *(.text.expand_obj)
+  . = MAX(., 0x17400);
   *(.text.interp816_doOpcode)
-  . = MAX(., 0x26920);
-  *(.text.dsp_handleEcho.constprop.0)
-  . = MAX(., 0x26e60);
+  . = MAX(., 0x1b4c0);
+  *(.text.ppu_write)
+  . = MAX(., 0x1bf20);
+  *(.text.bridge_timing_bus.part.0)
+  . = MAX(., 0x1c220);
   *(.text.apply_mask)
-  . = MAX(., 0x27100);
-  *(.text.dma_transferByte.part.0)
-  . = MAX(., 0x278a0);
-  *(.text.apu_runToGuestCycle)
-  . = MAX(., 0x27d80);
-  *(.text.bridge_apu_flush)
-  . = MAX(., 0x28480);
-  *(.text.apu_native_timer)
-  . = MAX(., 0x28560);
-  *(.text.cpu_region_speed)
-  . = MAX(., 0x28880);
-  *(.text._cpu_dispatch_find)
-  . = MAX(., 0x289c0);
-  *(.text.cpu_write8)
-  . = MAX(., 0x29360);
-  *(.text.bridge_bus_write)
-  . = MAX(., 0x29c00);
-  *(.text.cpu_read8)
-  . = MAX(., 0x2a220);
-  *(.text.math_color)
-  . = MAX(., 0x2a8e0);
-  *(.text.snes_catchupApu)
-  . = MAX(., 0x2aca0);
-  *(.text.rtl_sync_apu_to_cpu_locked)
-  . = MAX(., 0x2af20);
-  *(.text.rtl_apu_guest_cycle)
-  . = MAX(., 0x2b340);
-  *(.text.spc_readOpcodeWord)
-  . = MAX(., 0x2b8e0);
-  *(.text.RtlRenderAudio)
-  . = MAX(., 0x2c0e0);
-  *(.text.snes_advance_beam)
-  . = MAX(., 0x2ce20);
-  *(.text.window_bit)
-  . = MAX(., 0x2d500);
-  *(.text.apu_cpuRead)
-  . = MAX(., 0x2db20);
-  *(.text.data_cache_hit_writeback)
-  . = MAX(., 0x2e140);
-  *(.text.ppu_rasterRecord)
-  . = MAX(., 0x2e680);
-  *(.text.snes_writeBBus)
-  . = MAX(., 0x2e960);
-  *(.text.startup.main)
-  . = MAX(., 0x2f620);
+  . = MAX(., 0x1c360);
   *(.text.dma_doHdma)
-  . = MAX(., 0x2fa20);
+  . = MAX(., 0x1cec0);
+  *(.text.dma_transferByte.part.0)
+  . = MAX(., 0x1f720);
+  *(.text.PpuDrawVisibleLine)
+  . = MAX(., 0x24f80);
+  *(.text.cpu_read8)
+  . = MAX(., 0x251e0);
+  *(.text.window_bit)
+  . = MAX(., 0x25480);
+  *(.text.apu_native_timer)
+  . = MAX(., 0x25ca0);
+  *(.text.cpu_write8)
+  . = MAX(., 0x264a0);
   *(.text.dma_cycle)
-  . = MAX(., 0x2fc00);
-  *(.text.dsp_handleGain)
-  . = MAX(., 0x305e0);
-  *(.text.snes_sync_master_clock)
-  . = MAX(., 0x307a0);
-  *(.text.audio_trace_set_producer)
-  . = MAX(., 0x30e60);
-  *(.text.n64_ppu_draw_and_show)
-  . = MAX(., 0x31e00);
-  *(.text.cart_getRomPtr.part.0)
-  . = MAX(., 0x32180);
+  . = MAX(., 0x267e0);
+  *(.text.math_color)
+  . = MAX(., 0x26ac0);
+  *(.text._cpu_dispatch_find)
+  . = MAX(., 0x27140);
   *(.text.snes_writeReg)
-  . = MAX(., 0x32a60);
-  *(.text.ppu_rasterApplyLine)
-  . = MAX(., 0x32fa0);
-  *(.text.RtlGuestScopeCheckpoint)
-  . = MAX(., 0x331e0);
-  *(.text.interp816_lda)
-  . = MAX(., 0x33480);
+  . = MAX(., 0x27b20);
+  *(.text.apu_dspLogRam)
+  . = MAX(., 0x283e0);
+  *(.text.snesdsp_rsp_apu_launch)
+  . = MAX(., 0x28be0);
+  *(.text.snes_advance_beam)
+  . = MAX(., 0x29a80);
+  *(.text.spc_readOpcodeWord)
+  . = MAX(., 0x2a120);
+  *(.text.bridge_apu_flush)
+  . = MAX(., 0x2a500);
+  *(.text.ppu_rasterRecord)
+  . = MAX(., 0x2a640);
+  *(.text.data_cache_hit_writeback)
+  . = MAX(., 0x2a6a0);
+  *(.text.RtlRenderAudio)
+  . = MAX(., 0x2b180);
   *(.text.PpuRunLineJob)
-  . = MAX(., 0x33a60);
-  *(.text.rtl_render_wait)
-  . = MAX(., 0x33f00);
-  *(.text.interp_edge_note)
-  . = MAX(., 0x344c0);
-  *(.text.__rdpq_write8)
-  . = MAX(., 0x34ba0);
+  . = MAX(., 0x2b8e0);
+  *(.text.bridge_bus_write)
+  . = MAX(., 0x2bc40);
+  *(.text.decode.constprop.0)
+  . = MAX(., 0x2c3c0);
   *(.text.cpu_dispatch_inline_arg_bytes)
-  . = MAX(., 0x352c0);
-  *(.text.WatchdogCheck)
-  . = MAX(., 0x355a0);
-  *(.text._cpu_dispatch_lookup)
-  . = MAX(., 0x357e0);
-  *(.text.interp816_adrAbx)
-  . = MAX(., 0x36080);
-  *(.text.audio_trace_on_guest_sync)
-  . = MAX(., 0x36440);
-  *(.text.interp_bridge_lle_master_deadline_reached)
-  . = MAX(., 0x36ca0);
-  *(.text.rdpq_tex_upload_sub)
-  . = MAX(., 0x37540);
-  *(.text._ram_guard_blocks)
-  . = MAX(., 0x37c60);
-  *(.text.RecompStackPush)
-  . = MAX(., 0x37f40);
-  *(.text.__rdpq_autosync_change)
-  . = MAX(., 0x387e0);
-  *(.text.WriteReg)
-  . = MAX(., 0x38d20);
-  *(.text.dispatch_has_rom_mirror)
-  . = MAX(., 0x39480);
-  *(.text.RomPtr)
-  . = MAX(., 0x397c0);
-  *(.text.snes_refresh_charge)
-  . = MAX(., 0x398c0);
-  *(.text.cpu_read16)
-  . = MAX(., 0x3a3a0);
-  *(.text.snes_read)
-  . = MAX(., 0x3a4c0);
-  *(.text.interp816_readWord)
-  . = MAX(., 0x3a820);
-  *(.text._dispatch_log_record)
-  . = MAX(., 0x3ac40);
-  *(.text.snes_master_clocks_to_next_beam_event)
-  . = MAX(., 0x3b200);
-  *(.text.cpu_write16)
-  . = MAX(., 0x3bac0);
-  *(.text.n64_ppu_build_begin)
-  . = MAX(., 0x3bf80);
-  *(.text.interp816_adrAbs)
-  . = MAX(., 0x3c380);
+  . = MAX(., 0x2ca00);
+  *(.text.rtl_sync_apu_to_cpu_locked)
+  . = MAX(., 0x2cd40);
+  *(.text.snes_sync_master_clock)
+  . = MAX(., 0x2d380);
+  *(.text.snes_catchupApu)
+  . = MAX(., 0x2d560);
   *(.text.cart_note_cpu_bus)
-  . = MAX(., 0x3cb80);
-  *(.text.interp816_pullWord)
-  . = MAX(., 0x3cca0);
-  *(.text.interp816_adrDp)
-  . = MAX(., 0x3cf40);
-  *(.text.__rdpq_write8_syncchange)
-  . = MAX(., 0x3d3e0);
-  *(.text.draw_plane)
-  . = MAX(., 0x3dbc0);
-  *(.text.cpu_dispatch_has_entry)
-  . = MAX(., 0x3dea0);
-  *(.text.interp816_readOpcodeWord)
-  . = MAX(., 0x3e6a0);
-  *(.text.WsShadowOnVramWrite)
-  . = MAX(., 0x3eaa0);
+  . = MAX(., 0x2d580);
+  *(.text.n64_ppu_draw_and_show)
+  . = MAX(., 0x2e200);
+  *(.text.rtl_render_wait)
+  . = MAX(., 0x2e9e0);
+  *(.text.snes_writeBBus)
+  . = MAX(., 0x2ede0);
+  *(.text.host_main)
+  . = MAX(., 0x2fc80);
+  *(.text.snes_read)
+  . = MAX(., 0x30080);
+  *(.text.apu_runToGuestCycle)
+  . = MAX(., 0x301e0);
+  *(.text.__rdpq_write8)
+  . = MAX(., 0x30320);
+  *(.text.apu_cpuRead)
+  . = MAX(., 0x30b80);
+  *(.text.RtlGuestScopeCheckpoint)
+  . = MAX(., 0x311a0);
+  *(.text.interp_edge_note)
+  . = MAX(., 0x312a0);
   *(.text.rdpq_set_tile)
-  . = MAX(., 0x3f120);
-  *(.text.tier2_capture_enabled)
-  . = MAX(., 0x3f2c0);
-  *(.text.interp816_sta)
-  . = MAX(., 0x3f860);
-  *(.text.ppu_getVramRemap)
-  . = MAX(., 0x3f980);
-  *(.text.interp816_pushWord)
-  . = MAX(., 0x40120);
+  . = MAX(., 0x31560);
   *(.text.texload_set_rect)
-  . = MAX(., 0x40780);
-  *(.text.cpu_take_tailcall_return_context)
-  . = MAX(., 0x40940);
+  . = MAX(., 0x31be0);
+  *(.text._cpu_dispatch_lookup)
+  . = MAX(., 0x31ee0);
+  *(.text.WatchdogCheck)
+  . = MAX(., 0x325c0);
+  *(.text.cart_getRomPtr.part.0)
+  . = MAX(., 0x32dc0);
+  *(.text.dispatch_has_rom_mirror)
+  . = MAX(., 0x32e80);
+  *(.text.cpu_read16)
+  . = MAX(., 0x33360);
+  *(.text.__rdpq_autosync_change)
+  . = MAX(., 0x33900);
+  *(.text.snesdsp_rsp_apu_join)
+  . = MAX(., 0x341e0);
+  *(.text.spc_adrDp)
+  . = MAX(., 0x34520);
+  *(.text.spc_mov)
+  . = MAX(., 0x34600);
   *(.text.texload_tile)
-  . = MAX(., 0x40e60);
-  *(.text.rtl_apu_frame_timeline_active)
-  . = MAX(., 0x411e0);
-  *(.text.dma_startDma)
-  . = MAX(., 0x41d40);
-  *(.text.spc_adrDpx)
-  . = MAX(., 0x42500);
+  . = MAX(., 0x34ce0);
+  *(.text.interp816_lda)
+  . = MAX(., 0x35420);
+  *(.text.interp_bridge_lle_master_deadline_reached)
+  . = MAX(., 0x35680);
+  *(.text._ram_guard_blocks)
+  . = MAX(., 0x35f80);
+  *(.text._dispatch_log_record)
+  . = MAX(., 0x36720);
+  *(.text.spc_movy)
+  . = MAX(., 0x36c60);
+  *(.text.ppu_rasterApplyLine)
+  . = MAX(., 0x36d80);
   *(.text.__rdpq_texture_rectangle)
-  . = MAX(., 0x426c0);
-  *(.text.dsp_peek)
-  . = MAX(., 0x42780);
-  *(.text.rtl_apu_extended_frame_timing)
-  . = MAX(., 0x42900);
-  *(.text.PpuDecodeOamX)
-  . = MAX(., 0x42b80);
-  *(.text.graphics_draw_character)
-  . = MAX(., 0x43440);
-  *(.text.cpu_sram_offset)
-  . = MAX(., 0x43c80);
-  *(.text.interp816_ora)
-  . = MAX(., 0x44100);
-  *(.text.spc_lsr)
-  . = MAX(., 0x44980);
-  *(.text.RecompStackPop)
-  . = MAX(., 0x45080);
-  *(.text.ppu_rasterTakeHdmaen)
-  . = MAX(., 0x45260);
-  *(.text.interp816_adrAby)
-  . = MAX(., 0x459a0);
+  . = MAX(., 0x37580);
+  *(.text.snesdsp_rsp_unpack)
+  . = MAX(., 0x37dc0);
+  *(.text.snes_refresh_charge)
+  . = MAX(., 0x37fc0);
+  *(.text.cpu_write16)
+  . = MAX(., 0x38580);
+  *(.text.RomPtr)
+  . = MAX(., 0x387e0);
+  *(.text.rdpq_tex_upload_sub)
+  . = MAX(., 0x39040);
+  *(.text.RecompStackPush)
+  . = MAX(., 0x397c0);
+  *(.text.spc_adrDpx)
+  . = MAX(., 0x39fa0);
+  *(.text.interp816_pullWord)
+  . = MAX(., 0x3a2e0);
+  *(.text.n64_ppu_build_begin)
+  . = MAX(., 0x3ac40);
+  *(.text.interp816_adrDp)
+  . = MAX(., 0x3b100);
+  *(.text.interp816_adrAbx)
+  . = MAX(., 0x3b260);
+  *(.text.interp_bridge_lle_deadline_pause)
+  . = MAX(., 0x3b2a0);
+  *(.text.WsShadowOnVramWrite)
+  . = MAX(., 0x3b740);
   *(.text.cart_getRomPtr)
-  . = MAX(., 0x460a0);
-  *(.text.__rdpq_fixup_write8_syncchange)
-  . = MAX(., 0x462c0);
-  *(.text.PpuWidescreenHudOamSlot)
-  . = MAX(., 0x46420);
-  *(.text.interp816_cmp)
-  . = MAX(., 0x46560);
-  *(.text.interp816_writeWord)
-  . = MAX(., 0x46800);
-  *(.text.tier2_record)
-  . = MAX(., 0x46980);
-  *(.text.bridge_bounce_flush_thresh)
-  . = MAX(., 0x46dc0);
-  *(.text.interp816_ldy)
-  . = MAX(., 0x474e0);
-  *(.text.interp816_sbc)
-  . = MAX(., 0x47b80);
-  *(.text.interp816_and)
-  . = MAX(., 0x47d00);
-  *(.text.snes_dma_write)
-  . = MAX(., 0x483e0);
-  *(.text.apu_cpuWrite)
-  . = MAX(., 0x487e0);
-  *(.text.__rdpq_texture_rectangle_offline)
-  . = MAX(., 0x48ee0);
-  *(.text.enable_interrupts)
-  . = MAX(., 0x49000);
-  *(.text.interp816_setFlags)
-  . = MAX(., 0x49200);
-  *(.text.__rsp_check_assert)
-  . = MAX(., 0x49500);
-  *(.text.rspq_syncpoint_wait)
-  . = MAX(., 0x49840);
-  *(.text.surface_make_sub)
-  . = MAX(., 0x4a000);
-  *(.text.spc_adc)
-  . = MAX(., 0x4a5c0);
-  *(.text.bridge_bus_read_word)
-  . = MAX(., 0x4acc0);
-  *(.text.spc_adrDpWord)
-  . = MAX(., 0x4b460);
-  *(.text.interp_bridge_run_ex2)
-  . = MAX(., 0x4b9a0);
-  *(.text.interp816_ldx)
-  . = MAX(., 0x4bfa0);
-  *(.text.RtlApuUnlock)
-  . = MAX(., 0x4c1c0);
+  . = MAX(., 0x3b780);
+  *(.text.draw_plane)
+  . = MAX(., 0x3b960);
   *(.text.tex_loader_load)
-  . = MAX(., 0x4cac0);
-  *(.text.interp816_adc)
-  . = MAX(., 0x4d260);
-  *(.text.interp816_cpy)
-  . = MAX(., 0x4dac0);
-  *(.text.__rspq_deferred_poll)
-  . = MAX(., 0x4e1e0);
-  *(.text.spc_asl)
-  . = MAX(., 0x4e480);
-  *(.text.interp816_adrIly)
-  . = MAX(., 0x4eb60);
-  *(.text.tier2_discover)
-  . = MAX(., 0x4f420);
-  *(.text.rspq_next_buffer)
-  . = MAX(., 0x4f980);
-  *(.text.rdpq_set_texture_image)
-  . = MAX(., 0x4ff40);
-  *(.text.spc_movs)
-  . = MAX(., 0x50300);
-  *(.text.spc_adrDpImm)
-  . = MAX(., 0x50a80);
-  *(.text.spc_dec)
-  . = MAX(., 0x50f60);
-  *(.text.PpuAdjustWidescreenHudOamX)
-  . = MAX(., 0x51260);
-  *(.text.__rdpq_write8_syncchangeuse)
-  . = MAX(., 0x51980);
-  *(.text.bridge_bus_write_word)
-  . = MAX(., 0x51fc0);
-  *(.text.spc_cmp)
-  . = MAX(., 0x52100);
-  *(.text.__clip_blit)
-  . = MAX(., 0x522a0);
-  *(.text.spc_cmpx)
-  . = MAX(., 0x52ac0);
-  *(.text.interp816_dec)
-  . = MAX(., 0x52cc0);
-  *(.text.interp816_adrDpx)
-  . = MAX(., 0x53060);
-  *(.text.dsp_write)
-  . = MAX(., 0x53780);
-  *(.text.interp816_getFlags)
-  . = MAX(., 0x53800);
-  *(.text.rdpq_tex_upload)
-  . = MAX(., 0x53c80);
-  *(.text.spc_movsx)
-  . = MAX(., 0x541a0);
-  *(.text.cart_readLorom)
-  . = MAX(., 0x54460);
-  *(.text.apu_runCycles)
-  . = MAX(., 0x54c00);
-  *(.text.cpu_dispatch_pc_paired)
-  . = MAX(., 0x54f00);
-  *(.text.RtlRunFrame)
-  . = MAX(., 0x55f20);
-  *(.text.interp_bridge_lle_yield_unwind)
-  . = MAX(., 0x564a0);
-  *(.text.snes_mod_audio_mix)
-  . = MAX(., 0x56960);
-  *(.text.snes_beam_frame_driver_run_frame)
-  . = MAX(., 0x57460);
-  *(.text.WriteRegWord)
-  . = MAX(., 0x57960);
-  *(.text.spc_sbc)
-  . = MAX(., 0x581c0);
-  *(.text.ppu_rasterFieldBoundary)
-  . = MAX(., 0x58940);
-  *(.text.interp816_stx)
-  . = MAX(., 0x58c00);
-  *(.text.ppu_rasterRenderBegin)
-  . = MAX(., 0x58fe0);
-  *(.text.n64_platform_audio_pump)
-  . = MAX(., 0x595c0);
-  *(.text.joypad_auto_read)
-  . = MAX(., 0x59b60);
-  *(.text.spc_movsy)
-  . = MAX(., 0x59e80);
-  *(.text.ReadRegOpenBus)
-  . = MAX(., 0x5a200);
-  *(.text.interp816_cpx)
-  . = MAX(., 0x5a3c0);
-  *(.text.RtlGuestScopeActive)
-  . = MAX(., 0x5a5c0);
-  *(.text.spc_readWord)
-  . = MAX(., 0x5a6a0);
-  *(.text.spc_inc)
-  . = MAX(., 0x5a9c0);
-  *(.text.dma_initHdma)
-  . = MAX(., 0x5ab00);
-  *(.text.cpu_dbg_funcname)
-  . = MAX(., 0x5b2e0);
-  *(.text.joypad_inputs_from_n64_controller_read)
-  . = MAX(., 0x5b980);
-  *(.text.joypad_read_port.part.0)
-  . = MAX(., 0x5c120);
-  *(.text.RtlApuLock)
-  . = MAX(., 0x5c8a0);
-  *(.text.joypad_auto_read_reg_addr)
-  . = MAX(., 0x5cbc0);
-  *(.text.spc_adrIdx)
-  . = MAX(., 0x5cfe0);
-  *(.text.spc_cmpm)
-  . = MAX(., 0x5d660);
-  *(.text.spc_pullWord)
-  . = MAX(., 0x5d9e0);
-  *(.text.n64_ppu_build_end)
-  . = MAX(., 0x5dbc0);
-  *(.text.__retarget_lock_acquire_recursive)
-  . = MAX(., 0x5e0c0);
-  *(.text.run_interrupt)
-  . = MAX(., 0x5e320);
-  *(.text.interp816_inc)
-  . = MAX(., 0x5eb00);
-  *(.text.ppu_wlog_note_reg)
-  . = MAX(., 0x5ed40);
-  *(.text.joypad_latch)
-  . = MAX(., 0x5f5c0);
-  *(.text.RecompStackPushInterpreter)
-  . = MAX(., 0x5fbc0);
-  *(.text.get_ticks_us)
-  . = MAX(., 0x5ffc0);
-  *(.text.display_get)
-  . = MAX(., 0x60540);
-  *(.text.dsp_read)
-  . = MAX(., 0x60c60);
-  *(.text.ppu_rasterRenderEnd)
-  . = MAX(., 0x61000);
-  *(.text.cart_sync_coprocessors)
-  . = MAX(., 0x61660);
-  *(.text.sync_interp_to_cpu)
-  . = MAX(., 0x619e0);
-  *(.text.audio_trace_on_consume)
-  . = MAX(., 0x61ce0);
-  *(.text.resume_ring_note)
-  . = MAX(., 0x62000);
-  *(.text.sys_hw_memset16)
-  . = MAX(., 0x624e0);
-  *(.text.snes_readReg)
-  . = MAX(., 0x62740);
-  *(.text.WatchdogFrameStart)
-  . = MAX(., 0x62a20);
-  *(.text.acct_switch)
-  . = MAX(., 0x62cc0);
-  *(.text.rspq_flush_internal)
-  . = MAX(., 0x63340);
-  *(.text.cart_read)
-  . = MAX(., 0x63d40);
-  *(.text.__rdpq_fixup_mode4)
-  . = MAX(., 0x64540);
-  *(.text.ppudma_record_dma)
-  . = MAX(., 0x64660);
-  *(.text.interp816_bit)
-  . = MAX(., 0x64c00);
-  *(.text.graphics_draw_text)
-  . = MAX(., 0x65020);
+  . = MAX(., 0x3bea0);
+  *(.text.audio_trace_set_producer)
+  . = MAX(., 0x3c440);
+  *(.text.interp816_adrAbs)
+  . = MAX(., 0x3cbc0);
+  *(.text.cpu_dispatch_has_entry)
+  . = MAX(., 0x3cde0);
   *(.text.spc_pushWord)
-  . = MAX(., 0x652a0);
-  *(.text.snes_readBBus)
-  . = MAX(., 0x65a20);
-  *(.text.n64_platform_read_pad)
-  . = MAX(., 0x66300);
-  *(.text.apu_schedulePortWrite)
-  . = MAX(., 0x66520);
-  *(.text.__rdpq_set_scissor)
-  . = MAX(., 0x66640);
-  *(.text.__rdpq_fixup_mode3)
-  . = MAX(., 0x669c0);
-  *(.text.graphics_draw_box)
-  . = MAX(., 0x66dc0);
+  . = MAX(., 0x3cec0);
+  *(.text.dsp_peek)
+  . = MAX(., 0x3d0c0);
+  *(.text.snes_master_clocks_to_next_beam_event)
+  . = MAX(., 0x3d580);
+  *(.text.rtl_apu_guest_cycle)
+  . = MAX(., 0x3db40);
+  *(.text.spc_lsr)
+  . = MAX(., 0x3e280);
+  *(.text.apu_dspSyncFor)
+  . = MAX(., 0x3eba0);
+  *(.text.interp816_pushWord)
+  . = MAX(., 0x3ed20);
+  *(.text.ppu_getVramRemap)
+  . = MAX(., 0x3f480);
+  *(.text.WriteReg)
+  . = MAX(., 0x3f940);
+  *(.text.apu_cpuWrite)
+  . = MAX(., 0x3ff60);
+  *(.text.apu_runCycles)
+  . = MAX(., 0x3ff80);
+  *(.text.graphics_draw_character)
+  . = MAX(., 0x40ba0);
+  *(.text.spc_movs)
+  . = MAX(., 0x41340);
+  *(.text.__rspq_deferred_poll)
+  . = MAX(., 0x41560);
+  *(.text.snesdsp_rsp_pack)
+  . = MAX(., 0x420e0);
+  *(.text.cpu_sram_offset)
+  . = MAX(., 0x42420);
+  *(.text.interp816_sta)
+  . = MAX(., 0x42800);
+  *(.text.interp816_readWord)
+  . = MAX(., 0x42960);
+  *(.text.__rdpq_fixup_write8_syncchange)
+  . = MAX(., 0x42e40);
+  *(.text.RecompStackPop)
+  . = MAX(., 0x42f00);
+  *(.text.tier2_record)
+  . = MAX(., 0x43080);
+  *(.text.data_cache_hit_writeback_invalidate)
+  . = MAX(., 0x43120);
+  *(.text.dma_startDma)
+  . = MAX(., 0x436e0);
+  *(.text.ppu_rasterTakeHdmaen)
+  . = MAX(., 0x43cc0);
+  *(.text.audio_trace_on_guest_sync)
+  . = MAX(., 0x441a0);
+  *(.text.spc_adrDpWord)
+  . = MAX(., 0x442c0);
+  *(.text.cpu_take_tailcall_return_context)
+  . = MAX(., 0x445e0);
+  *(.text.__rsp_check_assert)
+  . = MAX(., 0x44c20);
+  *(.text.interp816_adrAby)
+  . = MAX(., 0x44ee0);
+  *(.text.pack_coefficients)
+  . = MAX(., 0x45680);
+  *(.text.interp816_cmp)
+  . = MAX(., 0x45d80);
+  *(.text.spc_pullWord)
+  . = MAX(., 0x46580);
+  *(.text.interp816_adc)
+  . = MAX(., 0x46920);
+  *(.text.spc_adc)
+  . = MAX(., 0x46a40);
+  *(.text.rdpq_tex_upload)
+  . = MAX(., 0x46a80);
+  *(.text.__rdpq_write8_syncchange)
+  . = MAX(., 0x46c00);
+  *(.text.apu_dspMarkDirEntry)
+  . = MAX(., 0x46d40);
+  *(.text.interp816_and)
+  . = MAX(., 0x46e60);
+  *(.text.surface_make_sub)
+  . = MAX(., 0x46f80);
+  *(.text.__rdpq_write8_syncchangeuse)
+  . = MAX(., 0x47020);
+  *(.text.interp816_ldx)
+  . = MAX(., 0x47820);
+  *(.text.spc_movx)
+  . = MAX(., 0x47920);
+  *(.text.enable_interrupts)
+  . = MAX(., 0x48020);
+  *(.text.snes_dma_write)
+  . = MAX(., 0x48420);
+  *(.text.PpuDecodeOamX)
+  . = MAX(., 0x48620);
+  *(.text.interp816_readOpcodeWord)
+  . = MAX(., 0x48880);
+  *(.text.cart_readLorom)
+  . = MAX(., 0x490a0);
+  *(.text.interp816_ora)
+  . = MAX(., 0x49260);
+  *(.text.spc_cmpx)
+  . = MAX(., 0x49640);
+  *(.text.interp_bridge_run_ex2)
+  . = MAX(., 0x49a40);
+  *(.text.rdpq_set_texture_image)
+  . = MAX(., 0x4a260);
+  *(.text.spc_movsx)
+  . = MAX(., 0x4a7c0);
+  *(.text.tier2_capture_enabled)
+  . = MAX(., 0x4aa60);
+  *(.text.tier2_discover)
+  . = MAX(., 0x4aec0);
+  *(.text.__rdpq_texture_rectangle_offline)
+  . = MAX(., 0x4b500);
+  *(.text.WriteRegWord)
+  . = MAX(., 0x4b980);
+  *(.text.interp816_cpy)
+  . = MAX(., 0x4bfa0);
+  *(.text.bridge_bus_read_word)
+  . = MAX(., 0x4c2e0);
+  *(.text.interp816_setFlags)
+  . = MAX(., 0x4c3c0);
+  *(.text.interp816_sbc)
+  . = MAX(., 0x4c880);
+  *(.text.spc_and)
+  . = MAX(., 0x4cf40);
+  *(.text.interp816_ldy)
+  . = MAX(., 0x4d740);
+  *(.text.cpu_dispatch_pc_paired)
+  . = MAX(., 0x4ddc0);
+  *(.text.emit_reg)
+  . = MAX(., 0x4eb60);
+  *(.text.rspq_syncpoint_wait)
+  . = MAX(., 0x4eec0);
+  *(.text.interp_bridge_lle_yield_unwind)
+  . = MAX(., 0x4f1c0);
+  *(.text.RtlApuUnlock)
+  . = MAX(., 0x4f360);
+  *(.text.sync_interp_to_cpu)
+  . = MAX(., 0x4f620);
+  *(.text.spc_adrIdx)
+  . = MAX(., 0x4fd80);
+  *(.text.bridge_bounce_flush_thresh)
+  . = MAX(., 0x50000);
+  *(.text.spc_dec)
+  . = MAX(., 0x502a0);
+  *(.text.spc_movsy)
+  . = MAX(., 0x50440);
+  *(.text.spc_adrDpImm)
+  . = MAX(., 0x50660);
+  *(.text.spc_cmp)
+  . = MAX(., 0x507e0);
+  *(.text.interp816_stx)
+  . = MAX(., 0x50a80);
+  *(.text.spc_asl)
+  . = MAX(., 0x51200);
+  *(.text.spc_readWord)
+  . = MAX(., 0x517a0);
+  *(.text.cart_read)
+  . = MAX(., 0x51d00);
+  *(.text.n64_ppu_build_end)
+  . = MAX(., 0x51e80);
+  *(.text.bridge_bus_write_word)
+  . = MAX(., 0x52180);
+  *(.text.__clip_blit)
+  . = MAX(., 0x529c0);
+  *(.text.spc_sbc)
+  . = MAX(., 0x52b40);
   *(.text.interp816_sty)
-  . = MAX(., 0x675a0);
-  *(.text.interp_bridge_run_until_quiescent)
-  . = MAX(., 0x67780);
-  *(.text.disable_interrupts)
-  . = MAX(., 0x67fa0);
+  . = MAX(., 0x52c60);
+  *(.text.interp816_adrDpx)
+  . = MAX(., 0x52d40);
+  *(.text.interp816_writeWord)
+  . = MAX(., 0x53420);
+  *(.text.spc_inc)
+  . = MAX(., 0x53960);
+  *(.text.ppu_rasterFieldBoundary)
+  . = MAX(., 0x53a80);
+  *(.text.joypad_inputs_from_n64_controller_read)
+  . = MAX(., 0x53fc0);
+  *(.text.apu_schedulePortWrite)
+  . = MAX(., 0x54280);
+  *(.text.RecompStackPushInterpreter)
+  . = MAX(., 0x54460);
+  *(.text.spc_cmpm)
+  . = MAX(., 0x546a0);
+  *(.text.snes_mod_audio_mix)
+  . = MAX(., 0x54f60);
+  *(.text.rtl_apu_extended_frame_timing)
+  . = MAX(., 0x55640);
+  *(.text.snes_beam_frame_driver_run_frame)
+  . = MAX(., 0x56020);
   *(.text.interp816_asl)
-  . = MAX(., 0x68660);
-  *(.text.ppu_runLineState)
-  . = MAX(., 0x68c60);
-  *(.text.ppu_rasterBegin)
-  . = MAX(., 0x68da0);
-  *(.text.cpu_fast_map_validate)
-  . = MAX(., 0x68fe0);
-  *(.text.__rdpq_fill_rectangle)
-  . = MAX(., 0x69660);
-  *(.text.joybus_get_identifier)
-  . = MAX(., 0x69a00);
-  *(.text.interp_bridge_run_interrupt)
-  . = MAX(., 0x69bc0);
-  *(.text.rtl_snes_charge_master_cycles)
-  . = MAX(., 0x6a000);
-  *(.text.rdpq_fence)
-  . = MAX(., 0x6a360);
-  *(.text.interp_tier_dispatch_tail)
-  . = MAX(., 0x6a500);
-  *(.text.dsp_available)
-  . = MAX(., 0x6a600);
-  *(.text.Tier2CoverageTick)
-  . = MAX(., 0x6aa00);
-  *(.text._ram_guard_find)
-  . = MAX(., 0x6b220);
-  *(.text.read_line)
-  . = MAX(., 0x6b560);
-  *(.text.interp816_ror)
-  . = MAX(., 0x6b780);
-  *(.text.PpuBeginDrawing)
-  . = MAX(., 0x6bfa0);
-  *(.text.interp816_eor)
-  . = MAX(., 0x6c120);
-  *(.text.joypad_poll.part.0)
-  . = MAX(., 0x6cc60);
-  *(.text.joypad_set_pad)
-  . = MAX(., 0x6d020);
-  *(.text.recomp_write_internal_reg)
-  . = MAX(., 0x6d760);
-  *(.text.snes_master_clocks_until_line)
-  . = MAX(., 0x6da40);
-  *(.text.get_interrupts_state)
-  . = MAX(., 0x6dcc0);
-  *(.text.spc_adrDpDp)
-  . = MAX(., 0x6e000);
-  *(.text.display_show)
-  . = MAX(., 0x6e3a0);
-  *(.text.audio_write_begin)
-  . = MAX(., 0x6e500);
-  *(.text.__rdpq_fill_rectangle_offline)
-  . = MAX(., 0x6e5c0);
-  *(.text.io_write)
-  . = MAX(., 0x6e740);
-  *(.text.joypad_get_buttons)
-  . = MAX(., 0x6ed60);
-  *(.text.graphics_make_color)
-  . = MAX(., 0x6f560);
-  *(.text.interp816_adrAlx)
-  . = MAX(., 0x6f7c0);
-  *(.text.bridge_continuous_read)
-  . = MAX(., 0x6fa40);
-  *(.text.vi_get_bpp)
-  . = MAX(., 0x701e0);
-  *(.text.joypad_read_port)
-  . = MAX(., 0x70660);
-  *(.text.rdpq_detach_cb)
-  . = MAX(., 0x70da0);
-  *(.text.__retarget_lock_release_recursive)
-  . = MAX(., 0x70f60);
-  *(.text.interp_bridge_set_master_deadline)
-  . = MAX(., 0x71660);
+  . = MAX(., 0x565a0);
+  *(.text.spc_or)
+  . = MAX(., 0x56b60);
+  *(.text.spc_pullByte)
+  . = MAX(., 0x57340);
   *(.text.RtlApuWrite)
-  . = MAX(., 0x71a40);
-  *(.text.audio_write_end)
-  . = MAX(., 0x71ca0);
+  . = MAX(., 0x574e0);
+  *(.text.rspq_next_buffer)
+  . = MAX(., 0x57ec0);
+  *(.text.RtlRunFrame)
+  . = MAX(., 0x592e0);
+  *(.text.interp816_cpx)
+  . = MAX(., 0x59920);
+  *(.text.cpu_fast_map_validate)
+  . = MAX(., 0x59aa0);
+  *(.text.graphics_draw_text)
+  . = MAX(., 0x59be0);
+  *(.text.audio_trace_on_consume)
+  . = MAX(., 0x5a320);
+  *(.text.ReadRegOpenBus)
+  . = MAX(., 0x5a8e0);
+  *(.text.interp816_getFlags)
+  . = MAX(., 0x5a960);
+  *(.text.spc_adrIdy)
+  . = MAX(., 0x5ab40);
+  *(.text.interp816_inc)
+  . = MAX(., 0x5b360);
+  *(.text.bridge_bus_read_slow)
+  . = MAX(., 0x5b620);
   *(.text.rspq_wait)
-  . = MAX(., 0x720e0);
+  . = MAX(., 0x5ba60);
+  *(.text.dsp_write)
+  . = MAX(., 0x5bea0);
+  *(.text.dma_initHdma)
+  . = MAX(., 0x5c000);
+  *(.text.RtlGuestScopeActive)
+  . = MAX(., 0x5c020);
+  *(.text.n64_platform_audio_pump)
+  . = MAX(., 0x5c080);
+  *(.text.disable_interrupts)
+  . = MAX(., 0x5c700);
+  *(.text.get_ticks)
+  . = MAX(., 0x5c8a0);
+  *(.text.graphics_draw_box)
+  . = MAX(., 0x5cac0);
+  *(.text.joypad_poll.part.0)
+  . = MAX(., 0x5d060);
+  *(.text.n64_platform_read_pad)
+  . = MAX(., 0x5d540);
+  *(.text.ppu_wlog_note_reg)
+  . = MAX(., 0x5dbc0);
+  *(.text.spc_pushByte)
+  . = MAX(., 0x5e420);
+  *(.text.rspq_flush_internal)
+  . = MAX(., 0x5e460);
+  *(.text.rdpq_tex_upload_tlut)
+  . = MAX(., 0x5e620);
+  *(.text.RtlApuLock)
+  . = MAX(., 0x5e820);
+  *(.text.interp_bridge_run_until_quiescent)
+  . = MAX(., 0x5e8c0);
+  *(.text.get_ticks_us)
+  . = MAX(., 0x5e940);
+  *(.text.__rdpq_set_scissor)
+  . = MAX(., 0x5ea60);
+  *(.text.interp816_eor)
+  . = MAX(., 0x5f2e0);
+  *(.text.rtl_apu_frame_timeline_active)
+  . = MAX(., 0x5f7a0);
+  *(.text.rspq_syncpoint_new)
+  . = MAX(., 0x5f960);
+  *(.text.joypad_auto_read)
+  . = MAX(., 0x5ffa0);
+  *(.text._ram_guard_find)
+  . = MAX(., 0x60020);
+  *(.text.rdpq_detach_cb)
+  . = MAX(., 0x600e0);
+  *(.text.PpuBeginDrawing)
+  . = MAX(., 0x60200);
+  *(.text.run_interrupt)
+  . = MAX(., 0x607e0);
+  *(.text.snes_readReg)
+  . = MAX(., 0x609a0);
+  *(.text.dsp_available)
+  . = MAX(., 0x61020);
+  *(.text.joypad_auto_read_reg_addr)
+  . = MAX(., 0x61120);
+  *(.text.rdpq_set_color_image)
+  . = MAX(., 0x619a0);
+  *(.text.interp_tier_dispatch_tail)
+  . = MAX(., 0x61be0);
+  *(.text.set_envx_outx.part.0.constprop.0)
+  . = MAX(., 0x622a0);
+  *(.text.rspq_flush)
+  . = MAX(., 0x62460);
+  *(.text.ppu_rasterRenderBegin)
+  . = MAX(., 0x62700);
+  *(.text.resume_ring_note)
+  . = MAX(., 0x628c0);
+  *(.text.joypad_read_port.part.0)
+  . = MAX(., 0x629c0);
+  *(.text.__rdpq_set_color_image)
+  . = MAX(., 0x62b00);
+  *(.text.__rdpq_fixup_mode3)
+  . = MAX(., 0x62be0);
+  *(.text.__rdpq_fixup_mode4)
+  . = MAX(., 0x633e0);
+  *(.text.WatchdogFrameStart)
+  . = MAX(., 0x637a0);
+  *(.text.joypad_read_port)
+  . = MAX(., 0x63f00);
+  *(.text.recomp_write_internal_reg)
+  . = MAX(., 0x64280);
+  *(.text.interp_bridge_set_master_deadline)
+  . = MAX(., 0x642c0);
+  *(.text.dma_hdmaLoadDescriptor)
+  . = MAX(., 0x64720);
+  *(.text.cpu_dbg_funcname)
+  . = MAX(., 0x647e0);
+  *(.text.rtl_apu_port_observers_read)
+  . = MAX(., 0x64aa0);
+  *(.text.cart_sync_coprocessors)
+  . = MAX(., 0x64ba0);
+  *(.text.display_get)
+  . = MAX(., 0x653c0);
+  *(.text.__retarget_lock_acquire_recursive)
+  . = MAX(., 0x659a0);
+  *(.text.__retarget_lock_release_recursive)
+  . = MAX(., 0x659c0);
+  *(.text.acct_switch)
+  . = MAX(., 0x65a60);
+  *(.text.graphics_make_color)
+  . = MAX(., 0x65be0);
+  *(.text.bridge_continuous_read)
+  . = MAX(., 0x65c80);
+  *(.text.io_write)
+  . = MAX(., 0x65d40);
+  *(.text.joypad_poll)
+  . = MAX(., 0x66440);
+  *(.text.ppu_rasterBegin)
+  . = MAX(., 0x66960);
+  *(.text.apu_dspMark.part.0)
+  . = MAX(., 0x669c0);
   *(.text.dsp_advance)
-  . = MAX(., 0x723a0);
-  *(.text.spc_orm)
-  . = MAX(., 0x72500);
-  *(.text.interp_bridge_lle_resume_pc)
-  . = MAX(., 0x725e0);
-  *(.text.attach)
-  . = MAX(., 0x72d80);
-  *(.text.rdpq_sync_full)
-  . = MAX(., 0x735c0);
-  *(.text.joypad_get_inputs)
+  . = MAX(., 0x66aa0);
+  *(.text.__rdpq_fill_rectangle_offline)
+  . = MAX(., 0x66e60);
+  *(.text.joypad_latch)
+  . = MAX(., 0x67360);
+  *(.text.interp816_adrIly)
+  . = MAX(., 0x67640);
+  *(.text.spc_eor)
+  . = MAX(., 0x67740);
+  *(.text.ppu_runLineState)
 }

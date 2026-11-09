@@ -273,7 +273,9 @@ static int host_main(void) {
     uint32_t inputs = n64_platform_read_pad();
 
     uint64_t t0 = n64_platform_time_us();
+    g_n64_profile_phase = N64_PHASE_CPU;
     RtlRunFrame(inputs);
+    g_n64_profile_phase = N64_PHASE_PPU;
     uint64_t t1 = n64_platform_time_us();
     PpuBeginDrawing(g_ppu, (uint8_t *)s_pixels, kSnesW * 4, kPpuRenderFlags_NewRenderer);
 #if N64_RENDER
@@ -282,6 +284,7 @@ static int host_main(void) {
     n64_draw_ppu_frame();
 #endif
     uint64_t t2 = n64_platform_time_us();
+    g_n64_profile_phase = N64_PHASE_PRESENT;
 
     char line[64];
     snprintf(line, sizeof line, "f%lu cpu %lums ppu %lums",

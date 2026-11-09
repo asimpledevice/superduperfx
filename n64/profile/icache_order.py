@@ -18,6 +18,12 @@ hot function at its chosen address (gaps are left unused), then the rest.
 It also prints the modelled conflict cost (sum over cache lines of heat
 products between different code lines sharing a set) for the profiled
 layout and for the new one.
+
+Samples carry the frame stage they were taken in ("PROF <pc> <stage>": CPU
+emulation, PPU, present). Stages run one after another, never interleaved,
+so code of different stages can share cache sets for free: conflicts are
+counted only between lines of the same stage (--merge-stages counts them
+all, as before). Logs without a stage field are one stage.
 """
 import argparse
 import re
@@ -63,12 +69,13 @@ def read_map_sections(path):
 
 
 def conflict_cost(placed):
-    """placed: list of (start address, {line offset: heat}). Sum over each
-    cache set of heat products between distinct code lines in that set."""
+    """placed: list of (start address, {(line offset, stage): heat}). Sum
+    over each cache set and stage of heat products between distinct code
+    lines in that set."""
     per_set = defaultdict(list)
     for start, lines in placed:
-        for off, h in lines.items():
-            per_set[((start >> 5) + off) % SETS].append(h)
+        for (off, st), h in lines.items():
+            per_set[(((start >> 5) + off) % SETS, st)].append(h)
     cost = 0
     for hs in per_set.values():
         total = sum(hs)
@@ -93,6 +100,8 @@ def main():
                     help="start address of the .text output section (n64.ld)")
     ap.add_argument("--base", type=lambda s: int(s, 0), default=0x80004000,
                     help="address of the first placed function (after .boot)")
+    ap.add_argument("--merge-stages", action="store_true",
+                    help="count conflicts between all code, ignoring the stage field")
     a = ap.parse_args()
 
     syms = read_symbols(a.elf, a.nm)
@@ -105,11 +114,13 @@ def main():
     for l in open(a.log, errors="replace"):
         if not l.startswith("PROF "):
             continue
-        pc = int(l.split()[1], 16)
+        p = l.split()
+        pc = int(p[1], 16)
+        st = 0 if a.merge_stages or len(p) < 3 else int(p[2])
         i = bisect.bisect_right(starts, pc) - 1
         if i < 0 or pc >= syms[i][0] + max(syms[i][1], 4):
             continue
-        heat[i][(pc - syms[i][0]) >> 5] += 1
+        heat[i][((pc - syms[i][0]) >> 5, st)] += 1
         total += 1
 
     order = sorted(heat, key=lambda i: -sum(heat[i].values()))
@@ -127,7 +138,7 @@ def main():
 
     before = conflict_cost([(syms[i][0], heat[i]) for i in heat])
 
-    setheat = [0] * SETS
+    setheat = defaultdict(int)   # (cache set, stage) -> heat placed
     cursor = a.base
     placement = []
     for i in chosen:
@@ -139,14 +150,14 @@ def main():
         for gap in range(span):
             start = cursor + gap * LINE
             s0 = start >> 5
-            cost = sum(h * setheat[(s0 + off) % SETS] for off, h in lines.items())
+            cost = sum(h * setheat[((s0 + off) % SETS, st)] for (off, st), h in lines.items())
             if best is None or cost < best[0]:
                 best = (cost, start)
                 if cost == 0:
                     break
         start = best[1]
-        for off, h in lines.items():
-            setheat[((start >> 5) + off) % SETS] += h
+        for (off, st), h in lines.items():
+            setheat[(((start >> 5) + off) % SETS, st)] += h
         placement.append((start, secs[addr][0], i))
         cursor = start + ((secs[addr][1] + LINE - 1) & ~(LINE - 1))
 

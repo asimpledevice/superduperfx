@@ -32,7 +32,11 @@ void n64_platform_audio_pump(void (*render)(int16_t *stereo, int frames));
 /* Status text position: inside the area TVs show (overscan). */
 enum { N64_STATUS_Y = 240 - 28 };
 
-/* Sampling profiler (see n64_platform.c). */
+/* Sampling profiler (see n64_platform.c). Each sample also records
+ * g_n64_profile_phase, the frame stage the host was in (always written, so
+ * profiling and shipped builds have the same layout). */
+enum { N64_PHASE_CPU = 0, N64_PHASE_PPU = 1, N64_PHASE_PRESENT = 2 };
+extern volatile uint8_t g_n64_profile_phase;
 void n64_platform_profile_start(unsigned interval_us);
 void n64_platform_profile_stop_and_dump(void);
 

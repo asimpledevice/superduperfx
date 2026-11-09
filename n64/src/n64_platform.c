@@ -10,9 +10,10 @@
 
 /* ---- Sampling profiler ------------------------------------------------
  * A continuous timer interrupt records COP0 EPC, the PC the CPU was
- * executing when the interrupt fired. Samples are dumped over the debug log
- * as "PROF <pc>" lines; map them to functions offline with the ELF
- * (n64/profile/symbolize.py). */
+ * executing when the interrupt fired, with the frame stage in its two low
+ * bits (instructions are 4-aligned). Samples are dumped over the debug log
+ * as "PROF <pc> <stage>" lines; map them to functions offline with the ELF
+ * (n64/profile/symbolize.py, icache_order.py). */
 #ifndef N64_PROFILE_MAX
 #define N64_PROFILE_MAX 131072
 #endif
@@ -20,10 +21,12 @@ enum { kProfMax = N64_PROFILE_MAX };
 static uint32_t s_prof_pc[kProfMax];
 static volatile unsigned s_prof_n;
 static timer_link_t *s_prof_timer;
+volatile uint8_t g_n64_profile_phase;
 
 static void prof_tick(int ovfl) {
   (void)ovfl;
-  if (s_prof_n < kProfMax) s_prof_pc[s_prof_n++] = (uint32_t)C0_EPC();
+  if (s_prof_n < kProfMax)
+    s_prof_pc[s_prof_n++] = ((uint32_t)C0_EPC() & ~3u) | (g_n64_profile_phase & 3u);
 }
 
 void n64_platform_profile_start(unsigned interval_us) {
@@ -36,7 +39,8 @@ void n64_platform_profile_stop_and_dump(void) {
   if (s_prof_timer) { delete_timer(s_prof_timer); s_prof_timer = NULL; }
   unsigned n = s_prof_n;
   debugf("PROF_BEGIN %u\n", n);
-  for (unsigned i = 0; i < n; ++i) debugf("PROF %08lx\n", (unsigned long)s_prof_pc[i]);
+  for (unsigned i = 0; i < n; ++i)
+    debugf("PROF %08lx %lu\n", (unsigned long)(s_prof_pc[i] & ~3u), (unsigned long)(s_prof_pc[i] & 3u));
   debugf("PROF_END\n");
 }
 

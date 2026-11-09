@@ -453,6 +453,45 @@ changes:
     profile/icache_order.py build/snesrecomp_interp.elf \
         build/snesrecomp_interp.map isviewer.log -o icache_order.ld --runtime-only
 
+### Stage-aware ordering (2026-11-09)
+
+The ordering above scored conflicts between all hot code. But a frame runs
+its stages one after another (CPU emulation, then the PPU stage, then
+present), so code of different stages can share cache sets at no cost;
+what matters is conflicts inside a stage. The PPU stage interleaves the
+line builder, the PPU's per-line state, HDMA and the raster replay on
+every line, so conflicts among those repeat 224 times a frame.
+
+Samples now carry the stage (`g_n64_profile_phase`, written by the host
+loop in every build, so profiling builds keep the shipped layout):
+"PROF <pc> <stage>". `icache_order.py` counts conflicts per stage
+(`--merge-stages` for the old behaviour); `symbolize.py --phase N` shows
+one stage.
+
+Regenerated for the current code (SMW attract, frames 400-520, 500 us):
+42,748 samples, 61% CPU stage, 33% PPU, 6% present. Modelled same-stage
+conflict cost: 14% of the previous ordering's. ares, same source:
+
+| frame | old ordering: run / ppu / present (ms) | stage-aware |
+|---|---|---|
+| 420 | 98.7 / 57.0 / 10.2 | 86.3 / 50.2 / 8.8 |
+| 600 | 99.6 / 56.6 / 10.1 | 87.2 / 49.8 / 8.7 |
+| 900 | 98.4 / 56.6 / 10.0 | 85.6 / 49.8 / 8.6 |
+
+About -12% per frame across frames 360-1140.
+
+Memory note: the default 131072-sample buffer (512 KB) no longer fits
+beside everything else (the cartridge copy's malloc fails at boot), so
+profile with half the buffer at 500 us:
+
+    make PROFILE=1 PROFILE_START=400 PROFILE_FRAMES=120 PROFILE_US=500 \
+        EXTRA_CFLAGS=-DN64_PROFILE_MAX=65536 ...
+    profile/icache_order.py build/snesrecomp_interp.elf \
+        build/snesrecomp_interp.map isviewer.log -o icache_order.ld --runtime-only
+
+Free heap in normal builds is therefore under 1 MB; worth knowing before
+adding large buffers (a decoded-tile cache would need its memory found).
+
 ## Data-cache placement (2026-11-08)
 
 Tools:

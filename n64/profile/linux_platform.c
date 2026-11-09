@@ -62,6 +62,7 @@ void n64_platform_present(const uint32_t *pixels, int width, int height,
 }
 
 /* The sampling profiler is N64-only; use gprof or callgrind on desktop. */
+volatile uint8_t g_n64_profile_phase;
 void n64_platform_profile_start(unsigned interval_us) { (void)interval_us; }
 void n64_platform_profile_stop_and_dump(void) {}
 
