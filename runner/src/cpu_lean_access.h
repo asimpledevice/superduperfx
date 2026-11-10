@@ -63,6 +63,9 @@ int    recomp_block_enter_charge(CpuState *cpu, uint32 pc16, uint32 n);
 int    recomp_block_enter_charge_c(CpuState *cpu, uint32 pc16, uint32 n, uint32 master);
 void   recomp_enter(const char *name);
 uint32 recomp_frame(CpuState *cpu, int s_offset, uint32 skip, uint16 *entry_s, uint8 *hrv);
+RecompReturn recomp_return_slow(CpuState *cpu, uint32 rpc24, uint16 ret_s, uint16 entry_s,
+                                uint8 hrv, uint32 host_return_pc24, uint32 frame_sz,
+                                uint32 site);
 
 #endif
 
@@ -100,6 +103,9 @@ uint32 cpu_host_return_pc24(CpuState *cpu, uint16 entry_s, uint8 hrv, uint32 ski
 /* The runtime symbols the sequences below call (common_cpu_infra.h). */
 void WatchdogCheck(void);
 void RecompStackPush(const char *name);
+void RecompStackPop(void);
+void RecompStackPopYield(void);
+int cpu_resolve_ancestor_skip(uint16_t ret_s);
 int cpu_take_tailcall_return_context(uint16_t *entry_s, uint8_t *hrv);
 extern int g_recomp_stack_top;
 extern uint16_t g_cpu_entry_s[];
@@ -150,5 +156,70 @@ uint32 recomp_frame(CpuState *cpu, int s_offset, uint32 skip, uint16 *entry_s, u
   *entry_s = s;
   *hrv = h;
   return host_return_pc24;
+}
+/* An RTS/RTL that is not the paired, balanced host return (the call site
+ * tests that one first): the default emitter's decision tree for the popped
+ * frame, test for test, each exit preceded by the recomp-stack pop the
+ * emitter writes before it (codegen.py _emit_return). frame_sz is 2 for RTS,
+ * 3 for RTL; site is the RTS/RTL PC. */
+RecompReturn recomp_return_slow(CpuState *cpu, uint32 rpc24, uint16 ret_s, uint16 entry_s,
+                                uint8 hrv, uint32 host_return_pc24, uint32 frame_sz,
+                                uint32 site) {
+  /* A paired, balanced frame whose return address was rewritten to code with
+   * no compiled entry. */
+  if (hrv == frame_sz && ret_s == entry_s &&
+      rpc24 != host_return_pc24 && !cpu_dispatch_has_entry(cpu, rpc24)) {
+    RecompStackPop();
+    return interp_tier_dispatch_rewritten_return(cpu, rpc24, site);
+  }
+  if (ret_s != entry_s) {
+    /* Return to an ancestor's continuation (multi-level non-local return). */
+    int anc_skip = cpu_resolve_ancestor_skip(ret_s);
+    if (anc_skip >= 0) {
+      cpu_trace_mark_nlr_exit(BD_EXIT_KIND_TRAMPOLINE);
+      RecompStackPop();
+      return (RecompReturn)anc_skip;
+    }
+    /* The callee moved its own frame above stack arguments and dropped them. */
+    if (hrv == frame_sz && rpc24 == host_return_pc24 &&
+        (uint16)(ret_s - entry_s) < 0x8000u) {
+      RecompStackPop();
+      return RECOMP_RETURN_NORMAL;
+    }
+    /* The skipped caller runs in the interpreter. */
+    if (interp_bridge_return_targets_owner(ret_s, cpu->S)) {
+      cpu_trace_mark_nlr_exit(BD_EXIT_KIND_TRAMPOLINE);
+      RecompStackPopYield();
+      return interp_bridge_lle_yield_unwind(cpu, rpc24);
+    }
+    if ((uint16)(ret_s - entry_s) < 0x8000u &&
+        interp_bridge_has_direct_paired_bounce()) {
+      RecompStackPop();
+      return interp_tier_dispatch_rewritten_return(cpu, rpc24, site);
+    }
+  }
+  /* Deeper than entry: the RTS/RTL consumed a frame this routine pushed. */
+  if (ret_s != entry_s &&
+      (uint16)(entry_s - ret_s) < 0x8000u &&
+      interp_bridge_has_direct_paired_bounce()) {
+    RecompStackPop();
+    return interp_tier_dispatch_rewritten_return(cpu, rpc24, site);
+  }
+  if (ret_s != entry_s &&
+      (uint16)(entry_s - ret_s) < 0x8000u &&
+      cpu->S != entry_s &&
+      (uint16)(cpu->S - entry_s) < 0x8000u) {
+    RecompStackPop();
+    return interp_tier_dispatch_rewritten_return(cpu, rpc24, site);
+  }
+  if (ret_s != entry_s &&
+      (uint16)(entry_s - ret_s) < 0x8000u &&
+      !cpu_dispatch_has_entry(cpu, rpc24)) {
+    RecompStackPop();
+    return interp_tier_dispatch_popped_return(cpu, rpc24, site, (uint16)(entry_s + frame_sz));
+  }
+  cpu_trace_mark_nlr_exit(BD_EXIT_KIND_TRAMPOLINE);
+  RecompStackPop();
+  return cpu_dispatch_pc_from(cpu, rpc24, (uint16)(entry_s + frame_sz), site);
 }
 #endif

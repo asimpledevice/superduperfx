@@ -1065,8 +1065,29 @@ Same function set; native state and audio hashes identical to default
 emission; the differential test now runs PB $00 and the $80 mirror with
 MEMSEL off and on, through D.l, page-cross and branch-taken charges and
 PHP/PLP; tests/v2 and the runtime C tests as before; ares 87.9 / 18.4 /
-9.8 ms. Still to consider: the RTS/RTL return decision tree (14% of the
-remaining code, ~723 sites) and decimal-mode ADC/SBC (4.5%).
+9.8 ms.
+
+RTS/RTL returns (same switch): each site pops its frame and tests the
+paired, balanced host return inline; every other outcome (rewritten return
+address, return to an ancestor, callee-cleaned frame, interpreter-owned
+caller, paired bounce, computed return through a pushed frame, dispatch)
+is `recomp_return_slow` in cpu_lean_access.h, the default tree test for
+test with the same recomp-stack pop before each exit. The routine-specific
+HLE return forms and RTI are unchanged. On SMW (600 frames) the slow path
+ran 54 times (52 returns to an ancestor, 2 dispatches); every other return
+stayed inline. test_emit_lean.py sweeps nine RTS/RTL stack shapes against
+every runtime answer (1,152 cases, every exit taken) and compares the exit
+called, its arguments, S and the pop kind; it catches a swapped pop kind or
+an RTS frame size on an RTL.
+
+| SMW native set, MIPS `.text` | bytes | vs default |
+|---|---|---|
+| Lean, plus fixed-sequence helpers | 1,549,754 | -39.9% |
+| Lean, plus out-of-line return tree | 1,285,270 | -50.1% |
+
+Hashes identical; tests/v2 and the runtime C tests as before; ares 90.1 /
+18.7 / 9.8 ms. Still to consider: decimal-mode ADC/SBC (about 4.5% before
+this step).
 
 ## Next steps
 

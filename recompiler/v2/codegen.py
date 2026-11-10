@@ -33,6 +33,7 @@ for p in (str(_THIS_DIR), str(_RECOMPILER_DIR)):
         sys.path.insert(0, p)
 
 from typing import Dict, List, Optional, Tuple  # noqa: E402
+from v2.emit_options import lean_emit
 from v2.naming import variant_suffix as _variant_suffix  # noqa: E402
 
 # Resolver: 24-bit address (bank << 16 | pc) -> friendly C function name.
@@ -2539,6 +2540,23 @@ def _emit_return(op: Return) -> List[str]:
         "#if SNESRECOMP_TRACE",
         f"  dbg_rts_trace(cpu, 0x{src24:06x}u, _entry_s, _ret_s, _rpc24, (uint8)_hrv);",
         "#endif",
+    ])
+    if lean_emit():
+        # SNESRECOMP_EMIT_LEAN: the paired, balanced host return stays here;
+        # every other outcome is decided by recomp_return_slow
+        # (cpu_lean_access.h), which runs the tests below in the same order
+        # with the same recomp-stack pop before each exit. The first test
+        # below excludes this one (_rpc24 differs), so testing this first is
+        # the same. The slow call's line starts with '{' so emit_function adds
+        # no pop of its own.
+        lines.extend([
+            f"  if (_hrv == {frame_sz} && _ret_s == _entry_s && _rpc24 == _host_return_pc24) {{",
+            f"    return RECOMP_RETURN_NORMAL;  /* {label_inner} host return */ }}",
+            f"  {{ RecompReturn _rr = recomp_return_slow(cpu, _rpc24, _ret_s, _entry_s, (uint8)_hrv, "
+            f"_host_return_pc24, {frame_sz}u, 0x{src24:06x}u); return _rr; }} }}",
+        ])
+        return lines
+    lines.extend([
         f"  if (_hrv == {frame_sz} && _ret_s == _entry_s &&",
         "      _rpc24 != _host_return_pc24 && !cpu_dispatch_has_entry(cpu, _rpc24)) {",
         f"    return interp_tier_dispatch_rewritten_return(cpu, _rpc24, 0x{src24:06x}u);",
