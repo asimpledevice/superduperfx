@@ -830,12 +830,19 @@ bool RtlRunFrame(uint32 inputs) {
     }
   }
 #endif
-  // Avoid up/down and left/right from being pressed at the same time
+  // Avoid up/down and left/right from being pressed at the same time.
+  // SNESRECOMP_ALLOW_OPPOSING_DIRECTIONS=1 passes them through, as the
+  // hardware does (needed to replay movies recorded on an accurate emulator).
+#ifndef SNESRECOMP_ALLOW_OPPOSING_DIRECTIONS
+#define SNESRECOMP_ALLOW_OPPOSING_DIRECTIONS 0
+#endif
+#if !SNESRECOMP_ALLOW_OPPOSING_DIRECTIONS
   if ((inputs & 0x30) == 0x30) inputs ^= 0x30;
   if ((inputs & 0xc0) == 0xc0) inputs ^= 0xc0;
   // Player2
   if ((inputs & 0x30000) == 0x30000) inputs ^= 0x30000;
   if ((inputs & 0xc0000) == 0xc0000) inputs ^= 0xc0000;
+#endif
 
   RtlApplyMultitapEnv();
 

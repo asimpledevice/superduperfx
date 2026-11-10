@@ -1,7 +1,16 @@
 /* Desktop stand-in for n64_platform.c, used to profile the N64 host's exact
- * runtime configuration on x86 Linux (gprof, callgrind). No display or pad:
- * it runs a fixed number of frames with no input, reads the ROM from
- * $N64_PROFILE_ROM, and exits. */
+ * runtime configuration on x86 Linux (gprof, callgrind). No display: it runs
+ * a fixed number of frames, reads the ROM from $N64_PROFILE_ROM, and exits.
+ *
+ * Input: none, or a replay. $N64_PROFILE_INPUT names a file of little-endian
+ * 16-bit controller words, one per frame in the host's bit order (bit 0 B,
+ * 1 Y, 2 Select, 3 Start, 4-7 Up/Down/Left/Right, 8 A, 9 X, 10 L, 11 R;
+ * romtrace/bk2_pad.py converts a BizHawk movie), starting at host frame
+ * $N64_PROFILE_INPUT_OFFSET (default 0; negative skips movie frames).
+ * $N64_PROFILE_RAMLOG=N prints a few WRAM bytes every N frames ("RAM <game
+ * frame> <replay index> <bytes>"):
+ * the SMW progress bytes by default, or the hex addresses listed in
+ * $N64_PROFILE_RAMLOG_ADDRS. */
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -31,7 +40,54 @@ uint64_t n64_platform_time_us(void) {
   clock_gettime(CLOCK_MONOTONIC, &ts);
   return (uint64_t)ts.tv_sec * 1000000u + (uint64_t)ts.tv_nsec / 1000u;
 }
-uint32_t n64_platform_read_pad(void) { return 0; }
+static uint16_t *s_pad;
+static long s_pad_len, s_pad_pos;
+static unsigned s_ramlog;
+static unsigned s_ramlog_addr[16], s_ramlog_n;
+extern unsigned char g_ram[];
+extern int snes_frame_counter;
+
+static void replay_init(void) {
+  static int done;
+  if (done) return;
+  done = 1;
+  const char *path = getenv("N64_PROFILE_INPUT");
+  if (path && path[0]) {
+    FILE *f = fopen(path, "rb");
+    if (!f) { fprintf(stderr, "cannot open %s\n", path); exit(1); }
+    fseek(f, 0, SEEK_END);
+    s_pad_len = ftell(f) / 2;
+    fseek(f, 0, SEEK_SET);
+    s_pad = malloc((size_t)s_pad_len * 2 + 2);
+    s_pad_len = (long)fread(s_pad, 2, (size_t)s_pad_len, f);
+    fclose(f);
+    const char *o = getenv("N64_PROFILE_INPUT_OFFSET");
+    s_pad_pos = o ? -atol(o) : 0;
+    fprintf(stderr, "[replay] %ld frames from %s, offset %ld\n", s_pad_len, path, -s_pad_pos);
+  }
+  const char *r = getenv("N64_PROFILE_RAMLOG");
+  s_ramlog = r ? (unsigned)atoi(r) : 0;
+  const char *a = getenv("N64_PROFILE_RAMLOG_ADDRS");
+  /* SMW: game mode, translevel, exits, lives, powerup, X position. */
+  const char *def = "0100,13bf,1f2e,0dbe,0019,0094,0095";
+  for (const char *p = (a && a[0]) ? a : def; *p && s_ramlog_n < 16;) {
+    char *end;
+    s_ramlog_addr[s_ramlog_n++] = (unsigned)strtoul(p, &end, 16) & 0x1ffff;
+    p = *end ? end + 1 : end;
+  }
+}
+
+uint32_t n64_platform_read_pad(void) {
+  replay_init();
+  if (s_ramlog && snes_frame_counter % s_ramlog == 0) {
+    printf("RAM %d %ld", snes_frame_counter, s_pad_pos);
+    for (unsigned i = 0; i < s_ramlog_n; i++) printf(" %02x", g_ram[s_ramlog_addr[i]]);
+    printf("\n");
+  }
+  if (!s_pad) return 0;
+  const long i = s_pad_pos++;
+  return (i >= 0 && i < s_pad_len) ? s_pad[i] : 0;
+}
 void n64_platform_present(const uint32_t *pixels, int width, int height,
                           const char *status) {
   (void)status;
