@@ -1909,8 +1909,13 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
         long step;
         unsigned repeats, idle_repeats;
     } QuiescentState;
+    /* Not cleared: a slot is read only through qbucket (set when the slot is
+     * written), and the idle replay reads the slots of steps from `old` on,
+     * each recorded in this run (dense recording writes every step). The
+     * interpreter is entered ~100 times a frame, often for a few
+     * instructions, and on the N64 this 4.6 KB clear alone cost ~5 ms of an
+     * 80 ms emulation stage. */
     QuiescentState qring[64];
-    memset(qring, 0, sizeof qring);
     /* What each step cost, parallel to qring, for replaying a declared idle
      * poll's cycle (interp_bridge_set_idle_poll). Recorded on every step, so
      * a poll declared while a run is live never replays a stale entry. */
@@ -1930,8 +1935,10 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
      * 64-entry scan chooses. A collision only costs a compare. */
     uint64_t qbucket[64];
     uint8_t qslot_bucket[64];
-    memset(qbucket, 0, sizeof qbucket);
-    memset(qslot_bucket, 0xFF, sizeof qslot_bucket);
+    if (auto_quiescent) {   /* the detector's only users */
+        memset(qbucket, 0, sizeof qbucket);
+        memset(qslot_bucket, 0xFF, sizeof qslot_bucket);
+    }
     /* SNESRECOMP_QUIESCENT_BACKEDGE=1: record detector states only where
      * control flow went backwards or changed bank, i.e. at loop heads,
      * instead of on every step. A loop whose whole state repeats passes
@@ -1956,7 +1963,8 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
         long step;
     } PollHeadState;
     PollHeadState poll_heads[4];
-    memset(poll_heads, 0, sizeof poll_heads);
+    for (unsigned hi = 0; hi < 4; hi++)
+        poll_heads[hi].step = 0;   /* empty; only read once step is set */
     unsigned poll_head_next = 0;
 
     const long step_cap = interp_step_cap();

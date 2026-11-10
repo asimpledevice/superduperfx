@@ -185,6 +185,14 @@ $(BUILD_DIR)/runner/%.o $(BUILD_DIR)/gen/%.o $(BUILD_DIR)/n64_host.o $(BUILD_DIR
 # PROFILE_START and dump them over the debug log (n64/profile/symbolize.py).
 # RENDER: 0 software PPU, 1 RDP backend (default), 2 RDP + software compare.
 RENDER ?= 1
+# libdragon's n64.mk builds with -ftrivial-auto-var-init=pattern, which fills
+# every uninitialised local on each function entry: ~7 KB of stores each time
+# the interpreter is entered (its quiescent-detector history and trace rings),
+# about 100 entries a frame, plus every generated body with a stack array.
+# SMW, ares: run stage 82.5 -> 69.7 ms with state hashes unchanged. The native
+# hosts never had it. AUTOVARINIT=pattern restores it (debugging).
+AUTOVARINIT ?= uninitialized
+N64_CFLAGS += -ftrivial-auto-var-init=$(AUTOVARINIT)
 N64_CFLAGS += -DN64_RENDER=$(RENDER) $(EXTRA_CFLAGS)
 
 PROFILE_START ?= 3

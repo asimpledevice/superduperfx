@@ -21,14 +21,27 @@
 #endif
 enum { kProfMax = N64_PROFILE_MAX };
 static uint32_t s_prof_pc[kProfMax];
+#ifdef N64_PROFILE_RA
+/* -DN64_PROFILE_RA: also the interrupted ra -- the caller, for a sample in
+ * a leaf function (memset, memcpy, ...): "PROF <pc> <stage> <ra>". */
+static uint32_t s_prof_ra[kProfMax];
+#endif
 static volatile unsigned s_prof_n;
 static timer_link_t *s_prof_timer;
 volatile uint8_t g_n64_profile_phase;
 
 static void prof_tick(int ovfl) {
   (void)ovfl;
-  if (s_prof_n < kProfMax)
+  if (s_prof_n < kProfMax) {
+#ifdef N64_PROFILE_RA
+    extern void *interrupt_exception_frame;
+    /* libdragon saves the interrupted registers 32 bytes above it. */
+    const reg_block_t *f = interrupt_exception_frame
+        ? (const reg_block_t *)((char *)interrupt_exception_frame + 32) : NULL;
+    s_prof_ra[s_prof_n] = f ? (uint32_t)f->ra : 0;
+#endif
     s_prof_pc[s_prof_n++] = ((uint32_t)C0_EPC() & ~3u) | (g_n64_profile_phase & 3u);
+  }
 }
 
 void n64_platform_profile_start(unsigned interval_us) {
@@ -42,7 +55,12 @@ void n64_platform_profile_stop_and_dump(void) {
   unsigned n = s_prof_n;
   debugf("PROF_BEGIN %u\n", n);
   for (unsigned i = 0; i < n; ++i)
+#ifdef N64_PROFILE_RA
+    debugf("PROF %08lx %lu %08lx\n", (unsigned long)(s_prof_pc[i] & ~3u),
+           (unsigned long)(s_prof_pc[i] & 3u), (unsigned long)s_prof_ra[i]);
+#else
     debugf("PROF %08lx %lu\n", (unsigned long)(s_prof_pc[i] & ~3u), (unsigned long)(s_prof_pc[i] & 3u));
+#endif
   debugf("PROF_END\n");
 }
 

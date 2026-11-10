@@ -1328,6 +1328,39 @@ I-cache order regenerated for the code-cache main program (1.15 MB text):
 modelled conflict cost 27% lower, measured run stage 85.8 ms against
 85.0 ms with the current order, so the current order stays.
 
+### Hot kernel, hot/cold splitting, and libdragon's auto-var-init (2026-11-10)
+
+Hot kernel per stage (attract demo, distinct 32-byte lines holding 90% of PC
+samples): 65816 emulation 17.9 KB, PPU 3.2 KB, present 2.2 KB. Whole
+functions holding them: 68 KB, 21 KB, 10 KB. The emulation stage's hot lines
+sit in three ~14 KB functions (_interp_run_core, the SPC700 and 65816 opcode
+switches) that keep 90% of their own samples in 10-13% of their bytes.
+Generated code is only 5.6% of that stage's samples.
+
+Rejected, no value:
+- Module block reordering (-freorder-blocks-algorithm=stc, with and without
+  partitioning, modules only): 82.26 vs 82.47 ms.
+- Cold labels on the never-sampled opcode cases (196 SPC700, 201 65816):
+  time in both switches unchanged (1657 vs 1627, 393 vs 396 samples); run
+  stage moves only with layout. Moving cold cases does not reduce how many
+  hot lines a switch touches. (GCC accepts `cold` on an ordinary label after
+  a case label; partitioning does not split functions on this target.)
+
+The real cost: memset was 9% of the emulation stage. -DN64_PROFILE_RA (the
+interrupted ra next to each PC sample; libdragon's interrupt_exception_frame
+is the sp, the register block sits 32 bytes above it) traced it to
+_interp_run_core's entry: libdragon's n64.mk compiles everything with
+-ftrivial-auto-var-init=pattern, ~7 KB of fills per interpreter entry (the
+quiescent detector's 64-state history, trace rings), ~100 entries a frame,
+plus every generated body with a stack array. The Makefile now passes
+-ftrivial-auto-var-init=uninitialized (AUTOVARINIT=pattern restores it) and
+the interpreter no longer clears the detector history it never reads before
+writing (qring; its buckets only for quiescent runs). Each alone showed
+nothing, the other's clear still standing: run stage 82.5 -> 69.7 ms (-15%),
+code-cache modules 7.16 -> 7.10 MB. SNES state hashes (WRAM, ARAM, DSP out)
+identical in ares over frames 0-1800; native TAS replay identical over
+90,000 frames.
+
 ## Next steps
 
 1. Audio: check the RSP DSP by ear on hardware (output arrives later than
