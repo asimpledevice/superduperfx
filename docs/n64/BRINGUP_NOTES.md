@@ -988,6 +988,39 @@ sets), so only sizes change:
 At 1 MB the lean cache only takes compulsory loads (each routine the demo
 uses, once). A 768 KB lean cache does better than a 1.5 MB default one.
 
+Real gameplay (2026-11-10). TASVideos movie #6738 ("all 96 exits, Lunar
+Dragon", BizHawk 2.9.1, bsnes v115 core, same ROM SHA-1) replayed in a
+local, unmodified-except-as-noted bsnes v115 libretro build (scratch only:
+memory accessors, a per-opcode trace hook, and raw D-pad, because bsnes
+clears Up+Down/Left+Right and BizHawk's fork does not; the movie presses
+Left+Right on 5,449 frames). It stays in sync for 84,000 frames (23 min,
+29 exits, 9 saves) and then drifts in translevel $31. bsnes reported, per
+frame and in order, which compiled-routine entry points it executed; sizes
+are the lean MIPS objects:
+
+| 23 min of play, everything compilable, lean | |
+|---|---|
+| Routines used | 1,382 of 3,432 (3.38 MB of 6.86 MB) |
+| Code run per frame | median 399 KB, max 676 KB |
+| Per 1 s / 10 s / 1 min window, max | 843 KB / 1.29 MB / 1.68 MB |
+
+| LRU cache | Loads in 23 min | Frames with loads | Worst frame |
+|---|---|---|---|
+| 768 KB | 18,631 (50 MB) | 4,148 | 350 KB |
+| 1 MB | 11,748 (31 MB) | 3,107 | 303 KB |
+| 1.5 MB | 4,495 (11 MB) | 1,673 | 89 KB |
+| 2 MB | 1,943 (4.5 MB) | 838 | 70 KB |
+
+So the attract demo (1.01 MB used) under-sizes the cache by 3x: real play
+wants about 1.5 MB, still well under today's 2.46 MB resident selection
+(default emission) while covering every compilable routine.
+
+Our timing against bsnes: generated with `--no-hle` (the SPC upload runs
+as game code) the title screen accepts input at frame 334 against bsnes's
+330; with the HLE upload, ~75 frames earlier. Replaying the movie needs
+`SNESRECOMP_ALLOW_OPPOSING_DIRECTIONS=1` (profile host) and the same raw
+D-pad in any reference.
+
 Reading: a 128 KB ROM page cache holds SMW's ROM working set (the full
 copy only matters for ROMs larger than RAM), and a 1.5 MB code cache in
 RDRAM backed by all compiled code in cartridge space holds the full
