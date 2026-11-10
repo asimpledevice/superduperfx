@@ -910,6 +910,16 @@ object after it moves (CPU stage 86 -> 96 ms). The anchor fixes the top,
 not the holes: allocate host buffers before `SnesInit` only if they are
 large, else lazily after it.
 
+SPC700 timer-wait skip (2026-11-10, `SNESRECOMP_SPC_WAIT_SKIP`, on unless
+SPC diagnostics are built; `=0` restores the plain loop): a sound driver
+polling a timer counter (`MOV A/X/Y, $FD-$FF` then `BEQ` back to it) is
+skipped in closed form up to the pass that sees the counter change, capped
+by the next queued port write and the requested clocks, with the DSP's
+32-cycle edges replayed. SMW's `$0549` wait was 31% of SPC instructions.
+Native state hashes and audio over 600 frames are identical to the plain
+loop; native instructions -2.6% (SPC opcodes 200M -> 135M Ir). On the N64
+the gain is inside layout noise (about +-2 ms per change).
+
 See [LESSONS.md](LESSONS.md) for ideas collected from other projects
 (sodium64) and design notes, with how they apply here.
 

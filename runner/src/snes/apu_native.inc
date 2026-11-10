@@ -60,9 +60,110 @@ void SNESRECOMP_DSP_CYCLE_HOOK(Dsp *dsp);
 #define APU_NATIVE_DSP_CYCLE dsp_cycle
 #endif
 
+/* Timer wait loops. Sound drivers spend much of their time in
+ *     loop: MOV reg, Tn-OUT   ; $FD-$FF, dp or absolute, into A, X or Y
+ *           BEQ loop
+ * Each pass reads 0 (which leaves the counter 0), sets reg = 0, Z = 1,
+ * N = 0 and branches back; nothing else changes. Passes are skipped in
+ * closed form up to the first one whose read sees the next counter
+ * increment, which runs normally. The skip never crosses a queued CPU port
+ * write or the end of the run, and sends the DSP the sample edges the
+ * skipped cycles contain, in order, so the result is identical to running
+ * every pass (SNESRECOMP_SPC_WAIT_SKIP=0 runs them). Returns the cycles
+ * skipped (0: not at such a loop, or nothing to skip). */
+#ifndef SNESRECOMP_SPC_WAIT_SKIP
+#define SNESRECOMP_SPC_WAIT_SKIP (!SNESRECOMP_SPC_DIAGNOSTICS)
+#endif
+#if SNESRECOMP_SPC_WAIT_SKIP
+static uint32_t apu_native_waitSkip(Apu *apu, uint32_t clocks) {
+  Spc *spc = apu->spc;
+  const uint16_t pc = spc->pc;
+  const uint8_t *ram = apu->ram;
+  unsigned len, cyc;
+  uint16_t adr;
+  switch (ram[pc]) {
+    case 0xe4: case 0xf8: case 0xeb:   /* MOV A/X/Y, dp */
+      if (spc->p) return 0;
+      adr = ram[(uint16_t)(pc + 1)];
+      len = 2; cyc = 3;
+      break;
+    case 0xe5: case 0xe9: case 0xec:   /* MOV A/X/Y, !abs */
+      adr = (uint16_t)(ram[(uint16_t)(pc + 1)] | ram[(uint16_t)(pc + 2)] << 8);
+      len = 3; cyc = 4;
+      break;
+    default:
+      return 0;
+  }
+  if (adr < 0xfd || adr > 0xff) return 0;
+  const uint16_t bpc = (uint16_t)(pc + len);
+  if (ram[bpc] != 0xf0 || (uint16_t)(bpc + 2 + (int8_t)ram[(uint16_t)(bpc + 1)]) != pc)
+    return 0;
+  if (pc >= 0xffb0) return 0;               /* keep clear of the IPL ROM overlay */
+#if SNESRECOMP_APU_DEFER_DSP
+  /* Code fetches from pages the DSP may write would sync it first. */
+  if (APU_DSP_PAGE_BIT(spc->dspWatchSync, pc) ||
+      APU_DSP_PAGE_BIT(spc->dspWatchSync, (uint16_t)(bpc + 1)))
+    return 0;
+#endif
+  apu_native_timers_sync(apu);
+  const Timer *t = &apu->timer[adr - 0xfd];
+  if (t->counter) return 0;                 /* this read sees a count */
+  const uint32_t pass = cyc + 4u;           /* the read, then BEQ taken */
+  uint64_t passes = UINT64_MAX;             /* passes whose read sees 0 */
+  if (t->enabled) {
+    /* The counter first increments `fire` cycles from now (the inverse of
+     * apu_native_timer): tick n comes when cycles + (n - 1) * period + 1
+     * clocks have passed, and the first increment is tick `first`. */
+    const uint32_t shift = adr == 0xff ? 4u : 7u;
+    const uint32_t first = ((uint32_t)(t->target - t->divider - 1u) & 0xffu) + 1u;
+    const uint64_t fire = (uint64_t)t->cycles + ((uint64_t)(first - 1u) << shift) + 1u;
+    passes = (fire + pass - 1u) / pass;     /* reads at j * pass < fire */
+  }
+  uint64_t room = clocks;
+  if (apu->portQHead != apu->portQTail) {
+    const ApuPortWrite *write = &apu->portQueue[apu->portQHead & (APU_PORT_QUEUE_LEN - 1u)];
+    const uint64_t distance = write->target_cycle - apu->portClock;
+    if (distance < room) room = distance;
+  }
+  if (passes > room / pass) passes = room / pass;
+  if (!passes) return 0;
+  const uint32_t skip = (uint32_t)passes * pass;
+  switch (ram[pc]) {
+    case 0xe4: case 0xe5: spc->a = 0; break;
+    case 0xf8: case 0xe9: spc->x = 0; break;
+    default: spc->y = 0; break;
+  }
+  spc->z = true;
+  spc->n = false;
+  /* The sample edges at the multiples of 32 in [cycles, cycles + skip). */
+  const uint32_t to_edge = (32u - (apu->cycles & 31u)) & 31u;
+  if (skip > to_edge) {
+    for (uint32_t n = (skip - 1u - to_edge) / 32u + 1u; n; --n) {
+#if SNESRECOMP_APU_DEFER_DSP
+      apu_dspEdge(apu);
+#else
+      APU_NATIVE_DSP_CYCLE(apu->dsp);
+#endif
+    }
+  }
+  apu->cycles += skip;
+  apu->portClock += skip;
+  return skip;
+}
+#endif
+
 static void apu_runCycles_native(Apu *apu, uint32_t clocks) {
   while (clocks) {
     apu_drainPortQueue(apu);
+#if SNESRECOMP_SPC_WAIT_SKIP
+    if (!apu->cpuCyclesLeft && !apu->spc->stopped) {
+      const uint32_t skipped = apu_native_waitSkip(apu, clocks);
+      if (skipped) {
+        clocks -= skipped;
+        continue;
+      }
+    }
+#endif
     if (!apu->cpuCyclesLeft) {
 #if SNESRECOMP_SPC_DIAGNOSTICS
       g_spc_pc_histogram[apu->spc->pc]++;
