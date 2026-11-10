@@ -9,6 +9,13 @@ import pytest
 from v2.emit_function import emit_function
 
 
+@pytest.fixture(autouse=True)
+def _default_emission(monkeypatch):
+    """These tests pin the default emitted text; SNESRECOMP_EMIT_LEAN has its
+    own (test_emit_lean.py)."""
+    monkeypatch.delenv("SNESRECOMP_EMIT_LEAN", raising=False)
+
+
 def test_emitted_wait_and_deadline_continuations_keep_live_bank(tmp_path):
     compiler = os.environ.get('CC') or ('C:/msys64/mingw64/bin/gcc.exe'
         if Path('C:/msys64/mingw64/bin/gcc.exe').is_file() else shutil.which('cc'))

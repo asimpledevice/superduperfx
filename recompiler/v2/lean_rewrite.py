@@ -1,5 +1,5 @@
-"""SNESRECOMP_EMIT_LEAN: rewrite the default emitter's memory-access shapes
-into the addressing-mode helpers of runner/src/cpu_lean_access.h.
+"""SNESRECOMP_EMIT_LEAN: rewrite the default emitter's memory-access, cycle
+charge and P-sync shapes into the helpers of runner/src/cpu_lean_access.h.
 
 Each pattern matches exactly the text the default emitter writes for one
 addressing mode and becomes the helper that performs that same call with the
@@ -57,7 +57,29 @@ def _call_end(s: str, start: int) -> int:
     return i
 
 
+_SPD = r'\(uint32\)g_code_speed\[cpu->PB >> 7\]'
+# A charge of N CPU cycles at the code-region speed, on one line (dynamic
+# charges) or two (a block's static charge when it is not merged).
+_CHARGE1 = re.compile(r'cpu->cycles \+= 1; cpu->master_cycles \+= ' + _SPD + ';')
+_CHARGEN = re.compile(r'cpu->cycles \+= (\d+);(\s*)cpu->master_cycles \+= (\d+) \* ' + _SPD + ';')
+_CHARGE_DL = re.compile(r'if \(cpu->D & 0xFF\) \{ cpu_charge\(cpu, 1u\); \}')
+_CHARGE_PAGE = re.compile(r'if \(\((0x[0-9a-fA-F]+) & 0x[fF]{2}00\) != \(\(\1 \+ cpu->([XY])\) & 0x[fF]{2}00\)\) '
+                          r'\{ cpu_charge\(cpu, 1u\); \}')
+_SYNC_P_NZ = ('cpu->P = (uint8)((cpu->P & ~0x82) | (cpu->_flag_Z ? 0x02 : 0) | '
+              '(cpu->_flag_N ? 0x80 : 0));')
+
+
+def _charges(src: str) -> str:
+    src = _CHARGE1.sub('cpu_charge(cpu, 1u);', src)
+    src = _CHARGEN.sub(lambda m: (f'cpu_charge(cpu, {m.group(1)}u);' if m.group(1) == m.group(3)
+                                  else m.group(0)), src)
+    src = _CHARGE_DL.sub('cpu_charge_dl(cpu);', src)
+    src = _CHARGE_PAGE.sub(lambda m: f'cpu_charge_page(cpu, {m.group(1)}u, cpu->{m.group(2)});', src)
+    return src.replace(_SYNC_P_NZ, 'cpu_sync_p_nz(cpu);')
+
+
 def lean_rewrite(src: str) -> str:
+    src = _charges(src)
     for pat, name in _FORMS:
         out, pos = [], 0
         for m in pat.finditer(src):

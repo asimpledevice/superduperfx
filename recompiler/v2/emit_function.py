@@ -2100,10 +2100,15 @@ def emit_function(rom: bytes, bank: int, start: int,
     src.append(f"RecompReturn {func_name}(CpuState *cpu) {{")
     # Diagnostics — same call-stack plumbing v1 emitted, so the runtime
     # debug_server's `call_stack` cmd and crash-handler attribution work.
-    src.append(f'  extern const char *g_last_recomp_func;')
-    src.append(f'  g_last_recomp_func = "{func_name}";')
-    src.append(f'  RecompStackPush("{func_name}");')
-    src.append(f'  cpu_dbg_funcname("{func_name}");')
+    lean = lean_emit()
+    if lean:
+        # cpu_lean_access.h: the same three statements.
+        src.append(f'  recomp_enter("{func_name}");')
+    else:
+        src.append(f'  extern const char *g_last_recomp_func;')
+        src.append(f'  g_last_recomp_func = "{func_name}";')
+        src.append(f'  RecompStackPush("{func_name}");')
+        src.append(f'  cpu_dbg_funcname("{func_name}");')
     # Trace ring: function entry (carries name hash) — first entry per call.
     fn_entry_pc = (bank << 16) | (start & 0xFFFF)
     src.append(f'  cpu_trace_func_entry(cpu, 0x{fn_entry_pc:06X}, "{func_name}");')
@@ -2113,7 +2118,6 @@ def emit_function(rom: bytes, bank: int, start: int,
     # deliver NMI/IRQ without discarding the already-pushed guest return frame.
     # interp_bridge_lle_deadline_pause: on a guest fiber the call pauses here
     # and returns 0 when resumed; otherwise it is the plain deadline test.
-    lean = lean_emit()
     if lean:
         # One shared yield exit per function (emitted after the last block):
         # every check stores its 16-bit resume PC and jumps there. Same calls
@@ -2161,7 +2165,17 @@ def emit_function(rom: bytes, bank: int, start: int,
     # whose own CFG has no PEI. Conditional `_entry_s` left those
     # variants with an undeclared-identifier error at the trampoline
     # branch (mmx_08_v2.c bank-08 build break, 2026-05-24).
-    if entry_s_offset:
+    deny_gate = bool(os.environ.get('SNESRECOMP_EMIT_AOT_DENY_GATE'))
+    own_inline_skip = _own_inline_skip(fn_entry_pc, inline_arg_map)
+    lean_frame = lean and not deny_gate
+    if lean_frame:
+        # cpu_lean_access.h recomp_frame: entry S (with this offset), the
+        # tail-call context, the host return frame and the entry-S record,
+        # in the order written out below.
+        src.append(f'  uint16 _entry_s; uint8 _hrv;')
+        src.append(f'  uint32 _host_return_pc24 = recomp_frame(cpu, {entry_s_offset}, '
+                   f'{own_inline_skip}u, &_entry_s, &_hrv);')
+    elif entry_s_offset:
         sign = '+' if entry_s_offset > 0 else '-'
         src.append(
             f'  uint16 _entry_s = (uint16)(cpu->S {sign} {abs(entry_s_offset)}u);'
@@ -2174,23 +2188,25 @@ def emit_function(rom: bytes, bank: int, start: int,
     # otherwise it dispatches on the popped PC. The caller sets
     # cpu->host_return_valid right before each invoke (direct call -> 1;
     # tail JMP/JML -> propagate the caller's _hrv; dispatch -> 0).
-    src.append(f'  uint8 _hrv = cpu->host_return_valid;')
-    src.append(f'  if (cpu_take_tailcall_return_context(&_entry_s, &_hrv)) {{')
-    src.append(f'    cpu->host_return_valid = _hrv;')
-    src.append(f'  }}')
+    if not lean_frame:
+        src.append(f'  uint8 _hrv = cpu->host_return_valid;')
+        src.append(f'  if (cpu_take_tailcall_return_context(&_entry_s, &_hrv)) {{')
+        src.append(f'    cpu->host_return_valid = _hrv;')
+        src.append(f'  }}')
     # Debug bisection guard (codegen-flag gated): after the prologue has
     # established the ACTUAL invocation's _entry_s/_hrv (incl. tail-call
     # context), tier the whole body to the interpreter if this node's PC is in
     # the runtime deny set. Uses the runtime continuation, so it is sound for
     # every entry path — enabling rebuild-free subset bisection of a seeded AOT
     # set against the interpreter oracle. Off unless SNESRECOMP_EMIT_AOT_DENY_GATE.
-    if os.environ.get('SNESRECOMP_EMIT_AOT_DENY_GATE'):
+    if deny_gate:
         src.append(
             f'  if (rtl_aot_node_denied(0x{fn_entry_pc:06X}u)) {{ '
             f'RecompStackPop(); return interp_tier_dispatch_balanced('
             f'cpu, {_transfer_target_expr(fn_entry_pc, False)}, 0x{fn_entry_pc:06X}u, _entry_s, _hrv, false); }}')
-    own_inline_skip = _own_inline_skip(fn_entry_pc, inline_arg_map)
-    if lean:
+    if lean_frame:
+        pass
+    elif lean:
         # cpu_lean_access.h: the same three reads and formula.
         src.append(f'  uint32 _host_return_pc24 = cpu_host_return_pc24(cpu, _entry_s, _hrv, {own_inline_skip}u);')
     else:
@@ -2223,7 +2239,8 @@ def emit_function(rom: bytes, bank: int, start: int,
     # return-to-ancestor RTS (manual PLA/PLX/PLB rebalance + RTS) can be
     # resolved to a SKIP_N non-local return (cpu_resolve_ancestor_skip).
     # Index by the just-pushed g_recomp_stack_top; pop is implicit (top--).
-    src.append(f'  if (g_recomp_stack_top >= 1) g_cpu_entry_s[g_recomp_stack_top - 1] = _entry_s;')
+    if not lean_frame:
+        src.append(f'  if (g_recomp_stack_top >= 1) g_cpu_entry_s[g_recomp_stack_top - 1] = _entry_s;')
     # `entry_hook`: observational host callbacks (docs/ENTRY_HOOK.md).
     for hook_name in sorted({hook_by_pc24[(bank << 16) | (key.pc & 0xFFFF)]
                              for key in block_order
@@ -2240,9 +2257,24 @@ def emit_function(rom: bytes, bank: int, start: int,
         # Cheap (counter bump + branch); v1 emitted at loop headers, v2
         # gets it at every block since we don't yet identify back-edges.
         sa1 = get_rom_mapping() == ROM_MAP_SA1
-        if lean and not sa1:
+        _cyc_const = _block_cycle_const(block_per_insn_ir.get(key, []))
+        _spd_expr, _spd_const = _block_speed(bank, key.pc)
+        # Lean, no entry hook: the entry checks, the coprocessor clock store
+        # and the static charge below are one call (cpu_lean_access.h), in
+        # that order; a yield skips the store and the charge, as here.
+        merged = (lean and not sa1 and block_pc24 not in hook_by_pc24 and
+                  (_spd_const is not None or _spd_expr == '(uint32)g_code_speed[cpu->PB >> 7]'))
+        if merged:
+            pc16 = f'0x{block_pc24 & 0xFFFF:04x}u'
+            if _spd_const is not None:
+                call = (f'recomp_block_enter_charge_c(cpu, {pc16}, {_cyc_const}u, '
+                        f'{_cyc_const * _spd_const}u)')
+            else:
+                call = f'recomp_block_enter_charge(cpu, {pc16}, {_cyc_const}u)'
+            src.append(f'    if (__builtin_expect({call}, 0)) {{ _yield_pc = {pc16}; goto _lle_yield; }}')
+        elif lean and not sa1:
             # recomp_block_enter = WatchdogCheck() then the deadline test
-            # below, in that order (cpu_state.h).
+            # below, in that order (cpu_lean_access.h).
             src.append(
                 f'    if (__builtin_expect(recomp_block_enter(cpu, 0x{block_pc24 & 0xFFFF:04x}u), 0)) '
                 f'{{ _yield_pc = 0x{block_pc24 & 0xFFFF:04x}u; goto _lle_yield; }}')
@@ -2287,17 +2319,16 @@ def emit_function(rom: bytes, bank: int, start: int,
         # advances the frame clock to the end of the block before its emitted
         # operations run; exposing that future timestamp to DSP-1 can let
         # firmware consume a word before the CPU has written it.
-        src.append(
-            '    cpu->coprocessor_master_cycles = cpu->master_cycles;')
+        if not merged:
+            src.append(
+                '    cpu->coprocessor_master_cycles = cpu->master_cycles;')
         # Axis-2: charge this block's static 65816 CPU cycles as one constant
         # add (recompiler/snes_cycles.py). Near-free. Runtime-only modifiers
         # (D.l/page-cross/branch-taken) are charged dynamically in block_lines.
         # Axis-5: also charge the region-weighted MASTER clocks (CPU cycles x
         # code-region speed) into cpu->master_cycles, which paces the SPC700.
-        _cyc_const = _block_cycle_const(block_per_insn_ir.get(key, []))
-        if _cyc_const:
+        if _cyc_const and not merged:
             src.append(f'    cpu->cycles += {_cyc_const};')
-            _spd_expr, _spd_const = _block_speed(bank, key.pc)
             if _spd_const is not None:
                 src.append(f'    cpu->master_cycles += {_cyc_const * _spd_const};')
             else:

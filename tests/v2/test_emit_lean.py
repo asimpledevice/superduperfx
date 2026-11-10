@@ -40,8 +40,9 @@ def test_blocks_share_one_yield_exit(lean):
     assert src.count('interp_bridge_lle_yield_unwind(cpu, ((uint32)cpu->PB << 16) | _yield_pc)') == 1
     assert 'WatchdogCheck' not in src
     for pc in _BLOCKS:
-        assert (f'recomp_block_enter(cpu, 0x{pc:04x}u), 0)) '
-                f'{{ _yield_pc = 0x{pc:04x}u; goto _lle_yield; }}') in src
+        assert re.search(rf'recomp_block_enter_charge\(cpu, 0x{pc:04x}u, \d+u\), 0\)\) '
+                         rf'\{{ _yield_pc = 0x{pc:04x}u; goto _lle_yield; \}}', src), pc
+    assert 'coprocessor_master_cycles' not in src and 'cpu->cycles +=' not in src
     # The function-entry check keeps its own deadline call and resume PC.
     assert re.search(r'interp_bridge_lle_deadline_pause\(cpu, \(\(\(uint32\)cpu->PB << 16\) '
                      r'\| 0x8000u\)\), 0\)\) \{ _yield_pc = 0x8000u; goto _lle_yield; \}', src)
@@ -161,20 +162,21 @@ def test_rewrite_leaves_order_sensitive_sites_inline():
 
 
 # LDA $10 / STA $12 / LDA $1234,X / STA $1300,Y / LDA $7E2000,X / STA $14,X /
-# PHA / LDA #$77 / PLA / PHP / PLP / LDA $20,X / STA $1400,X / RTS
+# PHA / LDA #$77 / PLA / PHP / PLP / LDA $20,X / STA $1400,X / BNE +0 / RTS
 _MIX = bytes.fromhex('A5 10 85 12 BD 34 12 99 00 13 BF 00 20 7E 95 14 '
-                     '48 A9 77 68 08 28 B5 20 9D 00 14 60')
+                     '48 A9 77 68 08 28 B5 20 9D 00 14 D0 00 60')
 
 _DIFF_MAIN = r'''
 static uint8 ram_after[2][0x20000];
 static CpuState cpu_after[2];
+static uint8 g_pb;
 static void run(int which, RecompReturn (*fn)(CpuState *)) {
   CpuState cpu;
   memset(&cpu, 0, sizeof cpu);
   for (unsigned i = 0; i < sizeof g_ram; i++) g_ram[i] = (uint8)(i * 7 + 3);
   cpu.ram = g_ram;
   cpu.S = 0x01FF; cpu.m_flag = 1; cpu.x_flag = 1; cpu.P = 0x30;
-  cpu.X = 3; cpu.Y = 5; cpu.D = 0x0100; cpu.DB = 0x7E;
+  cpu.X = 0xF3; cpu.Y = 5; cpu.D = 0x0101; cpu.DB = 0x7E; cpu.PB = g_pb;
   g_tc_valid = 0; g_recomp_stack_top = 0; g_other_exits = 0;
   cpu_push_jsr_return_frame(&cpu);
   fn(&cpu);
@@ -183,11 +185,25 @@ static void run(int which, RecompReturn (*fn)(CpuState *)) {
   cpu_after[which] = cpu;
 }
 int main(void) {
-  run(0, Def_M1X1);
-  run(1, Lean_M1X1);
-  if (memcmp(ram_after[0], ram_after[1], sizeof ram_after[0])) { puts("ram differs"); return 1; }
-  if (memcmp(&cpu_after[0], &cpu_after[1], sizeof cpu_after[0])) { puts("cpu differs"); return 1; }
-  if (g_other_exits) { puts("unexpected exit"); return 1; }
+  /* Every bank-speed case: slow bank, and the $80 mirror with MEMSEL off/on
+   * (the default body tests g_memsel, the lean one reads g_code_speed). */
+  for (int c = 0; c < 3; c++) {
+    g_pb = c ? 0x80 : 0x00;
+    g_memsel = c == 2;
+    g_code_speed[1] = g_memsel ? 6 : 8;
+    run(0, Def_M1X1);
+    run(1, Lean_M1X1);
+    if (memcmp(ram_after[0], ram_after[1], sizeof ram_after[0])) { printf("ram differs %d\n", c); return 1; }
+    if (memcmp(&cpu_after[0], &cpu_after[1], sizeof cpu_after[0])) {
+      printf("cpu differs %d: cycles %llu/%llu master %llu/%llu P %02x/%02x\n", c,
+             (unsigned long long)cpu_after[0].cycles, (unsigned long long)cpu_after[1].cycles,
+             (unsigned long long)cpu_after[0].master_cycles, (unsigned long long)cpu_after[1].master_cycles,
+             cpu_after[0].P, cpu_after[1].P);
+      return 1;
+    }
+    if (cpu_after[0].master_cycles == 0) { puts("no charge"); return 1; }
+    if (g_other_exits) { puts("unexpected exit"); return 1; }
+  }
   puts("ok");
   return 0;
 }
@@ -208,7 +224,9 @@ def test_lean_and_default_bodies_leave_the_same_state(monkeypatch, tmp_path):
     monkeypatch.setenv('SNESRECOMP_EMIT_LEAN', '1')
     lean = emit_function(rom, bank=0, start=0x8000, entry_m=1, entry_x=1, end=end, func_name='Lean')
     for helper in ('cpu_read_dp8', 'cpu_read_absX8', 'cpu_write_absY8', 'cpu_read_longx8',
-                   'cpu_write_dpx8', 'cpu_push8', 'cpu_pull8', 'cpu_host_return_pc24'):
+                   'cpu_write_dpx8', 'cpu_push8', 'cpu_pull8', 'recomp_frame', 'recomp_enter',
+                   'recomp_block_enter_charge', 'cpu_charge_dl', 'cpu_charge_page',
+                   'cpu_sync_p_nz', 'cpu_charge(cpu, 1u); goto'):
         assert helper in lean, helper
     harness = seam._HARNESS.split('/* The C helpers.')[0]
     c_file = tmp_path / 'diff.c'

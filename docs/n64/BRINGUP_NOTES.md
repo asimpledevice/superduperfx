@@ -1042,6 +1042,32 @@ emitted both ways and compares RAM and the whole CpuState; tests/v2 and the
 runtime C tests pass as before. ares frame time unchanged within noise
 (90.7 / 17.8 / 9.7 ms).
 
+Fixed sequences (same switch; the remaining lean output attributed per
+generated-C line, then each sequence moved into cpu_lean_access.h in the
+order the emitter writes it):
+
+- block entry: with no entry hook, `recomp_block_enter_charge(cpu, pc, n)`
+  is the watchdog, the deadline test, then (no yield) the coprocessor clock
+  store and the block's static charge (`_c` form for fixed-speed regions);
+- `cpu_charge(cpu, n)` for branch-taken and other dynamic charges,
+  `cpu_charge_dl` (D.l != 0 penalty), `cpu_charge_page` (index page cross);
+- `cpu_sync_p_nz` (P's N/Z bits after a flag update);
+- prologue: `recomp_enter(name)` and `recomp_frame(...)` (entry S, tail-call
+  context, host return frame, entry-S record); the debug deny gate keeps the
+  written-out prologue.
+
+| SMW native set, MIPS `.text` | bytes | vs default |
+|---|---|---|
+| Lean, plus memory-access helpers | 2,097,386 | -18.6% |
+| Lean, plus fixed-sequence helpers | 1,549,754 | -39.9% |
+
+Same function set; native state and audio hashes identical to default
+emission; the differential test now runs PB $00 and the $80 mirror with
+MEMSEL off and on, through D.l, page-cross and branch-taken charges and
+PHP/PLP; tests/v2 and the runtime C tests as before; ares 87.9 / 18.4 /
+9.8 ms. Still to consider: the RTS/RTL return decision tree (14% of the
+remaining code, ~723 sites) and decimal-mode ADC/SBC (4.5%).
+
 ## Next steps
 
 1. Audio: check the RSP DSP by ear on hardware (output arrives later than

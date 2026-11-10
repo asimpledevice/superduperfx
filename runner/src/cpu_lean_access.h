@@ -1,4 +1,4 @@
-/* Addressing-mode helpers for lean generated code (SNESRECOMP_EMIT_LEAN).
+/* Helpers for lean generated code (SNESRECOMP_EMIT_LEAN).
  *
  * Each helper is exactly the call the default emitter writes inline at every
  * site (same bus call, same address arithmetic, same order), moved out of
@@ -13,6 +13,21 @@
  *   cpu_push8(cpu, v)       = cpu_write8(cpu, 0x00, cpu->S, v); S -= 1
  *   cpu_pull8(cpu)          = S += 1; cpu_read8(cpu, 0x00, cpu->S)
  *   cpu_host_return_pc24    = the function prologue's return-frame read.
+ *
+ * and the emitter's other fixed sequences, each in the order it writes them:
+ *
+ *   cpu_charge(cpu, n)          = cycles += n; master_cycles += n * speed
+ *   cpu_charge_dl(cpu)          = if (D & 0xFF) cpu_charge(cpu, 1)
+ *   cpu_charge_page(cpu, k, i)  = if ((k & 0xFF00) != ((k + i) & 0xFF00)) cpu_charge(cpu, 1)
+ *   cpu_sync_p_nz(cpu)          = P's N and Z bits from the flag mirrors
+ *   recomp_block_enter(cpu, pc) = WatchdogCheck(); deadline test at PB:pc
+ *   recomp_block_enter_charge   = the same, then (no yield) the coprocessor
+ *                                 clock store and the block's static charge
+ *   recomp_enter(name)          = g_last_recomp_func, RecompStackPush, cpu_dbg_funcname
+ *   recomp_frame(...)           = entry S, tail-call context, host return frame,
+ *                                 entry-S record
+ *
+ * speed is g_code_speed[PB >> 7] (cpu_state.h).
  *
  * cpu_state.h includes the declarations. Definitions: define
  * CPU_LEAN_ACCESS_DEFINE and include this header again, once per program
@@ -39,6 +54,15 @@ CPU_LEAN_ACCESS_FORMS(CPU_LEAN_ACCESS_DECLARE)
 void   cpu_push8(CpuState *cpu, uint8 v);
 uint8  cpu_pull8(CpuState *cpu);
 uint32 cpu_host_return_pc24(CpuState *cpu, uint16 entry_s, uint8 hrv, uint32 skip);
+void   cpu_charge(CpuState *cpu, uint32 n);
+void   cpu_charge_dl(CpuState *cpu);
+void   cpu_charge_page(CpuState *cpu, uint32 k, uint32 i);
+void   cpu_sync_p_nz(CpuState *cpu);
+int    recomp_block_enter(CpuState *cpu, uint32 pc16);
+int    recomp_block_enter_charge(CpuState *cpu, uint32 pc16, uint32 n);
+int    recomp_block_enter_charge_c(CpuState *cpu, uint32 pc16, uint32 n, uint32 master);
+void   recomp_enter(const char *name);
+uint32 recomp_frame(CpuState *cpu, int s_offset, uint32 skip, uint16 *entry_s, uint8 *hrv);
 
 #endif
 
@@ -71,5 +95,60 @@ uint32 cpu_host_return_pc24(CpuState *cpu, uint16 entry_s, uint8 hrv, uint32 ski
   uint16 rpch = cpu_read8(cpu, 0x00, (uint16)(entry_s + 2u));
   uint8 rpb = (hrv == 3) ? cpu_read8(cpu, 0x00, (uint16)(entry_s + 3u)) : cpu->PB;
   return ((uint32)rpb << 16) | (uint16)((((rpch << 8) | rpcl) + 1u + skip) & 0xFFFFu);
+}
+
+/* The runtime symbols the sequences below call (common_cpu_infra.h). */
+void WatchdogCheck(void);
+void RecompStackPush(const char *name);
+int cpu_take_tailcall_return_context(uint16_t *entry_s, uint8_t *hrv);
+extern int g_recomp_stack_top;
+extern uint16_t g_cpu_entry_s[];
+extern const char *g_last_recomp_func;
+
+void cpu_charge(CpuState *cpu, uint32 n) {
+  cpu->cycles += n;
+  cpu->master_cycles += n * (uint32)g_code_speed[cpu->PB >> 7];
+}
+void cpu_charge_dl(CpuState *cpu) {
+  if (cpu->D & 0xFF) cpu_charge(cpu, 1u);
+}
+void cpu_charge_page(CpuState *cpu, uint32 k, uint32 i) {
+  if ((k & 0xFF00) != ((k + i) & 0xFF00)) cpu_charge(cpu, 1u);
+}
+void cpu_sync_p_nz(CpuState *cpu) {
+  cpu->P = (uint8)((cpu->P & ~0x82) | (cpu->_flag_Z ? 0x02 : 0) | (cpu->_flag_N ? 0x80 : 0));
+}
+int recomp_block_enter(CpuState *cpu, uint32 pc16) {
+  WatchdogCheck();
+  return interp_bridge_lle_deadline_pause(cpu, ((uint32)cpu->PB << 16) | pc16);
+}
+int recomp_block_enter_charge(CpuState *cpu, uint32 pc16, uint32 n) {
+  if (recomp_block_enter(cpu, pc16)) return 1;
+  cpu->coprocessor_master_cycles = cpu->master_cycles;
+  cpu_charge(cpu, n);
+  return 0;
+}
+/* The same for code whose region speed is fixed: master = n * that speed. */
+int recomp_block_enter_charge_c(CpuState *cpu, uint32 pc16, uint32 n, uint32 master) {
+  if (recomp_block_enter(cpu, pc16)) return 1;
+  cpu->coprocessor_master_cycles = cpu->master_cycles;
+  cpu->cycles += n;
+  cpu->master_cycles += master;
+  return 0;
+}
+void recomp_enter(const char *name) {
+  g_last_recomp_func = name;
+  RecompStackPush(name);
+  cpu_dbg_funcname(name);
+}
+uint32 recomp_frame(CpuState *cpu, int s_offset, uint32 skip, uint16 *entry_s, uint8 *hrv) {
+  uint16 s = (uint16)(cpu->S + s_offset);
+  uint8 h = cpu->host_return_valid;
+  if (cpu_take_tailcall_return_context(&s, &h)) cpu->host_return_valid = h;
+  uint32 host_return_pc24 = cpu_host_return_pc24(cpu, s, h, skip);
+  if (g_recomp_stack_top >= 1) g_cpu_entry_s[g_recomp_stack_top - 1] = s;
+  *entry_s = s;
+  *hrv = h;
+  return host_return_pc24;
 }
 #endif
