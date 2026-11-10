@@ -19,7 +19,15 @@ def test_emitted_wait_and_deadline_continuations_keep_live_bank(tmp_path):
                              start=0x8000, entry_m=0, entry_x=0, end=0x800D,
                              func_name='Wait')
     # Execute the actual entry guards; both paths return before the body.
-    entry = generated.split('  RecompReturn _pending_skip')[0] + '  assert(0); return 0;\n}\n'
+    entry = generated.split('  RecompReturn _pending_skip')[0]
+    if 'goto _lle_yield;' in entry:
+        # SNESRECOMP_EMIT_LEAN: the guards jump to the function's shared
+        # yield exit, emitted after the last block; run that exit too.
+        start = generated.index('  if (0) {\n  _lle_yield:')
+        shared_exit = generated[start:generated.index('\n  }\n', start) + 5]
+        entry += '  assert(0);\n' + shared_exit + '  return 0;\n}\n'
+    else:
+        entry += '  assert(0); return 0;\n}\n'
     # Execute an actual generated charge, including the live FastROM condition.
     charge = re.search(r'cpu->master_cycles \+= (\d+) \* ([^;]+);', generated)
     assert charge
@@ -28,10 +36,12 @@ def test_emitted_wait_and_deadline_continuations_keep_live_bank(tmp_path):
 #include <assert.h>
 #include <stdint.h>
 typedef uint32_t uint32;
+typedef uint16_t uint16;
 typedef int RecompReturn;
 typedef struct { uint8_t PB; uint16_t S; uint64_t master_cycles; } CpuState;
 const char *g_last_recomp_func;
 static unsigned g_memsel, deadline, depth;
+uint8_t g_code_speed[2] = {8, 8};   /* lean emission (SNESRECOMP_EMIT_LEAN) */
 static uint32 resume;
 #define RecompStackPush(...) (++depth)
 #define RecompStackPopYield() (--depth)
@@ -59,6 +69,7 @@ int main(void) {
             assert(resume == ((bank << 16) | 0x8000));
             assert(cpu.S == 0x1ffc && cpu.PB == bank && depth == 0);
             for (g_memsel = 0; g_memsel < 2; g_memsel++) {
+                g_code_speed[1] = g_memsel ? 6 : 8;
                 cpu.master_cycles = 0;
                 charge(&cpu);
                 const unsigned expected_speed = (bank == 0x80 && g_memsel) ? 6 : 8;

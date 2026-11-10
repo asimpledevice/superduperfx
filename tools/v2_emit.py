@@ -51,13 +51,18 @@ from sync_symbols import sync_symbols  # noqa: E402
 # Any non-empty value counts as enabled, matching the codegen guards.
 EMIT_SWITCHES = {
     "SNESRECOMP_EMIT_AOT_DENY_GATE": "aot_deny_gate",
+    "SNESRECOMP_EMIT_LEAN": "lean",
 }
+# Switches that predate the list always appear in the key text; later ones
+# only when set, so caches built without them stay valid.
+_EMIT_SWITCHES_ALWAYS_KEYED = {"SNESRECOMP_EMIT_AOT_DENY_GATE"}
 
 
 def _emit_switch_digest() -> str:
     return "\0".join(
         f"{label}={int(bool(os.environ.get(name)))}"
-        for name, label in EMIT_SWITCHES.items())
+        for name, label in EMIT_SWITCHES.items()
+        if name in _EMIT_SWITCHES_ALWAYS_KEYED or os.environ.get(name))
 
 
 def _tree_digest(paths) -> str:

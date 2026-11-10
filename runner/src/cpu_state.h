@@ -538,6 +538,18 @@ void wlog_scope_exit(void);
  * declared here so every generated translation unit (which always includes
  * cpu_state.h) can see it. SlowROM games never set it and emit no reference. */
 extern uint8_t g_memsel;
+/* Code-region master clocks per CPU cycle for a $00-$3F/$80-$BF ROM body,
+ * indexed by PB >> 7: [0] = 8, [1] = 6 when MEMSEL is set, else 8. Kept by
+ * common_rtl.c wherever g_memsel changes; read by lean generated code
+ * (SNESRECOMP_EMIT_LEAN) in place of the g_memsel/PB test. */
+extern uint8_t g_code_speed[2];
+
+/* Lean generated code (SNESRECOMP_EMIT_LEAN): a block's entry checks,
+ * WatchdogCheck() then interp_bridge_lle_deadline_pause(cpu, PB:pc16), as one
+ * call; nonzero means unwind to the interpreter at PB:pc16. */
+int recomp_block_enter(CpuState *cpu, uint32 pc16);
+/* A void alias's callee returned a non-local result: report and abort. */
+void recomp_void_alias_leak(int r, const char *name) __attribute__((noreturn, cold));
 
 /* Diagnostic — generated functions can call this to log entry. */
 void cpu_dbg_funcname(const char *name);

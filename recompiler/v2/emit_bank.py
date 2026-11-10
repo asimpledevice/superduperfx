@@ -29,6 +29,7 @@ from dataclasses import dataclass  # noqa: E402
 from typing import List, Optional, Tuple  # noqa: E402
 
 from v2.emit_function import emit_function  # noqa: E402
+from v2.emit_options import lean_emit  # noqa: E402
 from v2.naming import (  # noqa: E402
     default_func_name as _default_func_name_local,
     variant_suffix as _variant_suffix,
@@ -305,15 +306,22 @@ def emit_bank(rom: bytes, bank: int,
                 "  cpu_interrupt_context_leave();",
                 "  cpu->host_return_valid = _interrupted_hrv;",
             ])
-        body.extend([
-            "  if (_r != RECOMP_RETURN_NORMAL) {",
-            "    fprintf(stderr,",
-            "      \"[recomp] non-local-return SKIP_%d leaked past void alias %s\\n\",",
-            f"      (int)_r, \"{name}\");",
-            "    abort();",
-            "  }",
-            "}",
-        ])
+        if lean_emit():
+            body.extend([
+                "  if (_r != RECOMP_RETURN_NORMAL)",
+                f"    recomp_void_alias_leak((int)_r, \"{name}\");",
+                "}",
+            ])
+        else:
+            body.extend([
+                "  if (_r != RECOMP_RETURN_NORMAL) {",
+                "    fprintf(stderr,",
+                "      \"[recomp] non-local-return SKIP_%d leaked past void alias %s\\n\",",
+                f"      (int)_r, \"{name}\");",
+                "    abort();",
+                "  }",
+                "}",
+            ])
         parts.append("\n".join(body))
     if alias_entries:
         parts.append("")

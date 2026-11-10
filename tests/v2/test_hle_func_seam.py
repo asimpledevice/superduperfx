@@ -267,6 +267,16 @@ int interp_bridge_lle_deadline_pause(CpuState *cpu, uint32 pc) {
   (void)pc; return interp_bridge_lle_master_deadline_reached(cpu);
 }
 int interp_bridge_lle_unwind_pending(void) { return 0; }
+/* Lean emission (SNESRECOMP_EMIT_LEAN), as in the runtime. */
+uint8 g_code_speed[2] = {8, 8};
+int recomp_block_enter(CpuState *cpu, uint32 pc16) {
+  WatchdogCheck();
+  return interp_bridge_lle_deadline_pause(cpu, ((uint32)cpu->PB << 16) | pc16);
+}
+void recomp_void_alias_leak(int r, const char *name) {
+  fprintf(stderr, "[recomp] SKIP_%d leaked past void alias %s\n", r, name);
+  abort();
+}
 int interp_bridge_return_targets_owner(uint16 a, uint16 b) {
   (void)a; (void)b; return 0;
 }

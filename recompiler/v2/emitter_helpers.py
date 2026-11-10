@@ -18,6 +18,9 @@ from typing import List
 from snes_cycles import region_speed
 
 
+from v2.emit_options import lean_emit
+
+
 def runtime_code_speed(pc24: int):
     """Keep code-region cycle weighting correct through bank-bit-7 mirrors.
 
@@ -30,6 +33,10 @@ def runtime_code_speed(pc24: int):
     if slow == low_fast == high_slow == high_fast:
         return str(slow), slow
     assert slow == low_fast == high_slow
+    if lean_emit() and (slow, high_fast) == (8, 6):
+        # g_code_speed[PB >> 7]: 8, then 6 or 8 by MEMSEL ($420D), kept by
+        # the runtime wherever g_memsel changes. Same value, less code.
+        return "(uint32)g_code_speed[cpu->PB >> 7]", None
     return f"((g_memsel && (cpu->PB & 0x80)) ? {high_fast} : {slow})", None
 
 

@@ -29,6 +29,7 @@ for p in (str(_THIS_DIR), str(_RECOMPILER_DIR)):
 
 from typing import Dict, List, Optional, Tuple  # noqa: E402
 
+from v2.emit_options import lean_emit
 from v2.decoder import (  # noqa: E402
     DecodeKey, DecodedInsn, FunctionDecodeGraph, decode_function, addr24,
 )
@@ -2111,12 +2112,23 @@ def emit_function(rom: bytes, bank: int, start: int,
     # deliver NMI/IRQ without discarding the already-pushed guest return frame.
     # interp_bridge_lle_deadline_pause: on a guest fiber the call pauses here
     # and returns 0 when resumed; otherwise it is the plain deadline test.
-    src.append(f'  if (interp_bridge_lle_deadline_pause(cpu, {_transfer_target_expr(fn_entry_pc, False)})) {{')
-    src.append('    RecompStackPopYield();')
-    src.append(
-        f'    return interp_bridge_lle_yield_unwind(cpu, {_transfer_target_expr(fn_entry_pc, False)});'
-    )
-    src.append('  }')
+    lean = lean_emit()
+    if lean:
+        # One shared yield exit per function (emitted after the last block):
+        # every check stores its 16-bit resume PC and jumps there. Same calls
+        # and resume PCs as the inline form.
+        src.append('  uint16 _yield_pc;')
+        src.append(
+            f'  if (__builtin_expect(interp_bridge_lle_deadline_pause(cpu, '
+            f'{_transfer_target_expr(fn_entry_pc, False)}), 0)) '
+            f'{{ _yield_pc = 0x{fn_entry_pc & 0xFFFF:04x}u; goto _lle_yield; }}')
+    else:
+        src.append(f'  if (interp_bridge_lle_deadline_pause(cpu, {_transfer_target_expr(fn_entry_pc, False)})) {{')
+        src.append('    RecompStackPopYield();')
+        src.append(
+            f'    return interp_bridge_lle_yield_unwind(cpu, {_transfer_target_expr(fn_entry_pc, False)});'
+        )
+        src.append('  }')
     if has_lle_memory_poll:
         src.append('  if (interp_bridge_in_lle_scheduler()) {')
         src.append('    RecompStackPopYield();')
@@ -2222,7 +2234,15 @@ def emit_function(rom: bytes, bank: int, start: int,
         # frame timeout instead of freezing the runtime indefinitely.
         # Cheap (counter bump + branch); v1 emitted at loop headers, v2
         # gets it at every block since we don't yet identify back-edges.
-        src.append(f'    WatchdogCheck();')
+        sa1 = get_rom_mapping() == ROM_MAP_SA1
+        if lean and not sa1:
+            # recomp_block_enter = WatchdogCheck() then the deadline test
+            # below, in that order (cpu_state.h).
+            src.append(
+                f'    if (__builtin_expect(recomp_block_enter(cpu, 0x{block_pc24 & 0xFFFF:04x}u), 0)) '
+                f'{{ _yield_pc = 0x{block_pc24 & 0xFFFF:04x}u; goto _lle_yield; }}')
+        else:
+            src.append(f'    WatchdogCheck();')
         # SA-1 MMC registers can remap code while a routine is live. Each
         # instruction is a block, so a mapper write cannot leave a stale
         # compiled continuation executing the previous ROM bytes. Check
@@ -2239,13 +2259,19 @@ def emit_function(rom: bytes, bank: int, start: int,
         # across a frame boundary. Every CFG block starts at an architectural
         # instruction boundary, so it is safe to unwind here and resume this
         # exact PC through the owning interpreter after host events run.
-        src.append(
-            f'    if (interp_bridge_lle_deadline_pause(cpu, {_transfer_target_expr(block_pc24, False)})) {{')
-        src.append('      RecompStackPopYield();')
-        src.append(
-            f'      return interp_bridge_lle_yield_unwind('
-            f'cpu, {_transfer_target_expr(block_pc24, False)});')
-        src.append('    }')
+        if lean and sa1:
+            src.append(
+                f'    if (__builtin_expect(interp_bridge_lle_deadline_pause(cpu, '
+                f'{_transfer_target_expr(block_pc24, False)}), 0)) '
+                f'{{ _yield_pc = 0x{block_pc24 & 0xFFFF:04x}u; goto _lle_yield; }}')
+        elif not lean:
+            src.append(
+                f'    if (interp_bridge_lle_deadline_pause(cpu, {_transfer_target_expr(block_pc24, False)})) {{')
+            src.append('      RecompStackPopYield();')
+            src.append(
+                f'      return interp_bridge_lle_yield_unwind('
+                f'cpu, {_transfer_target_expr(block_pc24, False)});')
+            src.append('    }')
         # Once per execution of the hooked instruction: after the deadline
         # check (a yield there hands the instruction, and with it the report,
         # to the interpreter) and before the block's cycles are charged.
@@ -2284,6 +2310,12 @@ def emit_function(rom: bytes, bank: int, start: int,
                         else "RecompStackPop")
                 src.append(f"    {_pop}();")
             src.append(f"    {ln}")
+    if lean:
+        src.append("  if (0) {")
+        src.append("  _lle_yield:")
+        src.append("    RecompStackPopYield();")
+        src.append("    return interp_bridge_lle_yield_unwind(cpu, ((uint32)cpu->PB << 16) | _yield_pc);")
+        src.append("  }")
     # Defensive trailing return so a missing terminator doesn't fall off
     # the end of the function in the C compiler's view.
     src.append("  RecompStackPop();")

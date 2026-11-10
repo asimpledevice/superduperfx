@@ -1,9 +1,19 @@
+
 """Phase 6a: emit_function end-to-end smoke. Drives the v2 pipeline
 on synthetic ROM fixtures and asserts the emitted C function source
 has the expected structural shape."""
+import pytest
 from _helpers import make_lorom_bank0  # noqa: E402
 
+
 from v2.emit_function import emit_function  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _default_emission(monkeypatch):
+    """These tests pin the default emitted text; SNESRECOMP_EMIT_LEAN has its
+    own (test_emit_lean.py)."""
+    monkeypatch.delenv("SNESRECOMP_EMIT_LEAN", raising=False)
 
 
 def test_linear_function_signature_and_return():

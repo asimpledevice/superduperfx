@@ -309,6 +309,7 @@ static uint64_t rtl_apu_guest_cycle(void) {
 // SlowROM games (e.g. SMW) never set it and run all code from $00-$3F (speed is
 // memsel-independent there), so this stays 0 and the emitted charge is constant.
 uint8_t g_memsel = 0;
+uint8_t g_code_speed[2] = {8, 8};   /* see cpu_state.h */
 
 // Axis-7 determinism: diagnostic per-frame WRAM fingerprint ring. FNV-1a of
 // the full 128 KiB g_ram each frame, keyed by frame number. Trace and co-sim
@@ -1306,6 +1307,7 @@ static void rtl_mmio_shadow_resync_get(uint8 *memsel, uint8 *hdmaen,
 static void rtl_mmio_shadow_resync_set(uint8 memsel, uint8 hdmaen,
                                        uint8 apu_driving) {
   g_memsel = memsel;
+  g_code_speed[1] = memsel ? 6 : 8;
   g_snesrecomp_last_hdmaen = hdmaen;
   g_interp_apu_driving = apu_driving ? 1 : 0;
 }
@@ -1800,8 +1802,10 @@ void WriteReg(uint16 reg, uint8 value) {
       /* The raster journal records it in snes_writeReg. */
       g_snesrecomp_last_hdmaen = value;
     }
-    if (reg == 0x420D)
+    if (reg == 0x420D) {
       g_memsel = (uint8_t)(value & 1);  /* FastROM select; paces $80-FF code */
+      g_code_speed[1] = g_memsel ? 6 : 8;
+    }
     recomp_write_internal_reg(reg, value);
   } else if (reg >= 0x4300 && reg < 0x4380) {
     dma_write(g_dma, reg, value);

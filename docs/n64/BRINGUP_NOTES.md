@@ -981,6 +981,43 @@ varies at run time, the same validation class as guest fibers). Function
 granularity is coarse: a frame enters 700 KB of compiled functions but runs
 far less of each.
 
+## Lean emitter (`SNESRECOMP_EMIT_LEAN`, 2026-11-10)
+
+Where the generated MIPS code goes (SMW's native set, 2.58 MB of `.text`),
+measured by rewriting the generated C and compiling with the N64 flags:
+
+| Change | `.text` | Exact |
+|---|---|---|
+| Per-block watchdog + deadline as one call, one shared yield exit per function | -6.0% | yes |
+| Void-alias leak check: shared fatal routine instead of fprintf/abort | -1.3% | yes |
+| Mirrored-body code speed from `g_code_speed[PB >> 7]` | -2.5% | yes |
+| Speed as a constant 8 (ceiling; needs the speed known statically) | -10.3% | no |
+| All N/Z flag writes removed (ceiling for dead-flag elimination) | -3.1% | no |
+
+`SNESRECOMP_EMIT_LEAN=1` (v2_emit environment, off by default, in the
+generator digest via `EMIT_SWITCHES`) emits the three exact rows:
+
+- `recomp_block_enter(cpu, pc16)` = `WatchdogCheck()` then
+  `interp_bridge_lle_deadline_pause(cpu, PB:pc16)`, same order; a pause
+  stores the PC and jumps to the function's one `_lle_yield` exit
+  (`RecompStackPopYield` + `interp_bridge_lle_yield_unwind(PB:pc)`). SA-1
+  builds keep the watchdog inline (their mapping check sits between).
+- `g_code_speed[2]` (cpu_state.h) is kept by common_rtl.c at both places
+  `g_memsel` changes ($420D write, snapshot resync).
+- `recomp_void_alias_leak(r, name)` prints the same message and aborts.
+
+SMW, current native set: 2,577,336 -> 2,342,866 bytes (-9.1%, -229 KB).
+Native state and audio hashes over 1,200 frames identical to the default
+emission. tests/v2 passes in both modes (one failure, test_disconnect_
+diagnostics, predates this); tests/v2/test_emit_lean.py runs a lean
+function with the deadline forced at each block, and
+test_continuation_live_pb runs the table for bank $80 with MEMSEL off and on.
+ares frame time unchanged within layout noise (generated code is under 1%
+of the frame): the gain is RAM, and a smaller working set for a code cache.
+
+Dead-flag elimination is capped at about 3% (2.5% at the measured 80% dead
+rate), far below the 25% the per-block sequence was first guessed at.
+
 ## Next steps
 
 1. Audio: check the RSP DSP by ear on hardware (output arrives later than

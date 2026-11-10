@@ -1,9 +1,18 @@
+
 """Axis-2 step C: the v2 emitter charges each block's static 65816 CPU
 cycles as a per-block constant (recompiler/snes_cycles.py via
 emit_function._block_cycle_const). Guards the cost-model -> emitter wiring."""
+import pytest
 import re
 
 from _helpers import make_lorom_bank0  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _default_emission(monkeypatch):
+    """These tests pin the default emitted text; SNESRECOMP_EMIT_LEAN has its
+    own (test_emit_lean.py)."""
+    monkeypatch.delenv("SNESRECOMP_EMIT_LEAN", raising=False)
 from v2.emit_function import emit_function  # noqa: E402
 
 

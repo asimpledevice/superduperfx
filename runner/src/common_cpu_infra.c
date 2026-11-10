@@ -940,6 +940,16 @@ void snes_refresh_state_set(uint64_t phase, uint64_t charged_upto) {
   g_refresh_charged_upto = charged_upto;
 }
 
+int recomp_block_enter(CpuState *cpu, uint32 pc16) {
+  WatchdogCheck();
+  return interp_bridge_lle_deadline_pause(cpu, ((uint32)cpu->PB << 16) | pc16);
+}
+
+void recomp_void_alias_leak(int r, const char *name) {
+  fprintf(stderr, "[recomp] non-local-return SKIP_%d leaked past void alias %s\n", r, name);
+  abort();
+}
+
 // Called at loop headers in generated code — detect infinite loops
 void WatchdogCheck(void) {
   RtlGuestScopeCheckpoint();

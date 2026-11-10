@@ -1,5 +1,7 @@
+
 """Per-IR-op smoke tests for v2 codegen. Assert the emitted C contains
 the expected substrings for each op kind."""
+import pytest
 from _helpers import make_lorom_bank0  # noqa: E402
 
 from v2.codegen import emit_op  # noqa: E402
@@ -11,7 +13,15 @@ from v2.ir import (  # noqa: E402
     CondBranch, Goto, IndirectGoto, Call, Return, Transfer,
     Nop, Break, Stop, PushEffectiveAddress,
     Reg, SegRef, SegKind, Value, IRBlock,
+
 )
+
+
+@pytest.fixture(autouse=True)
+def _default_emission(monkeypatch):
+    """These tests pin the default emitted text; SNESRECOMP_EMIT_LEAN has its
+    own (test_emit_lean.py)."""
+    monkeypatch.delenv("SNESRECOMP_EMIT_LEAN", raising=False)
 
 
 def _joined(lines):

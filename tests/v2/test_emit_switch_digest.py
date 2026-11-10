@@ -46,7 +46,8 @@ def test_legacy_key_text_is_unchanged(monkeypatch):
     """The existing switch keeps its label, so caches built before the
     switch list existed stay valid."""
     v2_emit = importlib.import_module("v2_emit")
-    monkeypatch.delenv("SNESRECOMP_EMIT_AOT_DENY_GATE", raising=False)
+    for name in v2_emit.EMIT_SWITCHES:
+        monkeypatch.delenv(name, raising=False)
     assert v2_emit._emit_switch_digest() == "aot_deny_gate=0"
     monkeypatch.setenv("SNESRECOMP_EMIT_AOT_DENY_GATE", "yes")
     assert v2_emit._emit_switch_digest() == "aot_deny_gate=1"
