@@ -87,10 +87,14 @@ endif
 
 # CODECACHE=1: GEN_DIR was generated with SNESRECOMP_EMIT_LEAN=1 and
 # SNESRECOMP_EMIT_CODE_CACHE=1. tools/n64/split_code_cache.py moves every
-# compiled routine body into its own module, rom:/cc/<name>.dso (libdragon
-# DSO), which the code cache (runner/src/recomp_cache.h) loads on first call
-# and unloads to stay within CODECACHE_BYTES; the main program keeps the
-# runtime, the trampolines and routine records, and the host wrappers.
+# compiled routine body into its own module object; the main program keeps
+# the runtime, the trampolines and routine records, and the host wrappers,
+# and keeps every symbol the modules import (code_cache_externs.py).
+# tools/n64/pack_code_cache.py then links each module against the linked
+# main program (imports resolved at build time) and packs them, with only
+# their internal relocations, into rom:/cc.pack, which the code cache
+# (runner/src/recomp_cache.h) loads from on first call, staying within
+# CODECACHE_BYTES.
 CODECACHE ?= 0
 CODECACHE_BYTES ?= 1572864
 GEN_SRC_DIR := $(GEN_DIR)
@@ -106,25 +110,22 @@ endif
 GEN_SRC_DIR := $(CC_SPLIT)/resident
 CC_MODULES := $(basename $(notdir $(wildcard $(CC_SPLIT)/cc/*.c)))
 CC_MODOBJS := $(addprefix $(BUILD_DIR)/cc/,$(addsuffix .o,$(CC_MODULES)))
-CC_DSOS := $(addprefix $(BUILD_DIR)/filesystem/cc/,$(addsuffix .dso,$(CC_MODULES)))
 N64_CFLAGS += -DRECOMP_CACHE_EXTERNAL_BODIES -DN64_CODE_CACHE=1 -DN64_CODE_CACHE_BYTES=$(CODECACHE_BYTES)
 $(BUILD_DIR)/cc/%.o: $(CC_SPLIT)/cc/%.c
 	@mkdir -p $(dir $@)
 	@echo "    [CC] $<"
-	$(CC) -c $(CFLAGS) -Os -G 0 -DN64_DSO -I$(GEN_INC) -I$(GEN_DIR) -o $@ $<
-$(foreach m,$(CC_MODULES),$(eval $(BUILD_DIR)/filesystem/cc/$(m).dso: $(BUILD_DIR)/cc/$(m).o))
-$(BUILD_DIR)/cc_sizes.c: $(CC_MODOBJS)
-	@echo "    [SIZES] $@"
-	python3 ../tools/n64/code_cache_sizes.py $@ $(BUILD_DIR)/cc $(N64_INST)/bin/mips64-elf-size
-$(BUILD_DIR)/cc_sizes.o: $(BUILD_DIR)/cc_sizes.c
-	$(CC) -c $(CFLAGS) -o $@ $<
-OBJS += $(BUILD_DIR)/cc_sizes.o
+	$(CC) -c $(CFLAGS) -Os -G 0 -I$(GEN_INC) -I$(GEN_DIR) -o $@ $<
 CC_EXTERNS := $(BUILD_DIR)/snesrecomp_interp.externs
-$(CC_EXTERNS): $(CC_DSOS)
+$(CC_EXTERNS): $(CC_MODOBJS)
+	@echo "    [EXTERNS] $@"
+	python3 ../tools/n64/code_cache_externs.py $@ $(BUILD_DIR)/cc $(N64_INST)/bin/mips64-elf-nm
 $(BUILD_DIR)/snesrecomp_interp.elf: $(CC_EXTERNS)
-$(BUILD_DIR)/snesrecomp_interp.msym: $(BUILD_DIR)/snesrecomp_interp.elf $(CC_EXTERNS)
-$(BUILD_DIR)/snesrecomp_interp.dfs: $(CC_DSOS)
-snesrecomp_interp.z64: $(BUILD_DIR)/snesrecomp_interp.msym
+$(BUILD_DIR)/filesystem/cc.pack: $(BUILD_DIR)/snesrecomp_interp.elf $(CC_MODOBJS) cc_module.ld ../tools/n64/pack_code_cache.py
+	@mkdir -p $(dir $@)
+	@echo "    [PACK] $@"
+	python3 ../tools/n64/pack_code_cache.py $@ $(CC_SPLIT)/resident/dispatch_v2.c $(BUILD_DIR)/cc \
+		$< $(N64_INST)/bin/mips64-elf-ld cc_module.ld $(BUILD_DIR)/ccmod 8
+$(BUILD_DIR)/snesrecomp_interp.dfs: $(BUILD_DIR)/filesystem/cc.pack
 endif
 
 ifneq ($(GEN_DIR),)

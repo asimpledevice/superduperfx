@@ -41,11 +41,14 @@ uint8_t *n64_platform_rom_window(const char *path, int *size_out, int slots);
 /* Pages copied in so far. */
 uint32_t n64_platform_rom_window_misses(void);
 
-/* Loadable modules (libdragon DSOs), for the code cache: open a module file,
- * find a symbol in it, close it. NULL when unavailable. */
-void *n64_platform_module_open(const char *path);
-void *n64_platform_module_symbol(void *module, const char *name);
-void n64_platform_module_close(void *module);
+/* Code-cache pack (rom:/cc.pack, tools/n64/pack_code_cache.py): routine i of
+ * g_recomp_routines is module i. open returns the module count (or -1) and
+ * reports each module's memory size through size_cb; load copies module i
+ * into newly allocated memory, relocates it and returns its entry (the base
+ * to free in *base_out); free releases it. */
+int n64_platform_codepack_open(const char *path, void (*size_cb)(uint32_t id, uint32_t bytes));
+void *n64_platform_codepack_load(uint32_t id, void **base_out);
+void n64_platform_codepack_free(void *base);
 
 /* Status text position: inside the area TVs show (overscan). */
 enum { N64_STATUS_Y = 240 - 28 };

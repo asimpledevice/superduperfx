@@ -1264,6 +1264,30 @@ against the linked main program (jal reaches the whole kseg0 segment), only
 module-internal relocations kept, one packed file with an index read at
 boot -- a load becomes one DMA of ~2 KB plus a short relocation pass.
 
+### Code cache: own module format (2026-11-10)
+
+dlopen replaced. tools/n64/code_cache_externs.py lists every symbol the
+module objects import as EXTERN() for the main link; tools/n64/
+pack_code_cache.py links each module alone at 0x80000000 (n64/cc_module.ld;
+the base is written sign-extended, as the 64-bit linker sees the runtime's
+kseg0 symbols, or jal to them does not fit) with --just-symbols=<main ELF>
+and --emit-relocs, so every import is already its absolute address and only
+module-internal relocations remain (R_MIPS_32, 26, HI16 with its paired
+LO16, LO16; GPREL16 references resolve against the runtime's _gp, which $gp
+holds at run time). All modules go into rom:/cc.pack in g_recomp_routines
+order with an index the host reads once at boot for the sizes. A load
+(n64_platform_codepack_load) is: read the 24-byte index entry, allocate,
+one DMA of the image, zero the bss, add (base - 0x80000000) at each
+relocation, write back the data cache and invalidate the instruction cache.
+
+SMW: 3,432 modules, 7.16 MB in memory, 40,884 relocations in all (about 12
+per module, at most 242); pack 7.57 MB (the DSOs were 15 MB compressed,
+34 MB not); ROM 8.8 MB. ares: loads 0.73 ms on average, 4.6 ms at worst
+(2.6 / 56 ms with dlopen); the attract demo loads 372 routines (1,022 KB);
+run stage 83-89 ms. A 256 KB budget: 27,167 loads and 27,093 evictions,
+no crash, run stage 200 ms (376 with dlopen). At ~2.7 KB per load the time
+is now the cartridge DMA (~3.7 MB/s in ares).
+
 ## Next steps
 
 1. Audio: check the RSP DSP by ear on hardware (output arrives later than

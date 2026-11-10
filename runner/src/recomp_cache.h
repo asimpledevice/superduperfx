@@ -35,14 +35,15 @@ typedef struct RecompRoutine {
   uint32_t active;      /* calls in progress */
   int32_t resident_idx; /* position in the resident list, -1 if absent */
   void *host;           /* the loader's handle while resident */
+  uint32_t id;          /* position in g_recomp_routines (set by the host) */
 } RecompRoutine;
 
 /* RECOMP_CACHE_EXTERNAL_BODIES: bodies are not linked into the program (the
  * N64 code cache loads them as modules), so records do not refer to them. */
 #ifdef RECOMP_CACHE_EXTERNAL_BODIES
-#define RECOMP_ROUTINE(body, name) { NULL, NULL, (name), 0, 0, 0, -1, NULL }
+#define RECOMP_ROUTINE(body, name) { NULL, NULL, (name), 0, 0, 0, -1, NULL, 0 }
 #else
-#define RECOMP_ROUTINE(body, name) { NULL, (body), (name), 0, 0, 0, -1, NULL }
+#define RECOMP_ROUTINE(body, name) { NULL, (body), (name), 0, 0, 0, -1, NULL, 0 }
 #endif
 
 extern RecompRoutine *const g_recomp_routines[];

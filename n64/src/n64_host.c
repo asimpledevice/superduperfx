@@ -309,29 +309,30 @@ int main(void) {
  * to stay within N64_CODE_CACHE_BYTES (runner/src/recomp_cache.h). */
 #if N64_CODE_CACHE
 #include "recomp_cache.h"
-uint32_t recomp_cache_module_size(const char *name);   /* generated cc_sizes.c */
 static uint64_t s_cc_load_us, s_cc_load_max_us;   /* time spent loading modules */
 static void code_cache_load(RecompRoutine *rt) {
   const uint64_t t0 = n64_platform_time_us();
-  char path[192], sym[192];
-  snprintf(path, sizeof path, "rom:/cc/%s.dso", rt->name);
-  void *m = n64_platform_module_open(path);
-  if (!m) Die("Code cache: a routine module is missing from the cartridge.");
-  snprintf(sym, sizeof sym, "%s__body", rt->name);
-  rt->fn = (RecompFn)n64_platform_module_symbol(m, sym);
-  if (!rt->fn) Die("Code cache: a routine module lacks its body.");
-  rt->host = m;
+  void *base = NULL;
+  rt->fn = (RecompFn)n64_platform_codepack_load(rt->id, &base);
+  if (!rt->fn) Die("Code cache: out of memory loading a routine.");
+  rt->host = base;
   const uint64_t dt = n64_platform_time_us() - t0;
   s_cc_load_us += dt;
   if (dt > s_cc_load_max_us) s_cc_load_max_us = dt;
 }
 static void code_cache_unload(RecompRoutine *rt) {
-  n64_platform_module_close(rt->host);
+  n64_platform_codepack_free(rt->host);
   rt->host = NULL;
 }
+static void code_cache_size(uint32_t id, uint32_t bytes) {
+  if (id < g_recomp_routine_count) g_recomp_routines[id]->size = bytes;
+}
 static void code_cache_init(void) {
+  for (uint32_t i = 0; i < g_recomp_routine_count; i++) g_recomp_routines[i]->id = i;
+  const int n = n64_platform_codepack_open("rom:/cc.pack", code_cache_size);
+  if (n != (int)g_recomp_routine_count)
+    Die("Code cache: rom:/cc.pack is missing or does not match this build.");
   recomp_cache_set_loader(code_cache_load, code_cache_unload);
-  recomp_cache_set_size_hook(recomp_cache_module_size);
   recomp_cache_set_capacity(N64_CODE_CACHE_BYTES);
   n64_platform_log("[n64] code cache: %u routines, %u KB budget\n",
                    g_recomp_routine_count, (unsigned)(N64_CODE_CACHE_BYTES / 1024));

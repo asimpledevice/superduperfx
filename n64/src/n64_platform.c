@@ -1,6 +1,5 @@
 /* libdragon side of the N64 host. See n64_platform.h. */
 #include <libdragon.h>
-#include <dlfcn.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
@@ -227,9 +226,67 @@ uint8_t *n64_platform_rom_window(const char *path, int *size_out, int slots) {
 
 uint32_t n64_platform_rom_window_misses(void) { return s_rom_misses; }
 
-/* ---- Loadable modules (code cache) ----------------------------------- */
+/* ---- Code-cache pack (tools/n64/pack_code_cache.py) ------------------ */
 
-void *n64_platform_module_open(const char *path) { return dlopen(path, RTLD_LOCAL); }
-void *n64_platform_module_symbol(void *module, const char *name) { return dlsym(module, name); }
-void n64_platform_module_close(void *module) { dlclose(module); }
+typedef struct { uint32_t data, image, mem, entry, relocs, nrelocs; } CodePackEntry;
+#define CODEPACK_BASE 0x80000000u   /* the modules' link base (n64/cc_module.ld) */
+static pi_addr_t s_cp_pi;
+static uint32_t s_cp_count, s_cp_max_relocs;
+static uint32_t *s_cp_relocs;       /* scratch for one module's relocations */
 
+static void codepack_read(void *dst, uint32_t off, uint32_t len) {
+  data_cache_hit_writeback_invalidate(dst, len);
+  dma_read(dst, s_cp_pi + off, len);
+}
+
+int n64_platform_codepack_open(const char *path, void (*size_cb)(uint32_t id, uint32_t bytes)) {
+  const char *name = strncmp(path, "rom:/", 5) == 0 ? path + 5 : path;
+  s_cp_pi = dfs_rom_addr(name);
+  if (!s_cp_pi) return -1;
+  uint32_t head[4] __attribute__((aligned(16)));
+  codepack_read(head, 0, sizeof head);
+  if (head[0] != 0x52434D31u) return -1;   /* 'RCM1' */
+  s_cp_count = head[1];
+  s_cp_max_relocs = head[2];
+  s_cp_relocs = memalign(16, (s_cp_max_relocs ? s_cp_max_relocs : 1) * 8);
+  const uint32_t index_bytes = s_cp_count * sizeof(CodePackEntry);
+  CodePackEntry *index = memalign(16, index_bytes);
+  if (!s_cp_relocs || !index) return -1;
+  codepack_read(index, 16, index_bytes);
+  for (uint32_t i = 0; i < s_cp_count; i++) size_cb(i, index[i].mem);
+  free(index);
+  return (int)s_cp_count;
+}
+
+void *n64_platform_codepack_load(uint32_t id, void **base_out) {
+  CodePackEntry e __attribute__((aligned(16)));
+  codepack_read(&e, 16 + id * sizeof e, sizeof e);
+  uint8_t *base = memalign(16, e.mem);
+  if (!base) { *base_out = NULL; return NULL; }
+  codepack_read(base, e.data, e.image);
+  if (e.mem > e.image) memset(base + e.image, 0, e.mem - e.image);
+  if (e.nrelocs) codepack_read(s_cp_relocs, e.relocs, e.nrelocs * 8);
+  /* Move the module from its link base to base: add the difference at each
+   * internal relocation (imports were resolved when it was packed). */
+  const uint32_t delta = (uint32_t)(uintptr_t)base - CODEPACK_BASE;
+  for (uint32_t i = 0; i < e.nrelocs; i++) {
+    const uint32_t r = s_cp_relocs[2 * i], extra = s_cp_relocs[2 * i + 1];
+    uint32_t *p = (uint32_t *)(base + (r & 0x0FFFFFFFu));
+    switch (r >> 28) {
+    case 2: *p += delta; break;                                         /* R_MIPS_32 */
+    case 4: *p = (*p & 0xFC000000u) | ((*p + (delta >> 2)) & 0x03FFFFFFu); break;  /* 26 */
+    case 5: {                                                            /* HI16 */
+      const uint32_t full = ((*p & 0xFFFFu) << 16) + extra + delta;
+      *p = (*p & 0xFFFF0000u) | (((full + 0x8000u) >> 16) & 0xFFFFu);
+      break;
+    }
+    case 6: *p = (*p & 0xFFFF0000u) | ((*p + delta) & 0xFFFFu); break;   /* LO16 */
+    }
+  }
+  data_cache_hit_writeback(base, e.mem);
+  inst_cache_hit_invalidate(base, e.mem);
+  *base_out = base;
+  return base + e.entry;
+}
+
+void n64_platform_codepack_free(void *base) { free(base); }
