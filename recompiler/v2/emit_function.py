@@ -29,7 +29,7 @@ for p in (str(_THIS_DIR), str(_RECOMPILER_DIR)):
 
 from typing import Dict, List, Optional, Tuple  # noqa: E402
 
-from v2.emit_options import lean_emit
+from v2.emit_options import lean_emit, code_cache_emit
 from v2.lean_rewrite import lean_rewrite
 from v2.decoder import (  # noqa: E402
     DecodeKey, DecodedInsn, FunctionDecodeGraph, decode_function, addr24,
@@ -568,7 +568,7 @@ def emit_function(rom: bytes, bank: int, start: int,
         upload_helper = ('RtlUploadSpcImageFromDpLive' if live_upload else
                          'RtlUploadSpcImageFromDp')
         return "\n".join([
-            f"RecompReturn {variant_name}(CpuState *cpu) {{",
+            f"RecompReturn {variant_name}{'__body' if code_cache_emit() else ''}(CpuState *cpu) {{",
             "  extern const char *g_last_recomp_func;",
             f"  extern bool {upload_helper}(CpuState *cpu);",
             f"  g_last_recomp_func = \"{variant_name}\";",
@@ -635,7 +635,7 @@ def emit_function(rom: bytes, bank: int, start: int,
         variant_name = f"{base_func_name}{_variant_suffix(entry_m, entry_x)}"
         pc24 = ((bank & 0xFF) << 16) | (start & 0xFFFF)
         return "\n".join([
-            f"RecompReturn {variant_name}(CpuState *cpu) {{",
+            f"RecompReturn {variant_name}{'__body' if code_cache_emit() else ''}(CpuState *cpu) {{",
             "  extern const char *g_last_recomp_func;",
             f"  extern RecompReturn {c_helper}(CpuState *cpu);",
             f"  g_last_recomp_func = \"{variant_name}\";",
@@ -2097,7 +2097,9 @@ def emit_function(rom: bytes, bank: int, start: int,
 
     # Compose the function source with labels per block.
     src: List[str] = []
-    src.append(f"RecompReturn {func_name}(CpuState *cpu) {{")
+    # Code cache (SNESRECOMP_EMIT_CODE_CACHE): the body is F__body; F is the
+    # resident trampoline dispatch_v2.c defines.
+    src.append(f"RecompReturn {func_name}{'__body' if code_cache_emit() else ''}(CpuState *cpu) {{")
     # Diagnostics — same call-stack plumbing v1 emitted, so the runtime
     # debug_server's `call_stack` cmd and crash-handler attribution work.
     lean = lean_emit()

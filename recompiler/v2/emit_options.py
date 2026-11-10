@@ -14,3 +14,13 @@ import os
 
 def lean_emit() -> bool:
     return bool(os.environ.get("SNESRECOMP_EMIT_LEAN"))
+
+
+def code_cache_emit() -> bool:
+    """SNESRECOMP_EMIT_CODE_CACHE=1 (with SNESRECOMP_EMIT_LEAN): every
+    compiled routine F is emitted as F__body, and dispatch_v2.c defines F as
+    a resident trampoline through a RecompRoutine record (runner/src/
+    recomp_cache.h), so bodies can be loaded and evicted at run time. Callers,
+    the dispatch table and host wrappers keep calling F."""
+    return lean_emit() and bool(os.environ.get("SNESRECOMP_EMIT_CODE_CACHE"))
+

@@ -19,7 +19,7 @@ RUNNER = ../runner/src
 # OSD, save-state menu, netplay, Lua, debug server, trace/replay writers,
 # host report, MSU-1 and render workers.
 RUNNER_SRCS = \
-	common_cpu_infra.c common_rtl.c widescreen.c recomp_hw.c framedump.c \
+	common_cpu_infra.c common_rtl.c widescreen.c recomp_hw.c framedump.c recomp_cache.c \
 	state_dump.c host_paths.c rom_image_verify.c rom_identity.c sha1.c \
 	crc32.c snapshot_guard.c sha256.c snes_overlay_draw.c snes_runahead.c \
 	snes_rewind.c cpu_state.c program_module.c rom_patch.c \

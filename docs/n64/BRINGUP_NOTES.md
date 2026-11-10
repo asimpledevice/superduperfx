@@ -1208,6 +1208,29 @@ one sample, run stage; misses are too rare to account for it, so either
 layout or a per-access cost of mapped reads -- to be re-measured). Off by
 default until it has run on hardware.
 
+## Code cache, steps 1-2: routine records and trampolines (2026-11-10)
+
+`SNESRECOMP_EMIT_CODE_CACHE=1` (with `SNESRECOMP_EMIT_LEAN=1`; in the
+generator digest) emits every compiled routine F as `F__body`, and
+dispatch_v2.c defines F as a resident trampoline,
+`RecompReturn F(CpuState *cpu) { return recomp_call(&F__rt, cpu); }`, plus
+`g_recomp_routines[]`. Callers, the dispatch table and host wrappers keep
+calling F, so nothing else changes. runner/src/recomp_cache.[ch] manage
+residency: a call to an absent routine loads it, evicting the least recently
+used routines that are not running (a per-routine count of calls in progress
+pins them) until it fits the budget; if only running routines are left, the
+load goes over budget and is counted. The loader is a host hook; by default
+the body is linked in and loading only makes it reachable, which is how the
+profile host emulates the cache (`N64_PROFILE_CODE_CACHE=<bytes>`,
+`N64_PROFILE_CODE_SIZES=<name size file>`, stats every 600 frames).
+
+SMW, every compilable routine (lean): native state and audio hashes over
+1,200 frames identical to the same set without the cache, unlimited and at
+1.5 MB, 512 KB and 128 KB (27,529 evictions in 600 frames). The attract
+demo loads 281 routines (791 KB) and evicts none at 1.5 MB. Step 3 is the
+N64 loader: bodies packed outside the main image and loaded from the
+cartridge on a miss.
+
 ## Next steps
 
 1. Audio: check the RSP DSP by ear on hardware (output arrives later than

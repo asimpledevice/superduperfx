@@ -20,12 +20,68 @@
 #include <sys/mman.h>
 
 #include "n64_platform.h"
+#include "recomp_cache.h"
 
 static unsigned s_frames, s_limit;
+
+/* Code cache emulation (code generated with SNESRECOMP_EMIT_CODE_CACHE):
+ * $N64_PROFILE_CODE_CACHE is the budget in bytes, $N64_PROFILE_CODE_SIZES a
+ * file of "<name> <bytes>" lines (MIPS sizes, e.g. from mips64-elf-nm -S on
+ * the N64 objects). Statistics print every 600 frames. */
+static char **s_cc_names; static uint32_t *s_cc_sizes; static unsigned s_cc_n;
+static uint32_t cc_size_of(const char *name) {
+  unsigned lo = 0, hi = s_cc_n;
+  while (lo < hi) {
+    unsigned mid = (lo + hi) / 2;
+    int c = strcmp(s_cc_names[mid], name);
+    if (!c) return s_cc_sizes[mid];
+    if (c < 0) lo = mid + 1; else hi = mid;
+  }
+  return 0;
+}
+static int cc_cmp(const void *a, const void *b) {
+  return strcmp(*(char *const *)a, *(char *const *)b);
+}
+static unsigned s_cc_report;
 
 void n64_platform_init(void) {
   const char *n = getenv("N64_PROFILE_FRAMES");
   s_limit = n ? (unsigned)atoi(n) : 300;
+  const char *cap = getenv("N64_PROFILE_CODE_CACHE");
+  if (cap && cap[0]) {
+    recomp_cache_set_capacity((uint32_t)strtoul(cap, NULL, 0));
+    s_cc_report = 1;
+  }
+  const char *sizes = getenv("N64_PROFILE_CODE_SIZES");
+  FILE *f = sizes ? fopen(sizes, "r") : NULL;
+  if (f) {
+    char name[256]; unsigned long sz; unsigned capn = 0;
+    char **names = NULL; uint32_t *szs = NULL;
+    while (fscanf(f, "%255s %lu", name, &sz) == 2) {
+      if (s_cc_n == capn) {
+        capn = capn ? capn * 2 : 1024;
+        names = realloc(names, sizeof *names * capn);
+        szs = realloc(szs, sizeof *szs * capn);
+      }
+      names[s_cc_n] = strdup(name); szs[s_cc_n] = (uint32_t)sz; s_cc_n++;
+    }
+    fclose(f);
+    /* Sort names, carrying sizes along. */
+    char **pairs = malloc(sizeof *pairs * s_cc_n);
+    for (unsigned i = 0; i < s_cc_n; i++) {
+      pairs[i] = malloc(strlen(names[i]) + 16);
+      sprintf(pairs[i], "%s %u", names[i], szs[i]);
+    }
+    qsort(pairs, s_cc_n, sizeof *pairs, cc_cmp);
+    s_cc_names = names; s_cc_sizes = szs;
+    for (unsigned i = 0; i < s_cc_n; i++) {
+      char *sp = strrchr(pairs[i], ' ');
+      *sp = 0;
+      s_cc_names[i] = pairs[i];
+      s_cc_sizes[i] = (uint32_t)strtoul(sp + 1, NULL, 10);
+    }
+    recomp_cache_set_size_hook(cc_size_of);
+  }
 }
 int n64_platform_has_expansion_pak(void) { return 1; }
 void n64_platform_log(const char *fmt, ...) {
@@ -86,6 +142,13 @@ uint32_t n64_platform_read_pad(void) {
     printf("RAM %d %ld", snes_frame_counter, s_pad_pos);
     for (unsigned i = 0; i < s_ramlog_n; i++) printf(" %02x", g_ram[s_ramlog_addr[i]]);
     printf("\n");
+  }
+  if (s_cc_report && snes_frame_counter % 600 == 0) {
+    RecompCacheStats st;
+    recomp_cache_stats(&st);
+    printf("CODECACHE %d loads %u bytes %llu evictions %u resident %u used %llu over %u\n",
+           snes_frame_counter, st.loads, (unsigned long long)st.load_bytes, st.evictions,
+           st.resident, (unsigned long long)st.used_bytes, st.over_budget);
   }
   if (!s_pad) return 0;
   const long i = s_pad_pos++;

@@ -52,6 +52,7 @@ from sync_symbols import sync_symbols  # noqa: E402
 EMIT_SWITCHES = {
     "SNESRECOMP_EMIT_AOT_DENY_GATE": "aot_deny_gate",
     "SNESRECOMP_EMIT_LEAN": "lean",
+    "SNESRECOMP_EMIT_CODE_CACHE": "code_cache",
 }
 # Switches that predate the list always appear in the key text; later ones
 # only when set, so caches built without them stay valid.

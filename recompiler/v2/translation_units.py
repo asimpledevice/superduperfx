@@ -14,7 +14,7 @@ _TOP_LEVEL_CPU_FN_RE = re.compile(
     r"\(CpuState\s*\*cpu\)\s*\{", re.MULTILINE)
 _VARIANT_CALL_NAME_RE = re.compile(
     r"\b([A-Za-z_]\w*_M[01]X[01])\s*\(\s*cpu\s*\)")
-_VARIANT_SUFFIX_RE = re.compile(r"_M[01]X[01]$")
+_VARIANT_SUFFIX_RE = re.compile(r"_M[01]X[01](?:__body)?$")  # __body: code cache
 _SYNTHETIC_BANK_FN_RE = re.compile(
     r"^bank_([0-9A-Fa-f]{2})_([0-9A-Fa-f]{4})$")
 _FORWARD_DECL_MARKER = "/* Forward declarations for in-bank entries. */"

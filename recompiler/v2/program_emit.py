@@ -627,6 +627,8 @@ def _collect_ram_routines(parsed):
     return [seen[pc] for pc in sorted(seen)]
 
 
+from v2.emit_options import code_cache_emit  # noqa: E402
+
 def emit_dispatch_table(manifest: ProgramManifest, emitted_variants: Mapping,
                         name_for_pc: Mapping[int, str],
                         inline_arg_map: Mapping[int, int],
@@ -672,6 +674,25 @@ def emit_dispatch_table(manifest: ProgramManifest, emitted_variants: Mapping,
         "    (unsigned)(sizeof(g_dispatch_table) / sizeof(g_dispatch_table[0]));",
         "",
     ])
+    if code_cache_emit():
+        # Code cache: each body F__body is reached only through its record
+        # and the resident trampoline F (runner/src/recomp_cache.h).
+        names = [f"{base_name(pc24)}_M{m}X{x}" for pc24 in known_pcs
+                 for m, x in sorted(emitted_variants.get(pc24, ()))]
+        lines.append('#include "recomp_cache.h"')
+        for n in names:
+            lines.append(f"RecompReturn {n}__body(CpuState *cpu);")
+            lines.append(f'RecompRoutine {n}__rt = RECOMP_ROUTINE({n}__body, "{n}");')
+            lines.append(f"RecompReturn {n}(CpuState *cpu) {{ return recomp_call(&{n}__rt, cpu); }}")
+        lines.append("RecompRoutine *const g_recomp_routines[] = {")
+        lines.extend(f"    &{n}__rt," for n in names)
+        if not names:
+            lines.append("    NULL,")
+        lines.extend([
+            "};",
+            f"const unsigned g_recomp_routine_count = {len(names)}u;",
+            "",
+        ])
 
     # RAM-routine guards: for a WRAM-resident AOT body ($7E/$7F), runtime
     # dispatch is allowed ONLY when the live WRAM bytes still hash-match the
