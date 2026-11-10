@@ -970,6 +970,24 @@ Compiled code (MIPS -Os):
 | LRU cache 512 KB: loads after boot / worst frame | 474 (1.96 MB) / 109 KB | thrashes |
 | LRU cache 1 MB / 1.5 MB / 2 MB | | 686 / 426 / 304 loads (3.8 / 2.4 / 1.7 MB), worst frame 226 / 124 / 124 KB |
 
+With lean emission (`SNESRECOMP_EMIT_LEAN`, 2026-11-10), the same 3,000
+frames run the same routines (all 2,971 traced frames have identical routine
+sets), so only sizes change:
+
+| Everything compilable (gen_full) | Default emission | Lean emission |
+|---|---|---|
+| Compiled code (with LLE stubs) | 14.89 MB | 7.34 MB |
+| Routines run in 3,000 frames | 2.15 MB | 1.01 MB |
+| Distinct code run per frame | median 721 KB, max 912 KB | median 344 KB, max 428 KB |
+| Per 60-frame window | max 1,093 KB | max 508 KB |
+| LRU 512 KB: loads after boot / worst frame | thrashes | 618 (1.6 MB) / 106 KB |
+| LRU 768 KB | thrashes | 402 (1.07 MB) / 57 KB |
+| LRU 1 MB | 686 (3.8 MB) / 226 KB | 184 (0.48 MB) / 57 KB |
+| LRU 1.5 MB | 426 (2.4 MB) / 124 KB | 184 (0.48 MB) / 57 KB |
+
+At 1 MB the lean cache only takes compulsory loads (each routine the demo
+uses, once). A 768 KB lean cache does better than a 1.5 MB default one.
+
 Reading: a 128 KB ROM page cache holds SMW's ROM working set (the full
 copy only matters for ROMs larger than RAM), and a 1.5 MB code cache in
 RDRAM backed by all compiled code in cartridge space holds the full
