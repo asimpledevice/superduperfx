@@ -1015,6 +1015,33 @@ So the attract demo (1.01 MB used) under-sizes the cache by 3x: real play
 wants about 1.5 MB, still well under today's 2.46 MB resident selection
 (default emission) while covering every compilable routine.
 
+Code cache design options, simulated (2026-11-10) on the full routine-entry
+sequence bsnes executed over two 100 s stretches of the TAS (frames
+30,000-36,000 and 60,000-66,000; 267 and 197 compiled-routine entries per
+frame), caches warmed with the preceding play, lean MIPS sizes. A: software
+cache at routine granularity (calls through a routine table, relocating
+loads). B: compiled code linked at fixed virtual addresses and paged by
+TLB misses (no relocation, no call table). Assumed costs: refill 600
+cycles through libdragon's exception path or 50 with a dedicated refill
+vector, cartridge DMA 5 MB/s, 100 us fixed per A load.
+
+| 1.5 MB of code in RAM | Loads, avg per frame | Worst frame | Refills per frame |
+|---|---|---|---|
+| A, LRU | 0.03-0.04 ms | 8.5-9 ms | - (table calls ~0.01 ms) |
+| A, FIFO | 0.03-0.05 ms | 16-18 ms | - |
+| B, address order, 4 KB pages, 16-32 TLB entries | 0.08-0.22 ms | 25-83 ms | 81-132: 0.5-0.85 ms slow, ~0.05 ms fast |
+| B, hot-first (profile) order, 16 KB pages | 0.14-0.32 ms | 36-59 ms | 1-20: up to 0.13 ms slow |
+| B, 64 KB pages | 2.4-360 ms | up to 700 ms | ~0 |
+
+B's refill traffic is modest (a few hundred entries per frame, ~100 pages)
+but page-granular residency drags cold neighbours into RAM, so it moves
+several times A's bytes and its worst frames are 3-9x A's; it gets close to
+A only with a profile-ordered layout. It also competes with ROM paging for
+the 32 TLB entries. The simulation counts routine entries only (returns
+into a caller touch its page again, so B's refills are a lower bound) and
+assumes an entered routine touches all its pages (an overestimate for large
+routines).
+
 Our timing against bsnes: generated with `--no-hle` (the SPC upload runs
 as game code) the title screen accepts input at frame 334 against bsnes's
 330; with the HLE upload, ~75 frames earlier. Replaying the movie needs
