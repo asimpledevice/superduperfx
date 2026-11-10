@@ -934,6 +934,53 @@ any single statement.
 See [LESSONS.md](LESSONS.md) for ideas collected from other projects
 (sodium64) and design notes, with how they apply here.
 
+## ROM and compiled-code working sets (2026-11-10)
+
+Measured natively over 3,000 frames of SMW's attract demo with
+`n64/profile/romtrace/` (build.sh, then analyze_rom.py / analyze_code.py).
+The ROM copy is moved to an mmap'd region and made unreadable, so every
+reader (interpreter, generated code, fast map, DMA) faults once per 4 KB
+page per frame and is recorded; generated code is built with
+`-finstrument-functions` to record the compiled functions entered per frame,
+sized from the MIPS objects. Audio hashes are unchanged by the tracing.
+
+ROM (512 KB):
+
+| | |
+|---|---|
+| Code bytes (recompiler manifest ranges) | 139 KB (27%) |
+| Never read in 3,000 frames | 256 KB (half) |
+| Pages read per frame | median 21 (84 KB), max 26 |
+| Pages read per 60-frame window | max 33 |
+| LRU page cache of 96 / 128 / 192 KB, loads after boot | 140-1,113 / 47-49 / 10-11 pages |
+
+No DMA reads ROM directly: SMW decompresses graphics into WRAM, and its
+assets are read by the CPU (`cpu_read8` in the decompressor) and by the SPC
+upload. Page readers: generated code through `cpu_read8/16`, the
+interpreter, and `RtlUploadSpcImageFromDpInternal` (sound).
+
+Compiled code (MIPS -Os):
+
+| | Current native set (gen_fib) | Everything compilable (gen_full) |
+|---|---|---|
+| Compiled code in the build | 2.46 MB | 14.65 MB (with LLE stubs) |
+| Functions run in 3,000 frames | 277 = 1.14 MB | 376 = 2.15 MB |
+| Distinct code run per frame | median 308 KB, max 397 KB | median 721 KB, max 912 KB |
+| Per 60-frame window | max 479 KB | max 1,093 KB |
+| LRU cache 512 KB: loads after boot / worst frame | 474 (1.96 MB) / 109 KB | thrashes |
+| LRU cache 1 MB / 1.5 MB / 2 MB | | 686 / 426 / 304 loads (3.8 / 2.4 / 1.7 MB), worst frame 226 / 124 / 124 KB |
+
+Reading: a 128 KB ROM page cache holds SMW's ROM working set (the full
+copy only matters for ROMs larger than RAM), and a 1.5 MB code cache in
+RDRAM backed by all compiled code in cartridge space holds the full
+compiled set's working set, about 1 MB less RAM than today's 2.46 MB
+selection while covering every compilable routine without a per-ROM
+capture. A miss need not stall: the interpreter already runs any routine
+exactly, so it can run the routine while the DMA completes (selection then
+varies at run time, the same validation class as guest fibers). Function
+granularity is coarse: a frame enters 700 KB of compiled functions but runs
+far less of each.
+
 ## Next steps
 
 1. Audio: check the RSP DSP by ear on hardware (output arrives later than
