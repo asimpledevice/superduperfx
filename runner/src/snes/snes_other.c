@@ -146,6 +146,11 @@ if (headers[used].coprocessor == 0xf && headers[used].exCoprocessor != 0x10) {
           headers[used].coprocessor, headers[used].chips,
           headers[used].maker, headers[used].cartType);
   const int imageLength = length;
+  /* A host ROM provider (cart_set_rom_provider) takes power-of-two images
+   * as they are: their bus image needs no mirror fill. */
+  uint8_t *external_rom = NULL;
+  if (cart_rom_provider() && length >= 0x8000 && (length & (length - 1)) == 0)
+    external_rom = cart_rom_provider()(data, length);
   // expand to a power of 2
   int newLength = 0x8000;
   while(true) {
@@ -154,8 +159,8 @@ if (headers[used].coprocessor == 0xf && headers[used].exCoprocessor != 0x10) {
     }
     newLength *= 2;
   }
-  uint8_t* newData = malloc(newLength);
-  memcpy(newData, data, length);
+  uint8_t* newData = external_rom ? external_rom : malloc(newLength);
+  if (!external_rom) memcpy(newData, data, length);
   int test = 1;
   while(length != newLength) {
     if(length & test) {
@@ -206,14 +211,14 @@ else if (headers[used].cartType == CART_SA1)
   }
 #endif
 
-  cart_load(
+  (external_rom ? cart_load_external : cart_load)(
     snes->cart, headers[used].cartType,
     newData, newLength,
     cart_ram_size
   );
   snes->cart->romImageSize = imageLength;
   
-  free(newData);
+  if (!external_rom) free(newData);
   return true;
 }
 

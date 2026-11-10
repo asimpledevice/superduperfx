@@ -304,6 +304,21 @@ int main(void) {
 #endif
 }
 
+/* ROM paging (N64_ROM_PAGING=1): N64_ROM_PAGE_SLOTS slots of 8 KB. */
+#ifndef N64_ROM_PAGING
+#define N64_ROM_PAGING 0
+#endif
+#ifndef N64_ROM_PAGE_SLOTS
+#define N64_ROM_PAGE_SLOTS 24
+#endif
+static uint8_t *s_rom_window;
+#if N64_ROM_PAGING
+static uint8_t *rom_window_provider(const uint8_t *data, int length) {
+  (void)length;
+  return data == s_rom_window ? s_rom_window : NULL;
+}
+#endif
+
 static int host_main(void) {
 #if N64_STACK_COLOR >= 0 && defined(__mips__) && SNESRECOMP_GUEST_FIBER
   guest_fiber_set_stack(s_guest_stack, s_guest_stack + sizeof s_guest_stack - 8192 +
@@ -314,9 +329,23 @@ static int host_main(void) {
     Die("This build needs the Expansion Pak (8 MB).");
 
   int rom_size = 0;
-  uint8_t *rom = load_rom(N64_ROM_PATH, &rom_size);
-  if (!rom) Die("Could not read rom:/game.sfc. Rebuild with ROM=path/to/game.sfc.");
-  n64_platform_log("[n64] ROM loaded: %d bytes\n", rom_size);
+  uint8_t *rom = NULL;
+#if N64_ROM_PAGING
+  /* ROM paging: the cartridge reads its ROM through a window that pages
+   * from the cartridge on demand (n64_platform_rom_window), so no copy of
+   * the ROM is kept in RAM. */
+  rom = s_rom_window = n64_platform_rom_window(N64_ROM_PATH, &rom_size, N64_ROM_PAGE_SLOTS);
+  if (rom) {
+    cart_set_rom_provider(rom_window_provider);
+    n64_platform_log("[n64] ROM paged: %d bytes, %d slots of %d KB\n", rom_size,
+                     N64_ROM_PAGE_SLOTS, N64_ROM_PAGE_BYTES / 1024);
+  }
+#endif
+  if (!rom) {
+    rom = load_rom(N64_ROM_PATH, &rom_size);
+    if (!rom) Die("Could not read rom:/game.sfc. Rebuild with ROM=path/to/game.sfc.");
+    n64_platform_log("[n64] ROM loaded: %d bytes\n", rom_size);
+  }
 
   s_pixels = calloc(kSnesW * kSnesH, sizeof(uint32_t));
   if (!s_pixels) Die("Out of memory for the PPU frame buffer.");
@@ -335,7 +364,7 @@ static int host_main(void) {
   heap_anchor(N64_HEAP_COLOR);
 #endif
   if (!SnesInit(rom, rom_size)) Die("SnesInit failed: unsupported or damaged ROM.");
-  free(rom);  /* the cartridge keeps its own copy (cart_load) */
+  if (rom != s_rom_window) free(rom);  /* else the cartridge reads the window */
   n64_platform_log("[heap] snes %p ppu %p apu %p cart rom %p\n", (void *)g_snes, (void *)g_ppu,
                    (void *)g_snes->apu, (void *)g_snes->cart->rom);
   /* All OAM changes here go through the PPU ports or a save-state load. */
@@ -511,6 +540,11 @@ static int host_main(void) {
                        (unsigned long)frame, (unsigned long)(acc_run / 60),
                        (unsigned long)(acc_draw / 60), (unsigned long)(acc_present / 60));
       acc_run = acc_draw = acc_present = 0;
+#if N64_ROM_PAGING
+      if (s_rom_window && frame % 600 == 0)
+        n64_platform_log("[n64] ROM pages copied in: %lu\n",
+                         (unsigned long)n64_platform_rom_window_misses());
+#endif
     }
   }
 }

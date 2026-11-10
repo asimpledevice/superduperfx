@@ -15,6 +15,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
+#include <signal.h>
+#include <string.h>
+#include <sys/mman.h>
 
 #include "n64_platform.h"
 
@@ -138,3 +141,69 @@ void n64_platform_audio_pump(void (*render)(int16_t *stereo, int frames)) {
   if (calls % 30 == 0) printf("AUDIO %u %08x\n", calls, h);
   calls++;
 }
+
+/* ROM paging, emulated: the window is an inaccessible mapping; a fault on
+ * a page copies it in from the file image and makes it readable, and the
+ * slot it takes is the oldest one's, which becomes inaccessible again. Same
+ * page size, slot count and replacement order as the N64 TLB window, so the
+ * miss counts match and the emulation is checked against plain loading. */
+static uint8_t *s_win, *s_win_src;
+static uint32_t s_win_bytes, s_win_misses;
+static int s_win_slots, s_win_next;
+static long *s_win_slot_page;
+
+static void win_fault(int sig, siginfo_t *si, void *uc) {
+  (void)uc;
+  uint8_t *a = (uint8_t *)si->si_addr;
+  if (!s_win || a < s_win || a >= s_win + s_win_bytes) {
+    signal(sig, SIG_DFL);
+    raise(sig);
+    return;
+  }
+  const long page = (long)((a - s_win) / N64_ROM_PAGE_BYTES);
+  const int k = s_win_next;
+  s_win_next = (s_win_next + 1) % s_win_slots;
+  if (s_win_slot_page[k] >= 0)
+    mprotect(s_win + s_win_slot_page[k] * N64_ROM_PAGE_BYTES, N64_ROM_PAGE_BYTES, PROT_NONE);
+  uint8_t *p = s_win + page * N64_ROM_PAGE_BYTES;
+  mprotect(p, N64_ROM_PAGE_BYTES, PROT_READ | PROT_WRITE);
+  uint32_t len = s_win_bytes - (uint32_t)(page * N64_ROM_PAGE_BYTES);
+  if (len > N64_ROM_PAGE_BYTES) len = N64_ROM_PAGE_BYTES;
+  memcpy(p, s_win_src + page * N64_ROM_PAGE_BYTES, len);
+  mprotect(p, N64_ROM_PAGE_BYTES, PROT_READ);
+  s_win_slot_page[k] = page;
+  s_win_misses++;
+}
+
+uint8_t *n64_platform_rom_window(const char *path, int *size_out, int slots) {
+  if (slots < 2 || slots > N64_ROM_PAGE_MAX_SLOTS || !path) return NULL;
+  FILE *f = fopen(path, "rb");
+  if (!f) return NULL;
+  fseek(f, 0, SEEK_END);
+  long size = ftell(f);
+  fseek(f, 0, SEEK_SET);
+  long skip = (size & 0x3ff) == 0x200 ? 0x200 : 0;   /* copier header */
+  size -= skip;
+  s_win_src = malloc((size_t)size);
+  fseek(f, skip, SEEK_SET);
+  if (fread(s_win_src, 1, (size_t)size, f) != (size_t)size) { fclose(f); return NULL; }
+  fclose(f);
+  const size_t span = ((size_t)size + N64_ROM_PAGE_BYTES - 1) / N64_ROM_PAGE_BYTES * N64_ROM_PAGE_BYTES;
+  void *w = mmap(NULL, span, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  if (w == MAP_FAILED) return NULL;
+  s_win = w;
+  s_win_bytes = (uint32_t)size;
+  s_win_slots = slots;
+  s_win_slot_page = malloc(sizeof(long) * (size_t)slots);
+  for (int i = 0; i < slots; i++) s_win_slot_page[i] = -1;
+  struct sigaction sa;
+  memset(&sa, 0, sizeof sa);
+  sa.sa_sigaction = win_fault;
+  sa.sa_flags = SA_SIGINFO | SA_NODEFER;
+  sigaction(SIGSEGV, &sa, NULL);
+  *size_out = (int)size;
+  return s_win;
+}
+
+uint32_t n64_platform_rom_window_misses(void) { return s_win_misses; }
+

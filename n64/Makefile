@@ -60,6 +60,16 @@ $(BUILD_DIR)/rsp_snesdsp.o: rspdsp/rsp_snesdsp.S rspdsp/snesdsp_rsp_layout.h rsp
 		BUILD_DIR=$(BUILD_DIR) RSPASFLAGS="$(N64_RSPASFLAGS)" $@
 endif
 
+# ROMPAGING=1: the cartridge reads the SNES ROM through a TLB-mapped window
+# paged in from the N64 cartridge on demand (n64_platform_rom_window), so no
+# copy of the ROM stays in RAM; ROMPAGE_SLOTS 8 KB slots (default 24 = 192 KB).
+# Off by default until checked on hardware; 0 loads the whole ROM into RAM.
+ROMPAGING ?= 0
+ROMPAGE_SLOTS ?= 24
+ifeq ($(ROMPAGING),1)
+N64_CFLAGS += -DN64_ROM_PAGING=1 -DN64_ROM_PAGE_SLOTS=$(ROMPAGE_SLOTS)
+endif
+
 # RSPBG=1 (default): background layers are expanded on the RSP (n64/rspbg);
 # RSPBG=0 keeps the CPU expansion (the reference).
 RSPBG ?= 1

@@ -118,6 +118,16 @@ Cart* cart_init(Snes* snes);
 void cart_free(Cart* cart);
 void cart_reset(Cart* cart); // will reset special chips etc, general reading is set up in load
 void cart_load(Cart* cart, int type, uint8_t* rom, int romSize, int ramSize); // TODO: figure out how to handle (battery, cart-chips etc)
+/* Host-supplied ROM storage (ROM paging). When a provider is set,
+ * snes_loadRom offers it the headerless image (data, length) whenever the
+ * image is already a power of two in size (so the bus image is the bytes
+ * themselves). A non-NULL result is used as the cartridge ROM as is: not
+ * copied, never written, never freed. NULL falls back to the copy. */
+typedef uint8_t *(*CartRomProvider)(const uint8_t *data, int length);
+void cart_set_rom_provider(CartRomProvider provider);
+CartRomProvider cart_rom_provider(void);
+/* cart_load with a host-owned ROM (from a CartRomProvider): no copy. */
+void cart_load_external(Cart* cart, int type, uint8_t* rom, int romSize, int ramSize);
 uint8_t cart_read(Cart* cart, uint8_t bank, uint16_t adr);
 void cart_write(Cart* cart, uint8_t bank, uint16_t adr, uint8_t val);
 void cart_saveload(Cart *cart, SaveLoadInfo *sli);

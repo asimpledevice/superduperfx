@@ -1140,6 +1140,47 @@ Hashes identical; tests/v2 and the runtime C tests as before; ares 90.1 /
 18.7 / 9.8 ms. Still to consider: decimal-mode ADC/SBC (about 4.5% before
 this step).
 
+## ROM paging (`ROMPAGING=1`, 2026-11-10)
+
+The cartridge no longer needs the SNES ROM in RAM. `n64_platform_rom_window`
+returns a read-only window at `0xC0000000` (kseg2, always TLB-translated in
+kernel mode) over the ROM file in the cartridge filesystem. Each of
+`ROMPAGE_SLOTS` 8 KB-aligned RAM slots (default 24 = 192 KB) is one TLB
+entry (an even/odd 4 KB pair); a load miss in the window reaches the
+handler registered with libdragon's `register_exception_handler`, which
+DMAs the page from the cartridge into the oldest slot (FIFO), rewrites that
+entry and returns to the faulting instruction. Other exceptions go to the
+previous handler; a write into the window (entries are not writable) is a
+crash, as it should be. Slots and window pages share data-cache index bits
+12:4, so invalidating the slot through kseg0 before the DMA clears the old
+page's lines. All 32 entries start invalid at distinct kseg0 addresses
+(two matching entries would shut the TLB down). libdragon uses no TLB
+entries itself (only its crash inspector reads them).
+
+Runtime side (shared, game-agnostic): `cart_set_rom_provider` lets a host
+supply the cartridge ROM. `snes_loadRom` offers it power-of-two images
+(the bus image is then the bytes themselves) and `cart_load_external` uses
+the pointer as is, never copying or freeing it; other sizes keep the copy.
+The window works for any reader that holds a pointer, enhancement-chip
+emulation included.
+
+The profile host emulates the window with mmap and SIGSEGV (same page size,
+slot count and FIFO), so exactness and miss counts are checked natively:
+state and audio hashes over 1,200 frames identical to plain loading at 8,
+16, 24 and 32 slots. Pages copied in over 3,000 frames of the attract demo
+(64-page ROM, the boot-time identity hash reads all of it once): 8 slots
+32,147, 16 slots 760, 24 slots 132, 32 slots 103.
+
+ares, SMW, lean native set: heap in use 2.43 -> 2.09 MB, free 2.77 ->
+3.09 MB, and free memory trapped in holes 1.05 MB -> 600 bytes (the three
+boot-time ROM copies -- file buffer, power-of-two copy, cartridge copy --
+are gone), so the free heap is one contiguous 3.09 MB block. 102 pages
+copied in by frame 1,200. Frame time with a regenerated I-cache order
+93.2 / 18.1 / 10.8 ms against 90.1 / 18.7 / 9.8 without paging (+3.5 ms in
+one sample, run stage; misses are too rare to account for it, so either
+layout or a per-access cost of mapped reads -- to be re-measured). Off by
+default until it has run on hardware.
+
 ## Next steps
 
 1. Audio: check the RSP DSP by ear on hardware (output arrives later than

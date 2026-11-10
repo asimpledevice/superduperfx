@@ -16,6 +16,11 @@ void cart_load(Cart *cart, int type, uint8_t *rom, int rom_size, int ram_size) {
   loaded_rom_size = rom_size;
   loaded_ram_size = ram_size;
 }
+/* snes_loadRom asks for a host ROM provider (cart_set_rom_provider); none here. */
+CartRomProvider cart_rom_provider(void) { return NULL; }
+void cart_load_external(Cart *cart, int type, uint8_t *rom, int rom_size, int ram_size) {
+  cart_load(cart, type, rom, rom_size, ram_size);
+}
 
 static int check(int cond, const char *msg) {
   if (!cond) {

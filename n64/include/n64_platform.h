@@ -29,6 +29,18 @@ void n64_platform_present(const uint32_t *pixels, int width, int height,
 int n64_platform_audio_init(int rate);
 void n64_platform_audio_pump(void (*render)(int16_t *stereo, int frames));
 
+/* ROM paging. Returns a read-only window onto the ROM file at `path` (after
+ * any 512-byte copier header; *size_out is the remaining size), whose 8 KB
+ * pages are copied in from the cartridge on first touch into `slots` RAM
+ * slots, the oldest reused first. Reads through the window are the file's
+ * bytes; writes fault. NULL when paging is unavailable. On the N64 the
+ * window is TLB-mapped (kseg2) and a TLB miss pages in; the profile host
+ * emulates it with mmap and SIGSEGV. */
+enum { N64_ROM_PAGE_BYTES = 8192, N64_ROM_PAGE_MAX_SLOTS = 32 };
+uint8_t *n64_platform_rom_window(const char *path, int *size_out, int slots);
+/* Pages copied in so far. */
+uint32_t n64_platform_rom_window_misses(void);
+
 /* Status text position: inside the area TVs show (overscan). */
 enum { N64_STATUS_Y = 240 - 28 };
 

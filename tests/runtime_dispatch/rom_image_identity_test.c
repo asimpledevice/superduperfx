@@ -12,6 +12,22 @@ void cart_load(Cart *cart, int type, uint8_t *rom, int size, int ram_size) {
   free(bus); bus = malloc(size);
   memcpy(bus, rom, size); cart->rom = bus; cart->romSize = size;
 }
+/* The host ROM provider (cart_set_rom_provider): cart.c is not linked, so
+ * the hooks it provides are reproduced here; cart_load_external records the
+ * host-owned ROM it was handed. */
+static CartRomProvider s_provider;
+static const uint8_t *s_provided, *s_external;
+void cart_set_rom_provider(CartRomProvider provider) { s_provider = provider; }
+CartRomProvider cart_rom_provider(void) { return s_provider; }
+void cart_load_external(Cart *cart, int type, uint8_t *rom, int size, int ram_size) {
+  (void)type; (void)ram_size;
+  s_external = rom; cart->rom = rom; cart->romSize = size;
+}
+static uint8_t *identity_provider(const uint8_t *data, int length) {
+  (void)length;
+  s_provided = data;
+  return (uint8_t *)data;
+}
 static int check_case(int image_size, int copier_header) {
   const int prefix = copier_header ? 512 : 0;
   uint8_t *file = calloc(1, image_size + prefix), *rom = file + prefix;
@@ -34,6 +50,14 @@ static int check_case(int image_size, int copier_header) {
   if (image_size == 3 * 1024 * 1024)
     ok &= cart.romSize == 4 * 1024 * 1024 && memcmp(actual, padded, 32) != 0;
   else ok &= cart.romSize == (uint32_t)image_size;
+  /* With a provider: a power-of-two image is used in place (the headerless
+   * bytes, not copied); any other size is offered nothing and copied. */
+  if (s_provider) {
+    const int pow2 = (image_size & (image_size - 1)) == 0;
+    ok &= pow2 ? (s_provided == rom && s_external == rom && cart.rom == rom)
+               : (s_provided == NULL && s_external == NULL && cart.rom == bus);
+  }
+  s_provided = s_external = NULL;
   free(file);
   if (!ok) fprintf(stderr, "FAIL: image=%d copier_header=%d\n", image_size, copier_header);
   return !ok;
@@ -41,6 +65,9 @@ static int check_case(int image_size, int copier_header) {
 int main(void) {
   int fails = check_case(3 * 1024 * 1024, 0) + check_case(3 * 1024 * 1024, 1)
             + check_case(512 * 1024, 0) + check_case(512 * 1024, 1);
+  cart_set_rom_provider(identity_provider);
+  fails += check_case(3 * 1024 * 1024, 0) + check_case(3 * 1024 * 1024, 1)
+         + check_case(512 * 1024, 0) + check_case(512 * 1024, 1);
   free(bus);
   if (!fails) puts("rom_image_identity_test: PASS");
   return fails != 0;

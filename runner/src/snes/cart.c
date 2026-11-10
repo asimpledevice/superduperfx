@@ -20,6 +20,9 @@ static void cart_writeLorom(Cart* cart, uint8_t bank, uint16_t adr, uint8_t val)
 static uint8_t cart_readHirom(Cart* cart, uint8_t bank, uint16_t adr);
 static void cart_writeHirom(Cart* cart, uint8_t bank, uint16_t adr, uint8_t val);
 
+static CartRomProvider s_rom_provider;
+static uint8_t *s_external_rom;   /* the host-owned ROM in use, if any */
+
 Cart* cart_init(Snes* snes) {
   Cart* cart = calloc(1, sizeof(Cart));  /* zero padding: saveload/co-sim hash determinism */
   cart->snes = snes;
@@ -38,7 +41,7 @@ void cart_free(Cart* cart) {
   dsp1_destroy(cart->dsp1);
   sa1_destroy(cart->sa1);
   sdd1_destroy(cart->sdd1);
-  free(cart->rom);
+  if (cart->rom != s_external_rom) free(cart->rom);
   free(cart->ram);
   free(cart);
 }
@@ -68,7 +71,19 @@ void cart_saveload(Cart *cart, SaveLoadInfo *sli) {
   }
 }
 
+void cart_set_rom_provider(CartRomProvider provider) { s_rom_provider = provider; }
+CartRomProvider cart_rom_provider(void) { return s_rom_provider; }
+
+static void cart_load_common(Cart* cart, int type, uint8_t* rom, int romSize, int ramSize,
+                             int external);
 void cart_load(Cart* cart, int type, uint8_t* rom, int romSize, int ramSize) {
+  cart_load_common(cart, type, rom, romSize, ramSize, 0);
+}
+void cart_load_external(Cart* cart, int type, uint8_t* rom, int romSize, int ramSize) {
+  cart_load_common(cart, type, rom, romSize, ramSize, 1);
+}
+static void cart_load_common(Cart* cart, int type, uint8_t* rom, int romSize, int ramSize,
+                             int external) {
   superfx_destroy(cart->superfx);
   cart->superfx = NULL;
   cx4_destroy(cart->cx4);
@@ -80,9 +95,10 @@ void cart_load(Cart* cart, int type, uint8_t* rom, int romSize, int ramSize) {
   sdd1_destroy(cart->sdd1);
   cart->sdd1 = NULL;
   cart->type = type;
-  if(cart->rom != NULL) free(cart->rom);
+  if(cart->rom != NULL && cart->rom != s_external_rom) free(cart->rom);
   if(cart->ram != NULL) free(cart->ram);
-  cart->rom = malloc(romSize);
+  s_external_rom = external ? rom : NULL;
+  cart->rom = external ? rom : malloc(romSize);
   cart->romSize = romSize;
   cart->romImageSize = romSize;
   if(ramSize > 0) {
@@ -92,7 +108,7 @@ void cart_load(Cart* cart, int type, uint8_t* rom, int romSize, int ramSize) {
     cart->ram = NULL;
   }
   cart->ramSize = ramSize;
-  memcpy(cart->rom, rom, romSize);
+  if (!external) memcpy(cart->rom, rom, romSize);
   if (type == CART_SUPERFX)
     cart->superfx = superfx_create(cart->rom, cart->romSize,
                                    cart->ram, cart->ramSize);
