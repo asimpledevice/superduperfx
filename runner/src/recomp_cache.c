@@ -17,6 +17,8 @@ static void default_unload(RecompRoutine *rt) { (void)rt; }
 static void (*s_load)(RecompRoutine *rt) = default_load;
 static void (*s_unload)(RecompRoutine *rt) = default_unload;
 
+void recomp_enter_rt(const struct RecompRoutine *rt) { recomp_enter(rt->name); }
+
 void recomp_cache_set_capacity(uint32_t bytes) { s_capacity = bytes; }
 void recomp_cache_set_size_hook(uint32_t (*size_of)(const char *name)) { s_size_of = size_of; }
 void recomp_cache_set_loader(void (*load)(RecompRoutine *rt),

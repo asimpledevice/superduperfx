@@ -304,6 +304,40 @@ int main(void) {
 #endif
 }
 
+/* Code cache (N64_CODE_CACHE=1, n64/Makefile CODECACHE=1): compiled routine
+ * bodies are modules rom:/cc/<name>.dso, loaded on first call and unloaded
+ * to stay within N64_CODE_CACHE_BYTES (runner/src/recomp_cache.h). */
+#if N64_CODE_CACHE
+#include "recomp_cache.h"
+uint32_t recomp_cache_module_size(const char *name);   /* generated cc_sizes.c */
+static uint64_t s_cc_load_us, s_cc_load_max_us;   /* time spent loading modules */
+static void code_cache_load(RecompRoutine *rt) {
+  const uint64_t t0 = n64_platform_time_us();
+  char path[192], sym[192];
+  snprintf(path, sizeof path, "rom:/cc/%s.dso", rt->name);
+  void *m = n64_platform_module_open(path);
+  if (!m) Die("Code cache: a routine module is missing from the cartridge.");
+  snprintf(sym, sizeof sym, "%s__body", rt->name);
+  rt->fn = (RecompFn)n64_platform_module_symbol(m, sym);
+  if (!rt->fn) Die("Code cache: a routine module lacks its body.");
+  rt->host = m;
+  const uint64_t dt = n64_platform_time_us() - t0;
+  s_cc_load_us += dt;
+  if (dt > s_cc_load_max_us) s_cc_load_max_us = dt;
+}
+static void code_cache_unload(RecompRoutine *rt) {
+  n64_platform_module_close(rt->host);
+  rt->host = NULL;
+}
+static void code_cache_init(void) {
+  recomp_cache_set_loader(code_cache_load, code_cache_unload);
+  recomp_cache_set_size_hook(recomp_cache_module_size);
+  recomp_cache_set_capacity(N64_CODE_CACHE_BYTES);
+  n64_platform_log("[n64] code cache: %u routines, %u KB budget\n",
+                   g_recomp_routine_count, (unsigned)(N64_CODE_CACHE_BYTES / 1024));
+}
+#endif
+
 /* ROM paging (N64_ROM_PAGING=1): N64_ROM_PAGE_SLOTS slots of 8 KB. */
 #ifndef N64_ROM_PAGING
 #define N64_ROM_PAGING 0
@@ -354,6 +388,9 @@ static int host_main(void) {
   if (!s_rdp_frame) Die("Out of memory for the RDP frame planes.");
 #endif
 
+#if N64_CODE_CACHE
+  code_cache_init();
+#endif
   RtlSetAudioOutputRate(n64_platform_audio_init(32000));
   RtlRegisterGame(&kN64GameInfo);
 #if defined(__mips__)
@@ -540,6 +577,18 @@ static int host_main(void) {
                        (unsigned long)frame, (unsigned long)(acc_run / 60),
                        (unsigned long)(acc_draw / 60), (unsigned long)(acc_present / 60));
       acc_run = acc_draw = acc_present = 0;
+#if N64_CODE_CACHE
+      if (frame % 600 == 0) {
+        RecompCacheStats st;
+        recomp_cache_stats(&st);
+        n64_platform_log("[n64] code cache: loads %u (%lu KB, %lu us avg, %lu us max), evictions %u, "
+                         "resident %u (%lu KB), over budget %u\n",
+                         st.loads, (unsigned long)(st.load_bytes / 1024),
+                         (unsigned long)(st.loads ? s_cc_load_us / st.loads : 0),
+                         (unsigned long)s_cc_load_max_us, st.evictions, st.resident,
+                         (unsigned long)(st.used_bytes / 1024), st.over_budget);
+      }
+#endif
 #if N64_ROM_PAGING
       if (s_rom_window && frame % 600 == 0)
         n64_platform_log("[n64] ROM pages copied in: %lu\n",

@@ -85,12 +85,54 @@ $(BUILD_DIR)/rsp_bg.o: rspbg/rsp_bg.S rspbg/bg_rsp_layout.h rspbg/rsp_bg_full.in
 		BUILD_DIR=$(BUILD_DIR) RSPASFLAGS="$(N64_RSPASFLAGS)" $@
 endif
 
+# CODECACHE=1: GEN_DIR was generated with SNESRECOMP_EMIT_LEAN=1 and
+# SNESRECOMP_EMIT_CODE_CACHE=1. tools/n64/split_code_cache.py moves every
+# compiled routine body into its own module, rom:/cc/<name>.dso (libdragon
+# DSO), which the code cache (runner/src/recomp_cache.h) loads on first call
+# and unloads to stay within CODECACHE_BYTES; the main program keeps the
+# runtime, the trampolines and routine records, and the host wrappers.
+CODECACHE ?= 0
+CODECACHE_BYTES ?= 1572864
+GEN_SRC_DIR := $(GEN_DIR)
+ifeq ($(CODECACHE),1)
+ifeq ($(GEN_DIR),)
+$(error CODECACHE=1 needs GEN_DIR)
+endif
+CC_SPLIT := $(BUILD_DIR)/ccsplit
+CC_SPLIT_OK := $(shell mkdir -p $(BUILD_DIR) && python3 ../tools/n64/split_code_cache.py $(GEN_DIR) $(CC_SPLIT) >&2 && echo ok)
+ifneq ($(CC_SPLIT_OK),ok)
+$(error split_code_cache.py failed)
+endif
+GEN_SRC_DIR := $(CC_SPLIT)/resident
+CC_MODULES := $(basename $(notdir $(wildcard $(CC_SPLIT)/cc/*.c)))
+CC_MODOBJS := $(addprefix $(BUILD_DIR)/cc/,$(addsuffix .o,$(CC_MODULES)))
+CC_DSOS := $(addprefix $(BUILD_DIR)/filesystem/cc/,$(addsuffix .dso,$(CC_MODULES)))
+N64_CFLAGS += -DRECOMP_CACHE_EXTERNAL_BODIES -DN64_CODE_CACHE=1 -DN64_CODE_CACHE_BYTES=$(CODECACHE_BYTES)
+$(BUILD_DIR)/cc/%.o: $(CC_SPLIT)/cc/%.c
+	@mkdir -p $(dir $@)
+	@echo "    [CC] $<"
+	$(CC) -c $(CFLAGS) -Os -G 0 -DN64_DSO -I$(GEN_INC) -I$(GEN_DIR) -o $@ $<
+$(foreach m,$(CC_MODULES),$(eval $(BUILD_DIR)/filesystem/cc/$(m).dso: $(BUILD_DIR)/cc/$(m).o))
+$(BUILD_DIR)/cc_sizes.c: $(CC_MODOBJS)
+	@echo "    [SIZES] $@"
+	python3 ../tools/n64/code_cache_sizes.py $@ $(BUILD_DIR)/cc $(N64_INST)/bin/mips64-elf-size
+$(BUILD_DIR)/cc_sizes.o: $(BUILD_DIR)/cc_sizes.c
+	$(CC) -c $(CFLAGS) -o $@ $<
+OBJS += $(BUILD_DIR)/cc_sizes.o
+CC_EXTERNS := $(BUILD_DIR)/snesrecomp_interp.externs
+$(CC_EXTERNS): $(CC_DSOS)
+$(BUILD_DIR)/snesrecomp_interp.elf: $(CC_EXTERNS)
+$(BUILD_DIR)/snesrecomp_interp.msym: $(BUILD_DIR)/snesrecomp_interp.elf $(CC_EXTERNS)
+$(BUILD_DIR)/snesrecomp_interp.dfs: $(CC_DSOS)
+snesrecomp_interp.z64: $(BUILD_DIR)/snesrecomp_interp.msym
+endif
+
 ifneq ($(GEN_DIR),)
-GEN_SRCS := $(notdir $(wildcard $(GEN_DIR)/*.c))
+GEN_SRCS := $(notdir $(wildcard $(GEN_SRC_DIR)/*.c))
 GEN_OBJS := $(addprefix $(BUILD_DIR)/gen/,$(GEN_SRCS:.c=.o))
 OBJS += $(GEN_OBJS)
 $(BUILD_DIR)/n64_stubs.o: CFLAGS += -DSNESRECOMP_N64_HAS_GENERATED_CODE
-$(BUILD_DIR)/gen/%.o: $(GEN_DIR)/%.c
+$(BUILD_DIR)/gen/%.o: $(GEN_SRC_DIR)/%.c
 	@mkdir -p $(dir $@)
 	@echo "    [CC] $<"
 	$(CC) -c $(CFLAGS) -Os -I$(GEN_INC) -I$(GEN_DIR) -o $@ $<

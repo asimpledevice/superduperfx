@@ -2105,7 +2105,12 @@ def emit_function(rom: bytes, bank: int, start: int,
     lean = lean_emit()
     if lean:
         # cpu_lean_access.h: the same three statements.
-        src.append(f'  recomp_enter("{func_name}");')
+        if code_cache_emit():
+            # The name lives in the resident record: this body's own strings
+            # go away when the cache evicts it.
+            src.append(f'  extern struct RecompRoutine {func_name}__rt; recomp_enter_rt(&{func_name}__rt);')
+        else:
+            src.append(f'  recomp_enter("{func_name}");')
     else:
         src.append(f'  extern const char *g_last_recomp_func;')
         src.append(f'  g_last_recomp_func = "{func_name}";')

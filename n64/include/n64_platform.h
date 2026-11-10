@@ -41,6 +41,12 @@ uint8_t *n64_platform_rom_window(const char *path, int *size_out, int slots);
 /* Pages copied in so far. */
 uint32_t n64_platform_rom_window_misses(void);
 
+/* Loadable modules (libdragon DSOs), for the code cache: open a module file,
+ * find a symbol in it, close it. NULL when unavailable. */
+void *n64_platform_module_open(const char *path);
+void *n64_platform_module_symbol(void *module, const char *name);
+void n64_platform_module_close(void *module);
+
 /* Status text position: inside the area TVs show (overscan). */
 enum { N64_STATUS_Y = 240 - 28 };
 

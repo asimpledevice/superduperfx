@@ -1231,6 +1231,39 @@ demo loads 281 routines (791 KB) and evicts none at 1.5 MB. Step 3 is the
 N64 loader: bodies packed outside the main image and loaded from the
 cartridge on a miss.
 
+## Code cache, step 3: routine modules on the N64 (`CODECACHE=1`, 2026-11-10)
+
+`make CODECACHE=1 GEN_DIR=<tree generated with SNESRECOMP_EMIT_LEAN=1
+SNESRECOMP_EMIT_CODE_CACHE=1>` runs tools/n64/split_code_cache.py at parse
+time: each compiled routine body becomes rom:/cc/<name>.dso (a libdragon
+DSO, -G 0), and the main program keeps the runtime, the host wrappers and
+dispatch_v2.c (records built with RECOMP_CACHE_EXTERNAL_BODIES, so they do
+not refer to bodies). The main ELF links against the modules' .externs and
+ships the .msym that dlopen resolves imports with; tools/n64/code_cache_
+sizes.py turns the module objects into the size table the cache budgets
+with. The host loader (n64_host.c) dlopens the module, looks up F__body and
+dlcloses on eviction; budget `CODECACHE_BYTES` (default 1.5 MB). Bodies take
+their diagnostic name from the resident record (`recomp_enter_rt`), so no
+pointer into an evicted module outlives it.
+
+SMW in ares, all 3,432 compilable routines, ROM paging on: main ELF text
+1.19 MB (2.12 MB with the 709-routine selection linked in); the attract
+demo loads 372 routines (1,067 KB) by frame 1,800 and evicts none; free
+heap 2.14 MB contiguous; run stage 85.6-88.7 ms (no regenerated I-cache
+order). With a 256 KB budget: 27,192 loads and 27,122 evictions in 900
+frames, no crash, never over budget (running routines are never evicted).
+
+The cost is the load: 2.6 ms on average, 56 ms worst (first load, when the
+main symbol table is read). dlopen does two filesystem lookups (~235 us
+each: the module and its .sym) and reads modules that average 10 KB
+uncompressed for ~2.2 KB of code -- the rest is symbol and relocation
+tables, because every runtime call and global access in a body is an
+import. Uncompressed modules load slower (2.85 ms): the cartridge read is
+the cost. Next: a custom module format with imports resolved at build time
+against the linked main program (jal reaches the whole kseg0 segment), only
+module-internal relocations kept, one packed file with an index read at
+boot -- a load becomes one DMA of ~2 KB plus a short relocation pass.
+
 ## Next steps
 
 1. Audio: check the RSP DSP by ear on hardware (output arrives later than

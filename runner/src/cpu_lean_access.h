@@ -62,6 +62,9 @@ int    recomp_block_enter(CpuState *cpu, uint32 pc16);
 int    recomp_block_enter_charge(CpuState *cpu, uint32 pc16, uint32 n);
 int    recomp_block_enter_charge_c(CpuState *cpu, uint32 pc16, uint32 n, uint32 master);
 void   recomp_enter(const char *name);
+struct RecompRoutine;
+/* recomp_enter with the name from a code-cache record (recomp_cache.c). */
+void   recomp_enter_rt(const struct RecompRoutine *rt);
 uint32 recomp_frame(CpuState *cpu, int s_offset, uint32 skip, uint16 *entry_s, uint8 *hrv);
 RecompReturn recomp_return_slow(CpuState *cpu, uint32 rpc24, uint16 ret_s, uint16 entry_s,
                                 uint8 hrv, uint32 host_return_pc24, uint32 frame_sz,

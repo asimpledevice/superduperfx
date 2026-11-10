@@ -270,3 +270,8 @@ uint8_t *n64_platform_rom_window(const char *path, int *size_out, int slots) {
 
 uint32_t n64_platform_rom_window_misses(void) { return s_win_misses; }
 
+/* No loadable modules here: the profile host links every body in. */
+void *n64_platform_module_open(const char *path) { (void)path; return NULL; }
+void *n64_platform_module_symbol(void *module, const char *name) { (void)module; (void)name; return NULL; }
+void n64_platform_module_close(void *module) { (void)module; }
+

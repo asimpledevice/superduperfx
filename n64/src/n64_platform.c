@@ -1,5 +1,6 @@
 /* libdragon side of the N64 host. See n64_platform.h. */
 #include <libdragon.h>
+#include <dlfcn.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
@@ -225,4 +226,10 @@ uint8_t *n64_platform_rom_window(const char *path, int *size_out, int slots) {
 }
 
 uint32_t n64_platform_rom_window_misses(void) { return s_rom_misses; }
+
+/* ---- Loadable modules (code cache) ----------------------------------- */
+
+void *n64_platform_module_open(const char *path) { return dlopen(path, RTLD_LOCAL); }
+void *n64_platform_module_symbol(void *module, const char *name) { return dlsym(module, name); }
+void n64_platform_module_close(void *module) { dlclose(module); }
 
