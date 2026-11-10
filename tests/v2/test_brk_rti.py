@@ -12,6 +12,14 @@ from v2.brk_rti import check_brk_rti_site  # noqa: E402
 from v2.cfg_loader import load_bank_cfg  # noqa: E402
 from v2.emit_function import emit_function  # noqa: E402
 
+
+@pytest.fixture(autouse=True)
+def _default_emission(monkeypatch):
+    """These tests pin the default emitted text; SNESRECOMP_EMIT_LEAN has its
+    own (test_emit_lean.py)."""
+    monkeypatch.delenv("SNESRECOMP_EMIT_LEAN", raising=False)
+
+
 _REPO = pathlib.Path(__file__).resolve().parents[2]
 
 # 8000  LDA #$05 / BRK #$00 / STA $10 / RTS      (m=1)

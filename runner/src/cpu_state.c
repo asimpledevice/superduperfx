@@ -429,6 +429,10 @@ bool cpu_read8_plain_rom(CpuState *cpu, uint8 bank, uint16 addr, uint8 *out) {
     return true;
 }
 
+/* Lean generated code's addressing-mode helpers (cpu_lean_access.h). */
+#define CPU_LEAN_ACCESS_DEFINE
+#include "cpu_lean_access.h"
+
 uint8 cpu_read8(CpuState *cpu, uint8 bank, uint16 addr) {
     if (g_snes && g_snes->cart)
         cart_note_cpu_bus(g_snes->cart, bank, addr);

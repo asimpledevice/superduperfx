@@ -19,9 +19,17 @@ writes through a 24-bit effective with `(uint8)(eff >> 16)` for the
 bank arg and `(uint16)(eff)` for the address arg. Non-indexed bases
 keep the cheap hard-coded bank form.
 """
+import pytest
 from _helpers import make_lorom_bank0  # noqa: E402
 
 from v2.emit_function import emit_function  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _default_emission(monkeypatch):
+    """These tests pin the default emitted text; SNESRECOMP_EMIT_LEAN has its
+    own (test_emit_lean.py)."""
+    monkeypatch.delenv("SNESRECOMP_EMIT_LEAN", raising=False)
 
 
 def test_long_x_write_emits_24bit_effective_with_bank_carry():

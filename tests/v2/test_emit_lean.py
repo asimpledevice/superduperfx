@@ -121,3 +121,103 @@ def test_each_block_yields_at_its_own_pc(lean, tmp_path):
     run = subprocess.run([str(exe)], capture_output=True, text=True)
     assert run.returncode == 0, run.stdout + run.stderr
     assert run.stdout.strip() == 'ok'
+
+
+# ── Memory-access helpers (cpu_lean_access.h) ─────────────────────────────
+
+def test_rewrite_shapes():
+    from v2.lean_rewrite import lean_rewrite
+    cases = {
+        'cpu_read8(cpu, 0x00, (uint16)(cpu->D + 0x0010))': 'cpu_read_dp8(cpu, 0x0010)',
+        'cpu_write16(cpu, 0x00, (uint16)(cpu->D + 0x0010), _v3)': 'cpu_write_dp16(cpu, 0x0010, _v3)',
+        'cpu_read8(cpu, 0x00, (uint16)(cpu->D + 0x0020 + cpu->X))': 'cpu_read_dpx8(cpu, 0x0020)',
+        ('cpu_read8(cpu, (uint8)(((((uint32)cpu->DB << 16) + (uint32)0x8d90 + (uint32)cpu->X)) >> 16), '
+         '(uint16)((((uint32)cpu->DB << 16) + (uint32)0x8d90 + (uint32)cpu->X)))'): 'cpu_read_absX8(cpu, 0x8d90)',
+        ('cpu_write8(cpu, (uint8)(((((uint32)cpu->DB << 16) + (uint32)0x1300 + (uint32)cpu->Y)) >> 16), '
+         '(uint16)((((uint32)cpu->DB << 16) + (uint32)0x1300 + (uint32)cpu->Y)), (uint8)(_v2 & 0xFF))'):
+            'cpu_write_absY8(cpu, 0x1300, (uint8)(_v2 & 0xFF))',
+        ('cpu_read16(cpu, (uint8)((((uint32)0x7e2000 + (uint32)cpu->X)) >> 16), '
+         '(uint16)(((uint32)0x7e2000 + (uint32)cpu->X)))'): 'cpu_read_longx16(cpu, 0x7e2000)',
+        'cpu_write8(cpu, 0x00, cpu->S, (uint8)(cpu->A & 0xFF)); cpu->S = (uint16)(cpu->S - 1);':
+            'cpu_push8(cpu, (uint8)(cpu->A & 0xFF));',
+        'cpu->S = (uint16)(cpu->S + 1);\n    uint16 _rpcl = (uint16)cpu_read8(cpu, 0x00, cpu->S);':
+            '\n    uint16 _rpcl = (uint16)cpu_pull8(cpu);',
+    }
+    for before, after in cases.items():
+        assert lean_rewrite(before) == after, before
+
+
+def test_rewrite_leaves_order_sensitive_sites_inline():
+    from v2.lean_rewrite import lean_rewrite
+    # A written value with a call: argument order would change.
+    w = 'cpu_write8(cpu, 0x00, (uint16)(cpu->D + 0x0010), cpu_read8(cpu, 0x00, cpu->S))'
+    assert lean_rewrite(w).startswith('cpu_write8(cpu, 0x00, (uint16)(cpu->D + 0x0010), ')
+    # The low word of a (dp) pointer shares its expression with the bank read.
+    p = ('(((uint32)cpu_read8(cpu, 0x00, (uint16)((uint16)(cpu->D + 0x0010) + 2)) << 16) '
+         '| (uint32)cpu_read16(cpu, 0x00, (uint16)(cpu->D + 0x0010)))')
+    assert lean_rewrite(p) == p
+    w2 = 'cpu_write8(cpu, 0x00, cpu->S, f(x)); cpu->S = (uint16)(cpu->S - 1);'
+    assert lean_rewrite(w2) == w2
+
+
+# LDA $10 / STA $12 / LDA $1234,X / STA $1300,Y / LDA $7E2000,X / STA $14,X /
+# PHA / LDA #$77 / PLA / PHP / PLP / LDA $20,X / STA $1400,X / RTS
+_MIX = bytes.fromhex('A5 10 85 12 BD 34 12 99 00 13 BF 00 20 7E 95 14 '
+                     '48 A9 77 68 08 28 B5 20 9D 00 14 60')
+
+_DIFF_MAIN = r'''
+static uint8 ram_after[2][0x20000];
+static CpuState cpu_after[2];
+static void run(int which, RecompReturn (*fn)(CpuState *)) {
+  CpuState cpu;
+  memset(&cpu, 0, sizeof cpu);
+  for (unsigned i = 0; i < sizeof g_ram; i++) g_ram[i] = (uint8)(i * 7 + 3);
+  cpu.ram = g_ram;
+  cpu.S = 0x01FF; cpu.m_flag = 1; cpu.x_flag = 1; cpu.P = 0x30;
+  cpu.X = 3; cpu.Y = 5; cpu.D = 0x0100; cpu.DB = 0x7E;
+  g_tc_valid = 0; g_recomp_stack_top = 0; g_other_exits = 0;
+  cpu_push_jsr_return_frame(&cpu);
+  fn(&cpu);
+  memcpy(ram_after[which], g_ram, sizeof g_ram);
+  cpu.ram = NULL;
+  cpu_after[which] = cpu;
+}
+int main(void) {
+  run(0, Def_M1X1);
+  run(1, Lean_M1X1);
+  if (memcmp(ram_after[0], ram_after[1], sizeof ram_after[0])) { puts("ram differs"); return 1; }
+  if (memcmp(&cpu_after[0], &cpu_after[1], sizeof cpu_after[0])) { puts("cpu differs"); return 1; }
+  if (g_other_exits) { puts("unexpected exit"); return 1; }
+  puts("ok");
+  return 0;
+}
+'''
+
+
+def test_lean_and_default_bodies_leave_the_same_state(monkeypatch, tmp_path):
+    """The same routine through every rewritten addressing mode, emitted both
+    ways, run from the same state: RAM and the whole CpuState must match."""
+    import test_hle_func_seam as seam
+    compiler = seam._compiler()
+    if not compiler:
+        pytest.skip('C compiler required')
+    rom = _MIX + bytes(0x8000 - len(_MIX))
+    end = 0x8000 + len(_MIX)
+    monkeypatch.delenv('SNESRECOMP_EMIT_LEAN', raising=False)
+    default = emit_function(rom, bank=0, start=0x8000, entry_m=1, entry_x=1, end=end, func_name='Def')
+    monkeypatch.setenv('SNESRECOMP_EMIT_LEAN', '1')
+    lean = emit_function(rom, bank=0, start=0x8000, entry_m=1, entry_x=1, end=end, func_name='Lean')
+    for helper in ('cpu_read_dp8', 'cpu_read_absX8', 'cpu_write_absY8', 'cpu_read_longx8',
+                   'cpu_write_dpx8', 'cpu_push8', 'cpu_pull8', 'cpu_host_return_pc24'):
+        assert helper in lean, helper
+    harness = seam._HARNESS.split('/* The C helpers.')[0]
+    c_file = tmp_path / 'diff.c'
+    c_file.write_text(harness + default + lean + _DIFF_MAIN, encoding='utf-8')
+    exe = tmp_path / 'diff'
+    repo = pathlib.Path(__file__).resolve().parents[2]
+    build = subprocess.run([compiler, '-std=c11', '-O1', '-I', str(repo / 'runner' / 'src'),
+                            str(c_file), '-o', str(exe)], capture_output=True, text=True)
+    assert build.returncode == 0, build.stdout + build.stderr
+    run = subprocess.run([str(exe)], capture_output=True, text=True)
+    assert run.returncode == 0, run.stdout + run.stderr
+    assert run.stdout.strip() == 'ok'

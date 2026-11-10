@@ -30,6 +30,7 @@ for p in (str(_THIS_DIR), str(_RECOMPILER_DIR)):
 from typing import Dict, List, Optional, Tuple  # noqa: E402
 
 from v2.emit_options import lean_emit
+from v2.lean_rewrite import lean_rewrite
 from v2.decoder import (  # noqa: E402
     DecodeKey, DecodedInsn, FunctionDecodeGraph, decode_function, addr24,
 )
@@ -2188,29 +2189,33 @@ def emit_function(rom: bytes, bank: int, start: int,
             f'  if (rtl_aot_node_denied(0x{fn_entry_pc:06X}u)) {{ '
             f'RecompStackPop(); return interp_tier_dispatch_balanced('
             f'cpu, {_transfer_target_expr(fn_entry_pc, False)}, 0x{fn_entry_pc:06X}u, _entry_s, _hrv, false); }}')
-    src.append(f'  uint32 _host_return_pc24 = 0xFFFFFFFFu;')
-    src.append(f'  if (_hrv == 2 || _hrv == 3) {{')
-    src.append(f'    uint16 _host_rpcl = cpu_read8(cpu, 0x00, (uint16)(_entry_s + 1u));')
-    src.append(f'    uint16 _host_rpch = cpu_read8(cpu, 0x00, (uint16)(_entry_s + 2u));')
-    src.append(f'    uint8 _host_rpb = (_hrv == 3) ? cpu_read8(cpu, 0x00, (uint16)(_entry_s + 3u)) : cpu->PB;')
-    # A callee that consumes N inline argument bytes rewrites its own return
-    # frame (`LDA 3,S; ADC #N; STA 3,S`) and returns N bytes past the call.
-    # Its callers already continue there (the analyzer's inline-argument
-    # skip), so that rewritten address IS the host return. Sampling only the
-    # pushed address made the RTL treat it as foreign and dispatch the
-    # caller's continuation as a new frame, which the caller then ran again
-    # (Super Metroid: SpawnHdmaObject decoded through its PHP/PLP tail ran
-    # Phantoon2_Init twice and crashed Phantoon's room load). Before the
-    # tail was decoded through, its separate RTL re-sampled the frame after
-    # the rewrite, which hid the defect.
     own_inline_skip = _own_inline_skip(fn_entry_pc, inline_arg_map)
-    src.append(f'    _host_return_pc24 = ((uint32)_host_rpb << 16) |')
-    if own_inline_skip:
-        src.append(f'        (uint16)((((_host_rpch << 8) | _host_rpcl) + 1u + {own_inline_skip}u) & 0xFFFFu);'
-                   f'  /* + inline argument bytes this function consumes */')
+    if lean:
+        # cpu_lean_access.h: the same three reads and formula.
+        src.append(f'  uint32 _host_return_pc24 = cpu_host_return_pc24(cpu, _entry_s, _hrv, {own_inline_skip}u);')
     else:
-        src.append(f'        (uint16)((((_host_rpch << 8) | _host_rpcl) + 1u) & 0xFFFFu);')
-    src.append(f'  }}')
+        src.append(f'  uint32 _host_return_pc24 = 0xFFFFFFFFu;')
+        src.append(f'  if (_hrv == 2 || _hrv == 3) {{')
+        src.append(f'    uint16 _host_rpcl = cpu_read8(cpu, 0x00, (uint16)(_entry_s + 1u));')
+        src.append(f'    uint16 _host_rpch = cpu_read8(cpu, 0x00, (uint16)(_entry_s + 2u));')
+        src.append(f'    uint8 _host_rpb = (_hrv == 3) ? cpu_read8(cpu, 0x00, (uint16)(_entry_s + 3u)) : cpu->PB;')
+        # A callee that consumes N inline argument bytes rewrites its own return
+        # frame (`LDA 3,S; ADC #N; STA 3,S`) and returns N bytes past the call.
+        # Its callers already continue there (the analyzer's inline-argument
+        # skip), so that rewritten address IS the host return. Sampling only the
+        # pushed address made the RTL treat it as foreign and dispatch the
+        # caller's continuation as a new frame, which the caller then ran again
+        # (Super Metroid: SpawnHdmaObject decoded through its PHP/PLP tail ran
+        # Phantoon2_Init twice and crashed Phantoon's room load). Before the
+        # tail was decoded through, its separate RTL re-sampled the frame after
+        # the rewrite, which hid the defect.
+        src.append(f'    _host_return_pc24 = ((uint32)_host_rpb << 16) |')
+        if own_inline_skip:
+            src.append(f'        (uint16)((((_host_rpch << 8) | _host_rpcl) + 1u + {own_inline_skip}u) & 0xFFFFu);'
+                       f'  /* + inline argument bytes this function consumes */')
+        else:
+            src.append(f'        (uint16)((((_host_rpch << 8) | _host_rpcl) + 1u) & 0xFFFFu);')
+        src.append(f'  }}')
     src.append(f'  (void)_entry_s;  /* used by trampoline balance check */')
     src.append(f'  (void)_hrv;')
     src.append(f'  (void)_host_return_pc24;')
@@ -2321,6 +2326,8 @@ def emit_function(rom: bytes, bank: int, start: int,
     src.append("  RecompStackPop();")
     src.append("  return RECOMP_RETURN_NORMAL;")
     src.append("}")
+    if lean:
+        return lean_rewrite("\n".join(src) + "\n")
     return "\n".join(src) + "\n"
 
 

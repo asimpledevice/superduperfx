@@ -1,8 +1,16 @@
 """Regression tests for PHA/SEP/RTS table dispatchers."""
+import pytest
 from _helpers import make_lorom_bank0  # noqa: E402
 
 from v2 import codegen
 from v2.emit_function import emit_function  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _default_emission(monkeypatch):
+    """These tests pin the default emitted text; SNESRECOMP_EMIT_LEAN has its
+    own (test_emit_lean.py)."""
+    monkeypatch.delenv("SNESRECOMP_EMIT_LEAN", raising=False)
 
 
 def test_pha_rts_stack_dispatch_replaces_fake_return_push():

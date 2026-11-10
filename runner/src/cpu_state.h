@@ -414,6 +414,8 @@ uint8  cpu_read8 (CpuState *cpu, uint8 bank, uint16 addr);
 uint16 cpu_read16(CpuState *cpu, uint8 bank, uint16 addr);
 void   cpu_write8 (CpuState *cpu, uint8 bank, uint16 addr, uint8  v);
 void   cpu_write16(CpuState *cpu, uint8 bank, uint16 addr, uint16 v);
+/* Addressing-mode helpers for lean generated code (SNESRECOMP_EMIT_LEAN). */
+#include "cpu_lean_access.h"
 
 /* Region-paced AOT bus (2026-08-31): the AOT emitter charges block const
  * cycles minus data transfers, and paces each data/stack/pointer access

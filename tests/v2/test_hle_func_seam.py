@@ -268,6 +268,8 @@ int interp_bridge_lle_deadline_pause(CpuState *cpu, uint32 pc) {
 }
 int interp_bridge_lle_unwind_pending(void) { return 0; }
 /* Lean emission (SNESRECOMP_EMIT_LEAN), as in the runtime. */
+#define CPU_LEAN_ACCESS_DEFINE
+#include "cpu_lean_access.h"
 uint8 g_code_speed[2] = {8, 8};
 int recomp_block_enter(CpuState *cpu, uint32 pc16) {
   WatchdogCheck();

@@ -5,9 +5,17 @@ the PLAs expose an ancestor return frame, RTS pops its real PC and the runtime
 converts the hardware stack watermark into a host RecompReturn. This keeps AOT
 and LLE behavior identical without recognizing game-specific idioms.
 """
+import pytest
 from _helpers import make_lorom_bank0  # noqa: E402
 
 from v2.emit_function import emit_function  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _default_emission(monkeypatch):
+    """These tests pin the default emitted text; SNESRECOMP_EMIT_LEAN has its
+    own (test_emit_lean.py)."""
+    monkeypatch.delenv("SNESRECOMP_EMIT_LEAN", raising=False)
 
 
 def test_single_block_pla_pla_rts_uses_hardware_stack_unwind():

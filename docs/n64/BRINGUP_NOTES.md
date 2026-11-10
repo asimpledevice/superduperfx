@@ -1018,6 +1018,30 @@ of the frame): the gain is RAM, and a smaller working set for a code cache.
 Dead-flag elimination is capped at about 3% (2.5% at the measured 80% dead
 rate), far below the 25% the per-block sequence was first guessed at.
 
+Memory-access sites (same switch, `recompiler/v2/lean_rewrite.py` and
+`runner/src/cpu_lean_access.h`): about 15,000 calls to `cpu_read8/16` and
+`cpu_write8/16` each spelled out their addressing mode. In lean mode a
+rewrite pass turns the emitter's exact text for each mode into a helper
+that makes the same bus call with the same arithmetic, so a site passes
+only its constant: direct page (`cpu_read_dp8`), dp,X, absolute,X/,Y with
+bank carry, long,X, push/pull (`cpu_push8`/`cpu_pull8`), and the prologue's
+return-frame read (`cpu_host_return_pc24`, emitted directly). Left inline:
+writes whose value contains a call, and the two pointer reads of
+`(dp)`/`(dp),Y`, since C leaves the order of calls in one expression open.
+Absolute (DB, k) was measured at -0.2% and left out.
+
+| SMW native set, MIPS `.text` | bytes | vs default |
+|---|---|---|
+| Default emission | 2,577,336 | |
+| Lean, block checks / speed / leak | 2,342,866 | -9.1% |
+| Lean, plus memory-access helpers | 2,097,386 | -18.6% |
+
+Native state and audio hashes over 1,200 frames identical to the default
+emission; test_emit_lean.py runs one routine through every rewritten mode
+emitted both ways and compares RAM and the whole CpuState; tests/v2 and the
+runtime C tests pass as before. ares frame time unchanged within noise
+(90.7 / 17.8 / 9.7 ms).
+
 ## Next steps
 
 1. Audio: check the RSP DSP by ear on hardware (output arrives later than
