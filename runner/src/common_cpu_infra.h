@@ -104,6 +104,8 @@ int cpu_resolve_ancestor_skip(uint16_t ret_s);
  * to `out`, highlighting any slot whose entry S equals `mark` (0 = none). */
 void recomp_dump_frame_array(FILE *out, uint16_t mark);
 int cpu_resolve_post_return_skip(uint16_t post_s);
+int cpu_resolve_callee_post_return_skip(uint16_t post_s, int callee_tail);
+int cpu_top_frame_tail_entered(void);
 typedef struct CpuTailcallContextSave {
   uint8_t valid;
   uint16_t entry_s;

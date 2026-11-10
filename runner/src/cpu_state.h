@@ -727,6 +727,12 @@ RecompReturn interp_tier_dispatch_interrupt(CpuState *cpu,
  * Ordinary continuations must record their entry, even when target == site. */
 RecompReturn interp_tier_dispatch_balanced(CpuState *cpu, uint32 target_pc24,
     uint32 site_pc24, uint16 entry_s, uint8 hrv, bool from_indirect);
+/* A whole routine in the interpreter in place of its compiled body, after
+ * that body's prologue ran and popped its frame (the code cache's fallback,
+ * recomp_cache_interp.c): as _balanced, but a guest return past the routine's
+ * own frame resolves into the SKIP_N its body's RTS/RTL would return. */
+RecompReturn interp_tier_dispatch_routine(CpuState *cpu, uint32 target_pc24,
+    uint32 site_pc24, uint16 entry_s, uint8 hrv, int tail_entered);
 /* Tail transfer that preserves the enclosing architectural boundary.  Normal
  * subroutines stop past entry_s; an interrupt handler stops at its RTI. */
 RecompReturn interp_tier_dispatch_tail(CpuState *cpu, uint32 target_pc24,

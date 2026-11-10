@@ -44,6 +44,39 @@ static int cc_cmp(const void *a, const void *b) {
 }
 static unsigned s_cc_report;
 
+/* Background loading (-DN64_PROFILE_CC_ASYNC='"cc_fallback_v2.c"', the table
+ * from tools/n64/split_code_cache.py --fallback-only): a load is in flight
+ * for $N64_PROFILE_CODE_ASYNC frames (default 1), and calls meanwhile run in
+ * the interpreter fallback, as on the N64. */
+#ifdef N64_PROFILE_CC_ASYNC
+#include N64_PROFILE_CC_ASYNC
+#include "../../runner/src/recomp_cache_interp.c"
+static unsigned s_cc_delay = 1, s_cc_begin_frame;
+static int cc_async_begin(RecompRoutine *rt) {
+  if (g_recomp_fallback[rt->id].pc24 == 0xFFFFFFFFu) return 0;
+  {  /* $N64_PROFILE_CODE_ASYNC_IDS=lo:hi: only these ids (bisection) */
+    const char *r = getenv("N64_PROFILE_CODE_ASYNC_IDS");
+    unsigned lo, hi;
+    if (r && sscanf(r, "%u:%u", &lo, &hi) == 2 && (rt->id < lo || rt->id >= hi)) return 0;
+  }
+  s_cc_begin_frame = s_frames;
+  if (getenv("N64_PROFILE_CODE_ASYNC_LOG"))
+    fprintf(stderr, "[cc] frame %u: %s interpreted while loading\n", s_frames, rt->name);
+  return 1;
+}
+static int cc_async_finish(RecompRoutine *rt, int wait) {
+  if (!wait && s_frames - s_cc_begin_frame < s_cc_delay) return 0;
+  rt->fn = rt->body;
+  return 1;
+}
+static void cc_async_init(void) {
+  const char *d = getenv("N64_PROFILE_CODE_ASYNC");
+  if (d && d[0]) s_cc_delay = (unsigned)atoi(d);
+  for (unsigned i = 0; i < g_recomp_routine_count; i++) g_recomp_routines[i]->id = i;
+  recomp_cache_set_async(cc_async_begin, cc_async_finish, recomp_cache_interp_fallback);
+}
+#endif
+
 void n64_platform_init(void) {
   const char *n = getenv("N64_PROFILE_FRAMES");
   s_limit = n ? (unsigned)atoi(n) : 300;
@@ -82,6 +115,9 @@ void n64_platform_init(void) {
     }
     recomp_cache_set_size_hook(cc_size_of);
   }
+#ifdef N64_PROFILE_CC_ASYNC
+  cc_async_init();
+#endif
 }
 int n64_platform_has_expansion_pak(void) { return 1; }
 void n64_platform_log(const char *fmt, ...) {
@@ -276,3 +312,5 @@ int n64_platform_codepack_open(const char *path, void (*size_cb)(uint32_t id, ui
 }
 void *n64_platform_codepack_load(uint32_t id, void **base_out) { (void)id; *base_out = NULL; return NULL; }
 void n64_platform_codepack_free(void *base) { (void)base; }
+void *n64_platform_codepack_begin(uint32_t id, void **base_out) { (void)id; *base_out = NULL; return NULL; }
+void *n64_platform_codepack_finish(int wait) { (void)wait; return NULL; }

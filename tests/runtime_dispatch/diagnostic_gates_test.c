@@ -188,6 +188,40 @@ static int generated_entry_s_frames_still_resolve_returns(void) {
   return failures;
 }
 
+/* The code cache's interpreter fallback pops the interpreted routine's frame:
+ * a return past it resolves as if that frame were still on top, the immediate
+ * caller included (SMW's pointer-table call returning to its caller's caller). */
+static int callee_post_return_resolves_without_its_frame(void) {
+  int failures = 0;
+
+  g_recomp_stack_top = 0;
+  g_cpu.host_return_valid = 2;
+  g_cpu.S = 0x01f0;
+  RecompStackPush("grandparent");     /* entry 01f0, JSR frame: post 01f2 */
+  g_cpu.S = 0x01e0;
+  RecompStackPush("caller");          /* entry 01e0, JSR frame: post 01e2 */
+
+  failures += check(cpu_resolve_callee_post_return_skip(0x01e2, 0) == 1,
+                    "return to the immediate caller's continuation is SKIP_1");
+  failures += check(cpu_resolve_callee_post_return_skip(0x01f2, 0) == 2,
+                    "return to the grandparent's continuation is SKIP_2");
+  failures += check(cpu_resolve_callee_post_return_skip(0x01f2, 1) == 1,
+                    "a tail-entered callee does not count toward the depth");
+  failures += check(cpu_resolve_callee_post_return_skip(0x01d0, 0) == -1,
+                    "no matching ancestor resolves to nothing");
+  /* With the callee's frame on top, the existing resolver agrees. */
+  g_cpu.S = 0x01d0;
+  RecompStackPush("callee");
+  failures += check(cpu_resolve_post_return_skip(0x01e2) == 1 &&
+                    cpu_resolve_post_return_skip(0x01f2) == 2,
+                    "matches the resolver with the callee's frame present");
+  RecompStackPop();
+  RecompStackPop();
+  RecompStackPop();
+  g_cpu.host_return_valid = 0;
+  return failures;
+}
+
 static int json_matches_stack_balance_mode(void) {
   FILE *f = tmpfile();
   char buf[256];
@@ -228,6 +262,7 @@ int main(void) {
                     "functional recomp stack still pushes and pops");
   failures += hle_entry_s_frames_do_not_resolve_returns();
   failures += generated_entry_s_frames_still_resolve_returns();
+  failures += callee_post_return_resolves_without_its_frame();
   failures += check(json_matches_stack_balance_mode(),
                     "stack-balance dump matches diagnostic mode");
   failures += interpreter_scope_does_not_resolve_returns();

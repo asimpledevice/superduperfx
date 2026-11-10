@@ -1288,6 +1288,46 @@ run stage 83-89 ms. A 256 KB budget: 27,167 loads and 27,093 evictions,
 no crash, run stage 200 ms (376 with dlopen). At ~2.7 KB per load the time
 is now the cartridge DMA (~3.7 MB/s in ares).
 
+### Code cache: background loading, experimental (2026-11-10)
+
+`make CODECACHE_ASYNC=1` (default 0). A call to an absent routine starts its
+DMA (n64_platform_codepack_begin: index entry, relocations, then
+dma_read_async of the image) and runs the routine in the interpreter this
+time; recomp_cache_poll() each frame, or the next absent call, finishes the
+load (relocate, write back, invalidate) and sets rt->fn. One load in flight;
+it is pinned while it loads. The fallback (runner/src/recomp_cache_interp.c)
+runs the body's prologue -- frame, entry S with the tail-call context --
+pops the frame as the AOT deny gate does and interprets from the entry PC
+(tools/n64/split_code_cache.py writes each routine's entry PC and entry-S
+offset into g_recomp_fallback). A guest return past the routine's own frame
+resolves into the SKIP_N its RTS/RTL would return
+(cpu_resolve_callee_post_return_skip, interp_tier_dispatch_routine).
+
+ares, attract demo: the CPU cost per load falls from 0.73 ms to 0.27 ms (the
+DMA overlaps emulation), 372 routines interpreted once while loading, run
+stage unchanged (85 ms). Image lengths are rounded to whole cache lines:
+libdragon's data_cache_hit_invalidate asserts on a partial line.
+
+Why it is not the default: SMW timing changes (boot reaches its first game
+mode 66 frames earlier, much as with the HLE SPC upload), so the TAS replay
+cannot validate it; stress runs of the attract demo on the native host
+(N64_PROFILE_CODE_ASYNC=<frames in flight>, N64_PROFILE_CODE_ASYNC_IDS=lo:hi
+to bisect, -DN64_PROFILE_CC_ASYNC=<split_code_cache.py --fallback-only table>)
+found three return-contract cases. Fixed: a pointer-table call that returns
+to its caller's caller (CheckWhichControllersArePluggedIn: the interpreter
+returned NORMAL where the body returns SKIP_1), and GetDrawInfo's PLA/PLA/RTS
+inside an interpreted SubSprGfx2Entry1 (keeping the routine's frame during
+interpretation counted the interpreter's scope frame in the unwind depth).
+Open: GameMode08_FileSelect interpreted, its compiled callee
+HandleMenuCursor_Main_ReturnsTwice returns out of FileSelect; the bridge
+hands that return to the outermost interpreter (interp_bridge_return_
+targets_owner), which unwinds through compiled callers (LLE unwind) instead
+of returning from FileSelect. The deny gate has the same gap.
+
+I-cache order regenerated for the code-cache main program (1.15 MB text):
+modelled conflict cost 27% lower, measured run stage 85.8 ms against
+85.0 ms with the current order, so the current order stays.
+
 ## Next steps
 
 1. Audio: check the RSP DSP by ear on hardware (output arrives later than

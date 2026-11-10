@@ -441,6 +441,34 @@ int cpu_resolve_post_return_skip(uint16_t post_s) {
   return -1;
 }
 
+/* cpu_resolve_post_return_skip for a routine whose own frame is no longer on
+ * the recomp stack (the code cache's interpreter fallback pops it, as the AOT
+ * deny gate does, so the interpreter owns any non-local return inside it):
+ * resolves post_s as that routine's RTS/RTL would have with its frame on top,
+ * the immediate caller included. callee_tail: the routine was tail-entered
+ * (its frame would not count toward the unwind depth). */
+int cpu_resolve_callee_post_return_skip(uint16_t post_s, int callee_tail) {
+  const int top = g_recomp_stack_top;   /* the callee's virtual slot */
+  if (top < 1 || top >= RECOMP_STACK_DEPTH) return -1;
+  for (int i = top - 1; i >= 0; i--) {
+    uint16_t expected = (uint16_t)(g_cpu_entry_s[i] + g_cpu_entry_return_frame[i]);
+    if (!g_cpu_entry_s_valid[i] || expected != post_s) continue;
+    int n = 1;   /* cpu_resolve_unwind_depth(i, top + 1) */
+    for (int m = i + 2; m <= top - 1; m++)
+      if (!g_cpu_entry_tailcall[m]) n++;
+    if (i + 2 <= top && !callee_tail) n++;
+    return n;
+  }
+  return -1;
+}
+
+/* Whether the top frame adopted a tail-call return context (its prologue's
+ * cpu_take_tailcall_return_context). */
+int cpu_top_frame_tail_entered(void) {
+  const int top = g_recomp_stack_top;
+  return top >= 1 && top <= RECOMP_STACK_DEPTH && g_cpu_entry_tailcall[top - 1];
+}
+
 // Function-boundary WRAM snapshot history (Phase B koopa-stomp).
 // When a TCP client sets g_recomp_snap_on_func to a non-NULL name,
 // every RecompStackPush whose name matches captures the LOW 8KB of

@@ -48,6 +48,12 @@ uint32_t n64_platform_rom_window_misses(void);
  * to free in *base_out); free releases it. */
 int n64_platform_codepack_open(const char *path, void (*size_cb)(uint32_t id, uint32_t bytes));
 void *n64_platform_codepack_load(uint32_t id, void **base_out);
+/* The same in two steps, one load at a time: begin allocates module id
+ * (*base_out, NULL when out of memory) and starts its DMA; finish completes
+ * it and returns its entry, or NULL if !wait and the DMA is still running
+ * (or nothing is in flight). */
+void *n64_platform_codepack_begin(uint32_t id, void **base_out);
+void *n64_platform_codepack_finish(int wait);
 void n64_platform_codepack_free(void *base);
 
 /* Status text position: inside the area TVs show (overscan). */

@@ -97,6 +97,12 @@ endif
 # CODECACHE_BYTES.
 CODECACHE ?= 0
 CODECACHE_BYTES ?= 1572864
+# CODECACHE_ASYNC=1 (experimental): load modules in the background and run the
+# routine in the interpreter meanwhile (runner/src/recomp_cache_interp.c).
+# Known gap: a compiled callee's non-local return out of a routine being
+# interpreted (SMW GameMode08_FileSelect -> HandleMenuCursor ReturnsTwice) is
+# resolved by the outer interpreter, not as a return of that routine.
+CODECACHE_ASYNC ?= 0
 GEN_SRC_DIR := $(GEN_DIR)
 ifeq ($(CODECACHE),1)
 ifeq ($(GEN_DIR),)
@@ -110,7 +116,9 @@ endif
 GEN_SRC_DIR := $(CC_SPLIT)/resident
 CC_MODULES := $(basename $(notdir $(wildcard $(CC_SPLIT)/cc/*.c)))
 CC_MODOBJS := $(addprefix $(BUILD_DIR)/cc/,$(addsuffix .o,$(CC_MODULES)))
-N64_CFLAGS += -DRECOMP_CACHE_EXTERNAL_BODIES -DN64_CODE_CACHE=1 -DN64_CODE_CACHE_BYTES=$(CODECACHE_BYTES)
+N64_CFLAGS += -DRECOMP_CACHE_EXTERNAL_BODIES -DN64_CODE_CACHE=1 -DN64_CODE_CACHE_BYTES=$(CODECACHE_BYTES) \
+	-DN64_CODE_CACHE_ASYNC=$(CODECACHE_ASYNC)
+OBJS += $(BUILD_DIR)/runner/recomp_cache_interp.o
 $(BUILD_DIR)/cc/%.o: $(CC_SPLIT)/cc/%.c
 	@mkdir -p $(dir $@)
 	@echo "    [CC] $<"

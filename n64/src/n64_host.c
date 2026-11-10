@@ -324,6 +324,44 @@ static void code_cache_unload(RecompRoutine *rt) {
   n64_platform_codepack_free(rt->host);
   rt->host = NULL;
 }
+/* Background loading (N64_CODE_CACHE_ASYNC, make CODECACHE_ASYNC=1,
+ * experimental): a call to an absent routine starts its DMA and runs the
+ * routine in the interpreter this time (recomp_cache_interp_fallback), so no
+ * frame waits for the cartridge. */
+#ifndef N64_CODE_CACHE_ASYNC
+#define N64_CODE_CACHE_ASYNC 0
+#endif
+#if N64_CODE_CACHE_ASYNC
+#define S_CC_BEGIN_US s_cc_begin_us
+static uint64_t s_cc_begin_us, s_cc_begin_last_us;
+static int code_cache_begin(RecompRoutine *rt) {
+  if (g_recomp_fallback[rt->id].pc24 == 0xFFFFFFFFu) {   /* must load first */
+    code_cache_load(rt);
+    return 0;
+  }
+  const uint64_t t0 = n64_platform_time_us();
+  void *base = NULL;
+  if (!n64_platform_codepack_begin(rt->id, &base))
+    Die("Code cache: out of memory loading a routine.");
+  rt->host = base;
+  s_cc_begin_last_us = n64_platform_time_us() - t0;
+  s_cc_begin_us += s_cc_begin_last_us;
+  return 1;
+}
+static int code_cache_finish(RecompRoutine *rt, int wait) {
+  if (rt->fn) return 1;                 /* loaded synchronously in begin */
+  const uint64_t t0 = n64_platform_time_us();
+  void *entry = n64_platform_codepack_finish(wait);
+  const uint64_t dt = n64_platform_time_us() - t0;
+  s_cc_load_us += dt;
+  if (!entry) return 0;
+  if (dt + s_cc_begin_last_us > s_cc_load_max_us) s_cc_load_max_us = dt + s_cc_begin_last_us;
+  rt->fn = (RecompFn)entry;
+  return 1;
+}
+#else
+#define S_CC_BEGIN_US 0
+#endif
 static void code_cache_size(uint32_t id, uint32_t bytes) {
   if (id < g_recomp_routine_count) g_recomp_routines[id]->size = bytes;
 }
@@ -333,6 +371,9 @@ static void code_cache_init(void) {
   if (n != (int)g_recomp_routine_count)
     Die("Code cache: rom:/cc.pack is missing or does not match this build.");
   recomp_cache_set_loader(code_cache_load, code_cache_unload);
+#if N64_CODE_CACHE_ASYNC
+  recomp_cache_set_async(code_cache_begin, code_cache_finish, recomp_cache_interp_fallback);
+#endif
   recomp_cache_set_capacity(N64_CODE_CACHE_BYTES);
   n64_platform_log("[n64] code cache: %u routines, %u KB budget\n",
                    g_recomp_routine_count, (unsigned)(N64_CODE_CACHE_BYTES / 1024));
@@ -426,6 +467,7 @@ static int host_main(void) {
 #if N64_RENDER
     n64_ppu_build_release_vram();   /* the RSP has its VRAM snapshot */
 #endif
+    recomp_cache_poll();   /* background code-cache load (nothing to do without one) */
     RtlRunFrame(inputs);
     uint64_t t1 = n64_platform_time_us();
     g_n64_profile_phase = N64_PHASE_PRESENT;
@@ -582,11 +624,11 @@ static int host_main(void) {
       if (frame % 600 == 0) {
         RecompCacheStats st;
         recomp_cache_stats(&st);
-        n64_platform_log("[n64] code cache: loads %u (%lu KB, %lu us avg, %lu us max), evictions %u, "
-                         "resident %u (%lu KB), over budget %u\n",
+        n64_platform_log("[n64] code cache: loads %u (%lu KB, %lu us avg, %lu us max on the CPU), "
+                         "interpreted while loading %u, evictions %u, resident %u (%lu KB), over budget %u\n",
                          st.loads, (unsigned long)(st.load_bytes / 1024),
-                         (unsigned long)(st.loads ? s_cc_load_us / st.loads : 0),
-                         (unsigned long)s_cc_load_max_us, st.evictions, st.resident,
+                         (unsigned long)(st.loads ? (s_cc_load_us + S_CC_BEGIN_US) / st.loads : 0),
+                         (unsigned long)s_cc_load_max_us, st.fallbacks, st.evictions, st.resident,
                          (unsigned long)(st.used_bytes / 1024), st.over_budget);
       }
 #endif

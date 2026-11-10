@@ -258,14 +258,41 @@ int n64_platform_codepack_open(const char *path, void (*size_cb)(uint32_t id, ui
   return (int)s_cp_count;
 }
 
-void *n64_platform_codepack_load(uint32_t id, void **base_out) {
+/* The load in flight (one at a time): its image arrives by DMA; finishing
+ * zeroes its bss, relocates it and makes it executable. */
+static struct {
+  int active;
+  uint8_t *base;
+  uint64_t ticket;
+  CodePackEntry e;
+} s_cp_pending;
+
+void *n64_platform_codepack_begin(uint32_t id, void **base_out) {
   CodePackEntry e __attribute__((aligned(16)));
   codepack_read(&e, 16 + id * sizeof e, sizeof e);
-  uint8_t *base = memalign(16, e.mem);
-  if (!base) { *base_out = NULL; return NULL; }
-  codepack_read(base, e.data, e.image);
-  if (e.mem > e.image) memset(base + e.image, 0, e.mem - e.image);
+  /* Whole cache lines, so invalidating the image never touches a neighbour. */
+  uint8_t *base = memalign(16, (e.mem + 15u) & ~15u);
+  *base_out = base;
+  if (!base) return NULL;
   if (e.nrelocs) codepack_read(s_cp_relocs, e.relocs, e.nrelocs * 8);
+  data_cache_hit_writeback_invalidate(base, (e.mem + 15u) & ~15u);
+  s_cp_pending.ticket = dma_read_async(base, s_cp_pi + e.data, e.image);
+  s_cp_pending.base = base;
+  s_cp_pending.e = e;
+  s_cp_pending.active = 1;
+  return base;
+}
+
+void *n64_platform_codepack_finish(int wait) {
+  if (!s_cp_pending.active) return NULL;
+  if (!wait && !dma_finished(s_cp_pending.ticket)) return NULL;
+  dma_wait_finished(s_cp_pending.ticket);
+  s_cp_pending.active = 0;
+  uint8_t *base = s_cp_pending.base;
+  const CodePackEntry e = s_cp_pending.e;
+  /* Lines touched while the DMA ran must not hide the new bytes. */
+  data_cache_hit_invalidate(base, (e.image + 15u) & ~15u);
+  if (e.mem > e.image) memset(base + e.image, 0, e.mem - e.image);
   /* Move the module from its link base to base: add the difference at each
    * internal relocation (imports were resolved when it was packed). */
   const uint32_t delta = (uint32_t)(uintptr_t)base - CODEPACK_BASE;
@@ -285,8 +312,12 @@ void *n64_platform_codepack_load(uint32_t id, void **base_out) {
   }
   data_cache_hit_writeback(base, e.mem);
   inst_cache_hit_invalidate(base, e.mem);
-  *base_out = base;
   return base + e.entry;
+}
+
+void *n64_platform_codepack_load(uint32_t id, void **base_out) {
+  if (!n64_platform_codepack_begin(id, base_out)) return NULL;
+  return n64_platform_codepack_finish(1);
 }
 
 void n64_platform_codepack_free(void *base) { free(base); }

@@ -214,6 +214,9 @@ static int g_post_return_skip;
 int cpu_resolve_post_return_skip(uint16_t post_s) {
     (void)post_s; return g_post_return_skip;
 }
+int cpu_resolve_callee_post_return_skip(uint16_t post_s, int callee_tail) {
+    (void)post_s; (void)callee_tail; return g_post_return_skip;
+}
 RecompReturn cpu_unresolved_abandon_balanced(CpuState *cpu, uint32 site_pc24,
                                              uint16 entry_s, uint8 hrv) {
     (void)site_pc24; g_abandon_called++;

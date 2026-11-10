@@ -4027,8 +4027,12 @@ RecompReturn interp_tier_dispatch_tail_ex(CpuState *cpu, uint32_t target_pc24,
  * cpu_unresolved_abandon_balanced): run the target instead of dropping it. On
  * a clean return the routine's RTS/RTL has balanced the stack; on a bail fall
  * back to the stack-safe abandon so we are never worse than the drop path. */
-RecompReturn interp_tier_dispatch_balanced(CpuState *cpu, uint32_t target_pc24,
-    uint32_t site_pc24, uint16_t entry_s, uint8_t hrv, bool from_indirect) {
+/* callee_tail < 0: the caller's frame is on top (the routine is interpreted
+ * in its place); otherwise the routine's own frame was popped and a return
+ * past it resolves as if it were still on top (cpu_resolve_callee_post_return_skip). */
+static RecompReturn dispatch_balanced_core(CpuState *cpu, uint32_t target_pc24,
+    uint32_t site_pc24, uint16_t entry_s, uint8_t hrv, bool from_indirect,
+    int callee_tail) {
     interp_tier_note(target_pc24);
     const uint8_t mx = tier2_entry_mx(cpu);
     const uint8_t kind = from_indirect ? TIER2_KIND_INDIRECT_GOTO
@@ -4087,13 +4091,27 @@ RecompReturn interp_tier_dispatch_balanced(CpuState *cpu, uint32_t target_pc24,
          * remains NORMAL. */
         const uint16_t expected_post_s = (uint16_t)(entry_s + hrv);
         if (cpu->S != expected_post_s) {
-            int skip = cpu_resolve_post_return_skip(cpu->S);
+            int skip = callee_tail < 0
+                ? cpu_resolve_post_return_skip(cpu->S)
+                : cpu_resolve_callee_post_return_skip(cpu->S, callee_tail);
             if (skip > 0)
                 return (RecompReturn)skip;
         }
         return RECOMP_RETURN_NORMAL;
     }
     return cpu_unresolved_abandon_balanced(cpu, site_pc24, entry_s, hrv);
+}
+
+RecompReturn interp_tier_dispatch_balanced(CpuState *cpu, uint32_t target_pc24,
+    uint32_t site_pc24, uint16_t entry_s, uint8_t hrv, bool from_indirect) {
+    return dispatch_balanced_core(cpu, target_pc24, site_pc24, entry_s, hrv,
+                                  from_indirect, -1);
+}
+
+RecompReturn interp_tier_dispatch_routine(CpuState *cpu, uint32_t target_pc24,
+    uint32_t site_pc24, uint16_t entry_s, uint8_t hrv, int tail_entered) {
+    return dispatch_balanced_core(cpu, target_pc24, site_pc24, entry_s, hrv,
+                                  false, tail_entered ? 1 : 0);
 }
 
 RecompReturn interp_tier_dispatch_popped_return(CpuState *cpu,

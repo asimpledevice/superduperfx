@@ -127,6 +127,10 @@ int cpu_resolve_post_return_skip(uint16_t post_s) {
     (void)post_s;
     return 0;
 }
+int cpu_resolve_callee_post_return_skip(uint16_t post_s, int callee_tail) {
+    (void)post_s; (void)callee_tail;
+    return 0;
+}
 RecompReturn cpu_unresolved_abandon_balanced(CpuState *cpu, uint32 site_pc24,
                                              uint16 entry_s, uint8 hrv) {
     (void)site_pc24;
