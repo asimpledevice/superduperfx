@@ -920,6 +920,17 @@ Native state hashes and audio over 600 frames are identical to the plain
 loop; native instructions -2.6% (SPC opcodes 200M -> 135M Ir). On the N64
 the gain is inside layout noise (about +-2 ms per change).
 
+Rejected (2026-11-10, no value): packing the quiescent detector's record
+(88 -> 64 bytes, two-multiply hash, no memset) and skipping the dense-only
+`idle_cost` ring writes under `SNESRECOMP_QUIESCENT_BACKEDGE`. Hashes were
+identical and native instructions -0.4%, but the N64 samples in the record
+block did not move (848 -> 831 of ~4,300 in `_interp_run_core`). The samples
+fall on the first use of loaded values and on the ring store, so they are
+D-cache misses caused by the 4 KB rotating ring's footprint, not by its
+record size. `_interp_run_core` is ~19% of the CPU stage on the N64 but ~10%
+of native instructions: its cost is cache misses spread over the step, not
+any single statement.
+
 See [LESSONS.md](LESSONS.md) for ideas collected from other projects
 (sodium64) and design notes, with how they apply here.
 
