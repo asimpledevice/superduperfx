@@ -1816,18 +1816,708 @@ static const uint8_t k_bridge_op_class[256] = {
     [0x4C] = BRIDGE_OP_JMP_DIRECT, [0x5C] = BRIDGE_OP_JMP_DIRECT,               /* JMP a, JML al */
 };
 
-/* BRIDGE_COLD_PATH(): marks the block it opens as rarely executed, so GCC
- * places it after the hot code. _interp_run_core's per-instruction path then
- * stays contiguous at the start of the function, where the N64 build keeps it
- * in the I-cache (docs/n64/BRINGUP_NOTES.md, "Interpreter kernel"). Layout
- * only; no effect on behaviour. */
-#if defined(__GNUC__) && !defined(__clang__)
-#define BRIDGE_COLD_LABEL_(n) bridge_cold_##n: __attribute__((cold, unused))
-#define BRIDGE_COLD_LABEL(n) BRIDGE_COLD_LABEL_(n)
-#define BRIDGE_COLD_PATH() BRIDGE_COLD_LABEL(__LINE__)
+/* _interp_run_core's rare paths -- diagnostics, title-specific fast paths,
+ * idle-poll replay, nested hand-offs -- live in these out-of-line functions, so
+ * its per-instruction loop is compact: the N64 build keeps that loop in the
+ * I-cache (docs/n64/BRINGUP_NOTES.md, "Interpreter kernel"). GCC also places
+ * cold functions in .text.unlikely.* sections. */
+#if defined(__GNUC__)
+#define BRIDGE_COLD __attribute__((noinline, cold))
+#elif defined(_MSC_VER)
+#define BRIDGE_COLD __declspec(noinline)
 #else
-#define BRIDGE_COLD_PATH() ((void)0)
+#define BRIDGE_COLD
 #endif
+enum { BRIDGE_COLD_FALL, BRIDGE_COLD_CONTINUE, BRIDGE_COLD_RETURN_1, BRIDGE_COLD_STEP_CAP };
+
+/* The quiescent detector's per-step state, the stable-poll detector's loop-head
+ * state and the per-step cost record (_interp_run_core). */
+typedef struct BridgeQState {
+    uint32_t pc;
+    uint16_t a, x, y, sp, dp;
+    uint8_t db, k, c, z, v, n, i, d, mf, xf, e;
+    uint64_t write_epoch;
+    uint64_t continuous_read_epoch;
+    uint64_t idle_live_epoch, volatile_read_epoch;
+    long step;
+    unsigned repeats, idle_repeats;
+} BridgeQState;
+typedef struct BridgePollHead {
+    uint32_t pc;
+    uint16_t a, x, y, sp, dp;
+    uint8_t db, c, z, v, n, i, d, mf, xf, e;
+    uint64_t write_epoch;
+    uint64_t volatile_read_epoch;
+    long step;
+} BridgePollHead;
+typedef struct { uint64_t master; uint8_t cyc, open_bus; } BridgeIdleCost;
+
+/* Star Ocean battle $00D9 work-wait (see the call site): runs the LDA $00D9 /
+ * BEQ loop natively. BRIDGE_COLD_FALL: not this loop (interpret it);
+ * BRIDGE_COLD_CONTINUE: done, next step; BRIDGE_COLD_RETURN_1: end the run. */
+static BRIDGE_COLD int bridge_so_d9_wait(CpuState *cpu, Interp816 *in, int auto_quiescent) {
+    static int s_d9_bytes_ok = -1;
+    if (s_d9_bytes_ok < 0) {
+        s_d9_bytes_ok =
+            bridge_bus_read(cpu, 0xC084B2u) == 0xA5u &&
+            bridge_bus_read(cpu, 0xC084B3u) == 0xD9u &&
+            bridge_bus_read(cpu, 0xC084B4u) == 0xF0u &&
+            bridge_bus_read(cpu, 0xC084B5u) == 0xFCu;
+    }
+    if (s_d9_bytes_ok) {
+        for (;;) {
+            if (auto_quiescent && !in->i && g_snes && g_snes->inIrq) {
+                lle_resume_set(((uint32_t)in->k << 16) | in->pc, INTERP_RESUME_SITE_D9_IRQ, in->sp);
+                sync_interp_to_cpu(in, cpu);
+                bridge_apu_flush(cpu);
+                return BRIDGE_COLD_RETURN_1;
+            }
+            if (auto_quiescent && s_lle_master_deadline &&
+                cpu->master_cycles >= s_lle_master_deadline) {
+                lle_resume_set(((uint32_t)in->k << 16) | in->pc, INTERP_RESUME_SITE_D9_DEADLINE, in->sp);
+                sync_interp_to_cpu(in, cpu);
+                bridge_apu_flush(cpu);
+                return BRIDGE_COLD_RETURN_1;
+            }
+            if (in->pc == 0x84B4u) {
+                if (in->z) {
+                    cpu->cycles += 3u;
+                    cpu->master_cycles += 18u;
+                    in->pc = 0x84B2u;
+                } else {
+                    cpu->cycles += 2u;
+                    cpu->master_cycles += 12u;
+                    in->pc = 0x84B5u;
+                }
+                if (g_snes) snes_sync_master_clock(g_snes, cpu->master_cycles);
+                if (g_snes && g_snes->cart)
+                    cart_sync_coprocessors(g_snes->cart, cpu->master_cycles);
+                cpu->coprocessor_master_cycles = cpu->master_cycles;
+                if (in->pc == 0x84B5u) break;
+                continue;
+            }
+
+            cpu->cycles += 3u;
+            cpu->master_cycles += 18u;
+            {
+                const uint8_t v = (uint8_t)cpu->ram[0x00D9u];
+                in->a = (uint16_t)((in->a & 0xFF00u) | v);
+                in->z = (v == 0);
+                in->n = (v & 0x80u) != 0;
+            }
+            if (g_snes) snes_sync_master_clock(g_snes, cpu->master_cycles);
+            if (g_snes && g_snes->cart)
+                cart_sync_coprocessors(g_snes->cart, cpu->master_cycles);
+            cpu->coprocessor_master_cycles = cpu->master_cycles;
+            if (auto_quiescent && !in->i && g_snes && g_snes->inIrq) {
+                lle_resume_set(0xC084B4u, INTERP_RESUME_SITE_D9_IRQ, in->sp);
+                sync_interp_to_cpu(in, cpu);
+                bridge_apu_flush(cpu);
+                return BRIDGE_COLD_RETURN_1;
+            }
+            if (auto_quiescent && s_lle_master_deadline &&
+                cpu->master_cycles >= s_lle_master_deadline) {
+                lle_resume_set(0xC084B4u, INTERP_RESUME_SITE_D9_DEADLINE, in->sp);
+                sync_interp_to_cpu(in, cpu);
+                bridge_apu_flush(cpu);
+                return BRIDGE_COLD_RETURN_1;
+            }
+            if (in->z) {
+                cpu->cycles += 3u;
+                cpu->master_cycles += 18u;
+                if (g_snes) snes_sync_master_clock(g_snes, cpu->master_cycles);
+                if (g_snes && g_snes->cart)
+                    cart_sync_coprocessors(g_snes->cart, cpu->master_cycles);
+                cpu->coprocessor_master_cycles = cpu->master_cycles;
+            } else {
+                cpu->cycles += 2u;
+                cpu->master_cycles += 12u;
+                in->pc = 0x84B5u;
+                if (g_snes) snes_sync_master_clock(g_snes, cpu->master_cycles);
+                if (g_snes && g_snes->cart)
+                    cart_sync_coprocessors(g_snes->cart, cpu->master_cycles);
+                cpu->coprocessor_master_cycles = cpu->master_cycles;
+                break;
+            }
+        }
+        return BRIDGE_COLD_CONTINUE;
+    }
+    return BRIDGE_COLD_FALL;
+}
+
+/* Star Ocean beam-wait spins (see the call site): their PCs. */
+static BRIDGE_COLD int bridge_vff_pc(uint32_t pc_before) {
+    return ((pc_before == 0xC8F425u || pc_before == 0xC8F42Au ||
+              pc_before == 0xC8F40Fu || pc_before == 0xC8F414u ||
+              pc_before == 0xCC0538u || pc_before == 0xCC053Du ||
+              pc_before == 0xCC054Eu || pc_before == 0xCC0553u
+              /* C2 text-screen vblank spin DB39/DB3E: byte-verified pure
+               * (LDA $4212; BMI-BPL), no per-iter work. Added 20260828+
+               * per FASE 2b so the spin FF-aligns the beam to the 42-mpq
+               * boundary while the dump (DB43+) runs AOT. Distinguish from
+               * $CA/$C2:0B51/$C6 which DO carry real work and stay out. */
+              || pc_before == 0xC2DB39u || pc_before == 0xC2DB3Eu
+              /* FASE 2b step 2 (20260828): title wait $CA:6D13/18 tried
+               * individually — validate A/B before keeping. */
+              || pc_before == 0xCA6D13u || pc_before == 0xCA6D18u
+              /* FASE 2b step 3 (20260828): text-zone $C6:18D1/D6 tried
+               * individually (intro $C2:0B51/57 REVERTED — diverges f284:
+               * its vblank spin is pure but NOT frame-last; FF from mid-
+               * field (v=138) shifts the phase of the title task's real
+               * work (writewatch: $01E5 writers ca6d13->ca6d16, ca6430->
+               * ca642f). Left LLE; see HANDOFF §4.8). */
+              || pc_before == 0xC618D1u || pc_before == 0xC618D6u
+              /* Intro $C2:0B51/57 (LDA-long 0xAF) — validated 20260828 (§4.9):
+               * its spin iteration costs 48 master cycles, not the 42 of the
+               * LDA-abs spins, so it needs the step=48 target rounding below.
+               * A/B 3050 frames bit-exact. */
+              || pc_before == 0xC20B51u || pc_before == 0xC20B57u
+              /* Field copy of the vblank wait at $C2:0B82/87 (LDA abs
+               * $4212; BMI/BPL, step 42 — same family as C8/CC/DB/6D/18).
+               * Added 20260830: game ground-truth profile showed this spin
+               * at ~57% of the field's interpreted opcodes (PC-watch:
+               * $C20B87/$C20B8A), with NO guard covering it. */
+              || pc_before == 0xC20B82u || pc_before == 0xC20B87u
+              || pc_before == 0xC0849Eu || pc_before == 0xC084A1u
+              || pc_before == 0xC084A3u || pc_before == 0xC084A6u));
+}
+
+/* Star Ocean vblank-spin fast-forward (see the call site). */
+static BRIDGE_COLD void bridge_vblank_ff(CpuState *cpu, uint32_t pc_before) {
+    static int s_vff_ok = -1;
+    static int s_vff_log = -1;
+    if (s_vff_ok < 0) {
+        const char *_e = getenv("SNESRECOMP_NO_VBLANK_FF");
+        s_vff_ok = (_e && _e[0] && _e[0] != '0') ? 0 : 1;
+        const char *_l = getenv("SNESRECOMP_VFF_LOG");
+        s_vff_log = (_l && _l[0] && _l[0] != '0') ? 1 : 0;
+    }
+    extern int snes_frame_counter;
+    if (s_vff_log) {
+        fprintf(stderr, "[VFF] entry f=%d pc=%06X m=%llu intra=%llu v=%u h=%u beamML=%llu apu_pend=%llu\n",
+                snes_frame_counter, (unsigned)pc_before,
+                (unsigned long long)cpu->master_cycles,
+                (unsigned long long)(cpu->master_cycles % 357368u),
+                g_snes->vPos, g_snes->hPos,
+                (unsigned long long)g_snes->beamMasterLast,
+                (unsigned long long)s_apu_pending_master);
+    }
+    if (s_vff_ok) {
+        extern int snes_frame_counter;
+        if (snes_frame_counter > 10 && !g_snes->hIrqEnabled) {
+            const uint8_t op = bridge_bus_read(cpu, pc_before);
+            const uint8_t lo = bridge_bus_read(cpu, pc_before + 1);
+            const uint8_t hi = bridge_bus_read(cpu, pc_before + 2);
+            /* Both LDA abs (0xAD, branch at pc+3) and LDA long
+             * (0xAF, branch at pc+4) read $4212. Detect variant
+             * and locate the branch opcode accordingly. */
+            int is_abs = (op == 0xAD && lo == 0x12 && hi == 0x42);
+            int is_long = (op == 0xAF && lo == 0x12 && hi == 0x42);
+            if (is_abs || is_long) {
+                const int br_off = is_long ? 4 : 3;
+                const uint8_t br = bridge_bus_read(cpu, pc_before + br_off);
+                const int is_bmi = (br == 0x30);
+                const int is_bpl = (br == 0x10);
+                const uint32_t v = g_snes->vPos;
+                /* Step of the spin loop's repeated iteration in
+                 * master cycles: LDA abs $4212 + branch costs 42
+                 * (measured: validated spins C8/CC/DB/6D/18 all
+                 * bit-exact with mpq-42); the LDA LONG $4212 + branch
+                 * variant (0xAF, intro C2:0B51/57) costs 48 per
+                 * iteration (measured 20260828 f284: LLE reads at
+                 * intra 306894->306942 = +48; FF rounded to 42
+                 * landed 30 cycles early and shifted the phase of
+                 * the title task's real work). Use the variant's
+                 * real step so the FF lands on the same read the
+                 * LLE makes when it detects the vblank edge. */
+                const uint64_t step = is_long ? 48u : 42u;
+                uint64_t target = 0;
+                if (is_bpl && v >= 1u && v < 225u) {
+                    if (!(g_snes->vIrqEnabled && g_snes->vTimer > v &&
+                          g_snes->vTimer <= 224u)) {
+                        const uint64_t d = 225u * 1364u -
+                            (cpu->master_cycles % 357368u);
+                        if (d >= step)
+                            target = cpu->master_cycles +
+                                     step * ((d + step - 1u) / step);
+                    } else {
+                        const uint64_t trig =
+                            (uint64_t)g_snes->vTimer * 1364u;
+                        const uint64_t pos =
+                            cpu->master_cycles % 357368u;
+                        if (trig > pos) {
+                            const uint64_t d = trig - pos;
+                            const uint64_t k = (d - 1u) / step;
+                            if (k >= 1u)
+                                target = cpu->master_cycles + step * k;
+                        }
+                    }
+                } else if (is_bmi && v >= 225u && v <= 261u) {
+                    if (!(g_snes->vIrqEnabled && g_snes->vTimer >= v &&
+                          g_snes->vTimer <= 261u)) {
+                        const uint64_t d = 357368u -
+                            (cpu->master_cycles % 357368u);
+                        if (d >= step)
+                            target = cpu->master_cycles +
+                                     step * (d / step);
+                    }
+                }
+                if (target > cpu->master_cycles) {
+                    const uint64_t skip = target - cpu->master_cycles;
+                    if (s_vff_log) {
+                        fprintf(stderr, "[VFF] fire f=%d pc=%06X m=%llu v=%u h=%u d=%llu target=%llu skip=%llu\n",
+                                snes_frame_counter, (unsigned)pc_before,
+                                (unsigned long long)cpu->master_cycles,
+                                g_snes->vPos, g_snes->hPos,
+                                (unsigned long long)(target - cpu->master_cycles),
+                                (unsigned long long)target,
+                                (unsigned long long)skip);
+                    }
+                    /* CRITICAL: flush SPC BEFORE jumping master.
+                     * bridge_apu_flush -> rtl_sync_apu_to_cpu_locked
+                     * re-anchors SPC to current master. If master
+                     * is already at target, the first chunk pulls
+                     * portClock to full-skip and subsequent chunks
+                     * advance AGAIN (double count). Flushing
+                     * pre-jump anchors to pre-skip guest time
+                     * (no-op re-anchor), catchup adds exactly
+                     * skip * kInterpApuPerMaster. */
+                    s_apu_pending_master += skip;
+                    for (int _g = 0; s_apu_pending_master && _g < 64;
+                         _g++) {
+                        const uint64_t _max_feed =
+                            (uint64_t)(9000.0 / kInterpApuPerMaster);
+                        uint64_t _chunk = s_apu_pending_master;
+                        if (_chunk > _max_feed) _chunk = _max_feed;
+                        uint64_t _rest = s_apu_pending_master - _chunk;
+                        s_apu_pending_master = _chunk;
+                        bridge_apu_flush(cpu);
+                        s_apu_pending_master += _rest;
+                        if (!_chunk) break;
+                    }
+                    cpu->master_cycles = target;
+                    snes_sync_master_clock(g_snes, target);
+                }
+            }
+        }
+    }
+}
+
+/* Replay of a declared idle poll's cycle to the deadline (docs/IDLE_POLL.md;
+ * see the call site). BRIDGE_COLD_FALL: not replayed; BRIDGE_COLD_RETURN_1:
+ * end the run; BRIDGE_COLD_STEP_CAP: the step cap was reached. */
+static BRIDGE_COLD int bridge_idle_replay(CpuState *cpu, Interp816 *in,
+                                          const BridgeQState *old, BridgeQState *now,
+                                          const BridgeQState *qring,
+                                          const BridgeIdleCost *idle_cost,
+                                          long steps, long step_cap) {
+    now->idle_repeats=old->idle_repeats+1;
+    if (now->idle_repeats>=2 && s_lle_master_deadline &&
+        bridge_idle_replay_allowed(in, steps - old->step)) {
+        const long first = old->step;
+        const long period = steps - old->step;
+        int idle = 0, irq_unmasked = 0;
+        for (long j = 0; j < period; j++) {
+            const BridgeQState *state = &qring[(first + j) & 63];
+            idle |= bridge_is_idle_poll(state->pc);
+            irq_unmasked |= !state->i;
+        }
+        /* Equal endpoint flags do not prove I stayed set:
+         * SEI / poll / CLI can recur at a masked phase while
+         * an armed timer is observable elsewhere in the cycle. */
+        if (idle && !(irq_unmasked &&
+            (g_snes->hIrqEnabled || g_snes->vIrqEnabled))) {
+            const int apu_pending =
+                rtl_apu_extended_frame_timing() ||
+                !interp_bridge_use_absolute_apu_timeline(
+                    rtl_apu_frame_timeline_active(),
+                    cart_has_sa1(g_snes->cart), false);
+            const BridgeQState *at = &qring[first & 63];
+            int capped = 0;
+            for (long j = 0;; j++) {
+                const long e = (first + j % period) & 63;
+                at = &qring[e];
+                /* The checks the interpreted loop makes before
+                 * each step, in its order: the step cap, then
+                 * the deadline. */
+                if (steps + j >= step_cap) { capped = 1; break; }
+                if (cpu->master_cycles >= s_lle_master_deadline)
+                    break;
+                g_interp_bridge_steps++;
+                cpu->cycles += idle_cost[e].cyc;
+                cpu->master_cycles += idle_cost[e].master;
+                snes_refresh_charge();
+                cpu->open_bus = idle_cost[e].open_bus;
+                if (apu_pending) {
+                    s_apu_pending_master += idle_cost[e].master;
+                    if (s_apu_pending_master >= bridge_bounce_flush_thresh()) {
+                        cpu->coprocessor_master_cycles = cpu->master_cycles;
+                        snes_sync_master_clock(g_snes, cpu->master_cycles);
+                        bridge_apu_flush(cpu);
+                    }
+                }
+            }
+            in->k = at->k; in->pc = (uint16_t)at->pc;
+            in->a = at->a; in->x = at->x; in->y = at->y;
+            in->sp = at->sp; in->dp = at->dp; in->db = at->db;
+            in->c = at->c; in->z = at->z; in->v = at->v; in->n = at->n;
+            in->i = at->i; in->d = at->d; in->mf = at->mf;
+            in->xf = at->xf; in->e = at->e;
+            cpu->coprocessor_master_cycles = cpu->master_cycles;
+            snes_sync_master_clock(g_snes, cpu->master_cycles);
+            if (g_snes->cart)
+                cart_sync_coprocessors(g_snes->cart, cpu->master_cycles);
+            if (capped)
+                return BRIDGE_COLD_STEP_CAP;
+            lle_resume_set(at->pc, INTERP_RESUME_SITE_DEADLINE, in->sp);
+            sync_interp_to_cpu(in, cpu);
+            bridge_apu_flush(cpu);
+            return BRIDGE_COLD_RETURN_1;
+        }
+    }
+    return BRIDGE_COLD_FALL;
+}
+
+/* Stable-poll detector at a short backward transfer (see the call site):
+ * returns 1 with *ret set when the run must end with that value. */
+static BRIDGE_COLD int bridge_stable_poll(CpuState *cpu, Interp816 *in, uint32_t pc_before,
+                                          long steps, BridgePollHead *poll_heads,
+                                          unsigned *poll_head_next, uint32_t yield_pc,
+                                          int *ret) {
+    BridgePollHead now;
+    memset(&now, 0, sizeof now);
+    now.pc = pc_before; now.a = in->a; now.x = in->x; now.y = in->y;
+    now.sp = in->sp; now.dp = in->dp; now.db = in->db;
+    now.c = in->c; now.z = in->z; now.v = in->v; now.n = in->n;
+    now.i = in->i; now.d = in->d; now.mf = in->mf; now.xf = in->xf;
+    now.e = in->e;
+    now.write_epoch = g_interp_bridge_write_epoch;
+    now.volatile_read_epoch = s_interp_volatile_read_epoch;
+    now.step = steps;
+    BridgePollHead *slot = NULL;
+    for (unsigned hi = 0; hi < 4; hi++)
+        if (poll_heads[hi].step && poll_heads[hi].pc == now.pc)
+            slot = &poll_heads[hi];
+    if (slot && now.step - slot->step <= 256 &&
+        slot->a == now.a && slot->x == now.x && slot->y == now.y &&
+        slot->sp == now.sp && slot->dp == now.dp &&
+        slot->db == now.db && slot->c == now.c && slot->z == now.z &&
+        slot->v == now.v && slot->n == now.n && slot->i == now.i &&
+        slot->d == now.d && slot->mf == now.mf &&
+        slot->xf == now.xf && slot->e == now.e &&
+        slot->write_epoch == now.write_epoch &&
+        slot->volatile_read_epoch == now.volatile_read_epoch) {
+        *ret = bridge_cooperative_yield(cpu, in, pc_before, yield_pc,
+                                        INTERP_RESUME_SITE_STABLE_POLL);
+        return 1;
+    }
+    if (!slot) slot = &poll_heads[(*poll_head_next)++ & 3];
+    *slot = now;
+    return 0;
+}
+
+/* A nested frame reached the scheduler's yield PC (see the call site):
+ * returns 1 when the block was handed outward and the run must end. */
+static BRIDGE_COLD int bridge_nested_handoff(CpuState *cpu, Interp816 *in,
+                                             uint32_t pc_before, int ibrw) {
+    const uint8_t _sched_flag =
+        bridge_bus_read(cpu, s_sched_yield_flag_addr);
+    const int _blocked = _sched_flag == s_sched_yield_flag_value;
+    if (_blocked) {
+        lle_unwind_arm(pc_before, s_interp_bridge_depth - 1, 0,
+                       INTERP_RESUME_SITE_NESTED_HANDOFF, in->sp);
+        if (ibrw)
+            fprintf(stderr,
+                    "[ibr] nested yield hand-off -> $%06X sp=$%04X "
+                    "flag=$%02X owner_depth=%d\n",
+                    (unsigned)s_lle_unwind_pc24, (unsigned)in->sp,
+                    _sched_flag, s_interp_bridge_depth - 1);
+        sync_interp_to_cpu(in, cpu);
+        bridge_apu_flush(cpu);
+        return 1;
+    }
+    return 0;
+}
+
+/* A bounced compiled call returned past this interpreter frame (see the call
+ * site): the value the run returns. */
+static BRIDGE_COLD int bridge_nlr_exit(CpuState *cpu, Interp816 *in, uint32_t yield_pc,
+                                       RecompReturn air, uint32_t target, uint32_t pc_before,
+                                       uint16_t sp_pre, uint16_t s_enter) {
+    if (yield_pc) {
+        /* Nothing outside a scheduler frame can consume a
+         * multi-level skip: it IS the outermost guest
+         * program. Reporting the frame complete resumes
+         * the next one at a stale PC over a half-unwound
+         * stack. Bail contained instead, so the host sees
+         * a failed frame rather than a wrong one. */
+        static int s_ynlr_logged = 0;
+        if (s_ynlr_logged < 8) {
+            s_ynlr_logged++;
+            fprintf(stderr, "[interp_bridge] yield-mode NLR "
+                    "exit (non-unwind) _air=%d target=$%06X "
+                    "frame=%d site=$%06X sp_pre=$%04X "
+                    "sp=$%04X s_enter=$%04X - contained bail\n",
+                    (int)air, (unsigned)target,
+                    snes_frame_counter, (unsigned)pc_before,
+                    (unsigned)sp_pre, (unsigned)in->sp,
+                    (unsigned)s_enter);
+        }
+        sync_interp_to_cpu(in, cpu);
+        bridge_apu_flush(cpu);
+        return 0;
+    }
+    sync_interp_to_cpu(in, cpu);
+    /* A nested non-scheduler tier run belongs to a compiled
+     * caller. Preserve SKIP_N so that caller can unwind the
+     * host frame whose guest epilogue was already consumed.
+     * Top-level scheduler runs retain their contained boolean
+     * completion contract. */
+    if (!yield_pc && s_interp_bridge_depth > 1)
+        return (int)air + 2;
+    return 1;
+}
+
+/* Step cap hit: report the first 32 (see the call site). */
+static BRIDGE_COLD void bridge_cap_report(CpuState *cpu, const Interp816 *in, uint32_t entry_pc24,
+                                          uint32_t yield_pc, uint16_t yield_flag_addr,
+                                          const ITraceEnt *head, long itn) {
+    static int s_cap_reports;
+    if (s_cap_reports < 32) {
+        const uint32_t last_pc = ((uint32_t)in->k << 16) | in->pc;
+        s_cap_reports++;
+        fprintf(stderr,
+                "[interp_cap] entry=$%06X last=$%06X op=$%02X "
+                "m=%u x=%u db=$%02X sp=$%04X a=$%04X flag=$%02X\n",
+                (unsigned)entry_pc24, (unsigned)last_pc,
+                bridge_bus_read(cpu, last_pc), in->mf, in->xf, in->db,
+                in->sp, in->a,
+                yield_pc ? bridge_bus_read(cpu, yield_flag_addr) : 0);
+        fprintf(stderr,                    "[interp_cap] head:");
+        for (int hi = 0; hi < 8 && hi < itn; hi++)
+            fprintf(stderr, " $%06X/%02X", (unsigned)head[hi].pc,
+                    head[hi].op);
+        fputc('\n', stderr);
+        /* The step ring holds only the spin by now; the folded edge
+         * ring still holds the transfers that led into it. */
+        fprintf(stderr, "[interp_cap] edges:");
+        for (uint64_t ei = g_interp_edges_n > 8 ? g_interp_edges_n - 8 : 0;
+             ei < g_interp_edges_n; ei++) {
+            const InterpEdge *e =
+                &g_interp_edges[ei & (INTERP_EDGE_RING_LEN - 1)];
+            fprintf(stderr, " $%06X>$%06X(%s x%u)",
+                    (unsigned)e->from_pc24, (unsigned)e->to_pc24,
+                    interp_bridge_edge_kind_name(e->kind),
+                    (unsigned)e->count);
+        }
+        fputc('\n', stderr);
+
+    }
+}
+
+/* Step cap hit: decode the instruction it stopped at (see the call site). */
+static BRIDGE_COLD void bridge_cap_diag(CpuState *cpu, const Interp816 *in) {
+    static uint32_t s_last_diag_pc;
+    uint32_t pc24 = ((uint32_t)in->k << 16) | in->pc;
+    if (pc24 != s_last_diag_pc) {
+        s_last_diag_pc = pc24;
+        uint8_t op = bridge_bus_read(cpu, pc24);
+        fprintf(stderr, "[diag] PC=$%06X op=$%02X m=%u x=%u db=$%02X a=$%04X x16=$%04X y16=$%04X sp=$%04X\n",
+                (unsigned)pc24, (unsigned)op, (unsigned)in->mf, (unsigned)in->xf,
+                (unsigned)in->db, (unsigned)in->a, (unsigned)in->x, (unsigned)in->y, (unsigned)in->sp);
+        if (op == 0xCD) { /* CMP abs */
+            uint8_t lo = bridge_bus_read(cpu, pc24 + 1);
+            uint8_t hi8 = bridge_bus_read(cpu, pc24 + 2);
+            uint16_t addr16 = (uint16_t)lo | ((uint16_t)hi8 << 8);
+            uint8_t memval = cpu_read8(cpu, in->db, addr16);
+            fprintf(stderr, "  -> CMP $%04X mem=$%02X\n",
+                    (unsigned)addr16, (unsigned)memval);
+        }
+    }
+}
+
+/* Canonical automatic-joypad wait at its final taken BEQ (see the call site):
+ * returns 1 with *ret set when the run yields. */
+static BRIDGE_COLD int bridge_joypad_wait(CpuState *cpu, Interp816 *in, uint32_t pc_before,
+                                          uint32_t yield_pc, int *ret) {
+    if (!(bridge_peek8(cpu, pc_before - 8) == 0xAD &&
+          bridge_peek8(cpu, pc_before - 7) == 0x18 &&
+          bridge_peek8(cpu, pc_before - 6) == 0x42 &&
+          bridge_peek8(cpu, pc_before - 5) == 0xD0 &&
+          bridge_peek8(cpu, pc_before - 4) == 0x05 &&
+          bridge_peek8(cpu, pc_before - 3) == 0xAD &&
+          bridge_peek8(cpu, pc_before - 2) == 0x19 &&
+          bridge_peek8(cpu, pc_before - 1) == 0x42))
+        return 0;
+    const int8_t _rel = (int8_t)bridge_peek8(cpu, pc_before + 1);
+    if (_rel < 0) {
+        const uint32_t resume = (pc_before & 0xFF0000u) |
+            (uint16_t)(pc_before + 2 + _rel);
+        *ret = bridge_cooperative_yield(cpu, in, resume, yield_pc,
+                                        INTERP_RESUME_SITE_JOYPAD_WAIT);
+        return 1;
+    }
+    return 0;
+}
+
+/* The run reached its cooperative yield point (see the call site): returns 1
+ * when the run must end. */
+static BRIDGE_COLD int bridge_yield_point(CpuState *cpu, Interp816 *in, uint32_t pc_before,
+                                          uint16_t yield_flag_addr, uint8_t yield_flag_value,
+                                          long steps) {
+    const uint8_t _yield_flag = bridge_bus_read(cpu, yield_flag_addr);
+    /* Canonical byte wait loop: LDA <flag>; BNE -5.  A synthetic
+     * scheduler resume can arrive with DB/M inherited from a compiled
+     * coroutine rather than the PHK/PLB + SEP prologue that precedes
+     * this loop in ROM.  When the real low flag is clear, repair the
+     * instruction-local state before executing LDA; otherwise a
+     * 16-bit or foreign-bank read can see an adjacent nonzero byte and
+     * spin to the step cap.  Match the bytes and operand so this is a
+     * reusable loop contract, not a game/address special case. */
+    const int _canonical_wait_loop =
+        bridge_bus_read(cpu, pc_before) == 0xAD &&
+        bridge_bus_read(cpu, pc_before + 1) ==
+            (uint8_t)yield_flag_addr &&
+        bridge_bus_read(cpu, pc_before + 2) ==
+            (uint8_t)(yield_flag_addr >> 8) &&
+        bridge_bus_read(cpu, pc_before + 3) == 0xD0 &&
+        bridge_bus_read(cpu, pc_before + 4) == 0xFB;
+    if (_yield_flag != yield_flag_value && _canonical_wait_loop) {
+        in->mf = 1;
+        in->db = in->k;
+    }
+    if (bridge_yield_diag() &&
+        _yield_flag != yield_flag_value && steps > 16) {
+        static int _yield_diag_n;
+        if (_yield_diag_n < 64) {
+            _yield_diag_n++;
+            fprintf(stderr,
+                    "[yield_diag] pc=$%06X flag=$%02X want=$%02X "
+                    "m=%u x=%u db=$%02X sp=$%04X a=$%04X z=%u\n",
+                    (unsigned)pc_before, _yield_flag,
+                    yield_flag_value, in->mf, in->xf, in->db, in->sp,
+                    in->a, in->z);
+        }
+    }
+    if (_yield_flag == yield_flag_value) {
+        lle_resume_set(pc_before, INTERP_RESUME_SITE_YIELD_FLAG, in->sp);
+        sync_interp_to_cpu(in, cpu);
+        bridge_apu_flush(cpu);
+        return 1;
+    }
+    /* If the validated wait loop recurs after normal execution had a
+     * chance to leave it, treat that recurrence as the cooperative
+     * block point.  This contains a stale/corrupt flag without a
+     * multi-million-instruction spin; the next host frame injects NMI
+     * and resumes through the same architectural contract. */
+    if (_canonical_wait_loop && steps > 16) {
+        sync_interp_to_cpu(in, cpu);
+        bridge_apu_flush(cpu);
+        return 1;
+    }
+    return 0;
+}
+
+/* Stop-PC intercept (see the call site): returns 1 when the run must end. */
+static BRIDGE_COLD int bridge_stop_pc(CpuState *cpu, Interp816 *in, uint32_t pc_before,
+                                      const uint32_t *stop_pcs, int n_stop) {
+    const uint32_t pc_norm = pc_before & 0x7FFFFF;
+    for (int si = 0; si < n_stop; si++) {
+        if ((stop_pcs[si] & 0x7FFFFF) == pc_norm) {
+            sync_interp_to_cpu(in, cpu);
+            bridge_apu_flush(cpu);
+            if (cpu_dispatch_has_entry(cpu, pc_before))
+                cpu_dispatch_pc_paired(cpu, pc_before, 0);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* Pre-opcode hooks at this PC (see the call site): returns 1 when a hook
+ * redirected execution and decoding must restart at the new PC. */
+static BRIDGE_COLD int bridge_pre_opcode_hooks(CpuState *cpu, Interp816 *in, uint32_t pc_before) {
+    const uint32_t key = pc_before & 0x7FFFFFu;
+    bool redirected = false;
+    for (int hi = 0; hi < s_pre_opcode_hook_count; hi++) {
+        if (s_pre_opcode_hooks[hi].pc24 == key) {
+            sync_interp_to_cpu(in, cpu);
+            s_pre_opcode_redirect_valid = 0;
+            s_pre_opcode_hooks[hi].hook(cpu, pc_before);
+            sync_cpu_to_interp(cpu, in);
+            if (s_pre_opcode_redirect_valid) {
+                in->k = (uint8_t)((s_pre_opcode_redirect_pc24 >> 16) & 0xFF);
+                in->pc = (uint16_t)(s_pre_opcode_redirect_pc24 & 0xFFFF);
+                s_pre_opcode_redirect_valid = 0;
+                redirected = true;
+                break;
+            }
+        }
+    }
+    /* Restart opcode decoding at the destination, including
+     * call/return bookkeeping. A redirect completes handling for the
+     * original PC (later hooks composed on it do not run). Continuing
+     * with the old pc_before would execute one opcode and classify
+     * another, and could miss a terminal RTS. */
+    return redirected;
+}
+
+/* SNESRECOMP_TRAP_BADPB: a step into a program bank the cartridge does not
+ * have (see the call site). */
+static BRIDGE_COLD void bridge_trap_badpb(uint32_t pc_before, uint8_t op, uint16_t sp,
+                                          uint32_t entry_pc24, const ITraceEnt *head,
+                                          long itn, const ITraceEnt *ring, int trace) {
+    uint8_t _pbnk = (uint8_t)((pc_before >> 16) & 0xFF);
+    int _valid = (_pbnk <= 0x3F) ||
+                 (_pbnk >= 0x80 && _pbnk <= 0xBF) ||
+                 (_pbnk == 0x7E || _pbnk == 0x7F);
+    if (!_valid) {
+        extern int snes_frame_counter;
+        fprintf(stderr,
+            "[trap-badpb] interp entered PB=$%02X at pc=$%06X "
+            "op=$%02X frame=%d sp=$%04X — corrupted control transfer\n",
+            _pbnk, (unsigned)pc_before, op, snes_frame_counter,
+            (unsigned)sp);
+        /* Step history at the trap: this run's entry path
+         * (`head`, always recorded; the 256-entry `ring` only
+         * fills under SNESRECOMP_ITRACE, so total=0 when
+         * untraced), then the always-on global ring, which
+         * spans runs and needs no arming. */
+        itrace_dump(entry_pc24, head, (int)(itn < 8 ? itn : 8),
+                    ring, trace ? itn : 0);
+        interp_bridge_dump_recent(512, stderr);
+        fflush(stderr);
+        exit(43);
+    }
+}
+
+/* SNESRECOMP_IBRWATCH: whether this run is in the watched range (see the
+ * call site). */
+static BRIDGE_COLD int bridge_ibrwatch_enter(CpuState *cpu, uint32_t entry_pc24, uint16_t s_exit) {
+    int ibrw = 0;
+    extern int snes_frame_counter;
+    static int _iw_init = 0;
+    static int _iw_has_range = 0;
+    static unsigned long _iw_lo = 0, _iw_hi = 0;
+    static long _iw_frame = -1;
+    if (!_iw_init) { _iw_init = 1;
+        const char *_e = getenv("SNESRECOMP_IBRWATCH");
+        const char *_f = getenv("SNESRECOMP_IBRWATCH_FRAME");
+        if (_e) _iw_has_range = sscanf(_e, "%lx-%lx", &_iw_lo, &_iw_hi) == 2;
+        if (_f && *_f) _iw_frame = strtol(_f, NULL, 0);
+    }
+    if (SNESRECOMP_INTERP_DIAG && _iw_has_range && (unsigned long)entry_pc24 >= _iw_lo &&
+        (unsigned long)entry_pc24 <= _iw_hi &&
+        (_iw_frame < 0 || snes_frame_counter == _iw_frame)) {
+        ibrw = 1;
+        fprintf(stderr,
+                "[ibr] ENTER frame=%d pc=$%06X s_exit=$%04X cpu->S=$%04X\n",
+                snes_frame_counter, (unsigned)entry_pc24,
+                (unsigned)s_exit, (unsigned)cpu->S);
+    }
+    return ibrw;
+}
+
 static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
                                  uint16_t s_exit, uint32_t *out_landing,
                                  uint32_t *out_return_pc,
@@ -1874,29 +2564,7 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
      * bridge entry_pc24 is in range, log every call/ret with sp + the AOT-bounce
      * return value, to localize a tail-dispatch over-pop step by step.
      * SNESRECOMP_IBRWATCH_FRAME optionally restricts it to one host frame. */
-    int _ibrw = 0;
-    {
-        extern int snes_frame_counter;
-        static int _iw_init = 0;
-        static int _iw_has_range = 0;
-        static unsigned long _iw_lo = 0, _iw_hi = 0;
-        static long _iw_frame = -1;
-        if (!_iw_init) { _iw_init = 1;
-            const char *_e = getenv("SNESRECOMP_IBRWATCH");
-            const char *_f = getenv("SNESRECOMP_IBRWATCH_FRAME");
-            if (_e) _iw_has_range = sscanf(_e, "%lx-%lx", &_iw_lo, &_iw_hi) == 2;
-            if (_f && *_f) _iw_frame = strtol(_f, NULL, 0);
-        }
-        if (SNESRECOMP_INTERP_DIAG && _iw_has_range && (unsigned long)entry_pc24 >= _iw_lo &&
-            (unsigned long)entry_pc24 <= _iw_hi &&
-            (_iw_frame < 0 || snes_frame_counter == _iw_frame)) {
-            _ibrw = 1;
-            fprintf(stderr,
-                    "[ibr] ENTER frame=%d pc=$%06X s_exit=$%04X cpu->S=$%04X\n",
-                    snes_frame_counter, (unsigned)entry_pc24,
-                    (unsigned)s_exit, (unsigned)cpu->S);
-        }
-    }
+    const int _ibrw = bridge_ibrwatch_enter(cpu, entry_pc24, s_exit);
 
     const int trace = SNESRECOMP_INTERP_DIAG && itrace_enabled();
     static int dtrace = -1;
@@ -1911,27 +2579,17 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
     uint8_t edge_op = 0;
     interp_edge_note(0, entry_pc24, INTERP_EDGE_ENTRY, 0, (uint16_t)cpu->S);
 
-    typedef struct QuiescentState {
-        uint32_t pc;
-        uint16_t a, x, y, sp, dp;
-        uint8_t db, k, c, z, v, n, i, d, mf, xf, e;
-        uint64_t write_epoch;
-        uint64_t continuous_read_epoch;
-        uint64_t idle_live_epoch, volatile_read_epoch;
-        long step;
-        unsigned repeats, idle_repeats;
-    } QuiescentState;
     /* Not cleared: a slot is read only through qbucket (set when the slot is
      * written), and the idle replay reads the slots of steps from `old` on,
      * each recorded in this run (dense recording writes every step). The
      * interpreter is entered ~100 times a frame, often for a few
      * instructions, and on the N64 this 4.6 KB clear alone cost ~5 ms of an
      * 80 ms emulation stage. */
-    QuiescentState qring[64];
+    BridgeQState qring[64];
     /* What each step cost, parallel to qring, for replaying a declared idle
      * poll's cycle (interp_bridge_set_idle_poll). Recorded on every step, so
      * a poll declared while a run is live never replays a stale entry. */
-    struct { uint64_t master; uint8_t cyc, open_bus; } idle_cost[64];
+    BridgeIdleCost idle_cost[64];
     /* The quiescent detector's candidates, bucketed by a hash of every field
      * both matchers compare (PC, registers, flags, widths, write epoch and
      * idle-live read epoch). The ordinary matcher still compares its full
@@ -1966,15 +2624,7 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
     unsigned q_next_slot = 0;
     /* Stable-poll detector state: the architectural state at the last few
      * loop heads this frame branched back to (see the detector below). */
-    typedef struct PollHeadState {
-        uint32_t pc;
-        uint16_t a, x, y, sp, dp;
-        uint8_t db, c, z, v, n, i, d, mf, xf, e;
-        uint64_t write_epoch;
-        uint64_t volatile_read_epoch;
-        long step;
-    } PollHeadState;
-    PollHeadState poll_heads[4];
+    BridgePollHead poll_heads[4];
     for (unsigned hi = 0; hi < 4; hi++)
         poll_heads[hi].step = 0;   /* empty; only read once step is set */
     unsigned poll_head_next = 0;
@@ -2102,93 +2752,9 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
             s_d9ff && auto_quiescent && g_snes && !in.i &&
             !s_interp_bus_timing_active && in.mf && !in.e && !in.dp &&
             g_snes->vIrqEnabled && g_snes->vTimer == 216u) {
-            BRIDGE_COLD_PATH();
-            static int s_d9_bytes_ok = -1;
-            if (s_d9_bytes_ok < 0) {
-                s_d9_bytes_ok =
-                    bridge_bus_read(cpu, 0xC084B2u) == 0xA5u &&
-                    bridge_bus_read(cpu, 0xC084B3u) == 0xD9u &&
-                    bridge_bus_read(cpu, 0xC084B4u) == 0xF0u &&
-                    bridge_bus_read(cpu, 0xC084B5u) == 0xFCu;
-            }
-            if (s_d9_bytes_ok) {
-                for (;;) {
-                    if (auto_quiescent && !in.i && g_snes && g_snes->inIrq) {
-                        lle_resume_set(((uint32_t)in.k << 16) | in.pc, INTERP_RESUME_SITE_D9_IRQ, in.sp);
-                        sync_interp_to_cpu(&in, cpu);
-                        bridge_apu_flush(cpu);
-                        return 1;
-                    }
-                    if (auto_quiescent && s_lle_master_deadline &&
-                        cpu->master_cycles >= s_lle_master_deadline) {
-                        lle_resume_set(((uint32_t)in.k << 16) | in.pc, INTERP_RESUME_SITE_D9_DEADLINE, in.sp);
-                        sync_interp_to_cpu(&in, cpu);
-                        bridge_apu_flush(cpu);
-                        return 1;
-                    }
-                    if (in.pc == 0x84B4u) {
-                        if (in.z) {
-                            cpu->cycles += 3u;
-                            cpu->master_cycles += 18u;
-                            in.pc = 0x84B2u;
-                        } else {
-                            cpu->cycles += 2u;
-                            cpu->master_cycles += 12u;
-                            in.pc = 0x84B5u;
-                        }
-                        if (g_snes) snes_sync_master_clock(g_snes, cpu->master_cycles);
-                        if (g_snes && g_snes->cart)
-                            cart_sync_coprocessors(g_snes->cart, cpu->master_cycles);
-                        cpu->coprocessor_master_cycles = cpu->master_cycles;
-                        if (in.pc == 0x84B5u) break;
-                        continue;
-                    }
-
-                    cpu->cycles += 3u;
-                    cpu->master_cycles += 18u;
-                    {
-                        const uint8_t v = (uint8_t)cpu->ram[0x00D9u];
-                        in.a = (uint16_t)((in.a & 0xFF00u) | v);
-                        in.z = (v == 0);
-                        in.n = (v & 0x80u) != 0;
-                    }
-                    if (g_snes) snes_sync_master_clock(g_snes, cpu->master_cycles);
-                    if (g_snes && g_snes->cart)
-                        cart_sync_coprocessors(g_snes->cart, cpu->master_cycles);
-                    cpu->coprocessor_master_cycles = cpu->master_cycles;
-                    if (auto_quiescent && !in.i && g_snes && g_snes->inIrq) {
-                        lle_resume_set(0xC084B4u, INTERP_RESUME_SITE_D9_IRQ, in.sp);
-                        sync_interp_to_cpu(&in, cpu);
-                        bridge_apu_flush(cpu);
-                        return 1;
-                    }
-                    if (auto_quiescent && s_lle_master_deadline &&
-                        cpu->master_cycles >= s_lle_master_deadline) {
-                        lle_resume_set(0xC084B4u, INTERP_RESUME_SITE_D9_DEADLINE, in.sp);
-                        sync_interp_to_cpu(&in, cpu);
-                        bridge_apu_flush(cpu);
-                        return 1;
-                    }
-                    if (in.z) {
-                        cpu->cycles += 3u;
-                        cpu->master_cycles += 18u;
-                        if (g_snes) snes_sync_master_clock(g_snes, cpu->master_cycles);
-                        if (g_snes && g_snes->cart)
-                            cart_sync_coprocessors(g_snes->cart, cpu->master_cycles);
-                        cpu->coprocessor_master_cycles = cpu->master_cycles;
-                    } else {
-                        cpu->cycles += 2u;
-                        cpu->master_cycles += 12u;
-                        in.pc = 0x84B5u;
-                        if (g_snes) snes_sync_master_clock(g_snes, cpu->master_cycles);
-                        if (g_snes && g_snes->cart)
-                            cart_sync_coprocessors(g_snes->cart, cpu->master_cycles);
-                        cpu->coprocessor_master_cycles = cpu->master_cycles;
-                        break;
-                    }
-                }
-                continue;
-            }
+            const int _d9 = bridge_so_d9_wait(cpu, &in, auto_quiescent);
+            if (_d9 == BRIDGE_COLD_RETURN_1) return 1;
+            if (_d9 == BRIDGE_COLD_CONTINUE) continue;
         }
         /* --- Star Ocean vblank-spin fast-forward ---
          * The game has several copies of the same beam-wait routine: the
@@ -2203,158 +2769,9 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
          * the natural exit point and flushing the skipped SPC time is
          * state-exact. Disabled with SNESRECOMP_NO_VBLANK_FF=1. */
         if (auto_quiescent && g_snes && !in.i && !s_lle_master_deadline &&
-            ((pc_before == 0xC8F425u || pc_before == 0xC8F42Au ||
-              pc_before == 0xC8F40Fu || pc_before == 0xC8F414u ||
-              pc_before == 0xCC0538u || pc_before == 0xCC053Du ||
-              pc_before == 0xCC054Eu || pc_before == 0xCC0553u
-              /* C2 text-screen vblank spin DB39/DB3E: byte-verified pure
-               * (LDA $4212; BMI-BPL), no per-iter work. Added 20260828+
-               * per FASE 2b so the spin FF-aligns the beam to the 42-mpq
-               * boundary while the dump (DB43+) runs AOT. Distinguish from
-               * $CA/$C2:0B51/$C6 which DO carry real work and stay out. */
-              || pc_before == 0xC2DB39u || pc_before == 0xC2DB3Eu
-              /* FASE 2b step 2 (20260828): title wait $CA:6D13/18 tried
-               * individually — validate A/B before keeping. */
-              || pc_before == 0xCA6D13u || pc_before == 0xCA6D18u
-              /* FASE 2b step 3 (20260828): text-zone $C6:18D1/D6 tried
-               * individually (intro $C2:0B51/57 REVERTED — diverges f284:
-               * its vblank spin is pure but NOT frame-last; FF from mid-
-               * field (v=138) shifts the phase of the title task's real
-               * work (writewatch: $01E5 writers ca6d13->ca6d16, ca6430->
-               * ca642f). Left LLE; see HANDOFF §4.8). */
-              || pc_before == 0xC618D1u || pc_before == 0xC618D6u
-              /* Intro $C2:0B51/57 (LDA-long 0xAF) — validated 20260828 (§4.9):
-               * its spin iteration costs 48 master cycles, not the 42 of the
-               * LDA-abs spins, so it needs the step=48 target rounding below.
-               * A/B 3050 frames bit-exact. */
-              || pc_before == 0xC20B51u || pc_before == 0xC20B57u
-              /* Field copy of the vblank wait at $C2:0B82/87 (LDA abs
-               * $4212; BMI/BPL, step 42 — same family as C8/CC/DB/6D/18).
-               * Added 20260830: game ground-truth profile showed this spin
-               * at ~57% of the field's interpreted opcodes (PC-watch:
-               * $C20B87/$C20B8A), with NO guard covering it. */
-              || pc_before == 0xC20B82u || pc_before == 0xC20B87u
-              || pc_before == 0xC0849Eu || pc_before == 0xC084A1u
-              || pc_before == 0xC084A3u || pc_before == 0xC084A6u))) {
-            static int s_vff_ok = -1;
-            static int s_vff_log = -1;
-            if (s_vff_ok < 0) {
-                const char *_e = getenv("SNESRECOMP_NO_VBLANK_FF");
-                s_vff_ok = (_e && _e[0] && _e[0] != '0') ? 0 : 1;
-                const char *_l = getenv("SNESRECOMP_VFF_LOG");
-                s_vff_log = (_l && _l[0] && _l[0] != '0') ? 1 : 0;
-            }
-            extern int snes_frame_counter;
-            if (s_vff_log) {
-                fprintf(stderr, "[VFF] entry f=%d pc=%06X m=%llu intra=%llu v=%u h=%u beamML=%llu apu_pend=%llu\n",
-                        snes_frame_counter, (unsigned)pc_before,
-                        (unsigned long long)cpu->master_cycles,
-                        (unsigned long long)(cpu->master_cycles % 357368u),
-                        g_snes->vPos, g_snes->hPos,
-                        (unsigned long long)g_snes->beamMasterLast,
-                        (unsigned long long)s_apu_pending_master);
-            }
-            if (s_vff_ok) {
-                BRIDGE_COLD_PATH();
-                extern int snes_frame_counter;
-                if (snes_frame_counter > 10 && !g_snes->hIrqEnabled) {
-                    const uint8_t op = bridge_bus_read(cpu, pc_before);
-                    const uint8_t lo = bridge_bus_read(cpu, pc_before + 1);
-                    const uint8_t hi = bridge_bus_read(cpu, pc_before + 2);
-                    /* Both LDA abs (0xAD, branch at pc+3) and LDA long
-                     * (0xAF, branch at pc+4) read $4212. Detect variant
-                     * and locate the branch opcode accordingly. */
-                    int is_abs = (op == 0xAD && lo == 0x12 && hi == 0x42);
-                    int is_long = (op == 0xAF && lo == 0x12 && hi == 0x42);
-                    if (is_abs || is_long) {
-                        const int br_off = is_long ? 4 : 3;
-                        const uint8_t br = bridge_bus_read(cpu, pc_before + br_off);
-                        const int is_bmi = (br == 0x30);
-                        const int is_bpl = (br == 0x10);
-                        const uint32_t v = g_snes->vPos;
-                        /* Step of the spin loop's repeated iteration in
-                         * master cycles: LDA abs $4212 + branch costs 42
-                         * (measured: validated spins C8/CC/DB/6D/18 all
-                         * bit-exact with mpq-42); the LDA LONG $4212 + branch
-                         * variant (0xAF, intro C2:0B51/57) costs 48 per
-                         * iteration (measured 20260828 f284: LLE reads at
-                         * intra 306894->306942 = +48; FF rounded to 42
-                         * landed 30 cycles early and shifted the phase of
-                         * the title task's real work). Use the variant's
-                         * real step so the FF lands on the same read the
-                         * LLE makes when it detects the vblank edge. */
-                        const uint64_t step = is_long ? 48u : 42u;
-                        uint64_t target = 0;
-                        if (is_bpl && v >= 1u && v < 225u) {
-                            if (!(g_snes->vIrqEnabled && g_snes->vTimer > v &&
-                                  g_snes->vTimer <= 224u)) {
-                                const uint64_t d = 225u * 1364u -
-                                    (cpu->master_cycles % 357368u);
-                                if (d >= step)
-                                    target = cpu->master_cycles +
-                                             step * ((d + step - 1u) / step);
-                            } else {
-                                const uint64_t trig =
-                                    (uint64_t)g_snes->vTimer * 1364u;
-                                const uint64_t pos =
-                                    cpu->master_cycles % 357368u;
-                                if (trig > pos) {
-                                    const uint64_t d = trig - pos;
-                                    const uint64_t k = (d - 1u) / step;
-                                    if (k >= 1u)
-                                        target = cpu->master_cycles + step * k;
-                                }
-                            }
-                        } else if (is_bmi && v >= 225u && v <= 261u) {
-                            if (!(g_snes->vIrqEnabled && g_snes->vTimer >= v &&
-                                  g_snes->vTimer <= 261u)) {
-                                const uint64_t d = 357368u -
-                                    (cpu->master_cycles % 357368u);
-                                if (d >= step)
-                                    target = cpu->master_cycles +
-                                             step * (d / step);
-                            }
-                        }
-                        if (target > cpu->master_cycles) {
-                            const uint64_t skip = target - cpu->master_cycles;
-                            if (s_vff_log) {
-                                fprintf(stderr, "[VFF] fire f=%d pc=%06X m=%llu v=%u h=%u d=%llu target=%llu skip=%llu\n",
-                                        snes_frame_counter, (unsigned)pc_before,
-                                        (unsigned long long)cpu->master_cycles,
-                                        g_snes->vPos, g_snes->hPos,
-                                        (unsigned long long)(target - cpu->master_cycles),
-                                        (unsigned long long)target,
-                                        (unsigned long long)skip);
-                            }
-                            /* CRITICAL: flush SPC BEFORE jumping master.
-                             * bridge_apu_flush -> rtl_sync_apu_to_cpu_locked
-                             * re-anchors SPC to current master. If master
-                             * is already at target, the first chunk pulls
-                             * portClock to full-skip and subsequent chunks
-                             * advance AGAIN (double count). Flushing
-                             * pre-jump anchors to pre-skip guest time
-                             * (no-op re-anchor), catchup adds exactly
-                             * skip * kInterpApuPerMaster. */
-                            s_apu_pending_master += skip;
-                            for (int _g = 0; s_apu_pending_master && _g < 64;
-                                 _g++) {
-                                const uint64_t _max_feed =
-                                    (uint64_t)(9000.0 / kInterpApuPerMaster);
-                                uint64_t _chunk = s_apu_pending_master;
-                                if (_chunk > _max_feed) _chunk = _max_feed;
-                                uint64_t _rest = s_apu_pending_master - _chunk;
-                                s_apu_pending_master = _chunk;
-                                bridge_apu_flush(cpu);
-                                s_apu_pending_master += _rest;
-                                if (!_chunk) break;
-                            }
-                            cpu->master_cycles = target;
-                            snes_sync_master_clock(g_snes, target);
-                        }
-                    }
-                }
-            }
-        }
+            ((pc_before >> 16) & 0xF1u) == 0xC0u &&   /* banks $C0-$CE: the list's */
+            bridge_vff_pc(pc_before))
+            bridge_vblank_ff(cpu, pc_before);
         int q_record = auto_quiescent;
         if (q_record && q_sparse) {
             /* Loop head: first step, a backward move, or a bank change. */
@@ -2363,7 +2780,7 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
             q_prev_pc = pc_before;
         }
         if (q_record) {
-            QuiescentState now;
+            BridgeQState now;
             memset(&now, 0, sizeof now);
             now.pc=pc_before; now.a=in.a; now.x=in.x; now.y=in.y;
             now.sp=in.sp; now.dp=in.dp; now.db=in.db; now.k=in.k;
@@ -2392,7 +2809,7 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
                 qb = (unsigned)(h >> 58);
             }
             for (uint64_t qm = qbucket[qb]; qm; qm &= qm - 1) {
-                QuiescentState *old=&qring[bridge_ctz64(qm)];
+                BridgeQState *old=&qring[bridge_ctz64(qm)];
                 if (!(old->step && steps-old->step<=256 &&
                       old->pc==now.pc && old->a==now.a && old->x==now.x &&
                       old->y==now.y && old->sp==now.sp && old->dp==now.dp &&
@@ -2410,73 +2827,13 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
                 if (s_idle_poll_count && !q_sparse && !idle_seen &&
                     old->idle_live_epoch==now.idle_live_epoch &&
                     old->volatile_read_epoch==now.volatile_read_epoch) {
-                    BRIDGE_COLD_PATH();
                     idle_seen = 1;
-                    now.idle_repeats=old->idle_repeats+1;
-                    if (now.idle_repeats>=2 && s_lle_master_deadline &&
-                        bridge_idle_replay_allowed(&in, steps - old->step)) {
-                        const long first = old->step;
-                        const long period = steps - old->step;
-                        int idle = 0, irq_unmasked = 0;
-                        for (long j = 0; j < period; j++) {
-                            const QuiescentState *state = &qring[(first + j) & 63];
-                            idle |= bridge_is_idle_poll(state->pc);
-                            irq_unmasked |= !state->i;
-                        }
-                        /* Equal endpoint flags do not prove I stayed set:
-                         * SEI / poll / CLI can recur at a masked phase while
-                         * an armed timer is observable elsewhere in the cycle. */
-                        if (idle && !(irq_unmasked &&
-                            (g_snes->hIrqEnabled || g_snes->vIrqEnabled))) {
-                            const int apu_pending =
-                                rtl_apu_extended_frame_timing() ||
-                                !interp_bridge_use_absolute_apu_timeline(
-                                    rtl_apu_frame_timeline_active(),
-                                    cart_has_sa1(g_snes->cart), false);
-                            const QuiescentState *at = &qring[first & 63];
-                            int capped = 0;
-                            for (long j = 0;; j++) {
-                                const long e = (first + j % period) & 63;
-                                at = &qring[e];
-                                /* The checks the interpreted loop makes before
-                                 * each step, in its order: the step cap, then
-                                 * the deadline. */
-                                if (steps + j >= step_cap) { capped = 1; break; }
-                                if (cpu->master_cycles >= s_lle_master_deadline)
-                                    break;
-                                g_interp_bridge_steps++;
-                                cpu->cycles += idle_cost[e].cyc;
-                                cpu->master_cycles += idle_cost[e].master;
-                                snes_refresh_charge();
-                                cpu->open_bus = idle_cost[e].open_bus;
-                                if (apu_pending) {
-                                    s_apu_pending_master += idle_cost[e].master;
-                                    if (s_apu_pending_master >= bridge_bounce_flush_thresh()) {
-                                        cpu->coprocessor_master_cycles = cpu->master_cycles;
-                                        snes_sync_master_clock(g_snes, cpu->master_cycles);
-                                        bridge_apu_flush(cpu);
-                                    }
-                                }
-                            }
-                            in.k = at->k; in.pc = (uint16_t)at->pc;
-                            in.a = at->a; in.x = at->x; in.y = at->y;
-                            in.sp = at->sp; in.dp = at->dp; in.db = at->db;
-                            in.c = at->c; in.z = at->z; in.v = at->v; in.n = at->n;
-                            in.i = at->i; in.d = at->d; in.mf = at->mf;
-                            in.xf = at->xf; in.e = at->e;
-                            cpu->coprocessor_master_cycles = cpu->master_cycles;
-                            snes_sync_master_clock(g_snes, cpu->master_cycles);
-                            if (g_snes->cart)
-                                cart_sync_coprocessors(g_snes->cart, cpu->master_cycles);
-                            if (capped) {
-                                steps = step_cap;
-                                goto idle_replay_step_cap;
-                            }
-                            lle_resume_set(at->pc, INTERP_RESUME_SITE_DEADLINE, in.sp);
-                            sync_interp_to_cpu(&in, cpu);
-                            bridge_apu_flush(cpu);
-                            return 1;
-                        }
+                    const int _ir = bridge_idle_replay(cpu, &in, old, &now, qring,
+                                                       idle_cost, steps, step_cap);
+                    if (_ir == BRIDGE_COLD_RETURN_1) return 1;
+                    if (_ir == BRIDGE_COLD_STEP_CAP) {
+                        steps = step_cap;
+                        goto idle_replay_step_cap;
                     }
                 }
                 if (old->continuous_read_epoch==now.continuous_read_epoch) {
@@ -2513,31 +2870,8 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
             qslot_bucket[qs] = (uint8_t)qb;
             qring[qs]=now;
         }
-        if (s_pre_opcode_hook_count > 0) {
-            const uint32_t key = pc_before & 0x7FFFFFu;
-            bool redirected = false;
-            for (int hi = 0; hi < s_pre_opcode_hook_count; hi++) {
-                if (s_pre_opcode_hooks[hi].pc24 == key) {
-                    sync_interp_to_cpu(&in, cpu);
-                    s_pre_opcode_redirect_valid = 0;
-                    s_pre_opcode_hooks[hi].hook(cpu, pc_before);
-                    sync_cpu_to_interp(cpu, &in);
-                    if (s_pre_opcode_redirect_valid) {
-                        in.k = (uint8_t)((s_pre_opcode_redirect_pc24 >> 16) & 0xFF);
-                        in.pc = (uint16_t)(s_pre_opcode_redirect_pc24 & 0xFFFF);
-                        s_pre_opcode_redirect_valid = 0;
-                        redirected = true;
-                        break;
-                    }
-                }
-            }
-            /* Restart opcode decoding at the destination, including
-             * call/return bookkeeping. A redirect completes handling for the
-             * original PC (later hooks composed on it do not run). Continuing
-             * with the old pc_before would execute one opcode and classify
-             * another, and could miss a terminal RTS. */
-            if (redirected) continue;
-        }
+        if (s_pre_opcode_hook_count > 0 && bridge_pre_opcode_hooks(cpu, &in, pc_before))
+            continue;
         /* Opt-in control-flow tripwire: game code normally executes from the
          * LoROM $8000-$FFFF half of a bank.  If a return/jump crosses from ROM
          * into the low I/O/RAM half, capture the transition and a substantial
@@ -2618,35 +2952,10 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
             ((pc_before ^ edge_from) & 0xFF0000u) == 0 &&
             (uint16_t)pc_before < (uint16_t)edge_from &&
             (uint16_t)((uint16_t)edge_from - (uint16_t)pc_before) <= 64u) {
-            BRIDGE_COLD_PATH();
-            PollHeadState now;
-            memset(&now, 0, sizeof now);
-            now.pc = pc_before; now.a = in.a; now.x = in.x; now.y = in.y;
-            now.sp = in.sp; now.dp = in.dp; now.db = in.db;
-            now.c = in.c; now.z = in.z; now.v = in.v; now.n = in.n;
-            now.i = in.i; now.d = in.d; now.mf = in.mf; now.xf = in.xf;
-            now.e = in.e;
-            now.write_epoch = g_interp_bridge_write_epoch;
-            now.volatile_read_epoch = s_interp_volatile_read_epoch;
-            now.step = steps;
-            PollHeadState *slot = NULL;
-            for (unsigned hi = 0; hi < 4; hi++)
-                if (poll_heads[hi].step && poll_heads[hi].pc == now.pc)
-                    slot = &poll_heads[hi];
-            if (slot && now.step - slot->step <= 256 &&
-                slot->a == now.a && slot->x == now.x && slot->y == now.y &&
-                slot->sp == now.sp && slot->dp == now.dp &&
-                slot->db == now.db && slot->c == now.c && slot->z == now.z &&
-                slot->v == now.v && slot->n == now.n && slot->i == now.i &&
-                slot->d == now.d && slot->mf == now.mf &&
-                slot->xf == now.xf && slot->e == now.e &&
-                slot->write_epoch == now.write_epoch &&
-                slot->volatile_read_epoch == now.volatile_read_epoch) {
-                return bridge_cooperative_yield(cpu, &in, pc_before, yield_pc,
-                                                INTERP_RESUME_SITE_STABLE_POLL);
-            }
-            if (!slot) slot = &poll_heads[poll_head_next++ & 3];
-            *slot = now;
+            int _sp_ret;
+            if (bridge_stable_poll(cpu, &in, pc_before, steps, poll_heads,
+                                   &poll_head_next, yield_pc, &_sp_ret))
+                return _sp_ret;
         }
         /* Canonical automatic-joypad wait used by synchronous message boxes:
          *
@@ -2664,22 +2973,10 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
          * can change.  Recognise the register/opcode shape (not a game PC) at
          * the final taken BEQ, yield to the owning LLE scheduler, and resume at
          * the backward target so $4212/$4218/$4219 are sampled again. */
-        if (_cooperative_poll && _poll_op == 0xF0 && in.z &&
-            bridge_peek8(cpu, pc_before - 8) == 0xAD &&
-            bridge_peek8(cpu, pc_before - 7) == 0x18 &&
-            bridge_peek8(cpu, pc_before - 6) == 0x42 &&
-            bridge_peek8(cpu, pc_before - 5) == 0xD0 &&
-            bridge_peek8(cpu, pc_before - 4) == 0x05 &&
-            bridge_peek8(cpu, pc_before - 3) == 0xAD &&
-            bridge_peek8(cpu, pc_before - 2) == 0x19 &&
-            bridge_peek8(cpu, pc_before - 1) == 0x42) {
-            const int8_t _rel = (int8_t)bridge_peek8(cpu, pc_before + 1);
-            if (_rel < 0) {
-                const uint32_t resume = (pc_before & 0xFF0000u) |
-                    (uint16_t)(pc_before + 2 + _rel);
-                return bridge_cooperative_yield(cpu, &in, resume, yield_pc,
-                                                INTERP_RESUME_SITE_JOYPAD_WAIT);
-            }
+        if (_cooperative_poll && _poll_op == 0xF0 && in.z) {
+            int _jw_ret;
+            if (bridge_joypad_wait(cpu, &in, pc_before, yield_pc, &_jw_ret))
+                return _jw_ret;
         }
         /* A NESTED frame (yield_pc == 0) standing on the active scheduler's
          * yield PC. It has no yield contract of its own: the handshake flag is
@@ -2715,94 +3012,20 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
         if (!yield_pc && s_lle_sched_depth > 0 && s_sched_yield_pc &&
             s_interp_bridge_depth > 1 &&
             (pc_before & 0x7FFFFF) == (s_sched_yield_pc & 0x7FFFFF)) {
-            BRIDGE_COLD_PATH();
-            const uint8_t _sched_flag =
-                bridge_bus_read(cpu, s_sched_yield_flag_addr);
-            const int _blocked = _sched_flag == s_sched_yield_flag_value;
-            if (_blocked) {
-                lle_unwind_arm(pc_before, s_interp_bridge_depth - 1, 0,
-                               INTERP_RESUME_SITE_NESTED_HANDOFF, in.sp);
-                if (_ibrw)
-                    fprintf(stderr,
-                            "[ibr] nested yield hand-off -> $%06X sp=$%04X "
-                            "flag=$%02X owner_depth=%d\n",
-                            (unsigned)s_lle_unwind_pc24, (unsigned)in.sp,
-                            _sched_flag, s_interp_bridge_depth - 1);
-                sync_interp_to_cpu(&in, cpu);
-                bridge_apu_flush(cpu);
-                return 1;
-            }
+            if (bridge_nested_handoff(cpu, &in, pc_before, _ibrw)) return 1;
         }
         if (yield_pc && !auto_quiescent &&
             (pc_before & 0x7FFFFF) == (yield_pc & 0x7FFFFF)) {
-            const uint8_t _yield_flag = bridge_bus_read(cpu, yield_flag_addr);
-            /* Canonical byte wait loop: LDA <flag>; BNE -5.  A synthetic
-             * scheduler resume can arrive with DB/M inherited from a compiled
-             * coroutine rather than the PHK/PLB + SEP prologue that precedes
-             * this loop in ROM.  When the real low flag is clear, repair the
-             * instruction-local state before executing LDA; otherwise a
-             * 16-bit or foreign-bank read can see an adjacent nonzero byte and
-             * spin to the step cap.  Match the bytes and operand so this is a
-             * reusable loop contract, not a game/address special case. */
-            const int _canonical_wait_loop =
-                bridge_bus_read(cpu, pc_before) == 0xAD &&
-                bridge_bus_read(cpu, pc_before + 1) ==
-                    (uint8_t)yield_flag_addr &&
-                bridge_bus_read(cpu, pc_before + 2) ==
-                    (uint8_t)(yield_flag_addr >> 8) &&
-                bridge_bus_read(cpu, pc_before + 3) == 0xD0 &&
-                bridge_bus_read(cpu, pc_before + 4) == 0xFB;
-            if (_yield_flag != yield_flag_value && _canonical_wait_loop) {
-                in.mf = 1;
-                in.db = in.k;
-            }
-            if (bridge_yield_diag() &&
-                _yield_flag != yield_flag_value && steps > 16) {
-                static int _yield_diag_n;
-                if (_yield_diag_n < 64) {
-                    _yield_diag_n++;
-                    fprintf(stderr,
-                            "[yield_diag] pc=$%06X flag=$%02X want=$%02X "
-                            "m=%u x=%u db=$%02X sp=$%04X a=$%04X z=%u\n",
-                            (unsigned)pc_before, _yield_flag,
-                            yield_flag_value, in.mf, in.xf, in.db, in.sp,
-                            in.a, in.z);
-                }
-            }
-            if (_yield_flag == yield_flag_value) {
-                lle_resume_set(pc_before, INTERP_RESUME_SITE_YIELD_FLAG, in.sp);
-                sync_interp_to_cpu(&in, cpu);
-                bridge_apu_flush(cpu);
+            if (bridge_yield_point(cpu, &in, pc_before, yield_flag_addr, yield_flag_value, steps))
                 return 1;
-            }
-            /* If the validated wait loop recurs after normal execution had a
-             * chance to leave it, treat that recurrence as the cooperative
-             * block point.  This contains a stale/corrupt flag without a
-             * multi-million-instruction spin; the next host frame injects NMI
-             * and resumes through the same architectural contract. */
-            if (_canonical_wait_loop && steps > 16) {
-                sync_interp_to_cpu(&in, cpu);
-                bridge_apu_flush(cpu);
-                return 1;
-            }
         }
         /* Stop-PC intercept (task-resume mode): JMP/BRA arrival at a PC whose
          * real asm is incompatible with interpretation (fiber-HLE'd machinery
          * like MMX's task-die $80F8). Run its registered HLE body instead and
          * treat the task frame as ended. JSR arrivals never get here — they
          * bounce via the paired-call path below. Compared bank-mirrored. */
-        if (n_stop) {
-            const uint32_t pc_norm = pc_before & 0x7FFFFF;
-            for (int si = 0; si < n_stop; si++) {
-                if ((stop_pcs[si] & 0x7FFFFF) == pc_norm) {
-                    sync_interp_to_cpu(&in, cpu);
-                    bridge_apu_flush(cpu);
-                    if (cpu_dispatch_has_entry(cpu, pc_before))
-                        cpu_dispatch_pc_paired(cpu, pc_before, 0);
-                    return 1;
-                }
-            }
-        }
+        if (n_stop && bridge_stop_pc(cpu, &in, pc_before, stop_pcs, n_stop))
+            return 1;
         const uint8_t  op = bridge_bus_read(cpu, pc_before);
 #ifdef SNESRECOMP_INTERP_PROFILE
         if ((steps & 8191u) == 0) {
@@ -2931,30 +3154,8 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
         {
             static int _tbp = -1;
             if (_tbp < 0) _tbp = getenv("SNESRECOMP_TRAP_BADPB") ? 1 : 0;
-            if (_tbp) {
-                uint8_t _pbnk = (uint8_t)((pc_before >> 16) & 0xFF);
-                int _valid = (_pbnk <= 0x3F) ||
-                             (_pbnk >= 0x80 && _pbnk <= 0xBF) ||
-                             (_pbnk == 0x7E || _pbnk == 0x7F);
-                if (!_valid) {
-                    extern int snes_frame_counter;
-                    fprintf(stderr,
-                        "[trap-badpb] interp entered PB=$%02X at pc=$%06X "
-                        "op=$%02X frame=%d sp=$%04X — corrupted control transfer\n",
-                        _pbnk, (unsigned)pc_before, op, snes_frame_counter,
-                        (unsigned)in.sp);
-                    /* Step history at the trap: this run's entry path
-                     * (`head`, always recorded; the 256-entry `ring` only
-                     * fills under SNESRECOMP_ITRACE, so total=0 when
-                     * untraced), then the always-on global ring, which
-                     * spans runs and needs no arming. */
-                    itrace_dump(entry_pc24, head, (int)(itn < 8 ? itn : 8),
-                                ring, trace ? itn : 0);
-                    interp_bridge_dump_recent(512, stderr);
-                    fflush(stderr);
-                    exit(43);
-                }
-            }
+            if (_tbp)
+                bridge_trap_badpb(pc_before, op, in.sp, entry_pc24, head, itn, ring, trace);
         }
 
         /* Subroutine calls: JSR abs (0x20, 3B), JSL (0x22, 4B),
@@ -3341,39 +3542,8 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
                         interp_owner_crossed(in.sp);
                     if (_air != RECOMP_RETURN_SKIP_1 ||
                         _skip_crossed_owner) {
-                        BRIDGE_COLD_PATH();
-                        if (yield_pc) {
-                            /* Nothing outside a scheduler frame can consume a
-                             * multi-level skip: it IS the outermost guest
-                             * program. Reporting the frame complete resumes
-                             * the next one at a stale PC over a half-unwound
-                             * stack. Bail contained instead, so the host sees
-                             * a failed frame rather than a wrong one. */
-                            static int s_ynlr_logged = 0;
-                            if (s_ynlr_logged < 8) {
-                                s_ynlr_logged++;
-                                fprintf(stderr, "[interp_bridge] yield-mode NLR "
-                                        "exit (non-unwind) _air=%d target=$%06X "
-                                        "frame=%d site=$%06X sp_pre=$%04X "
-                                        "sp=$%04X s_enter=$%04X - contained bail\n",
-                                        (int)_air, (unsigned)target,
-                                        snes_frame_counter, (unsigned)pc_before,
-                                        (unsigned)_sp_pre, (unsigned)in.sp,
-                                        (unsigned)s_enter);
-                            }
-                            sync_interp_to_cpu(&in, cpu);
-                            bridge_apu_flush(cpu);
-                            return 0;
-                        }
-                        sync_interp_to_cpu(&in, cpu);
-                        /* A nested non-scheduler tier run belongs to a compiled
-                         * caller. Preserve SKIP_N so that caller can unwind the
-                         * host frame whose guest epilogue was already consumed.
-                         * Top-level scheduler runs retain their contained boolean
-                         * completion contract. */
-                        if (!yield_pc && s_interp_bridge_depth > 1)
-                            return (int)_air + 2;
-                        return 1;
+                        return bridge_nlr_exit(cpu, &in, yield_pc, _air, target, pc_before,
+                                               _sp_pre, s_enter);
                     }
                 }
                 in.k  = (uint8)((ret >> 16) & 0xFF);
@@ -3446,40 +3616,7 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
 
     /* Step cap hit — contained bail. Sync so observable state is consistent;
      * the caller treats a 0 return as "gap not cleanly resolved". */
-    {
-        static int s_cap_reports;
-        if (s_cap_reports < 32) {
-            BRIDGE_COLD_PATH();
-            const uint32_t last_pc = ((uint32_t)in.k << 16) | in.pc;
-            s_cap_reports++;
-            fprintf(stderr,
-                    "[interp_cap] entry=$%06X last=$%06X op=$%02X "
-                    "m=%u x=%u db=$%02X sp=$%04X a=$%04X flag=$%02X\n",
-                    (unsigned)entry_pc24, (unsigned)last_pc,
-                    bridge_bus_read(cpu, last_pc), in.mf, in.xf, in.db,
-                    in.sp, in.a,
-                    yield_pc ? bridge_bus_read(cpu, yield_flag_addr) : 0);
-            fprintf(stderr,                    "[interp_cap] head:");
-            for (int hi = 0; hi < 8 && hi < itn; hi++)
-                fprintf(stderr, " $%06X/%02X", (unsigned)head[hi].pc,
-                        head[hi].op);
-            fputc('\n', stderr);
-            /* The step ring holds only the spin by now; the folded edge
-             * ring still holds the transfers that led into it. */
-            fprintf(stderr, "[interp_cap] edges:");
-            for (uint64_t ei = g_interp_edges_n > 8 ? g_interp_edges_n - 8 : 0;
-                 ei < g_interp_edges_n; ei++) {
-                const InterpEdge *e =
-                    &g_interp_edges[ei & (INTERP_EDGE_RING_LEN - 1)];
-                fprintf(stderr, " $%06X>$%06X(%s x%u)",
-                        (unsigned)e->from_pc24, (unsigned)e->to_pc24,
-                        interp_bridge_edge_kind_name(e->kind),
-                        (unsigned)e->count);
-            }
-            fputc('\n', stderr);
-
-        }
-    }
+    bridge_cap_report(cpu, &in, entry_pc24, yield_pc, yield_flag_addr, head, itn);
 idle_replay_step_cap:
     if (trace) {
         itrace_dump(entry_pc24, head, (int)(itn < 8 ? itn : 8), ring, itn);
@@ -3503,26 +3640,7 @@ idle_replay_step_cap:
     sync_interp_to_cpu(&in, cpu);
     bridge_apu_flush(cpu);
     /* Post-sync diagnostic: decode the instruction at step-cap PC */
-    {
-        BRIDGE_COLD_PATH();
-        static uint32_t s_last_diag_pc;
-        uint32_t pc24 = ((uint32_t)in.k << 16) | in.pc;
-        if (pc24 != s_last_diag_pc) {
-            s_last_diag_pc = pc24;
-            uint8_t op = bridge_bus_read(cpu, pc24);
-            fprintf(stderr, "[diag] PC=$%06X op=$%02X m=%u x=%u db=$%02X a=$%04X x16=$%04X y16=$%04X sp=$%04X\n",
-                    (unsigned)pc24, (unsigned)op, (unsigned)in.mf, (unsigned)in.xf,
-                    (unsigned)in.db, (unsigned)in.a, (unsigned)in.x, (unsigned)in.y, (unsigned)in.sp);
-            if (op == 0xCD) { /* CMP abs */
-                uint8_t lo = bridge_bus_read(cpu, pc24 + 1);
-                uint8_t hi8 = bridge_bus_read(cpu, pc24 + 2);
-                uint16_t addr16 = (uint16_t)lo | ((uint16_t)hi8 << 8);
-                uint8_t memval = cpu_read8(cpu, in.db, addr16);
-                fprintf(stderr, "  -> CMP $%04X mem=$%02X\n",
-                        (unsigned)addr16, (unsigned)memval);
-            }
-        }
-    }
+    bridge_cap_diag(cpu, &in);
 #ifdef SNESRECOMP_INTERP_PROFILE
     { extern uint64_t g_interp_total_steps;
       g_interp_total_steps += (uint64_t)(steps > 0 ? steps : 0); }

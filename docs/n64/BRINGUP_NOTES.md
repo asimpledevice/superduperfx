@@ -1458,6 +1458,37 @@ compiled game code calls (ppu_write, snes_writeReg, DMA).
 Not yet re-placed: icache_order.ld predates these changes (SMW 1.88M ->
 1.91M misses, Pitfall 9.4M -> 19.3M with the stale layout).
 
+### Interpreter kernel: _interp_run_core split (2026-11-11)
+
+The interpreter loop's rare paths are now out-of-line functions marked
+noinline + cold (BRIDGE_COLD; GCC places them in .text.unlikely.* sections):
+the Star Ocean $00D9 wait and vblank fast-forward (the fast-forward's
+30-address PC list is now checked only after a bank pre-filter, (bank & 0xF1)
+== 0xC0, a superset of its banks), idle-poll replay, the stable-poll detector,
+nested scheduler hand-off, non-local return exit, the automatic-joypad wait,
+the yield point, the stop-PC intercept, pre-opcode hooks, and the step-cap,
+bad-bank and IBRWATCH diagnostics. Exits come back as result codes
+(BRIDGE_COLD_FALL / _CONTINUE / _RETURN_1 / _STEP_CAP or the run's return
+value). Bodies were moved by script (in. -> in->, returns -> codes), not
+retyped; the detector's struct types moved to file scope.
+
+_interp_run_core 13,784 -> 7,348 bytes (N64); its hot code (lines entered
+>= 0.1% of the hottest) is unchanged, 4.0 KB in SMW and 2.0 KB in Pitfall,
+but now within the first 6.6 / 4.4 KB instead of 11.4 / 7.5 KB. Verified:
+interp_bridge 432/432 (incl. stable-poll S17 and idle-replay S18), interp816
+89/89, bridge pytest suites, native SMW TAS replay identical over 90,000
+frames with and without SNESRECOMP_COMPACT_INTERP.
+
+Kernel by role (loop, both cores, APU loop, bus accessors) as whole
+functions: 49 functions, 32 KB -- hot within it about 11 KB per game. The
+decoders are the gap: a game-agnostic kernel holds the whole decoder (games
+use different opcodes): 65816 8.7 KB (hot 0.8-2.1 KB), SPC700 6.9 KB (hot
+0.5-2.3 KB). A naive kernel-first layout (no traces) measured worse than the
+old default (SMW 3.34M misses vs 2.88M; PPU stage 505K vs 96K): placing the
+kernel without a rule for the rest moves every other hot function. Next:
+consolidate the decoders' special cases, then a complete deterministic
+layout (kernel sets + Idea 1 colouring for the rest).
+
 ## Next steps
 
 1. Audio: check the RSP DSP by ear on hardware (output arrives later than
