@@ -1678,6 +1678,56 @@ The hard parts:
 - MUL and DIV;
 - an exactness harness like the DSP's.
 
+### SPC700 on the RSP, milestone 1: the core (2026-11-11)
+
+`n64/rspspc`: an rspq overlay (`rsp_spc.S`) runs the SPC700 for a cycle
+budget, as repeated `spc_runOpcode` calls would. Not yet used by the
+emulator.
+
+**Dispatch.** `gen_tables.py` builds the dispatch table from `spc.c`'s
+own cycle, mode and operation tables, and asserts that every opcode is
+mapped. Each entry holds cycles, an addressing mode and an operation:
+14 modes, 68 operations.
+
+**Traps.** Opcodes SMW never uses end the run before them (TCALL, BRK,
+PCALL, RETI, DAA, DAS, TSET1, TCLR1, the carry-bit ops). The glue
+(`spc_rsp_run.c`) runs that one instruction in C and resumes the RSP.
+
+**ARAM** stays in RDRAM:
+
+- pages 0-1 (direct page 0 and the stack) are in DMEM for the whole run;
+- the rest goes through a 2 KB direct-mapped write-back cache of 64-byte
+  lines.
+
+Sizing, from SMW (attract mode, native trace):
+
+| Measure | Value |
+|---|---|
+| SPC700 instructions per frame | about 7,000 |
+| Accesses per instruction | 2.7 |
+| Cache misses per frame (2 KB direct-mapped) | 131 |
+| 2-way, 3 KB | 39 |
+
+**Size.** IMEM 4,024 of 4,096 bytes (rspq's core takes 632). DMEM
+3,920 bytes.
+
+**Milestone 1 limit.** The I/O page (`$F0-$FF`) and the IPL ROM are plain
+RAM on both sides.
+
+**Verification** (`n64/rspspc/test`, ares). Random states and programs are
+compared against `spc.c` built with plain-RAM APU stubs: registers, flags,
+PC, stopped state, cycles used and all 64 KB of ARAM.
+
+- 2,000 of 2,000 tests pass.
+- A deliberately wrong H flag fails 899 of 2,000.
+
+**Next** (milestone 2): the I/O page on the RSP.
+
+- control, timers and ports;
+- DSP register writes into the RSP DSP's log;
+- trapping reads of ENVX, OUTX and ENDX;
+- the test's reference switched to the real `apu.c`.
+
 ## Next steps
 
 1. Audio: check the RSP DSP by ear on hardware (output arrives later than
