@@ -1525,6 +1525,62 @@ which a game-agnostic layout must hold, is 28 KB, and SMW's emulation stage
 also keeps ~20 KB of hardware-access code hot. 16 KB cannot hold the
 emulation stage's hot set in SMW whatever the layout.
 
+### Interpreter kernel: batching the SPC700 (2026-11-11, not adopted)
+
+Idea: if the 65816 and the SPC700 alternated less often, the two cores would
+stop evicting each other and could share cache sets. Measured on the ares
+icprof traces (SMW attract window from frame 400; Pitfall from frame 100).
+
+Ceiling. `icsim/batchtrace.py` rewrites a recorded trace so each frame's
+APU-side lines (`spc.o`, `dsp.o`, `apu.o`) run after its 65816-side lines.
+On SMW, emulation-stage misses fall from 1,611,442 to 1,341,478 (-16.8%).
+This is an upper bound: no exact scheme can run the SPC700 only once per
+frame, because port reads must see it caught up.
+
+Where the alternations come from (`icsim/switches.py` and native counts).
+On SMW, the window has about 39,000 alternations, an average of about 630
+cache lines between them. Native counts over 90 attract frames, about 165
+APU catch-ups per frame:
+
+| Source | Count | Share |
+|---|---|---|
+| `_interp_run_core`: flush at every progress checkpoint (any interpreted write or dynamic-read change) | 11,185 | 75% |
+| Bridge exit on return | 1,996 | 13% |
+| Pending-cycle threshold (1,024 master cycles) | 757 | 5% |
+| APU port accesses | ~360 | 2% |
+
+Raising the threshold therefore barely matters. With 65,536: SMW total
+misses -1.6% (1.880M to 1.850M), Pitfall -0.06%.
+
+Dropping the per-checkpoint flush (port accesses, the threshold and bridge
+exits still catch the SPC up):
+
+| | Before | Without the flush | Change |
+|---|---|---|---|
+| SMW total misses | 1,880,077 | 1,748,751 | -7.0% |
+| Pitfall total misses | 22,237,765 | 23,102,294 | +3.9% |
+
+Not adopted, for two reasons:
+
+- Pitfall regresses.
+- The audio changes. WRAM and ARAM stay identical at every 60-frame
+  checkpoint, but the DSP output stream differs from sample 13,891 on
+  (largest difference 348 against a peak of 7,134).
+
+The cause is the bridge's relative catch-up. `bridge_apu_flush` adds the
+pending time as a delta (`apuCatchupCycles`, `snes_catchupApu`) to wherever
+the SPC is. It then syncs to the absolute guest clock
+(`rtl_sync_apu_to_cpu_locked`), which only moves the SPC forward. When the
+absolute sync has already pushed the SPC ahead, the next delta adds to that.
+So the SPC's position depends on how many flushes there were, not only on
+guest time. The SPC core itself is slice-invariant: `apu_runCycles_native`
+carries partial-opcode cycles across calls.
+
+Batching can only be exact once the bridge catches up to an absolute target
+(for example, to the greater of the relative and absolute positions, without
+stacking). That changes SPC timing in every title, so it needs its own
+validation.
+
 ## Next steps
 
 1. Audio: check the RSP DSP by ear on hardware (output arrives later than
