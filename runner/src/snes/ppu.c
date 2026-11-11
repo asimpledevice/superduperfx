@@ -3820,7 +3820,8 @@ void ppu_write(Ppu* ppu, uint8_t adr, uint8_t val) {
       break;
     }
     case BGMODE & 0xff:
-      assert((val & 0xf0) == 0);
+      /* Bits 4-7: 16x16 tiles for BG1-BG4 (PPU_bigTiles). Joe & Mac 2 sets
+       * them; this was an assert from before large tiles were supported. */
       ppu->bgmode = val;
       break;
     case MOSAIC & 0xff:

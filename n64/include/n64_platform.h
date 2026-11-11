@@ -64,6 +64,10 @@ enum { N64_STATUS_Y = 240 - 28 };
  * profiling and shipped builds have the same layout). */
 enum { N64_PHASE_CPU = 0, N64_PHASE_PPU = 1, N64_PHASE_PRESENT = 2 };
 extern volatile uint8_t g_n64_profile_phase;
+/* Sets g_n64_profile_phase and, on the N64, writes its line back to RDRAM, so
+ * an emulator's profiler reading RDRAM (ares icprof) sees the current stage
+ * rather than whatever the write-back D-cache last flushed. */
+void n64_platform_set_phase(uint8_t phase);
 void n64_platform_profile_start(unsigned interval_us);
 void n64_platform_profile_stop_and_dump(void);
 

@@ -29,6 +29,10 @@ static uint32_t s_prof_ra[kProfMax];
 static volatile unsigned s_prof_n;
 static timer_link_t *s_prof_timer;
 volatile uint8_t g_n64_profile_phase;
+void n64_platform_set_phase(uint8_t phase) {
+  g_n64_profile_phase = phase;
+  data_cache_hit_writeback((const void *)&g_n64_profile_phase, 1);
+}
 
 static void prof_tick(int ovfl) {
   (void)ovfl;

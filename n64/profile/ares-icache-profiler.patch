@@ -1,0 +1,206 @@
+Local ares patch: instruction-cache miss profiler (n64/profile/icsim/README in
+BRINGUP_NOTES.md, "I-cache: trace-driven placement").
+
+Apply with `git apply` in an ares checkout, then add one line to
+Cartridge::ISViewer::messageChar (ares/n64/cartridge/isviewer.cpp), next to
+the data-cache profiler's dcprof::message(c) if that patch is applied:
+
+    icprof::message(c);
+
+Runtime: ARES_ICPROF=<out.txt> enables it (the JIT emits its hooks only
+then); ARES_ICPROF_PHASE=<physical address of g_n64_profile_phase>;
+ARES_ICTRACE=<trace.bin> also records the code-line trace for icsim/trg.
+The window is the host's DCPROF_START/DCPROF_STOP markers (N64_DCPROF=<frame>).
+
+diff --git a/ares/n64/cpu/cpu.hpp b/ares/n64/cpu/cpu.hpp
+index ada6b68..3e003cb 100644
+--- a/ares/n64/cpu/cpu.hpp
++++ b/ares/n64/cpu/cpu.hpp
+@@ -1,5 +1,6 @@
+ //NEC VR4300
+ 
++#include "../icprof.hpp"
+ struct CPU : Thread {
+   Node::Object node;
+ 
+@@ -144,9 +145,11 @@ struct CPU : Thread {
+     auto jitFetch(u64 vaddr, u32 paddr, CPU& cpu) -> void {
+       auto& line = this->line(vaddr);
+       if(!line.hit(paddr)) {
++        icprof::miss(paddr, line.valid(), (line.tagKey & ~0xfffu) | line.index);
+         self.profile.icacheMisses++;
+         line.fill(paddr, cpu);
+       } else {
++        icprof::hit();
+         self.profile.icacheHits++;
+       }
+     }
+@@ -154,10 +157,13 @@ struct CPU : Thread {
+     //used by the interpreter to fully emulate the instruction cache
+     auto fetch(u64 vaddr, u32 paddr, CPU& cpu) -> u32 {
+       auto& line = this->line(vaddr);
++      icprof::access(paddr);
+       if(!line.hit(paddr)) {
++        icprof::miss(paddr, line.valid(), (line.tagKey & ~0xfffu) | line.index);
+         self.profile.icacheMisses++;
+         line.fill(paddr, cpu);
+       } else {
++        icprof::hit();
+         self.profile.icacheHits++;
+       }
+       return line.read(paddr);
+@@ -342,8 +348,17 @@ struct CPU : Thread {
+     icache.jitFetch(vaddr, addr, *this);
+   }
+ 
++  //local patch: icprof trace hook for every JIT line check
++  auto icprofJitAccess(u32 paddr) -> void { icprof::access(paddr); }
++  //local patch: icprof hook for the JIT's inline refill (called before it)
++  auto icprofJitMiss(u32 lineIndex, u32 paddr) -> void {
++    auto& line = icache.lines[lineIndex & 0x1ff];
++    icprof::miss(paddr, line.valid(), (line.tagKey & ~0xfffu) | line.index);
++  }
++
+   auto jitIcacheFillMiss(u64 vaddr, u32 paddr) -> void {
+     auto& line = icache.line(vaddr);
++    icprof::miss(paddr, line.valid(), (line.tagKey & ~0xfffu) | line.index);
+     profile.icacheMisses++;
+     line.fill(paddr, *this);
+   }
+diff --git a/ares/n64/cpu/recompiler.cpp b/ares/n64/cpu/recompiler.cpp
+index a18ee5f..c5bd8d4 100644
+--- a/ares/n64/cpu/recompiler.cpp
++++ b/ares/n64/cpu/recompiler.cpp
+@@ -725,6 +725,8 @@ auto CPU::Recompiler::emit(u64 vaddr, u32 address, u64 stateKey) -> Block* {
+         return nullptr;
+       }
+       const u32 lineIndex = u32(ii.vaddr >> 5) & 0x1ffu;
++      static const bool ictraceJit = getenv("ARES_ICTRACE") != nullptr;  // local patch
++      if(ictraceJit) callf(&CPU::icprofJitAccess, imm(ii.address));
+       const u32 expectedTagKey = (ii.address & ~0xfffu) | 1u;
+       cmp32(IcacheTagKeyMem(lineIndex), imm(expectedTagKey), set_z);
+       auto icacheMiss = jump(flag_ne);
+@@ -818,6 +820,8 @@ auto CPU::Recompiler::emit(u64 vaddr, u32 address, u64 stateKey) -> Block* {
+         add64(ProfileIcacheMissesMem, ProfileIcacheMissesMem, imm(1));
+         if(!sdram) add64(mem0(RdramRbusIcacheReadsAddr), mem0(RdramRbusIcacheReadsAddr), imm(ICache));
+       }
++      static const bool icprofJit = getenv("ARES_ICPROF") != nullptr;  // local patch
++      if(icprofJit) callf(&CPU::icprofJitMiss, imm(lineIndex), imm(slow.icachePaddr));
+       emitCpuStep(96);
+       mov32(IcacheTagKeyMem(lineIndex), imm(tagKey));
+       mov64(reg(1), mem0(ramDataField));
+diff --git a/ares/n64/icprof.hpp b/ares/n64/icprof.hpp
+new file mode 100644
+index 0000000..42316b2
+--- /dev/null
++++ b/ares/n64/icprof.hpp
+@@ -0,0 +1,109 @@
++#pragma once
++// Local patch: instruction-cache miss profiler for headless analysis.
++// Windowed by the same IS-Viewer markers as the data-cache profiler
++// ("DCPROF_START" / "DCPROF_STOP" lines, n64/src/n64_host.c N64_DCPROF).
++// STOP writes $ARES_ICPROF (default icprof.txt):
++//   TOTAL <fetch hits> <misses>       over the window
++//   STAGE <stage> <misses>            stage = byte at physical $ARES_ICPROF_PHASE
++//                                     (g_n64_profile_phase), 3 if unset
++//   LINE <paddr> <stage> <misses>     per 32-byte code line and stage
++//   EVICT <old paddr> <new paddr> <n> which line a miss replaced (valid only)
++// Included inside the Nintendo64 namespace (unity build), after rdram.hpp.
++namespace icprof {
++inline bool on = false;
++inline u64 hits, misses;
++inline u64 stageMiss[4];
++inline u32* line[4];          // per 32-byte line of 8 MB RDRAM, per stage
++enum : u32 { PairSlots = 1u << 20 };
++inline u64* pairKey;
++inline u32* pairCount;
++inline s64 phaseAddr = -2;
++
++inline auto stage() -> u32 {
++  if(phaseAddr == -2) {
++    const char* p = getenv("ARES_ICPROF_PHASE");
++    phaseAddr = p ? (s64)(strtoull(p, nullptr, 0) & 0x7fffff) : -1;
++  }
++  if(phaseAddr < 0) return 3;
++  return rdram.ram.Memory::Writable::read<Byte>((u32)phaseAddr) & 3;
++}
++
++inline auto alloc() -> void {
++  if(!line[0]) {
++    for(auto& l : line) l = new u32[1u << 18]();
++    pairKey = new u64[PairSlots]();
++    pairCount = new u32[PairSlots]();
++  }
++}
++
++inline auto hit() -> void { if(on) hits++; }
++
++// $ARES_ICTRACE: also record every code-line entry (u32: paddr of the 32-byte
++// line | stage in bits 0-1), consecutive repeats dropped, up to
++// $ARES_ICTRACE_MAX entries (default 32M), for offline cache simulation.
++inline FILE* trace;
++inline u64 traceLeft;
++inline u32 traceLast = ~0u;
++inline u32 tbuf[1u << 16]; inline u32 tn;
++inline auto traceFlush() -> void { if(trace && tn) fwrite(tbuf, 4, tn, trace); tn = 0; }
++inline auto access(u32 paddr) -> void {
++  if(!on || !trace || !traceLeft) return;
++  const u32 w = (paddr & 0x7fffe0u) | stage();
++  if(w == traceLast) return;
++  traceLast = w;
++  tbuf[tn++] = w;
++  if(tn == (1u << 16)) traceFlush();
++  if(!--traceLeft) { traceFlush(); fclose(trace); trace = nullptr; }
++}
++
++inline auto miss(u32 paddr, bool hadOld, u32 oldPaddr) -> void {
++  if(!on) return;
++  alloc();
++  const u32 s = stage();
++  misses++; stageMiss[s]++;
++  line[s][paddr >> 5 & 0x3ffff]++;
++  if(!hadOld) return;
++  const u64 key = ((u64)((oldPaddr >> 5) & 0x3ffff) << 32 | ((paddr >> 5) & 0x3ffff)) + 1;
++  u32 h = (u32)(key * 0x9e3779b97f4a7c15ull >> 44) & (PairSlots - 1);
++  while(pairKey[h] && pairKey[h] != key) h = (h + 1) & (PairSlots - 1);
++  pairKey[h] = key;
++  pairCount[h]++;
++}
++
++inline auto dump() -> void {
++  const char* path = getenv("ARES_ICPROF");
++  FILE* f = fopen(path ? path : "icprof.txt", "w");
++  if(!f) return;
++  fprintf(f, "TOTAL %llu %llu\n", (unsigned long long)hits, (unsigned long long)misses);
++  for(u32 s = 0; s < 4; s++) fprintf(f, "STAGE %u %llu\n", s, (unsigned long long)stageMiss[s]);
++  if(line[0]) {
++    for(u32 s = 0; s < 4; s++)
++      for(u32 i = 0; i < (1u << 18); i++) if(line[s][i]) fprintf(f, "LINE %08x %u %u\n", i << 5, s, line[s][i]);
++    for(u32 i = 0; i < PairSlots; i++) if(pairKey[i]) {
++      const u64 k = pairKey[i] - 1;
++      fprintf(f, "EVICT %08x %08x %u\n", (u32)(k >> 32) << 5, (u32)k << 5, pairCount[i]);
++    }
++  }
++  fclose(f);
++}
++
++inline auto message(char c) -> void {
++  static char buf[64]; static u32 n = 0;
++  if(c == '\n') {
++    buf[n] = 0;
++    if(!strcmp(buf, "DCPROF_START")) {
++      on = true; hits = misses = 0; for(auto& m : stageMiss) m = 0;
++      if(const char* t = getenv("ARES_ICTRACE")) {
++        trace = fopen(t, "wb");
++        const char* m = getenv("ARES_ICTRACE_MAX");
++        traceLeft = m ? strtoull(m, nullptr, 0) : (32ull << 20);
++      }
++    }
++    if(!strcmp(buf, "DCPROF_STOP")) {
++      on = false; dump();
++      if(trace) { traceFlush(); fclose(trace); trace = nullptr; }
++    }
++    n = 0;
++  } else if(n < sizeof(buf) - 1) buf[n++] = c;
++}
++}

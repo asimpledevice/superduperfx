@@ -463,19 +463,21 @@ static int host_main(void) {
     uint32_t inputs = n64_platform_read_pad();
 
     uint64_t t0 = n64_platform_time_us();
-    g_n64_profile_phase = N64_PHASE_CPU;
+    n64_platform_set_phase(N64_PHASE_CPU);
 #if N64_RENDER
     n64_ppu_build_release_vram();   /* the RSP has its VRAM snapshot */
 #endif
+#if N64_CODE_CACHE
     recomp_cache_poll();   /* background code-cache load (nothing to do without one) */
+#endif
     RtlRunFrame(inputs);
     uint64_t t1 = n64_platform_time_us();
-    g_n64_profile_phase = N64_PHASE_PRESENT;
+    n64_platform_set_phase(N64_PHASE_PRESENT);
 #if N64_PIPELINE
     if (pending) present_rdp_frame(pending_frame, pending_line);
 #endif
     uint64_t t1p = n64_platform_time_us();
-    g_n64_profile_phase = N64_PHASE_PPU;
+    n64_platform_set_phase(N64_PHASE_PPU);
     PpuBeginDrawing(g_ppu, (uint8_t *)s_pixels, kSnesW * 4, kPpuRenderFlags_NewRenderer);
 #if N64_RENDER
     draw_frame_rdp(N64_RENDER == 2);
@@ -483,7 +485,7 @@ static int host_main(void) {
     n64_draw_ppu_frame();
 #endif
     uint64_t t2 = n64_platform_time_us();
-    g_n64_profile_phase = N64_PHASE_PRESENT;
+    n64_platform_set_phase(N64_PHASE_PRESENT);
 
     char line[64];
     snprintf(line, sizeof line, "f%lu cpu %lums ppu %lums",

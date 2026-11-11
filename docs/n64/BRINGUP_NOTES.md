@@ -1361,6 +1361,58 @@ code-cache modules 7.16 -> 7.10 MB. SNES state hashes (WRAM, ARAM, DSP out)
 identical in ares over frames 0-1800; native TAS replay identical over
 90,000 frames.
 
+### I-cache: measured misses and trace-driven placement (2026-11-11)
+
+Layout work is now judged in I-cache misses, not milliseconds (layout moves
+frame time by +-2-3 ms either way). Tools, n64/profile:
+- ares-icache-profiler.patch: ares counts I-cache misses per 32-byte code
+  line and frame stage, which line evicted which, and (ARES_ICTRACE) records
+  the sequence of code lines entered, windowed by the host's
+  DCPROF_START/STOP markers. ares models the cache in its JIT too (48 cycles
+  a miss); the patch hooks the JIT's inline refill and line checks.
+- icsim/icsim.c replays a trace through the 16 KB direct-mapped cache, under
+  any layout (a remap of function addresses): SMW 2,492,765 emulation-stage
+  misses against ares's 2,492,753, in 0.1 s. icfa.c gives the fully
+  associative floor; icreport.py ranks functions and eviction pairs.
+- icache_trg.py: placement from a temporal relationship graph over 256-byte
+  chunks (Gloy & Smith 1999), built by icsim/trg.c from the trace; graphs
+  of several builds (games) merge by function name, each weighted equally;
+  --gap-cost trades RAM for misses; --seed restarts the greedy order;
+  --remap writes the planned layout for icsim, so candidates are scored
+  offline. The greedy placer is noisy between restarts, so: generate
+  several, score each game in icsim, build the best, confirm in ares.
+
+g_n64_profile_phase is now set through n64_platform_set_phase, which writes
+its line back: the profiler reads RDRAM, and the write-back D-cache made
+stage attribution depend on when that line happened to be flushed.
+
+SMW attract demo, frames 400-460, before: 47,000 misses a frame (emulation
+41,400, about 21 ms of stalls at 48 cycles; PPU 4,600; present 1,300).
+Fully associative floor: emulation 1,234,068 vs 2,492,765 (60 frames) --
+about half are conflict misses, the rest is capacity. Mutual eviction
+pairs (apu_runCycles_native/spc_readOpcodeWord 2,570 a frame,
+_interp_run_core/interp816_doOpcode, dma_doHdma/memset, ...) and
+code-cache modules evicting each other (6,300 a frame over 6,900 lines)
+dominated.
+
+New icache_order.ld, from SMW and Pitfall (interpreter-only beyond its
+static coverage) traces, --gap-cost 0.5 --seed 4, chosen among restarts by
+simulated misses on both games, confirmed in ares:
+- SMW: 2,881,714 -> 1,879,685 misses (-35%; emulation -34%, PPU -59%,
+  present -7%); run stage 69.7 -> 62.8 ms, PPU 16.8 -> 15.3 ms.
+- Pitfall: 33,706,446 -> 9,404,642 (-72%).
+- .text 1,149,572 -> 1,157,724 bytes (the old order carried gaps too).
+The other restart kept (seed 2, gap cost 1) gave SMW -30%, Pitfall -81%.
+
+Other games (static seed configs only: Pitfall 364 routines, Joe & Mac 2
+52, Tetris Attack 42; most code interpreted until a coverage run):
+Pitfall boots and runs, slowly. Joe & Mac 2 sets BGMODE's 16x16-tile bits,
+which a stale assert in ppu_write rejected (removed; the PPU and the N64
+renderer's fallback handle large tiles). Tetris Attack: an interrupt
+handler's wait loop hits the interpreter step cap during boot and the guest
+reaches BRK at $B6:7C09 -- natively too, so not N64-specific; open.
+Also fixed: builds without CODECACHE failed to compile (recomp_cache_poll).
+
 ## Next steps
 
 1. Audio: check the RSP DSP by ear on hardware (output arrives later than
