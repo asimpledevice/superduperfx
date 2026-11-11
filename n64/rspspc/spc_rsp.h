@@ -4,22 +4,31 @@
 #define SPC_RSP_H
 #include <stdint.h>
 
-typedef struct {
+/* SpcRspState (spc_rsp_layout.h). */
+typedef struct __attribute__((aligned(16))) {
   uint8_t a, x, y, sp;
   uint16_t pc;
-  uint8_t psw, stopped;   /* psw: N V P B H I Z C */
-} SpcRspRegs;
+  uint8_t psw, stopped;            /* psw: N V P B H I Z C */
+  uint32_t aram;                   /* filled by spc_rsp_exec */
+  int32_t budget;
+  uint32_t used, count, exit;
+  uint8_t ccl, dspAdr, romReadable, pad0;
+  uint8_t inPorts[6], outPorts[4], pad1[6];
+  struct { uint8_t cycles, divider, target, counter, enabled, pad[3]; } timer[3];
+  uint32_t cycles, timerSync;
+  uint8_t dspRegs[128];
+} SpcRspBlock;
 
 void spc_rsp_init(void);
-/* One RSP run of up to `budget` cycles over the 64 KB of ARAM (8-byte
- * aligned). Returns SPCEXIT_*; *used and *count are the cycles and
- * instructions it ran. */
-int spc_rsp_exec(SpcRspRegs *r, uint8_t *aram, int budget, int *used, uint32_t *count);
+/* One RSP run over the 64 KB of ARAM (8-byte aligned). Returns SPCEXIT_*. */
+int spc_rsp_exec(SpcRspBlock *b, uint8_t *aram);
 
-struct Spc;
-/* Run until at least `budget` cycles are used, as repeated spc_runOpcode
- * calls would; trapped opcodes run in C. Returns the cycles used. */
-int spc_rsp_run(struct Spc *spc, int budget);
+struct Apu;
+/* As apu_runCycles(apu, clocks), with the SPC on the RSP; opcodes and
+ * accesses the RSP leaves to the CPU run in C. */
+void spc_rsp_run_apu(struct Apu *apu, uint32_t clocks);
+/* The DSP register file the SPC reads back (the host provides it). */
+uint8_t *spc_rsp_dsp_regs(struct Apu *apu);
 
 extern uint32_t g_spc_rsp_runs, g_spc_rsp_traps, g_spc_rsp_insns;
 #endif

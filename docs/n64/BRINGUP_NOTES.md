@@ -1728,6 +1728,54 @@ PC, stopped state, cycles used and all 64 KB of ARAM.
 - trapping reads of ENVX, OUTX and ENDX;
 - the test's reference switched to the real `apu.c`.
 
+### SPC700 on the RSP, milestone 2b: the I/O page (2026-11-11)
+
+A run is now `apu_runCycles`: BUDGET APU cycles, with the cycles left of
+the instruction in progress (`cpuCyclesLeft`) carried across runs. The I/O
+page follows `apu_cpuRead` and `apu_cpuWrite`:
+
+- `$F1`: timer enables, port clears and the IPL ROM switch;
+- `$F2`/`$F3`: DSP address and data, held as the register file the SPC
+  reads back;
+- the ports in both directions, and `$F8`/`$F9`;
+- `$FA-$FF`: timer targets and counters. The timers are brought current in
+  the closed form of `apu_native_timer` when the SPC touches them and at
+  the end of a run.
+
+**Traps.** Some cases end the run before the instruction; the CPU runs it
+and the RSP resumes:
+
+- IPL ROM reads;
+- an opcode fetched from a timer counter (`$FD-$FF`), because that read
+  clears the counter and a later trap could not undo it;
+- DIV and CMPY (DIV runs 35 times a frame in SMW; a vector-unit DIV, with
+  the reciprocal instructions, is the way back);
+- the 21 rare operations from step 2a.
+
+A trap rolls back to the PC and budget saved at the instruction start.
+
+**Vector unit.** MUL is one `vmudn`, giving the low 16 bits of the product.
+
+**Size.** IMEM full (4,096 bytes). DMEM 4,064 bytes. The DSP register
+mirror travels in the 208-byte state block.
+
+**Test** (`n64/rspspc/test`). The real `apu.c` and `spc.c` (APU_NATIVE,
+wait-loop skip on) against `spc_rsp_run_apu`, with the DSP stubbed as a
+register file.
+
+- Random states cover ports, timers (prescaler below its period), DSP
+  address, carried instruction cycles and the IPL ROM switch.
+- Compared: registers, flags, stopped, cpuCyclesLeft, cycles, portClock,
+  timerSyncCycle, ports, all timer fields, DSP registers and ARAM.
+- 2,000 of 2,000 pass.
+
+Bugs the test found:
+
+- a delay slot overwriting the `$F8`/`$F9` index;
+- a trap rollback using a stale cycle count;
+- the timers synced at the wrong cycle when an opcode is fetched from the
+  I/O page.
+
 ## Next steps
 
 1. Audio: check the RSP DSP by ear on hardware (output arrives later than

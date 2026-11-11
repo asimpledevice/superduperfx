@@ -9,13 +9,19 @@
 #
 # ARAM stays in RDRAM. Pages 0 and 1 (direct page 0 and the stack) are held
 # in DMEM for the whole run; the rest goes through a 2 KB direct-mapped
-# write-back cache of 64-byte lines. Milestone 1: the I/O page ($F0-$FF) and
-# the IPL ROM are plain RAM here and in the test's reference.
+# write-back cache of 64-byte lines.
+#
+# A run is apu_runCycles (apu_native.inc): BUDGET APU cycles, an instruction
+# executing at its first cycle, CCL cycles of it carried across runs. The
+# I/O page ($F0-$FF) is as apu_cpuRead/apu_cpuWrite: control, ports, timers
+# (brought up to date in closed form when the SPC touches them and at the
+# end), and the DSP registers as the SPC reads them back. An IPL ROM read
+# ends the run before that instruction (SPCEXIT_TRAP); the CPU runs it.
 #
 # Registers during a run:
 #   s1 A, s2 X, s3 Y, s5 SP, s6 PC, s7 PSW (N V P B H I Z C),
 #   fp cycles left (budget minus used), k1 direct-page base (P ? 0x100 : 0),
-#   sp instructions executed, t7 opcode, a2/a3 operand addresses.
+#   t7 opcode, a2/a3 operand addresses.
 # rd/wr (memory) clobber t0-t2 and, on a miss, t8, t9, k0, s0, s4, at.
 
 #include <rsp_queue.inc>
@@ -45,6 +51,10 @@ FLSET:      .byte 0, 0,    0x20, 0,    0x01, 0x04, 0,    0
     .align 4
 ST:         .ds.b SPCST_SIZE
 RET_RA:     .ds.b 4
+END:        .ds.b 4                 # CYCLES + BUDGET: the cycle the run ends at
+PC0:        .ds.b 2                 # PC of the instruction in progress
+    .align 2
+FP0:        .ds.b 4                 # fp before it (a trap rolls back to both)
 REGS:       .ds.b 4                 # psw a x y, for pushes
     .align 4
 TAGS:       .ds.b 64                # line number per slot, bit 15 dirty; 0x7fff empty
@@ -82,6 +92,11 @@ SpcCmd_Run:
     lhu s6, %lo(ST + SPCST_PC)
     lbu s7, %lo(ST + SPCST_PSW)
     lw fp, %lo(ST + SPCST_BUDGET)
+    lw t0, %lo(ST + SPCST_CYCLES)
+    addu t0, t0, fp
+    sw t0, %lo(END)
+    lbu t0, %lo(ST + SPCST_CCL)
+    subu fp, fp, t0                 # the carried instruction finishes first
     lbu t0, %lo(ST + SPCST_STOPPED)
     beqz t0, 2f
     andi k1, s7, 0x20
@@ -89,11 +104,13 @@ SpcCmd_Run:
     nop                             # a positive budget is used exactly
     move fp, zero
 2:  sll k1, k1, 3
-    move sp, zero
     sw zero, %lo(ST + SPCST_EXIT)
 
 loop:
     blez fp, done
+    sh s6, %lo(PC0)
+    sw fp, %lo(FP0)
+    move t4, zero                   # this instruction's cycles: none charged yet
     move a0, s6
     jal rd
     addiu s6, s6, 1
@@ -103,7 +120,6 @@ loop:
     move t7, v0                     # opcode
     srl t4, t3, 12                  # cycles
     subu fp, fp, t4
-    addiu sp, sp, 1
     srl t5, t3, 6
     andi t5, t5, 0x1e               # mode * 2
     lhu t5, %lo(MODETAB)(t5)
@@ -127,10 +143,20 @@ fetch:                              # v0 = byte at PC, PC++
 rd:
     sltiu t0, a0, 0x200
     beqz t0, rd_hi
-    srl t0, a0, 6
+    andi t1, a0, 0x1f0
+    xori t1, t1, 0xf0
+    beqz t1, rd_io                  # $00F0-$00FF
+    nop
     jr ra
     lbu v0, %lo(ZP)(a0)
 rd_hi:
+    srl t0, a0, 6
+    xori t1, t0, 0x3ff
+    bnez t1, rd_hc                  # not $FFC0-$FFFF
+    lbu t1, %lo(ST + SPCST_ROMREADABLE)
+    bnez t1, OP_TRAP                # the IPL ROM: left to the CPU
+    nop
+rd_hc:
     andi t1, t0, 31
     sll t1, t1, 1
     lhu t2, %lo(TAGS)(t1)
@@ -147,15 +173,20 @@ rd_miss:
     move t9, t0
     move ra, t8
     b rd_hi
-    srl t0, a0, 6
+    nop
 
 wr:
     sltiu t0, a0, 0x200
     beqz t0, wr_hi
-    srl t0, a0, 6
+    andi t1, a0, 0x1f0
+    xori t1, t1, 0xf0
+    beqz t1, wr_io                  # $00F0-$00FF (then RAM, as apu_cpuWrite)
+    nop
+wr_zp:
     jr ra
     sb a1, %lo(ZP)(a0)
 wr_hi:
+    srl t0, a0, 6
     andi t1, t0, 31
     sll t1, t1, 1
     lhu t2, %lo(TAGS)(t1)
@@ -174,7 +205,187 @@ wr_miss:
     move t9, t0
     move ra, t8
     b wr_hi
-    srl t0, a0, 6
+    nop
+
+# The I/O page. rd_io: v0 = apu_cpuRead(a0). wr_io: apu_cpuWrite(a0, a1)
+# before the RAM write. Keep a0, a1, a2, a3, v1, t3-t7.
+rd_io:
+    addiu t1, a0, -0xf4
+    sltiu t2, t1, 6
+    bnez t2, 1f                     # $F4-$F9: ports from the CPU, $F8-$F9
+    addiu t2, a0, -0xfd
+    sltiu t0, t2, 3
+    bnez t0, rd_tim                 # $FD-$FF: timer counters
+    addiu t1, a0, -0xf2
+    beqz t1, 2f                     # $F2
+    addiu t1, t1, -1
+    beqz t1, 3f                     # $F3
+    nop
+    jr ra                           # $F0 $F1 $FA-$FC read 0
+    move v0, zero
+1:  jr ra
+    lbu v0, %lo(ST + SPCST_INPORTS)(t1)
+2:  jr ra
+    lbu v0, %lo(ST + SPCST_DSPADR)
+3:  lbu t0, %lo(ST + SPCST_DSPADR)
+    andi t0, t0, 0x7f
+    jr ra
+    lbu v0, %lo(ST + SPCST_DSPREGS)(t0)
+rd_tim:                             # sync the timers, read and clear the counter
+    beqz t4, OP_TRAP                # an opcode fetch from $FD-$FF: the CPU runs
+    move t8, ra                     # it (the read clears; a later trap could not undo it)
+    jal tsync_now
+    nop
+    move ra, t8
+    addiu t2, a0, -0xfd
+    sll t2, t2, 3
+    lbu v0, %lo(ST + SPCST_TIMERS + 3)(t2)
+    jr ra
+    sb zero, %lo(ST + SPCST_TIMERS + 3)(t2)
+
+wr_io:
+    addiu t1, a0, -0xf4
+    sltiu t2, t1, 4
+    bnez t2, 1f                     # $F4-$F7: ports to the CPU
+    addiu t2, a0, -0xf8
+    sltiu t0, t2, 2
+    bnez t0, 2f                     # $F8-$F9
+    addiu t2, a0, -0xfa
+    sltiu t0, t2, 3
+    bnez t0, 3f                     # $FA-$FC: timer targets
+    addiu t1, a0, -0xf2
+    beqz t1, 4f                     # $F2
+    addiu t1, t1, -1
+    beqz t1, 5f                     # $F3
+    addiu t1, a0, -0xf1
+    beqz t1, 6f                     # $F1
+    nop
+    b wr_zp                         # $F0, $FD-$FF: RAM only
+    nop
+1:  b wr_zp
+    sb a1, %lo(ST + SPCST_OUTPORTS)(t1)
+2:  andi t2, a0, 1                  # (t2 was reused in the delay slot above)
+    b wr_zp
+    sb a1, %lo(ST + SPCST_INPORTS + 4)(t2)
+3:  move t8, ra
+    jal tsync_now
+    nop
+    move ra, t8
+    addiu t2, a0, -0xfa
+    sll t2, t2, 3
+    b wr_zp
+    sb a1, %lo(ST + SPCST_TIMERS + 2)(t2)
+4:  b wr_zp
+    sb a1, %lo(ST + SPCST_DSPADR)
+5:  lbu t0, %lo(ST + SPCST_DSPADR)
+    sltiu t1, t0, 0x80
+    beqz t1, wr_zp
+    nop
+    b wr_zp
+    sb a1, %lo(ST + SPCST_DSPREGS)(t0)
+6:  move t8, ra                     # $F1: timer enables, port clears, IPL ROM
+    jal tsync_now
+    nop
+    move ra, t8
+    li s4, %lo(ST + SPCST_TIMERS)
+    li t2, 1
+7:  lbu t0, 4(s4)                   # enabled before
+    and t1, a1, t2
+    sltu t1, zero, t1
+    bnez t0, 8f
+    sb t1, 4(s4)
+    beqz t1, 8f
+    nop
+    sb zero, 1(s4)                  # newly enabled: divider and counter reset
+    sb zero, 3(s4)
+8:  addiu s4, s4, 8
+    sll t2, t2, 1
+    li t0, 8
+    bne t2, t0, 7b
+    nop
+    andi t0, a1, 0x10
+    beqz t0, 9f
+    andi t0, a1, 0x20
+    sh zero, %lo(ST + SPCST_INPORTS)
+9:  beqz t0, 9f
+    srl t0, a1, 7
+    sh zero, %lo(ST + SPCST_INPORTS + 2)
+9:  b wr_zp
+    sb t0, %lo(ST + SPCST_ROMREADABLE)
+
+# Timers, as apu_native_timer: bring all three to cycle t2 (tsync) or to the
+# start of the instruction in progress (tsync_now). Uses t0-t2, t9, v0, s0,
+# s4, k0.
+tsync_now:
+    lw t2, %lo(END)
+    subu t2, t2, fp
+    subu t2, t2, t4                 # fp was charged this instruction's cycles
+tsync:
+    lw t0, %lo(ST + SPCST_TSYNC)
+    subu s0, t2, t0                 # clocks
+    beqz s0, 9f
+    sw t2, %lo(ST + SPCST_TSYNC)
+    li s4, %lo(ST + SPCST_TIMERS)
+    li k0, 7
+tm_one:
+    lbu t0, 0(s4)                   # prescaler
+    sltu t1, t0, s0
+    bnez t1, 1f
+    subu t2, t0, s0
+    b tm_next
+    sb t2, 0(s4)
+1:  subu t1, s0, t0                 # rest
+    addiu t2, t1, -1
+    srlv t2, t2, k0
+    addiu t2, t2, 1                 # ticks
+    sllv t0, t2, k0
+    subu t0, t0, t1
+    sb t0, 0(s4)
+    lbu t0, 4(s4)
+    beqz t0, tm_next                # disabled: only the prescaler runs
+    lbu t1, 2(s4)                   # target
+    lbu t0, 1(s4)                   # divider
+    subu t9, t1, t0
+    addiu t9, t9, -1
+    andi t9, t9, 0xff
+    addiu t9, t9, 1                 # first
+    sltu v0, t2, t9
+    beqz v0, 2f
+    addu t0, t0, t2
+    b tm_next
+    sb t0, 1(s4)                    # divider += ticks
+2:  subu t2, t2, t9                 # after
+    bnez t1, 3f
+    sll t1, t1, 16
+    li t1, 0x1000000                # target 0: every 256
+3:  li v0, 16                       # after / every, after % every
+4:  sll t2, t2, 1
+    sltu t0, t2, t1
+    bnez t0, 5f
+    addiu v0, v0, -1
+    subu t2, t2, t1
+    ori t2, t2, 1
+5:  bnez v0, 4b
+    nop
+    srl t0, t2, 16
+    sb t0, 1(s4)                    # divider = after % every
+    andi t2, t2, 0xffff
+    lbu t0, 3(s4)
+    addu t0, t0, t2
+    addiu t0, t0, 1                 # counter += 1 + after / every
+    andi t0, t0, 15
+    sb t0, 3(s4)
+tm_next:
+    addiu s4, s4, 8
+    li t0, %lo(ST + SPCST_TIMERS) + 24
+    beq s4, t0, 9f
+    li t0, %lo(ST + SPCST_TIMERS) + 16
+    bne s4, t0, tm_one
+    nop
+    b tm_one
+    li k0, 4                        # timer 2: 64 kHz
+9:  jr ra
+    nop
 
 # fill: bring line t9 into its slot (writing back a dirty occupant).
 # Keeps a0, a1, t3-t7, v1.
@@ -440,12 +651,7 @@ OP_CMP:
 OP_CMPX:
     jal rd
     move a0, a2
-    b cmp_c
     move t3, s2
-OP_CMPY:
-    jal rd
-    move a0, a2
-    move t3, s3
 cmp_c:                              # t3 - v0: C and Z/N
     xori v0, v0, 0xff
     addu v0, t3, v0
@@ -566,7 +772,7 @@ OP_MOVMI:                           # mov dp, #imm: read source, dummy-read dp, 
 # Bits, branches.
 OP_CLR1:
     b bit1_c
-    li t3, 1
+    li t3, 0xff
 OP_SET1:
     move t3, zero
 bit1_c:
@@ -575,9 +781,8 @@ bit1_c:
     srl t0, t7, 5
     li t1, 1
     sllv t1, t1, t0
-    or a1, v0, t1
-    beqz t3, wr_loop
-    nop
+    or a1, v0, t1                   # set the bit; clr1 then flips it back
+    and t1, t1, t3
     b wr_loop
     xor a1, a1, t1
 OP_BBS:
@@ -640,10 +845,9 @@ OP_CALL:
     jal push
     nop
     andi a1, s6, 0xff
-    jal push
-    nop
-    j loop
     move s6, a2
+    j push                          # returns to loop
+    li ra, %lo(loop)
 OP_RET:
     jal pull
     nop
@@ -660,10 +864,8 @@ OP_PUSH:                            # pushp pusha pushx pushy
     sb s3, %lo(REGS) + 3
     srl t0, t7, 5
     lbu a1, %lo(REGS)(t0)
-    jal push
-    nop
-    j loop
-    nop
+    j push                          # returns to loop
+    li ra, %lo(loop)
 OP_POP:                             # popp popa popx popy
     jal pull
     nop
@@ -751,60 +953,16 @@ OP_XCN:
     andi s1, s1, 0xff
     j zn_loop
     move v0, s1
-OP_MUL:                             # ya = y * a
-    move t0, zero
-    move t1, s1
-    li t2, 8
-1:  andi t3, s3, 1
-    beqz t3, 2f
-    srl s3, s3, 1
-    addu t0, t0, t1
-2:  addiu t2, t2, -1
-    bnez t2, 1b
-    sll t1, t1, 1
+OP_MUL:                             # ya = y * a, on the vector unit
+    mtc2 s1, $v01.e0
+    mtc2 s3, $v02.e0
+    vmudn $v03, $v01, $v02, e(0)    # low 16 bits of the product, unclamped
+    mfc2 t0, $v03.e0
+    andi t0, t0, 0xffff
     andi s1, t0, 0xff
     srl s3, t0, 8
     j zn_loop
     move v0, s3
-OP_DIV:                             # a = ya / x, y = ya % x (as spc.c)
-    andi t3, s7, 0xb7               # V and H recomputed
-    andi t0, s2, 0xf
-    andi t1, s3, 0xf
-    sltu t0, t1, t0                 # (y & f) < (x & f)
-    xori t0, t0, 1
-    sll t0, t0, 3                   # H = (x & f) <= (y & f)
-    or t3, t3, t0
-    sll t1, s3, 8
-    bnez s2, 1f
-    or t1, t1, s1                   # ya
-    li t4, 0xffff                   # x = 0: quotient $FFFF, remainder a
-    b 3f
-    move t5, s1
-1:  move t4, zero                   # restoring division, 16 bits
-    move t5, zero
-    li t2, 16
-2:  sll t5, t5, 1
-    srl t0, t1, 15
-    or t5, t5, t0
-    sll t1, t1, 1
-    andi t1, t1, 0xffff
-    sll t4, t4, 1
-    sltu t0, t5, s2
-    bnez t0, 4f
-    addiu t2, t2, -1
-    subu t5, t5, s2
-    ori t4, t4, 1
-4:  bnez t2, 2b
-    nop
-3:  sltiu t0, t4, 0x100
-    xori t0, t0, 1
-    sll t0, t0, 6                   # V = quotient > $FF
-    or s7, t3, t0
-    andi s1, t4, 0xff
-    andi s3, t5, 0xff
-    j zn_loop
-    move v0, s1
-
 # Words (direct page): a2 low address, a3 high.
 OP_MOVW:
     jal rdw_dp
@@ -871,11 +1029,9 @@ addw_c:                             # ya + t5 + t6, H as spc.c (always +1)
     nop
 
 # Left to the CPU: stop before this opcode.
-OP_TRAP:
-    addiu s6, s6, -1
-    andi s6, s6, 0xffff
-    addu fp, fp, t4
-    addiu sp, sp, -1
+OP_TRAP:                            # also from an access the CPU must make
+    lhu s6, %lo(PC0)
+    lw fp, %lo(FP0)
     li t0, SPCEXIT_TRAP
     sw t0, %lo(ST + SPCST_EXIT)
 
@@ -889,9 +1045,17 @@ done:
     sb s7, %lo(ST + SPCST_PSW)
     lw t0, %lo(ST + SPCST_BUDGET)
     lw s7, %lo(ST + SPCST_USED)     # the state block address
+    blez fp, 1f                     # fp > 0 only when stopped before a trap
+    subu t1, zero, fp
     subu t0, t0, fp
-    sw t0, %lo(ST + SPCST_USED)
-    sw sp, %lo(ST + SPCST_COUNT)
+    move t1, zero
+1:  sw t0, %lo(ST + SPCST_USED)
+    sb t1, %lo(ST + SPCST_CCL)
+    lw t2, %lo(ST + SPCST_CYCLES)
+    addu t2, t2, t0
+    sw t2, %lo(ST + SPCST_CYCLES)
+    jal tsync                       # timers current at the end, as apu_runCycles
+    sw zero, %lo(ST + SPCST_COUNT)  # (instruction count: not kept)
     li s5, 0                        # write back dirty lines
 1:  lhu t2, %lo(TAGS)(s5)
     andi t0, t2, 0x8000

@@ -51,10 +51,12 @@ sp([0x5d, 0x7d, 0x9d, 0xdd, 0xfd], "NONE", "XFER")
 # out of the 4 KB IMEM. Exact either way: the C core runs them.
 CPU_OPS = {"ROL", "ROLA", "ROR", "ORMM2", "ANDMM2", "EORMM2", "ADCMM2", "SBCMM2",
            "MOVSINDP", "MOVINDP", "MOVPX", "CLRV", "NOTC", "SLEEP", "MOVMD",
-           "CMPW", "DECW", "INCW", "JMPIAX", "DBNZ", "DBNZY"}
+           "CMPW", "DECW", "INCW", "JMPIAX", "DBNZ", "DBNZY",
+           "DIV", "CMPY"}   # DIV: 35 a frame in SMW; a vector-unit DIV is the way back
 OPS = ops1 + [o + "M2" for o in ops2]
 for m, o in sorted(set(SPECIAL.values())):
     if o not in OPS: OPS.append(o)
+OPS = [o for o in OPS if o not in CPU_OPS]   # no table slots for them
 entries = []
 for x in range(256):
     if mode[x]:
@@ -71,7 +73,7 @@ with open(sys.argv[2], "w") as f:
     for i in range(0, 256, 8):
         f.write("    .half " + ", ".join("0x%04x" % e for e in entries[i:i + 8]) + "\n")
     f.write("MODETAB:\n" + "".join("    .half M_%s - _start\n" % m for m in MODES))
-    f.write("OPTAB:\n" + "".join("    .half OP_%s - _start\n" % ("TRAP" if o in CPU_OPS else o) for o in OPS))
+    f.write("OPTAB:\n" + "".join("    .half OP_%s - _start\n" % o for o in OPS))
 if len(sys.argv) > 3:   # the opcodes the RSP leaves to the CPU, for the test
     traps = [x for x in range(256) if (entries[x] & 0x7f) == OPS.index("TRAP")]
     with open(sys.argv[3], "w") as f:
