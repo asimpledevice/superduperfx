@@ -15,11 +15,9 @@ void apu_cpuWrite(Apu *apu, uint16_t adr, uint8_t val) { apu->ram[adr] = val; }
 static uint32_t s_rng = 0x2468aceu;
 static uint32_t rnd(void) { s_rng ^= s_rng << 13; s_rng ^= s_rng >> 17; s_rng ^= s_rng << 5; return s_rng; }
 
-static int is_trap(uint8_t op) {
-  if ((op & 0x0f) == 0x01) return 1;   /* tcall */
-  static const uint8_t t[] = {0x0e, 0x4e, 0x0f, 0x4f, 0x7f, 0xbe, 0xdf, 0xca, 0xea,
-                              0x0a, 0x2a, 0x4a, 0x6a, 0x8a, 0xaa, 0xef, 0xff};
-  for (unsigned i = 0; i < sizeof t; i++) if (t[i] == op) return 1;
+#include "rsp_spc_traps.h"
+static int is_trap(uint8_t op) {   /* opcodes the RSP leaves to the C core */
+  for (unsigned i = 0; i < sizeof k_spc_rsp_traps; i++) if (k_spc_rsp_traps[i] == op) return 1;
   return 0;
 }
 
@@ -49,6 +47,7 @@ void run_tests(void) {
   uint64_t c_ticks = 0, r_ticks = 0, c_cycles = 0;
   const int tests = SPCRSP_TESTS;
   for (int t = 0; t < tests; t++) {
+    if (t % 250 == 0) debugf("test %d (%d failed)\n", t, fails);
     for (int i = 0; i < 0x10000; i += 4) *(uint32_t *)(aa->ram + i) = rnd();
     if (t & 1)   /* long runs: mostly no trapped opcodes */
       for (int i = 0; i < 0x10000; i++) while (is_trap(aa->ram[i])) aa->ram[i] = rnd();

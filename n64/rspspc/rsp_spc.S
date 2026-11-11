@@ -505,21 +505,6 @@ lsr_c:
     andi t0, v0, 1
     b rmw_cc
     srl a1, v0, 1
-OP_ROL:
-    jal rd
-    move a0, a2
-    move t5, zero
-rol_c:
-    sll a1, v0, 1
-    andi t0, s7, 1
-    or a1, a1, t0
-    andi a1, a1, 0xff
-    b rmw_cc
-    srl t0, v0, 7
-OP_ROR:
-    jal rd
-    move a0, a2
-    move t5, zero
 ror_c:
     srl a1, v0, 1
     andi t0, s7, 1
@@ -561,62 +546,23 @@ OP_LSRA:
     move v0, s1
     b lsr_c
     li t5, 1
-OP_ROLA:
-    move v0, s1
-    b rol_c
-    li t5, 1
 OP_RORA:
     move v0, s1
     b ror_c
     li t5, 1
 
 # Two operands: a2 destination, a3 source.
-OP_ORMM2:
-    jal m2_rd
-    nop
-    b m_store
-    or a1, v0, t5
-OP_ANDMM2:
-    jal m2_rd
-    nop
-    b m_store
-    and a1, v0, t5
-OP_EORMM2:
-    jal m2_rd
-    nop
-    b m_store
-    xor a1, v0, t5
 OP_CMPMM2:
     jal m2_rd
     nop
     move t3, v0
     b cmp_c
     move v0, t5
-OP_SBCMM2:
-    jal m2_rd
-    nop
-    b adcm_c
-    xori t5, t5, 0xff
-OP_ADCMM2:
-    jal m2_rd
-    nop
-adcm_c:
-    move t3, v0
-    jal adc8
-    move v0, t5
-    b m_store
-    move a1, v0
 OP_MOVMI:                           # mov dp, #imm: read source, dummy-read dp, write
     jal m2_rd
     nop
     b wr_loop
     move a1, t5
-OP_MOVMD:                           # mov dp, dp: no dummy read
-    jal rd
-    move a0, a3
-    b wr_loop
-    move a1, v0
-
 # Bits, branches.
 OP_CLR1:
     b bit1_c
@@ -657,20 +603,6 @@ OP_CBNE:
     addiu v0, v0, 1
     b branch
     andi t3, v0, 0xff
-OP_DBNZ:
-    jal rd
-    move a0, a2
-    addiu a1, v0, -1
-    andi a1, a1, 0xff
-    jal wr
-    move a0, a2
-    b branch
-    move t3, a1
-OP_DBNZY:
-    addiu s3, s3, -1
-    andi s3, s3, 0xff
-    b branch
-    move t3, s3
 OP_BRANCH:                          # bpl bmi bvc bvs bcc bcs bne beq
     srl t0, t7, 6
     lbu t0, %lo(BRMASK)(t0)
@@ -703,17 +635,6 @@ OP_BRA:
 OP_JMP:
     j loop
     move s6, a2
-OP_JMPIAX:                          # jmp [abs+X]
-    jal fetchw
-    nop
-    addu a2, v0, s2
-    addiu a3, a2, 1
-    andi a2, a2, 0xffff
-    andi a3, a3, 0xffff
-    jal m_ptrw
-    nop
-    j loop
-    move s6, t5
 OP_CALL:
     srl a1, s6, 8
     jal push
@@ -823,37 +744,6 @@ OP_XFER:                            # movxa movax movxp movay movya
 4:  move s1, s3
     j zn_loop
     move v0, s1
-OP_MOVPX:
-    j loop
-    move s5, s2
-OP_MOVSINDP:                        # mov (x)+, a
-    or a0, s2, k1
-    addiu s2, s2, 1
-    andi s2, s2, 0xff
-    jal wr
-    move a1, s1
-    j loop
-    nop
-OP_MOVINDP:                         # mov a, (x)+
-    or a0, s2, k1
-    addiu s2, s2, 1
-    jal rd
-    andi s2, s2, 0xff
-    j zn_loop
-    move s1, v0
-OP_CLRV:
-    j loop
-    andi s7, s7, 0xb7
-OP_NOTC:
-    j loop
-    xori s7, s7, 1
-OP_SLEEP:                           # sleep, stop: no interrupts, so both stop
-    li t0, 1
-    sb t0, %lo(ST + SPCST_STOPPED)
-    blez fp, loop
-    nop
-    j loop
-    move fp, zero
 OP_XCN:
     srl t0, s1, 4
     sll s1, s1, 4
@@ -916,27 +806,6 @@ OP_DIV:                             # a = ya / x, y = ya % x (as spc.c)
     move v0, s1
 
 # Words (direct page): a2 low address, a3 high.
-OP_DECW:
-    jal rdw_dp
-    nop
-    b incw_c
-    addiu t5, t5, -1
-OP_INCW:
-    jal rdw_dp
-    nop
-    addiu t5, t5, 1
-incw_c:
-    andi t5, t5, 0xffff
-    jal zn16
-    nop
-    andi a1, t5, 0xff
-    jal wr
-    move a0, a2
-    srl a1, t5, 8
-    jal wr
-    move a0, a3
-    j loop
-    nop
 OP_MOVW:
     jal rdw_dp
     nop
@@ -958,22 +827,6 @@ OP_MOVWS:
     move a1, s3
     jal wr
     move a0, a3
-    j loop
-    nop
-OP_CMPW:
-    jal rdw_dp
-    nop
-    xori t5, t5, 0xffff
-    sll t0, s3, 8
-    or t0, t0, s1                   # ya
-    addu t5, t0, t5
-    addiu t5, t5, 1
-    srl t0, t5, 16                  # C
-    andi s7, s7, 0xfe
-    or s7, s7, t0
-    andi t5, t5, 0xffff
-    jal zn16
-    nop
     j loop
     nop
 OP_SUBW:
