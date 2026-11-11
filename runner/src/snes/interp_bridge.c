@@ -63,6 +63,24 @@ static uint64_t s_apu_pending_master = 0;
  * batch-flush threshold. Env override SNESRECOMP_LLE_APU_FLUSH_THRESH is a
  * diagnostic lever: 0 restores the old flush-EVERY-bounce behavior. Cached
  * once. */
+/* Build options for the bridge's SPC catch-up (both off/unchanged by default):
+ * SNESRECOMP_LLE_APU_GUEST_TARGET=1 catches up to guest time only (see
+ * bridge_apu_flush); SNESRECOMP_LLE_APU_PROGRESS_FLUSH=0 then drops the
+ * catch-up at every progress checkpoint once the frame timeline runs, so
+ * the SPC runs in fewer, longer batches. Port accesses, the threshold,
+ * bridge exits and frame boundaries still catch it up. */
+#ifndef SNESRECOMP_LLE_APU_GUEST_TARGET
+#define SNESRECOMP_LLE_APU_GUEST_TARGET 0
+#endif
+#ifndef SNESRECOMP_LLE_APU_PROGRESS_FLUSH
+#define SNESRECOMP_LLE_APU_PROGRESS_FLUSH 1
+#endif
+/* Guest time exists for the SPC: the frame timeline runs and the APU's port
+ * clock is anchored to it. Before that (boot), catch-up is relative. */
+static inline bool bridge_apu_guest_time_ready(void) {
+    return rtl_apu_frame_timeline_active() && g_snes && g_snes->apu &&
+           g_snes->apu->portTimeValid;
+}
 static uint64_t bridge_bounce_flush_thresh(void) {
     static int64_t s_t = -1;
     if (s_t < 0) {
@@ -112,6 +130,25 @@ static void bridge_apu_flush(CpuState *cpu) {
         s_apu_pending_master = 0;
         return;
     }
+#if SNESRECOMP_LLE_APU_GUEST_TARGET
+    /* Build option: catch up to a target that depends only on guest time
+     * (no relative delta stacked on the absolute sync), so how often the
+     * bridge flushes no longer changes what the SPC does. */
+    { static bool s_was_ready;
+      if (bridge_apu_guest_time_ready()) {
+        RtlApuLock();
+        g_apu_last_sync_master = cpu->master_cycles;
+        rtl_sync_apu_to_cpu_locked();
+        RtlApuUnlock();
+        s_apu_pending_master = 0;
+        s_was_ready = true;
+        return;
+      }
+      /* Guest time was lost since the last catch-up (an APU reset): time
+       * owed from before it is not relative time; drop it, so the SPC's
+       * position at the re-anchor does not depend on when that was. */
+      if (s_was_ready) { s_was_ready = false; s_apu_pending_master = 0; return; } }
+#endif
     RtlApuLock();
     g_snes->apuCatchupCycles += (double)s_apu_pending_master * kInterpApuPerMaster;
     g_apu_last_sync_master = cpu->master_cycles;
@@ -129,6 +166,26 @@ static void bridge_apu_flush(CpuState *cpu) {
 #ifdef SNESRECOMP_INTERP_PROFILE
     { extern uint64_t apu_prof_calls; extern double apu_prof_ms;
       apu_prof_ms += 1000.0 * ((double)(clock() - _t0)) / CLOCKS_PER_SEC; }
+#endif
+}
+
+/* Frame boundaries and SPC uploads (common_rtl.c): with
+ * SNESRECOMP_LLE_APU_GUEST_TARGET, catch up SPC time the bridge still owes,
+ * so the SPC's position there depends only on guest time, not on how often
+ * the bridge flushed. */
+void interp_bridge_flush_apu_pending(void) {
+#if SNESRECOMP_LLE_APU_GUEST_TARGET
+    if (bridge_apu_guest_time_ready()) {
+        /* Also when nothing is pending: compiled code may have run since the
+         * last catch-up, and the SPC must stand at guest time here. */
+        RtlApuLock();
+        g_apu_last_sync_master = g_cpu.master_cycles;
+        rtl_sync_apu_to_cpu_locked();
+        RtlApuUnlock();
+        s_apu_pending_master = 0;
+    } else if (s_apu_pending_master) {
+        bridge_apu_flush(&g_cpu);
+    }
 #endif
 }
 static int bridge_is_apu_port(uint32_t adr) {
@@ -3292,6 +3349,11 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
              * upload → poll $2140 for response).  Without this the SPC only
              * advances at port accesses and threshold crossings, which may
              * leave it frozen during long code sequences. */
+#if !SNESRECOMP_LLE_APU_PROGRESS_FLUSH
+            /* Until the SPC has guest time (boot, after an APU reset), keep
+             * this catch-up: pacing there is relative and depends on it. */
+            if (!bridge_apu_guest_time_ready())
+#endif
             bridge_apu_flush(cpu);
             steps=0;
         }

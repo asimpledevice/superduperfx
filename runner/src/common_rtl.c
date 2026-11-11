@@ -293,15 +293,27 @@ static int16 g_audio_last_output_l;
 static int16 g_audio_last_output_r;
 static void rtl_sync_apu_frame_boundary(void);
 
-static uint64_t rtl_apu_guest_cycle(void) {
+static uint64_t rtl_apu_guest_cycle_at(bool clamp) {
   if (g_extended_frame_timing)
     return rtl_apu_clock_now(&g_apu_frame_clock, g_cpu.master_cycles);
   uint64_t within = g_cpu.master_cycles - g_apu_frame_start_master;
-  if (within >= RTL_MASTER_CYCLES_PER_FRAME)
+  if (clamp && within >= RTL_MASTER_CYCLES_PER_FRAME)
     within = RTL_MASTER_CYCLES_PER_FRAME - 1;
   return (uint64_t)snes_frame_counter * RTL_APU_CYCLES_PER_FRAME +
          within * RTL_APU_CYCLES_PER_FRAME /
              RTL_MASTER_CYCLES_PER_FRAME;
+}
+/* SNESRECOMP_LLE_APU_GUEST_TARGET=1 (build option): guest time runs on past
+ * the end of a frame that holds more than a frame of guest work (loaders,
+ * handshakes), as the SPC does on hardware, instead of stopping at the frame
+ * boundary. The interpreter bridge then catches the SPC up to this time only,
+ * without its relative delta, so every caller targets the same function of
+ * guest time and how often the SPC is caught up no longer matters. */
+#ifndef SNESRECOMP_LLE_APU_GUEST_TARGET
+#define SNESRECOMP_LLE_APU_GUEST_TARGET 0
+#endif
+static uint64_t rtl_apu_guest_cycle(void) {
+  return rtl_apu_guest_cycle_at(!SNESRECOMP_LLE_APU_GUEST_TARGET);
 }
 // $420D bit 0 (FastROM / MEMSEL): 1 => $80-$FF:$8000-$FFFF code runs fast (6
 // master clocks/access) instead of slow (8). Tracked here so emitted blocks in
@@ -953,8 +965,11 @@ bool RtlRunFrame(uint32 inputs) {
    * frames, and the game's sound-effect queue stepped a frame early on 21
    * frames in 1,200. Not running it is both the correct answer and the
    * cheaper one -- the audio from those frames was discarded regardless. */
-  if (!g_rtl_speculative_frame)
+  if (!g_rtl_speculative_frame) {
+    extern void interp_bridge_flush_apu_pending(void);
+    interp_bridge_flush_apu_pending();
     rtl_sync_apu_frame_boundary();
+  }
 
 #if SNESRECOMP_ENABLE_MODS
   /* Not on a speculative frame: the player never sees it, so a mod counting
@@ -2210,7 +2225,15 @@ static bool RtlUploadSpcImageFromDpInternal(CpuState *cpu,
   uint16_t final_pc = 0;
   int block_count = 0;
 
+#if SNESRECOMP_LLE_APU_GUEST_TARGET
+  /* Start the upload's SPC handshake from the SPC's guest-time position, not
+   * from wherever its last catch-up left it. */
+  { extern void interp_bridge_flush_apu_pending(void); interp_bridge_flush_apu_pending(); }
   RtlApuLock();
+  if (g_apu_frame_time_valid && g_snes->apu->portTimeValid) rtl_sync_apu_to_cpu_locked();
+#else
+  RtlApuLock();
+#endif
   bool ipl_phase = g_snes->apu->romReadable;
   /* The HLE routine takes ownership only after all earlier CPU bus events
    * have reached the live SPC. For a running driver, honor its ready

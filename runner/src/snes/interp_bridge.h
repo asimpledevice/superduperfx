@@ -34,6 +34,7 @@
 /* Dump the last n entries of the always-on global interp step ring
  * (pc/op/sp/frame per interpreted opcode) to `out` (NULL = stderr). */
 void interp_bridge_dump_recent_steps(int n, FILE *out);
+void interp_bridge_flush_apu_pending(void);
 
 /* ── Always-on interpreter control-flow edge ring ───────────────────────
  * One record per control transfer the interpreter takes. A transfer that
