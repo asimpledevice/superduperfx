@@ -195,6 +195,16 @@ AUTOVARINIT ?= uninitialized
 # Interpreter cores compiled compactly so their working set fits the 16 KB
 # I-cache (runner/src/snes/interp816.c, spc.c).
 N64_CFLAGS += -DSNESRECOMP_COMPACT_INTERP=1
+# SPC catch-up by guest time only, without the per-checkpoint catch-up in
+# the interpreter bridge (runner/src/snes/interp_bridge.c): the SPC runs in
+# fewer, longer batches and keeps running through overrunning frames. ares,
+# with the I-cache order trained for it: misses SMW -7.5%, Pitfall -40%,
+# Joe & Mac 2 -10% (docs/n64/BRINGUP_NOTES.md). APUBATCH=0 restores the old
+# catch-up.
+APUBATCH ?= 1
+ifeq ($(APUBATCH),1)
+N64_CFLAGS += -DSNESRECOMP_LLE_APU_GUEST_TARGET=1 -DSNESRECOMP_LLE_APU_PROGRESS_FLUSH=0
+endif
 N64_CFLAGS += -ftrivial-auto-var-init=$(AUTOVARINIT)
 N64_CFLAGS += -DN64_RENDER=$(RENDER) $(EXTRA_CFLAGS)
 

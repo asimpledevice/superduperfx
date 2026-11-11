@@ -1581,6 +1581,103 @@ Batching can only be exact once the bridge catches up to an absolute target
 stacking). That changes SPC timing in every title, so it needs its own
 validation.
 
+### I-cache layout and SPC catch-up, round 2 (2026-11-11)
+
+**Rule-based layout: measured, not adopted.** The interpreter kernel (the
+48-function role list) goes first; the hardware layer goes next, ordered
+by how many code-cache modules import each function (14.7 KB); the
+module allocator is coloured away from the kernel's sets.
+`icsim/layout_eval.py` estimates such orders on recorded traces without
+relinking. Emulation-stage misses in the trace window:
+
+| Layout | SMW | Pitfall |
+|---|---|---|
+| Trained layout (old) | 1.64M | 1.15M |
+| Best rule-based | 2.13M | 1.60M |
+| Fully associative floor | 0.91M | 0.007M |
+
+The kernel is 28 KB, so it collides with itself. Role lists also can't say
+which lines of the hardware layer and libdragon are hot. Static
+reachability from the interpreter loop is no help either: it pulls in
+printf and every coprocessor. Colouring modules on top of the trained
+layout changes misses by about 1%, because the trained layout already uses
+every set.
+
+**Engine layout: trained on a fixed suite, checked on a held-out game.**
+Trained on SMW and Pitfall; Joe & Mac 2 is never in training. One training
+is noisy: across 8 seeds of `icache_trg.py`, SMW's PPU-stage misses ranged
+from 134K to 470K. The rule is therefore best of seeds 0-7, scored on the
+training games only (geometric mean of misses relative to the best seen
+for each game).
+
+**SPC catch-up by guest time** (`SNESRECOMP_LLE_APU_GUEST_TARGET`, runner
+default off). The bridge's relative catch-up stacked on the absolute sync,
+so the SPC's position depended on how often the bridge flushed. Now every
+caller targets one function of guest time:
+
+- That time runs on past the end of an overrunning frame instead of
+  stopping at the boundary, as the SPC does on hardware.
+- Frame boundaries and HLE SPC uploads start from that time.
+- Time owed across an APU reset is dropped.
+- Boot, before the port clock is anchored, keeps the relative path.
+
+With the option on, `SNESRECOMP_LLE_APU_PROGRESS_FLUSH=0` (drop the
+per-checkpoint catch-up) and a 64x threshold leave WRAM, ARAM, DSP output
+and rendered audio identical. Checked on SMW (attract 1,200 frames, TAS
+3,000), Pitfall, Joe & Mac 2 and Tetris Attack (900 each). SMW's
+90,000-frame TAS progress is identical with the option on and off, also
+under code-cache emulation.
+
+Against the old catch-up, audio pacing shifts at loads. Samples relative
+to a nominal 32 kHz by frame 840:
+
+| Game | Old | New |
+|---|---|---|
+| Joe & Mac 2 | -37,340 | -29,621 (recovering) |
+| Pitfall | -2,385 | +4,932 (bounded) |
+| Tetris Attack | +6,619 | +7,247 |
+
+Tetris Attack's existing BRK remains, at a different address.
+
+**Adopted on the N64** (`APUBATCH=1`, the default), with the seed-7 layout
+trained on that configuration. ares totals:
+
+| Game | Catch-up kept, best layout | APUBATCH=1, seed 7 | Change |
+|---|---|---|---|
+| SMW | 1,844,030 | 1,705,494 | -7.5% |
+| Pitfall | 4,818,294 | 2,907,037 | -40% |
+| Joe & Mac 2 (held out) | 9,720,656 | 8,737,702 | -10% |
+
+Default link order for reference: 3.53M, 48.3M, 22.9M. With a single
+shared layout, batching alone moved SMW -6% to -10%, and Pitfall and
+Joe & Mac 2 by 0% to +18% depending on the layout. Layout noise is larger
+than the batching effect, which is why each configuration gets its own
+best-seed layout.
+
+**SPC700 on the RSP: assessment, no code yet.**
+
+The case for it:
+
+- The RSP runs the DSP at about 7.8 ms per emulated frame and background
+  expansion at 3-4 ms, against 70-80 ms frames, so it is about 80% idle.
+- The SPC700 runs about 5,000 instructions per frame: roughly 4 ms on the
+  RSP at an estimated 50 cycles per instruction.
+- It is about 27% of SMW's emulation-stage fetches, and about 7 KB of hot
+  code that would leave the VR4300 I-cache.
+
+The design that keeps results exact: the SPC trails the 65816. The CPU
+publishes its guest time; the RSP runs the SPC up to it, never past it; a
+port access waits for the SPC to reach the access time. No rollback is
+needed.
+
+The hard parts:
+
+- an SPC700 interpreter in the 4 KB IMEM, next to the DSP microcode (as an
+  overlay);
+- a DMEM cache for the 64 KB of ARAM;
+- MUL and DIV;
+- an exactness harness like the DSP's.
+
 ## Next steps
 
 1. Audio: check the RSP DSP by ear on hardware (output arrives later than
