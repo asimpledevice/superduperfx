@@ -192,6 +192,9 @@ RENDER ?= 1
 # SMW, ares: run stage 82.5 -> 69.7 ms with state hashes unchanged. The native
 # hosts never had it. AUTOVARINIT=pattern restores it (debugging).
 AUTOVARINIT ?= uninitialized
+# Interpreter cores compiled compactly so their working set fits the 16 KB
+# I-cache (runner/src/snes/interp816.c, spc.c).
+N64_CFLAGS += -DSNESRECOMP_COMPACT_INTERP=1
 N64_CFLAGS += -ftrivial-auto-var-init=$(AUTOVARINIT)
 N64_CFLAGS += -DN64_RENDER=$(RENDER) $(EXTRA_CFLAGS)
 

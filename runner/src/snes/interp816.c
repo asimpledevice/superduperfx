@@ -26,6 +26,23 @@
 #endif
 #include "interp816.h"
 
+/* SNESRECOMP_COMPACT_INTERP=1 (the N64 build): the whole core is compiled for
+ * size, so the interpreter's working set fits the VR4300's 16 KB I-cache
+ * (docs/n64/BRINGUP_NOTES.md, "Interpreter kernel"). */
+#ifndef SNESRECOMP_COMPACT_INTERP
+#define SNESRECOMP_COMPACT_INTERP 0
+#endif
+#if SNESRECOMP_COMPACT_INTERP && defined(__GNUC__) && !defined(__clang__)
+#pragma GCC optimize ("Os")
+#endif
+#if defined(__GNUC__)
+#define I816_UNREACHABLE() __builtin_unreachable()
+#elif defined(_MSC_VER)
+#define I816_UNREACHABLE() __assume(0)
+#else
+#define I816_UNREACHABLE() ((void)0)
+#endif
+
 static const int cyclesPerOpcode[256] = {
   7, 6, 7, 4, 5, 3, 5, 6, 3, 2, 2, 4, 6, 4, 6, 5,
   2, 5, 5, 7, 5, 4, 6, 6, 2, 4, 2, 2, 6, 4, 7, 5,
@@ -981,6 +998,52 @@ static void interp816_trb(Interp816* cpu, uint32_t low, uint32_t high) {
 }
 
 
+/* Opcodes that are an addressing mode followed by an operation: their
+ * mode and operation, so interp816_doOpcode dispatches them through two
+ * small switches instead of one switch case each (176 cases whose call
+ * sequences and epilogues the compiler duplicated: 7 KB of code, a
+ * different few lines per opcode in the I-cache). 0: a case of its own.
+ * Generated from the per-opcode cases they replace; the helpers called,
+ * and their order, are unchanged. */
+enum { I816_M_NONE, I816_M_IDX, I816_M_SR, I816_M_DP, I816_M_IDL, I816_M_IMM_FALSE, I816_M_ABS, I816_M_ABL, I816_M_IDY_FALSE, I816_M_IDP, I816_M_ISY, I816_M_DPX, I816_M_ILY, I816_M_ABY_FALSE, I816_M_ABX_FALSE, I816_M_ABX_TRUE, I816_M_ALX, I816_M_IDY_TRUE, I816_M_DPY, I816_M_ABY_TRUE, I816_M_IMM_TRUE };
+enum { I816_O_NONE, I816_O_ORA, I816_O_TSB, I816_O_ASL, I816_O_TRB, I816_O_AND, I816_O_BIT, I816_O_ROL, I816_O_EOR, I816_O_LSR, I816_O_ADC, I816_O_STZ, I816_O_ROR, I816_O_STA, I816_O_STY, I816_O_STX, I816_O_LDY, I816_O_LDA, I816_O_LDX, I816_O_CPY, I816_O_CMP, I816_O_DEC, I816_O_CPX, I816_O_SBC, I816_O_INC };
+static const uint8_t k_i816_mode[256] = {
+   0,  1,  0,  2,  3,  3,  3,  4,  0,  5,  0,  0,  6,  6,  6,  7,  /* 00 */
+   0,  8,  9, 10,  3, 11, 11, 12,  0, 13,  0,  0,  6, 14, 15, 16,  /* 10 */
+   0,  1,  0,  2,  3,  3,  3,  4,  0,  5,  0,  0,  6,  6,  6,  7,  /* 20 */
+   0,  8,  9, 10, 11, 11, 11, 12,  0, 13,  0,  0, 14, 14, 15, 16,  /* 30 */
+   0,  1,  0,  2,  0,  3,  3,  4,  0,  5,  0,  0,  0,  6,  6,  7,  /* 40 */
+   0,  8,  9, 10,  0, 11, 11, 12,  0, 13,  0,  0,  0, 14, 15, 16,  /* 50 */
+   0,  1,  0,  2,  3,  3,  3,  4,  0,  5,  0,  0,  0,  6,  6,  7,  /* 60 */
+   0,  8,  9, 10, 11, 11, 11, 12,  0, 13,  0,  0,  0, 14, 15, 16,  /* 70 */
+   0,  1,  0,  2,  3,  3,  3,  4,  0,  0,  0,  0,  6,  6,  6,  7,  /* 80 */
+   0, 17,  9, 10, 11, 11, 18, 12,  0, 19,  0,  0,  6, 15, 15, 16,  /* 90 */
+  20,  1, 20,  2,  3,  3,  3,  4,  0,  5,  0,  0,  6,  6,  6,  7,  /* A0 */
+   0,  8,  9, 10, 11, 11, 18, 12,  0, 13,  0,  0, 14, 14, 13, 16,  /* B0 */
+  20,  1,  0,  2,  3,  3,  3,  4,  0,  5,  0,  0,  6,  6,  6,  7,  /* C0 */
+   0,  8,  9, 10,  0, 11, 11, 12,  0, 13,  0,  0,  0, 14, 15, 16,  /* D0 */
+  20,  1,  0,  2,  3,  3,  3,  4,  0,  5,  0,  0,  6,  6,  6,  7,  /* E0 */
+   0,  8,  9, 10,  0, 11, 11, 12,  0, 13,  0,  0,  0, 14, 15, 16,  /* F0 */
+};
+static const uint8_t k_i816_op[256] = {
+   0,  1,  0,  1,  2,  1,  3,  1,  0,  1,  0,  0,  2,  1,  3,  1,  /* 00 */
+   0,  1,  1,  1,  4,  1,  3,  1,  0,  1,  0,  0,  4,  1,  3,  1,  /* 10 */
+   0,  5,  0,  5,  6,  5,  7,  5,  0,  5,  0,  0,  6,  5,  7,  5,  /* 20 */
+   0,  5,  5,  5,  6,  5,  7,  5,  0,  5,  0,  0,  6,  5,  7,  5,  /* 30 */
+   0,  8,  0,  8,  0,  8,  9,  8,  0,  8,  0,  0,  0,  8,  9,  8,  /* 40 */
+   0,  8,  8,  8,  0,  8,  9,  8,  0,  8,  0,  0,  0,  8,  9,  8,  /* 50 */
+   0, 10,  0, 10, 11, 10, 12, 10,  0, 10,  0,  0,  0, 10, 12, 10,  /* 60 */
+   0, 10, 10, 10, 11, 10, 12, 10,  0, 10,  0,  0,  0, 10, 12, 10,  /* 70 */
+   0, 13,  0, 13, 14, 13, 15, 13,  0,  0,  0,  0, 14, 13, 15, 13,  /* 80 */
+   0, 13, 13, 13, 14, 13, 15, 13,  0, 13,  0,  0, 11, 13, 11, 13,  /* 90 */
+  16, 17, 18, 17, 16, 17, 18, 17,  0, 17,  0,  0, 16, 17, 18, 17,  /* A0 */
+   0, 17, 17, 17, 16, 17, 18, 17,  0, 17,  0,  0, 16, 17, 18, 17,  /* B0 */
+  19, 20,  0, 20, 19, 20, 21, 20,  0, 20,  0,  0, 19, 20, 21, 20,  /* C0 */
+   0, 20, 20, 20,  0, 20, 21, 20,  0, 20,  0,  0,  0, 20, 21, 20,  /* D0 */
+  22, 23,  0, 23, 22, 23, 24, 23,  0, 23,  0,  0, 22, 23, 24, 23,  /* E0 */
+   0, 23, 23, 23,  0, 23, 24, 23,  0, 23,  0,  0,  0, 23, 24, 23,  /* F0 */
+};
+
 static void interp816_doOpcode(Interp816* cpu, uint8_t opcode) {
   switch(opcode) {
     case 0x00: { // brk imp
@@ -1033,12 +1096,6 @@ static void interp816_doOpcode(Interp816* cpu, uint8_t opcode) {
       }
       break;
     }
-    case 0x01: { // ora idx
-      uint32_t low = 0;
-      uint32_t high = interp816_adrIdx(cpu, &low);
-      interp816_ora(cpu, low, high);
-      break;
-    }
     case 0x02: { // cop imm(s)
       interp816_readOpcode(cpu);
       interp816_pushByte(cpu, cpu->k);
@@ -1051,44 +1108,8 @@ static void interp816_doOpcode(Interp816* cpu, uint8_t opcode) {
       cpu->pc = interp816_readWord(cpu, 0xffe4, 0xffe5);
       break;
     }
-    case 0x03: { // ora sr
-      uint32_t low = 0;
-      uint32_t high = interp816_adrSr(cpu, &low);
-      interp816_ora(cpu, low, high);
-      break;
-    }
-    case 0x04: { // tsb dp
-      uint32_t low = 0;
-      uint32_t high = interp816_adrDp(cpu, &low);
-      interp816_tsb(cpu, low, high);
-      break;
-    }
-    case 0x05: { // ora dp
-      uint32_t low = 0;
-      uint32_t high = interp816_adrDp(cpu, &low);
-      interp816_ora(cpu, low, high);
-      break;
-    }
-    case 0x06: { // asl dp
-      uint32_t low = 0;
-      uint32_t high = interp816_adrDp(cpu, &low);
-      interp816_asl(cpu, low, high);
-      break;
-    }
-    case 0x07: { // ora idl
-      uint32_t low = 0;
-      uint32_t high = interp816_adrIdl(cpu, &low);
-      interp816_ora(cpu, low, high);
-      break;
-    }
     case 0x08: { // php imp
       interp816_pushByte(cpu, interp816_getFlags(cpu));
-      break;
-    }
-    case 0x09: { // ora imm(m)
-      uint32_t low = 0;
-      uint32_t high = interp816_adrImm(cpu, &low, false);
-      interp816_ora(cpu, low, high);
       break;
     }
     case 0x0a: { // asla imp
@@ -1106,84 +1127,12 @@ static void interp816_doOpcode(Interp816* cpu, uint8_t opcode) {
       interp816_pushWord(cpu, cpu->dp);
       break;
     }
-    case 0x0c: { // tsb abs
-      uint32_t low = 0;
-      uint32_t high = interp816_adrAbs(cpu, &low);
-      interp816_tsb(cpu, low, high);
-      break;
-    }
-    case 0x0d: { // ora abs
-      uint32_t low = 0;
-      uint32_t high = interp816_adrAbs(cpu, &low);
-      interp816_ora(cpu, low, high);
-      break;
-    }
-    case 0x0e: { // asl abs
-      uint32_t low = 0;
-      uint32_t high = interp816_adrAbs(cpu, &low);
-      interp816_asl(cpu, low, high);
-      break;
-    }
-    case 0x0f: { // ora abl
-      uint32_t low = 0;
-      uint32_t high = interp816_adrAbl(cpu, &low);
-      interp816_ora(cpu, low, high);
-      break;
-    }
     case 0x10: { // bpl rel
       interp816_doBranch(cpu, interp816_readOpcode(cpu), !cpu->n);
       break;
     }
-    case 0x11: { // ora idy(r)
-      uint32_t low = 0;
-      uint32_t high = interp816_adrIdy(cpu, &low, false);
-      interp816_ora(cpu, low, high);
-      break;
-    }
-    case 0x12: { // ora idp
-      uint32_t low = 0;
-      uint32_t high = interp816_adrIdp(cpu, &low);
-      interp816_ora(cpu, low, high);
-      break;
-    }
-    case 0x13: { // ora isy
-      uint32_t low = 0;
-      uint32_t high = interp816_adrIsy(cpu, &low);
-      interp816_ora(cpu, low, high);
-      break;
-    }
-    case 0x14: { // trb dp
-      uint32_t low = 0;
-      uint32_t high = interp816_adrDp(cpu, &low);
-      interp816_trb(cpu, low, high);
-      break;
-    }
-    case 0x15: { // ora dpx
-      uint32_t low = 0;
-      uint32_t high = interp816_adrDpx(cpu, &low);
-      interp816_ora(cpu, low, high);
-      break;
-    }
-    case 0x16: { // asl dpx
-      uint32_t low = 0;
-      uint32_t high = interp816_adrDpx(cpu, &low);
-      interp816_asl(cpu, low, high);
-      break;
-    }
-    case 0x17: { // ora ily
-      uint32_t low = 0;
-      uint32_t high = interp816_adrIly(cpu, &low);
-      interp816_ora(cpu, low, high);
-      break;
-    }
     case 0x18: { // clc imp
       cpu->c = false;
-      break;
-    }
-    case 0x19: { // ora aby(r)
-      uint32_t low = 0;
-      uint32_t high = interp816_adrAby(cpu, &low, false);
-      interp816_ora(cpu, low, high);
       break;
     }
     case 0x1a: { // inca imp
@@ -1199,40 +1148,10 @@ static void interp816_doOpcode(Interp816* cpu, uint8_t opcode) {
       cpu->sp = cpu->a;
       break;
     }
-    case 0x1c: { // trb abs
-      uint32_t low = 0;
-      uint32_t high = interp816_adrAbs(cpu, &low);
-      interp816_trb(cpu, low, high);
-      break;
-    }
-    case 0x1d: { // ora abx(r)
-      uint32_t low = 0;
-      uint32_t high = interp816_adrAbx(cpu, &low, false);
-      interp816_ora(cpu, low, high);
-      break;
-    }
-    case 0x1e: { // asl abx
-      uint32_t low = 0;
-      uint32_t high = interp816_adrAbx(cpu, &low, true);
-      interp816_asl(cpu, low, high);
-      break;
-    }
-    case 0x1f: { // ora alx
-      uint32_t low = 0;
-      uint32_t high = interp816_adrAlx(cpu, &low);
-      interp816_ora(cpu, low, high);
-      break;
-    }
     case 0x20: { // jsr abs
       uint16_t value = interp816_readOpcodeWord(cpu);
       interp816_pushWord(cpu, cpu->pc - 1);
       cpu->pc = value;
-      break;
-    }
-    case 0x21: { // and idx
-      uint32_t low = 0;
-      uint32_t high = interp816_adrIdx(cpu, &low);
-      interp816_and(cpu, low, high);
       break;
     }
     case 0x22: { // jsl abl
@@ -1246,44 +1165,8 @@ static void interp816_doOpcode(Interp816* cpu, uint8_t opcode) {
       cpu->k = newK;
       break;
     }
-    case 0x23: { // and sr
-      uint32_t low = 0;
-      uint32_t high = interp816_adrSr(cpu, &low);
-      interp816_and(cpu, low, high);
-      break;
-    }
-    case 0x24: { // bit dp
-      uint32_t low = 0;
-      uint32_t high = interp816_adrDp(cpu, &low);
-      interp816_bit(cpu, low, high);
-      break;
-    }
-    case 0x25: { // and dp
-      uint32_t low = 0;
-      uint32_t high = interp816_adrDp(cpu, &low);
-      interp816_and(cpu, low, high);
-      break;
-    }
-    case 0x26: { // rol dp
-      uint32_t low = 0;
-      uint32_t high = interp816_adrDp(cpu, &low);
-      interp816_rol(cpu, low, high);
-      break;
-    }
-    case 0x27: { // and idl
-      uint32_t low = 0;
-      uint32_t high = interp816_adrIdl(cpu, &low);
-      interp816_and(cpu, low, high);
-      break;
-    }
     case 0x28: { // plp imp
       interp816_setFlags(cpu, interp816_pullByte(cpu));
-      break;
-    }
-    case 0x29: { // and imm(m)
-      uint32_t low = 0;
-      uint32_t high = interp816_adrImm(cpu, &low, false);
-      interp816_and(cpu, low, high);
       break;
     }
     case 0x2a: { // rola imp
@@ -1303,84 +1186,12 @@ static void interp816_doOpcode(Interp816* cpu, uint8_t opcode) {
       interp816_setZN(cpu, cpu->dp, false);
       break;
     }
-    case 0x2c: { // bit abs
-      uint32_t low = 0;
-      uint32_t high = interp816_adrAbs(cpu, &low);
-      interp816_bit(cpu, low, high);
-      break;
-    }
-    case 0x2d: { // and abs
-      uint32_t low = 0;
-      uint32_t high = interp816_adrAbs(cpu, &low);
-      interp816_and(cpu, low, high);
-      break;
-    }
-    case 0x2e: { // rol abs
-      uint32_t low = 0;
-      uint32_t high = interp816_adrAbs(cpu, &low);
-      interp816_rol(cpu, low, high);
-      break;
-    }
-    case 0x2f: { // and abl
-      uint32_t low = 0;
-      uint32_t high = interp816_adrAbl(cpu, &low);
-      interp816_and(cpu, low, high);
-      break;
-    }
     case 0x30: { // bmi rel
       interp816_doBranch(cpu, interp816_readOpcode(cpu), cpu->n);
       break;
     }
-    case 0x31: { // and idy(r)
-      uint32_t low = 0;
-      uint32_t high = interp816_adrIdy(cpu, &low, false);
-      interp816_and(cpu, low, high);
-      break;
-    }
-    case 0x32: { // and idp
-      uint32_t low = 0;
-      uint32_t high = interp816_adrIdp(cpu, &low);
-      interp816_and(cpu, low, high);
-      break;
-    }
-    case 0x33: { // and isy
-      uint32_t low = 0;
-      uint32_t high = interp816_adrIsy(cpu, &low);
-      interp816_and(cpu, low, high);
-      break;
-    }
-    case 0x34: { // bit dpx
-      uint32_t low = 0;
-      uint32_t high = interp816_adrDpx(cpu, &low);
-      interp816_bit(cpu, low, high);
-      break;
-    }
-    case 0x35: { // and dpx
-      uint32_t low = 0;
-      uint32_t high = interp816_adrDpx(cpu, &low);
-      interp816_and(cpu, low, high);
-      break;
-    }
-    case 0x36: { // rol dpx
-      uint32_t low = 0;
-      uint32_t high = interp816_adrDpx(cpu, &low);
-      interp816_rol(cpu, low, high);
-      break;
-    }
-    case 0x37: { // and ily
-      uint32_t low = 0;
-      uint32_t high = interp816_adrIly(cpu, &low);
-      interp816_and(cpu, low, high);
-      break;
-    }
     case 0x38: { // sec imp
       cpu->c = true;
-      break;
-    }
-    case 0x39: { // and aby(r)
-      uint32_t low = 0;
-      uint32_t high = interp816_adrAby(cpu, &low, false);
-      interp816_and(cpu, low, high);
       break;
     }
     case 0x3a: { // deca imp
@@ -1397,30 +1208,6 @@ static void interp816_doOpcode(Interp816* cpu, uint8_t opcode) {
       interp816_setZN(cpu, cpu->a, false);
       break;
     }
-    case 0x3c: { // bit abx(r)
-      uint32_t low = 0;
-      uint32_t high = interp816_adrAbx(cpu, &low, false);
-      interp816_bit(cpu, low, high);
-      break;
-    }
-    case 0x3d: { // and abx(r)
-      uint32_t low = 0;
-      uint32_t high = interp816_adrAbx(cpu, &low, false);
-      interp816_and(cpu, low, high);
-      break;
-    }
-    case 0x3e: { // rol abx
-      uint32_t low = 0;
-      uint32_t high = interp816_adrAbx(cpu, &low, true);
-      interp816_rol(cpu, low, high);
-      break;
-    }
-    case 0x3f: { // and alx
-      uint32_t low = 0;
-      uint32_t high = interp816_adrAlx(cpu, &low);
-      interp816_and(cpu, low, high);
-      break;
-    }
     case 0x40: { // rti imp
       interp816_setFlags(cpu, interp816_pullByte(cpu));
       cpu->cyclesUsed++; // native mode: 1 extra cycle
@@ -1428,20 +1215,8 @@ static void interp816_doOpcode(Interp816* cpu, uint8_t opcode) {
       cpu->k = interp816_pullByte(cpu);
       break;
     }
-    case 0x41: { // eor idx
-      uint32_t low = 0;
-      uint32_t high = interp816_adrIdx(cpu, &low);
-      interp816_eor(cpu, low, high);
-      break;
-    }
     case 0x42: { // wdm imm(s)
       interp816_readOpcode(cpu);
-      break;
-    }
-    case 0x43: { // eor sr
-      uint32_t low = 0;
-      uint32_t high = interp816_adrSr(cpu, &low);
-      interp816_eor(cpu, low, high);
       break;
     }
     case 0x44: { // mvp bm
@@ -1461,24 +1236,6 @@ static void interp816_doOpcode(Interp816* cpu, uint8_t opcode) {
       }
       break;
     }
-    case 0x45: { // eor dp
-      uint32_t low = 0;
-      uint32_t high = interp816_adrDp(cpu, &low);
-      interp816_eor(cpu, low, high);
-      break;
-    }
-    case 0x46: { // lsr dp
-      uint32_t low = 0;
-      uint32_t high = interp816_adrDp(cpu, &low);
-      interp816_lsr(cpu, low, high);
-      break;
-    }
-    case 0x47: { // eor idl
-      uint32_t low = 0;
-      uint32_t high = interp816_adrIdl(cpu, &low);
-      interp816_eor(cpu, low, high);
-      break;
-    }
     case 0x48: { // pha imp
       if(cpu->mf) {
         interp816_pushByte(cpu, (uint8_t)cpu->a);
@@ -1486,12 +1243,6 @@ static void interp816_doOpcode(Interp816* cpu, uint8_t opcode) {
         cpu->cyclesUsed++; // m = 0: 1 extra cycle
         interp816_pushWord(cpu, cpu->a);
       }
-      break;
-    }
-    case 0x49: { // eor imm(m)
-      uint32_t low = 0;
-      uint32_t high = interp816_adrImm(cpu, &low, false);
-      interp816_eor(cpu, low, high);
       break;
     }
     case 0x4a: { // lsra imp
@@ -1512,44 +1263,8 @@ static void interp816_doOpcode(Interp816* cpu, uint8_t opcode) {
       cpu->pc = interp816_readOpcodeWord(cpu);
       break;
     }
-    case 0x4d: { // eor abs
-      uint32_t low = 0;
-      uint32_t high = interp816_adrAbs(cpu, &low);
-      interp816_eor(cpu, low, high);
-      break;
-    }
-    case 0x4e: { // lsr abs
-      uint32_t low = 0;
-      uint32_t high = interp816_adrAbs(cpu, &low);
-      interp816_lsr(cpu, low, high);
-      break;
-    }
-    case 0x4f: { // eor abl
-      uint32_t low = 0;
-      uint32_t high = interp816_adrAbl(cpu, &low);
-      interp816_eor(cpu, low, high);
-      break;
-    }
     case 0x50: { // bvc rel
       interp816_doBranch(cpu, interp816_readOpcode(cpu), !cpu->v);
-      break;
-    }
-    case 0x51: { // eor idy(r)
-      uint32_t low = 0;
-      uint32_t high = interp816_adrIdy(cpu, &low, false);
-      interp816_eor(cpu, low, high);
-      break;
-    }
-    case 0x52: { // eor idp
-      uint32_t low = 0;
-      uint32_t high = interp816_adrIdp(cpu, &low);
-      interp816_eor(cpu, low, high);
-      break;
-    }
-    case 0x53: { // eor isy
-      uint32_t low = 0;
-      uint32_t high = interp816_adrIsy(cpu, &low);
-      interp816_eor(cpu, low, high);
       break;
     }
     case 0x54: { // mvn bm
@@ -1569,32 +1284,8 @@ static void interp816_doOpcode(Interp816* cpu, uint8_t opcode) {
       }
       break;
     }
-    case 0x55: { // eor dpx
-      uint32_t low = 0;
-      uint32_t high = interp816_adrDpx(cpu, &low);
-      interp816_eor(cpu, low, high);
-      break;
-    }
-    case 0x56: { // lsr dpx
-      uint32_t low = 0;
-      uint32_t high = interp816_adrDpx(cpu, &low);
-      interp816_lsr(cpu, low, high);
-      break;
-    }
-    case 0x57: { // eor ily
-      uint32_t low = 0;
-      uint32_t high = interp816_adrIly(cpu, &low);
-      interp816_eor(cpu, low, high);
-      break;
-    }
     case 0x58: { // cli imp
       cpu->i = false;
-      break;
-    }
-    case 0x59: { // eor aby(r)
-      uint32_t low = 0;
-      uint32_t high = interp816_adrAby(cpu, &low, false);
-      interp816_eor(cpu, low, high);
       break;
     }
     case 0x5a: { // phy imp
@@ -1618,67 +1309,13 @@ static void interp816_doOpcode(Interp816* cpu, uint8_t opcode) {
       cpu->pc = value;
       break;
     }
-    case 0x5d: { // eor abx(r)
-      uint32_t low = 0;
-      uint32_t high = interp816_adrAbx(cpu, &low, false);
-      interp816_eor(cpu, low, high);
-      break;
-    }
-    case 0x5e: { // lsr abx
-      uint32_t low = 0;
-      uint32_t high = interp816_adrAbx(cpu, &low, true);
-      interp816_lsr(cpu, low, high);
-      break;
-    }
-    case 0x5f: { // eor alx
-      uint32_t low = 0;
-      uint32_t high = interp816_adrAlx(cpu, &low);
-      interp816_eor(cpu, low, high);
-      break;
-    }
     case 0x60: { // rts imp
       cpu->pc = interp816_pullWord(cpu) + 1;
-      break;
-    }
-    case 0x61: { // adc idx
-      uint32_t low = 0;
-      uint32_t high = interp816_adrIdx(cpu, &low);
-      interp816_adc(cpu, low, high);
       break;
     }
     case 0x62: { // per rll
       uint16_t value = interp816_readOpcodeWord(cpu);
       interp816_pushWord(cpu, cpu->pc + (int16_t) value);
-      break;
-    }
-    case 0x63: { // adc sr
-      uint32_t low = 0;
-      uint32_t high = interp816_adrSr(cpu, &low);
-      interp816_adc(cpu, low, high);
-      break;
-    }
-    case 0x64: { // stz dp
-      uint32_t low = 0;
-      uint32_t high = interp816_adrDp(cpu, &low);
-      interp816_stz(cpu, low, high);
-      break;
-    }
-    case 0x65: { // adc dp
-      uint32_t low = 0;
-      uint32_t high = interp816_adrDp(cpu, &low);
-      interp816_adc(cpu, low, high);
-      break;
-    }
-    case 0x66: { // ror dp
-      uint32_t low = 0;
-      uint32_t high = interp816_adrDp(cpu, &low);
-      interp816_ror(cpu, low, high);
-      break;
-    }
-    case 0x67: { // adc idl
-      uint32_t low = 0;
-      uint32_t high = interp816_adrIdl(cpu, &low);
-      interp816_adc(cpu, low, high);
       break;
     }
     case 0x68: { // pla imp
@@ -1689,12 +1326,6 @@ static void interp816_doOpcode(Interp816* cpu, uint8_t opcode) {
         cpu->a = interp816_pullWord(cpu);
       }
       interp816_setZN(cpu, cpu->a, cpu->mf);
-      break;
-    }
-    case 0x69: { // adc imm(m)
-      uint32_t low = 0;
-      uint32_t high = interp816_adrImm(cpu, &low, false);
-      interp816_adc(cpu, low, high);
       break;
     }
     case 0x6a: { // rora imp
@@ -1718,78 +1349,12 @@ static void interp816_doOpcode(Interp816* cpu, uint8_t opcode) {
       cpu->pc = interp816_readWord(cpu, adr, (adr + 1) & 0xffff);
       break;
     }
-    case 0x6d: { // adc abs
-      uint32_t low = 0;
-      uint32_t high = interp816_adrAbs(cpu, &low);
-      interp816_adc(cpu, low, high);
-      break;
-    }
-    case 0x6e: { // ror abs
-      uint32_t low = 0;
-      uint32_t high = interp816_adrAbs(cpu, &low);
-      interp816_ror(cpu, low, high);
-      break;
-    }
-    case 0x6f: { // adc abl
-      uint32_t low = 0;
-      uint32_t high = interp816_adrAbl(cpu, &low);
-      interp816_adc(cpu, low, high);
-      break;
-    }
     case 0x70: { // bvs rel
       interp816_doBranch(cpu, interp816_readOpcode(cpu), cpu->v);
       break;
     }
-    case 0x71: { // adc idy(r)
-      uint32_t low = 0;
-      uint32_t high = interp816_adrIdy(cpu, &low, false);
-      interp816_adc(cpu, low, high);
-      break;
-    }
-    case 0x72: { // adc idp
-      uint32_t low = 0;
-      uint32_t high = interp816_adrIdp(cpu, &low);
-      interp816_adc(cpu, low, high);
-      break;
-    }
-    case 0x73: { // adc isy
-      uint32_t low = 0;
-      uint32_t high = interp816_adrIsy(cpu, &low);
-      interp816_adc(cpu, low, high);
-      break;
-    }
-    case 0x74: { // stz dpx
-      uint32_t low = 0;
-      uint32_t high = interp816_adrDpx(cpu, &low);
-      interp816_stz(cpu, low, high);
-      break;
-    }
-    case 0x75: { // adc dpx
-      uint32_t low = 0;
-      uint32_t high = interp816_adrDpx(cpu, &low);
-      interp816_adc(cpu, low, high);
-      break;
-    }
-    case 0x76: { // ror dpx
-      uint32_t low = 0;
-      uint32_t high = interp816_adrDpx(cpu, &low);
-      interp816_ror(cpu, low, high);
-      break;
-    }
-    case 0x77: { // adc ily
-      uint32_t low = 0;
-      uint32_t high = interp816_adrIly(cpu, &low);
-      interp816_adc(cpu, low, high);
-      break;
-    }
     case 0x78: { // sei imp
       cpu->i = true;
-      break;
-    }
-    case 0x79: { // adc aby(r)
-      uint32_t low = 0;
-      uint32_t high = interp816_adrAby(cpu, &low, false);
-      interp816_adc(cpu, low, high);
       break;
     }
     case 0x7a: { // ply imp
@@ -1811,68 +1376,14 @@ static void interp816_doOpcode(Interp816* cpu, uint8_t opcode) {
       cpu->pc = interp816_adrIax(cpu);
       break;
     }
-    case 0x7d: { // adc abx(r)
-      uint32_t low = 0;
-      uint32_t high = interp816_adrAbx(cpu, &low, false);
-      interp816_adc(cpu, low, high);
-      break;
-    }
-    case 0x7e: { // ror abx
-      uint32_t low = 0;
-      uint32_t high = interp816_adrAbx(cpu, &low, true);
-      interp816_ror(cpu, low, high);
-      break;
-    }
-    case 0x7f: { // adc alx
-      uint32_t low = 0;
-      uint32_t high = interp816_adrAlx(cpu, &low);
-      interp816_adc(cpu, low, high);
-      break;
-    }
     case 0x80: { // bra rel
       uint8_t offset = interp816_readOpcode(cpu);
       cpu->pc += (int8_t) offset;
       break;
     }
-    case 0x81: { // sta idx
-      uint32_t low = 0;
-      uint32_t high = interp816_adrIdx(cpu, &low);
-      interp816_sta(cpu, low, high);
-      break;
-    }
     case 0x82: { // brl rll
       uint16_t offset = interp816_readOpcodeWord(cpu);
       cpu->pc += (int16_t) offset;
-      break;
-    }
-    case 0x83: { // sta sr
-      uint32_t low = 0;
-      uint32_t high = interp816_adrSr(cpu, &low);
-      interp816_sta(cpu, low, high);
-      break;
-    }
-    case 0x84: { // sty dp
-      uint32_t low = 0;
-      uint32_t high = interp816_adrDp(cpu, &low);
-      interp816_sty(cpu, low, high);
-      break;
-    }
-    case 0x85: { // sta dp
-      uint32_t low = 0;
-      uint32_t high = interp816_adrDp(cpu, &low);
-      interp816_sta(cpu, low, high);
-      break;
-    }
-    case 0x86: { // stx dp
-      uint32_t low = 0;
-      uint32_t high = interp816_adrDp(cpu, &low);
-      interp816_stx(cpu, low, high);
-      break;
-    }
-    case 0x87: { // sta idl
-      uint32_t low = 0;
-      uint32_t high = interp816_adrIdl(cpu, &low);
-      interp816_sta(cpu, low, high);
       break;
     }
     case 0x88: { // dey imp
@@ -1908,74 +1419,8 @@ static void interp816_doOpcode(Interp816* cpu, uint8_t opcode) {
       interp816_pushByte(cpu, cpu->db);
       break;
     }
-    case 0x8c: { // sty abs
-      uint32_t low = 0;
-      uint32_t high = interp816_adrAbs(cpu, &low);
-      interp816_sty(cpu, low, high);
-      break;
-    }
-    case 0x8d: { // sta abs
-      uint32_t low = 0;
-      uint32_t high = interp816_adrAbs(cpu, &low);
-      interp816_sta(cpu, low, high);
-      break;
-    }
-    case 0x8e: { // stx abs
-      uint32_t low = 0;
-      uint32_t high = interp816_adrAbs(cpu, &low);
-      interp816_stx(cpu, low, high);
-      break;
-    }
-    case 0x8f: { // sta abl
-      uint32_t low = 0;
-      uint32_t high = interp816_adrAbl(cpu, &low);
-      interp816_sta(cpu, low, high);
-      break;
-    }
     case 0x90: { // bcc rel
       interp816_doBranch(cpu, interp816_readOpcode(cpu), !cpu->c);
-      break;
-    }
-    case 0x91: { // sta idy
-      uint32_t low = 0;
-      uint32_t high = interp816_adrIdy(cpu, &low, true);
-      interp816_sta(cpu, low, high);
-      break;
-    }
-    case 0x92: { // sta idp
-      uint32_t low = 0;
-      uint32_t high = interp816_adrIdp(cpu, &low);
-      interp816_sta(cpu, low, high);
-      break;
-    }
-    case 0x93: { // sta isy
-      uint32_t low = 0;
-      uint32_t high = interp816_adrIsy(cpu, &low);
-      interp816_sta(cpu, low, high);
-      break;
-    }
-    case 0x94: { // sty dpx
-      uint32_t low = 0;
-      uint32_t high = interp816_adrDpx(cpu, &low);
-      interp816_sty(cpu, low, high);
-      break;
-    }
-    case 0x95: { // sta dpx
-      uint32_t low = 0;
-      uint32_t high = interp816_adrDpx(cpu, &low);
-      interp816_sta(cpu, low, high);
-      break;
-    }
-    case 0x96: { // stx dpy
-      uint32_t low = 0;
-      uint32_t high = interp816_adrDpy(cpu, &low);
-      interp816_stx(cpu, low, high);
-      break;
-    }
-    case 0x97: { // sta ily
-      uint32_t low = 0;
-      uint32_t high = interp816_adrIly(cpu, &low);
-      interp816_sta(cpu, low, high);
       break;
     }
     case 0x98: { // tya imp
@@ -1985,12 +1430,6 @@ static void interp816_doOpcode(Interp816* cpu, uint8_t opcode) {
         cpu->a = cpu->y;
       }
       interp816_setZN(cpu, cpu->a, cpu->mf);
-      break;
-    }
-    case 0x99: { // sta aby
-      uint32_t low = 0;
-      uint32_t high = interp816_adrAby(cpu, &low, true);
-      interp816_sta(cpu, low, high);
       break;
     }
     case 0x9a: { // txs imp
@@ -2006,78 +1445,6 @@ static void interp816_doOpcode(Interp816* cpu, uint8_t opcode) {
       interp816_setZN(cpu, cpu->y, cpu->xf);
       break;
     }
-    case 0x9c: { // stz abs
-      uint32_t low = 0;
-      uint32_t high = interp816_adrAbs(cpu, &low);
-      interp816_stz(cpu, low, high);
-      break;
-    }
-    case 0x9d: { // sta abx
-      uint32_t low = 0;
-      uint32_t high = interp816_adrAbx(cpu, &low, true);
-      interp816_sta(cpu, low, high);
-      break;
-    }
-    case 0x9e: { // stz abx
-      uint32_t low = 0;
-      uint32_t high = interp816_adrAbx(cpu, &low, true);
-      interp816_stz(cpu, low, high);
-      break;
-    }
-    case 0x9f: { // sta alx
-      uint32_t low = 0;
-      uint32_t high = interp816_adrAlx(cpu, &low);
-      interp816_sta(cpu, low, high);
-      break;
-    }
-    case 0xa0: { // ldy imm(x)
-      uint32_t low = 0;
-      uint32_t high = interp816_adrImm(cpu, &low, true);
-      interp816_ldy(cpu, low, high);
-      break;
-    }
-    case 0xa1: { // lda idx
-      uint32_t low = 0;
-      uint32_t high = interp816_adrIdx(cpu, &low);
-      interp816_lda(cpu, low, high);
-      break;
-    }
-    case 0xa2: { // ldx imm(x)
-      uint32_t low = 0;
-      uint32_t high = interp816_adrImm(cpu, &low, true);
-      interp816_ldx(cpu, low, high);
-      break;
-    }
-    case 0xa3: { // lda sr
-      uint32_t low = 0;
-      uint32_t high = interp816_adrSr(cpu, &low);
-      interp816_lda(cpu, low, high);
-      break;
-    }
-    case 0xa4: { // ldy dp
-      uint32_t low = 0;
-      uint32_t high = interp816_adrDp(cpu, &low);
-      interp816_ldy(cpu, low, high);
-      break;
-    }
-    case 0xa5: { // lda dp
-      uint32_t low = 0;
-      uint32_t high = interp816_adrDp(cpu, &low);
-      interp816_lda(cpu, low, high);
-      break;
-    }
-    case 0xa6: { // ldx dp
-      uint32_t low = 0;
-      uint32_t high = interp816_adrDp(cpu, &low);
-      interp816_ldx(cpu, low, high);
-      break;
-    }
-    case 0xa7: { // lda idl
-      uint32_t low = 0;
-      uint32_t high = interp816_adrIdl(cpu, &low);
-      interp816_lda(cpu, low, high);
-      break;
-    }
     case 0xa8: { // tay imp
       if(cpu->xf) {
         cpu->y = cpu->a & 0xff;
@@ -2085,12 +1452,6 @@ static void interp816_doOpcode(Interp816* cpu, uint8_t opcode) {
         cpu->y = cpu->a;
       }
       interp816_setZN(cpu, cpu->y, cpu->xf);
-      break;
-    }
-    case 0xa9: { // lda imm(m)
-      uint32_t low = 0;
-      uint32_t high = interp816_adrImm(cpu, &low, false);
-      interp816_lda(cpu, low, high);
       break;
     }
     case 0xaa: { // tax imp
@@ -2107,84 +1468,12 @@ static void interp816_doOpcode(Interp816* cpu, uint8_t opcode) {
       interp816_setZN(cpu, cpu->db, true);
       break;
     }
-    case 0xac: { // ldy abs
-      uint32_t low = 0;
-      uint32_t high = interp816_adrAbs(cpu, &low);
-      interp816_ldy(cpu, low, high);
-      break;
-    }
-    case 0xad: { // lda abs
-      uint32_t low = 0;
-      uint32_t high = interp816_adrAbs(cpu, &low);
-      interp816_lda(cpu, low, high);
-      break;
-    }
-    case 0xae: { // ldx abs
-      uint32_t low = 0;
-      uint32_t high = interp816_adrAbs(cpu, &low);
-      interp816_ldx(cpu, low, high);
-      break;
-    }
-    case 0xaf: { // lda abl
-      uint32_t low = 0;
-      uint32_t high = interp816_adrAbl(cpu, &low);
-      interp816_lda(cpu, low, high);
-      break;
-    }
     case 0xb0: { // bcs rel
       interp816_doBranch(cpu, interp816_readOpcode(cpu), cpu->c);
       break;
     }
-    case 0xb1: { // lda idy(r)
-      uint32_t low = 0;
-      uint32_t high = interp816_adrIdy(cpu, &low, false);
-      interp816_lda(cpu, low, high);
-      break;
-    }
-    case 0xb2: { // lda idp
-      uint32_t low = 0;
-      uint32_t high = interp816_adrIdp(cpu, &low);
-      interp816_lda(cpu, low, high);
-      break;
-    }
-    case 0xb3: { // lda isy
-      uint32_t low = 0;
-      uint32_t high = interp816_adrIsy(cpu, &low);
-      interp816_lda(cpu, low, high);
-      break;
-    }
-    case 0xb4: { // ldy dpx
-      uint32_t low = 0;
-      uint32_t high = interp816_adrDpx(cpu, &low);
-      interp816_ldy(cpu, low, high);
-      break;
-    }
-    case 0xb5: { // lda dpx
-      uint32_t low = 0;
-      uint32_t high = interp816_adrDpx(cpu, &low);
-      interp816_lda(cpu, low, high);
-      break;
-    }
-    case 0xb6: { // ldx dpy
-      uint32_t low = 0;
-      uint32_t high = interp816_adrDpy(cpu, &low);
-      interp816_ldx(cpu, low, high);
-      break;
-    }
-    case 0xb7: { // lda ily
-      uint32_t low = 0;
-      uint32_t high = interp816_adrIly(cpu, &low);
-      interp816_lda(cpu, low, high);
-      break;
-    }
     case 0xb8: { // clv imp
       cpu->v = false;
-      break;
-    }
-    case 0xb9: { // lda aby(r)
-      uint32_t low = 0;
-      uint32_t high = interp816_adrAby(cpu, &low, false);
-      interp816_lda(cpu, low, high);
       break;
     }
     case 0xba: { // tsx imp
@@ -2205,74 +1494,8 @@ static void interp816_doOpcode(Interp816* cpu, uint8_t opcode) {
       interp816_setZN(cpu, cpu->x, cpu->xf);
       break;
     }
-    case 0xbc: { // ldy abx(r)
-      uint32_t low = 0;
-      uint32_t high = interp816_adrAbx(cpu, &low, false);
-      interp816_ldy(cpu, low, high);
-      break;
-    }
-    case 0xbd: { // lda abx(r)
-      uint32_t low = 0;
-      uint32_t high = interp816_adrAbx(cpu, &low, false);
-      interp816_lda(cpu, low, high);
-      break;
-    }
-    case 0xbe: { // ldx aby(r)
-      uint32_t low = 0;
-      uint32_t high = interp816_adrAby(cpu, &low, false);
-      interp816_ldx(cpu, low, high);
-      break;
-    }
-    case 0xbf: { // lda alx
-      uint32_t low = 0;
-      uint32_t high = interp816_adrAlx(cpu, &low);
-      interp816_lda(cpu, low, high);
-      break;
-    }
-    case 0xc0: { // cpy imm(x)
-      uint32_t low = 0;
-      uint32_t high = interp816_adrImm(cpu, &low, true);
-      interp816_cpy(cpu, low, high);
-      break;
-    }
-    case 0xc1: { // cmp idx
-      uint32_t low = 0;
-      uint32_t high = interp816_adrIdx(cpu, &low);
-      interp816_cmp(cpu, low, high);
-      break;
-    }
     case 0xc2: { // rep imm(s)
       interp816_setFlags(cpu, interp816_getFlags(cpu) & ~interp816_readOpcode(cpu));
-      break;
-    }
-    case 0xc3: { // cmp sr
-      uint32_t low = 0;
-      uint32_t high = interp816_adrSr(cpu, &low);
-      interp816_cmp(cpu, low, high);
-      break;
-    }
-    case 0xc4: { // cpy dp
-      uint32_t low = 0;
-      uint32_t high = interp816_adrDp(cpu, &low);
-      interp816_cpy(cpu, low, high);
-      break;
-    }
-    case 0xc5: { // cmp dp
-      uint32_t low = 0;
-      uint32_t high = interp816_adrDp(cpu, &low);
-      interp816_cmp(cpu, low, high);
-      break;
-    }
-    case 0xc6: { // dec dp
-      uint32_t low = 0;
-      uint32_t high = interp816_adrDp(cpu, &low);
-      interp816_dec(cpu, low, high);
-      break;
-    }
-    case 0xc7: { // cmp idl
-      uint32_t low = 0;
-      uint32_t high = interp816_adrIdl(cpu, &low);
-      interp816_cmp(cpu, low, high);
       break;
     }
     case 0xc8: { // iny imp
@@ -2282,12 +1505,6 @@ static void interp816_doOpcode(Interp816* cpu, uint8_t opcode) {
         cpu->y++;
       }
       interp816_setZN(cpu, cpu->y, cpu->xf);
-      break;
-    }
-    case 0xc9: { // cmp imm(m)
-      uint32_t low = 0;
-      uint32_t high = interp816_adrImm(cpu, &low, false);
-      interp816_cmp(cpu, low, high);
       break;
     }
     case 0xca: { // dex imp
@@ -2303,50 +1520,8 @@ static void interp816_doOpcode(Interp816* cpu, uint8_t opcode) {
       cpu->waiting = true;
       break;
     }
-    case 0xcc: { // cpy abs
-      uint32_t low = 0;
-      uint32_t high = interp816_adrAbs(cpu, &low);
-      interp816_cpy(cpu, low, high);
-      break;
-    }
-    case 0xcd: { // cmp abs
-      uint32_t low = 0;
-      uint32_t high = interp816_adrAbs(cpu, &low);
-      interp816_cmp(cpu, low, high);
-      break;
-    }
-    case 0xce: { // dec abs
-      uint32_t low = 0;
-      uint32_t high = interp816_adrAbs(cpu, &low);
-      interp816_dec(cpu, low, high);
-      break;
-    }
-    case 0xcf: { // cmp abl
-      uint32_t low = 0;
-      uint32_t high = interp816_adrAbl(cpu, &low);
-      interp816_cmp(cpu, low, high);
-      break;
-    }
     case 0xd0: { // bne rel
       interp816_doBranch(cpu, interp816_readOpcode(cpu), !cpu->z);
-      break;
-    }
-    case 0xd1: { // cmp idy(r)
-      uint32_t low = 0;
-      uint32_t high = interp816_adrIdy(cpu, &low, false);
-      interp816_cmp(cpu, low, high);
-      break;
-    }
-    case 0xd2: { // cmp idp
-      uint32_t low = 0;
-      uint32_t high = interp816_adrIdp(cpu, &low);
-      interp816_cmp(cpu, low, high);
-      break;
-    }
-    case 0xd3: { // cmp isy
-      uint32_t low = 0;
-      uint32_t high = interp816_adrIsy(cpu, &low);
-      interp816_cmp(cpu, low, high);
       break;
     }
     case 0xd4: { // pei dp
@@ -2355,32 +1530,8 @@ static void interp816_doOpcode(Interp816* cpu, uint8_t opcode) {
       interp816_pushWord(cpu, interp816_readWord(cpu, low, high));
       break;
     }
-    case 0xd5: { // cmp dpx
-      uint32_t low = 0;
-      uint32_t high = interp816_adrDpx(cpu, &low);
-      interp816_cmp(cpu, low, high);
-      break;
-    }
-    case 0xd6: { // dec dpx
-      uint32_t low = 0;
-      uint32_t high = interp816_adrDpx(cpu, &low);
-      interp816_dec(cpu, low, high);
-      break;
-    }
-    case 0xd7: { // cmp ily
-      uint32_t low = 0;
-      uint32_t high = interp816_adrIly(cpu, &low);
-      interp816_cmp(cpu, low, high);
-      break;
-    }
     case 0xd8: { // cld imp
       cpu->d = false;
-      break;
-    }
-    case 0xd9: { // cmp aby(r)
-      uint32_t low = 0;
-      uint32_t high = interp816_adrAby(cpu, &low, false);
-      interp816_cmp(cpu, low, high);
       break;
     }
     case 0xda: { // phx imp
@@ -2402,68 +1553,8 @@ static void interp816_doOpcode(Interp816* cpu, uint8_t opcode) {
       cpu->k = interp816_read(cpu, (adr + 2) & 0xffff);
       break;
     }
-    case 0xdd: { // cmp abx(r)
-      uint32_t low = 0;
-      uint32_t high = interp816_adrAbx(cpu, &low, false);
-      interp816_cmp(cpu, low, high);
-      break;
-    }
-    case 0xde: { // dec abx
-      uint32_t low = 0;
-      uint32_t high = interp816_adrAbx(cpu, &low, true);
-      interp816_dec(cpu, low, high);
-      break;
-    }
-    case 0xdf: { // cmp alx
-      uint32_t low = 0;
-      uint32_t high = interp816_adrAlx(cpu, &low);
-      interp816_cmp(cpu, low, high);
-      break;
-    }
-    case 0xe0: { // cpx imm(x)
-      uint32_t low = 0;
-      uint32_t high = interp816_adrImm(cpu, &low, true);
-      interp816_cpx(cpu, low, high);
-      break;
-    }
-    case 0xe1: { // sbc idx
-      uint32_t low = 0;
-      uint32_t high = interp816_adrIdx(cpu, &low);
-      interp816_sbc(cpu, low, high);
-      break;
-    }
     case 0xe2: { // sep imm(s)
       interp816_setFlags(cpu, interp816_getFlags(cpu) | interp816_readOpcode(cpu));
-      break;
-    }
-    case 0xe3: { // sbc sr
-      uint32_t low = 0;
-      uint32_t high = interp816_adrSr(cpu, &low);
-      interp816_sbc(cpu, low, high);
-      break;
-    }
-    case 0xe4: { // cpx dp
-      uint32_t low = 0;
-      uint32_t high = interp816_adrDp(cpu, &low);
-      interp816_cpx(cpu, low, high);
-      break;
-    }
-    case 0xe5: { // sbc dp
-      uint32_t low = 0;
-      uint32_t high = interp816_adrDp(cpu, &low);
-      interp816_sbc(cpu, low, high);
-      break;
-    }
-    case 0xe6: { // inc dp
-      uint32_t low = 0;
-      uint32_t high = interp816_adrDp(cpu, &low);
-      interp816_inc(cpu, low, high);
-      break;
-    }
-    case 0xe7: { // sbc idl
-      uint32_t low = 0;
-      uint32_t high = interp816_adrIdl(cpu, &low);
-      interp816_sbc(cpu, low, high);
       break;
     }
     case 0xe8: { // inx imp
@@ -2473,12 +1564,6 @@ static void interp816_doOpcode(Interp816* cpu, uint8_t opcode) {
         cpu->x++;
       }
       interp816_setZN(cpu, cpu->x, cpu->xf);
-      break;
-    }
-    case 0xe9: { // sbc imm(m)
-      uint32_t low = 0;
-      uint32_t high = interp816_adrImm(cpu, &low, false);
-      interp816_sbc(cpu, low, high);
       break;
     }
     case 0xea: { // nop imp
@@ -2492,50 +1577,8 @@ static void interp816_doOpcode(Interp816* cpu, uint8_t opcode) {
       interp816_setZN(cpu, high, true);
       break;
     }
-    case 0xec: { // cpx abs
-      uint32_t low = 0;
-      uint32_t high = interp816_adrAbs(cpu, &low);
-      interp816_cpx(cpu, low, high);
-      break;
-    }
-    case 0xed: { // sbc abs
-      uint32_t low = 0;
-      uint32_t high = interp816_adrAbs(cpu, &low);
-      interp816_sbc(cpu, low, high);
-      break;
-    }
-    case 0xee: { // inc abs
-      uint32_t low = 0;
-      uint32_t high = interp816_adrAbs(cpu, &low);
-      interp816_inc(cpu, low, high);
-      break;
-    }
-    case 0xef: { // sbc abl
-      uint32_t low = 0;
-      uint32_t high = interp816_adrAbl(cpu, &low);
-      interp816_sbc(cpu, low, high);
-      break;
-    }
     case 0xf0: { // beq rel
       interp816_doBranch(cpu, interp816_readOpcode(cpu), cpu->z);
-      break;
-    }
-    case 0xf1: { // sbc idy(r)
-      uint32_t low = 0;
-      uint32_t high = interp816_adrIdy(cpu, &low, false);
-      interp816_sbc(cpu, low, high);
-      break;
-    }
-    case 0xf2: { // sbc idp
-      uint32_t low = 0;
-      uint32_t high = interp816_adrIdp(cpu, &low);
-      interp816_sbc(cpu, low, high);
-      break;
-    }
-    case 0xf3: { // sbc isy
-      uint32_t low = 0;
-      uint32_t high = interp816_adrIsy(cpu, &low);
-      interp816_sbc(cpu, low, high);
       break;
     }
     case 0xf4: { // pea imm(l)
@@ -2546,32 +1589,8 @@ static void interp816_doOpcode(Interp816* cpu, uint8_t opcode) {
   
       break;
     }
-    case 0xf5: { // sbc dpx
-      uint32_t low = 0;
-      uint32_t high = interp816_adrDpx(cpu, &low);
-      interp816_sbc(cpu, low, high);
-      break;
-    }
-    case 0xf6: { // inc dpx
-      uint32_t low = 0;
-      uint32_t high = interp816_adrDpx(cpu, &low);
-      interp816_inc(cpu, low, high);
-      break;
-    }
-    case 0xf7: { // sbc ily
-      uint32_t low = 0;
-      uint32_t high = interp816_adrIly(cpu, &low);
-      interp816_sbc(cpu, low, high);
-      break;
-    }
     case 0xf8: { // sed imp
       cpu->d = true;
-      break;
-    }
-    case 0xf9: { // sbc aby(r)
-      uint32_t low = 0;
-      uint32_t high = interp816_adrAby(cpu, &low, false);
-      interp816_sbc(cpu, low, high);
       break;
     }
     case 0xfa: { // plx imp
@@ -2597,22 +1616,58 @@ static void interp816_doOpcode(Interp816* cpu, uint8_t opcode) {
       cpu->pc = value;
       break;
     }
-    case 0xfd: { // sbc abx(r)
-      uint32_t low = 0;
-      uint32_t high = interp816_adrAbx(cpu, &low, false);
-      interp816_sbc(cpu, low, high);
-      break;
-    }
-    case 0xfe: { // inc abx
-      uint32_t low = 0;
-      uint32_t high = interp816_adrAbx(cpu, &low, true);
-      interp816_inc(cpu, low, high);
-      break;
-    }
-    case 0xff: { // sbc alx
-      uint32_t low = 0;
-      uint32_t high = interp816_adrAlx(cpu, &low);
-      interp816_sbc(cpu, low, high);
+    default: {  /* addressing mode + operation (k_i816_mode, k_i816_op) */
+      uint32_t low = 0, high = 0;
+      switch (k_i816_mode[opcode]) {
+        case I816_M_IDX: high = interp816_adrIdx(cpu, &low); break;
+        case I816_M_SR: high = interp816_adrSr(cpu, &low); break;
+        case I816_M_DP: high = interp816_adrDp(cpu, &low); break;
+        case I816_M_IDL: high = interp816_adrIdl(cpu, &low); break;
+        case I816_M_IMM_FALSE: high = interp816_adrImm(cpu, &low, false); break;
+        case I816_M_ABS: high = interp816_adrAbs(cpu, &low); break;
+        case I816_M_ABL: high = interp816_adrAbl(cpu, &low); break;
+        case I816_M_IDY_FALSE: high = interp816_adrIdy(cpu, &low, false); break;
+        case I816_M_IDP: high = interp816_adrIdp(cpu, &low); break;
+        case I816_M_ISY: high = interp816_adrIsy(cpu, &low); break;
+        case I816_M_DPX: high = interp816_adrDpx(cpu, &low); break;
+        case I816_M_ILY: high = interp816_adrIly(cpu, &low); break;
+        case I816_M_ABY_FALSE: high = interp816_adrAby(cpu, &low, false); break;
+        case I816_M_ABX_FALSE: high = interp816_adrAbx(cpu, &low, false); break;
+        case I816_M_ABX_TRUE: high = interp816_adrAbx(cpu, &low, true); break;
+        case I816_M_ALX: high = interp816_adrAlx(cpu, &low); break;
+        case I816_M_IDY_TRUE: high = interp816_adrIdy(cpu, &low, true); break;
+        case I816_M_DPY: high = interp816_adrDpy(cpu, &low); break;
+        case I816_M_ABY_TRUE: high = interp816_adrAby(cpu, &low, true); break;
+        case I816_M_IMM_TRUE: high = interp816_adrImm(cpu, &low, true); break;
+        default: I816_UNREACHABLE();
+      }
+      switch (k_i816_op[opcode]) {
+        case I816_O_ORA: interp816_ora(cpu, low, high); break;
+        case I816_O_TSB: interp816_tsb(cpu, low, high); break;
+        case I816_O_ASL: interp816_asl(cpu, low, high); break;
+        case I816_O_TRB: interp816_trb(cpu, low, high); break;
+        case I816_O_AND: interp816_and(cpu, low, high); break;
+        case I816_O_BIT: interp816_bit(cpu, low, high); break;
+        case I816_O_ROL: interp816_rol(cpu, low, high); break;
+        case I816_O_EOR: interp816_eor(cpu, low, high); break;
+        case I816_O_LSR: interp816_lsr(cpu, low, high); break;
+        case I816_O_ADC: interp816_adc(cpu, low, high); break;
+        case I816_O_STZ: interp816_stz(cpu, low, high); break;
+        case I816_O_ROR: interp816_ror(cpu, low, high); break;
+        case I816_O_STA: interp816_sta(cpu, low, high); break;
+        case I816_O_STY: interp816_sty(cpu, low, high); break;
+        case I816_O_STX: interp816_stx(cpu, low, high); break;
+        case I816_O_LDY: interp816_ldy(cpu, low, high); break;
+        case I816_O_LDA: interp816_lda(cpu, low, high); break;
+        case I816_O_LDX: interp816_ldx(cpu, low, high); break;
+        case I816_O_CPY: interp816_cpy(cpu, low, high); break;
+        case I816_O_CMP: interp816_cmp(cpu, low, high); break;
+        case I816_O_DEC: interp816_dec(cpu, low, high); break;
+        case I816_O_CPX: interp816_cpx(cpu, low, high); break;
+        case I816_O_SBC: interp816_sbc(cpu, low, high); break;
+        case I816_O_INC: interp816_inc(cpu, low, high); break;
+        default: I816_UNREACHABLE();
+      }
       break;
     }
   }

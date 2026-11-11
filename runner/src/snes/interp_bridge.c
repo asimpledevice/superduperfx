@@ -1816,6 +1816,18 @@ static const uint8_t k_bridge_op_class[256] = {
     [0x4C] = BRIDGE_OP_JMP_DIRECT, [0x5C] = BRIDGE_OP_JMP_DIRECT,               /* JMP a, JML al */
 };
 
+/* BRIDGE_COLD_PATH(): marks the block it opens as rarely executed, so GCC
+ * places it after the hot code. _interp_run_core's per-instruction path then
+ * stays contiguous at the start of the function, where the N64 build keeps it
+ * in the I-cache (docs/n64/BRINGUP_NOTES.md, "Interpreter kernel"). Layout
+ * only; no effect on behaviour. */
+#if defined(__GNUC__) && !defined(__clang__)
+#define BRIDGE_COLD_LABEL_(n) bridge_cold_##n: __attribute__((cold, unused))
+#define BRIDGE_COLD_LABEL(n) BRIDGE_COLD_LABEL_(n)
+#define BRIDGE_COLD_PATH() BRIDGE_COLD_LABEL(__LINE__)
+#else
+#define BRIDGE_COLD_PATH() ((void)0)
+#endif
 static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
                                  uint16_t s_exit, uint32_t *out_landing,
                                  uint32_t *out_return_pc,
@@ -2090,6 +2102,7 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
             s_d9ff && auto_quiescent && g_snes && !in.i &&
             !s_interp_bus_timing_active && in.mf && !in.e && !in.dp &&
             g_snes->vIrqEnabled && g_snes->vTimer == 216u) {
+            BRIDGE_COLD_PATH();
             static int s_d9_bytes_ok = -1;
             if (s_d9_bytes_ok < 0) {
                 s_d9_bytes_ok =
@@ -2242,6 +2255,7 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
                         (unsigned long long)s_apu_pending_master);
             }
             if (s_vff_ok) {
+                BRIDGE_COLD_PATH();
                 extern int snes_frame_counter;
                 if (snes_frame_counter > 10 && !g_snes->hIrqEnabled) {
                     const uint8_t op = bridge_bus_read(cpu, pc_before);
@@ -2396,6 +2410,7 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
                 if (s_idle_poll_count && !q_sparse && !idle_seen &&
                     old->idle_live_epoch==now.idle_live_epoch &&
                     old->volatile_read_epoch==now.volatile_read_epoch) {
+                    BRIDGE_COLD_PATH();
                     idle_seen = 1;
                     now.idle_repeats=old->idle_repeats+1;
                     if (now.idle_repeats>=2 && s_lle_master_deadline &&
@@ -2603,6 +2618,7 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
             ((pc_before ^ edge_from) & 0xFF0000u) == 0 &&
             (uint16_t)pc_before < (uint16_t)edge_from &&
             (uint16_t)((uint16_t)edge_from - (uint16_t)pc_before) <= 64u) {
+            BRIDGE_COLD_PATH();
             PollHeadState now;
             memset(&now, 0, sizeof now);
             now.pc = pc_before; now.a = in.a; now.x = in.x; now.y = in.y;
@@ -2699,6 +2715,7 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
         if (!yield_pc && s_lle_sched_depth > 0 && s_sched_yield_pc &&
             s_interp_bridge_depth > 1 &&
             (pc_before & 0x7FFFFF) == (s_sched_yield_pc & 0x7FFFFF)) {
+            BRIDGE_COLD_PATH();
             const uint8_t _sched_flag =
                 bridge_bus_read(cpu, s_sched_yield_flag_addr);
             const int _blocked = _sched_flag == s_sched_yield_flag_value;
@@ -3324,6 +3341,7 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
                         interp_owner_crossed(in.sp);
                     if (_air != RECOMP_RETURN_SKIP_1 ||
                         _skip_crossed_owner) {
+                        BRIDGE_COLD_PATH();
                         if (yield_pc) {
                             /* Nothing outside a scheduler frame can consume a
                              * multi-level skip: it IS the outermost guest
@@ -3431,6 +3449,7 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
     {
         static int s_cap_reports;
         if (s_cap_reports < 32) {
+            BRIDGE_COLD_PATH();
             const uint32_t last_pc = ((uint32_t)in.k << 16) | in.pc;
             s_cap_reports++;
             fprintf(stderr,
@@ -3485,6 +3504,7 @@ idle_replay_step_cap:
     bridge_apu_flush(cpu);
     /* Post-sync diagnostic: decode the instruction at step-cap PC */
     {
+        BRIDGE_COLD_PATH();
         static uint32_t s_last_diag_pc;
         uint32_t pc24 = ((uint32_t)in.k << 16) | in.pc;
         if (pc24 != s_last_diag_pc) {

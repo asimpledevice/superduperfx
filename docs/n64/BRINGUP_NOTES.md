@@ -1413,6 +1413,51 @@ handler's wait loop hits the interpreter step cap during boot and the guest
 reaches BRK at $B6:7C09 -- natively too, so not N64-specific; open.
 Also fixed: builds without CODECACHE failed to compile (recomp_cache_poll).
 
+### Interpreter kernel: compact cores (2026-11-11)
+
+Goal: an interpreter whose per-instruction code fits the 16 KB I-cache by
+construction, so it can be given its own cache sets (no per-game layout).
+
+65816 core (interp816.c) and SPC700 core (spc.c), both LakeSnes-style: one
+switch case per opcode, each calling an addressing-mode helper and an
+operation helper, all inlined -- the 65816's ORA was compiled 15 times. Now:
+- opcodes that are exactly "addressing mode, then operation" (65816: 177 of
+  256, 20 modes x 24 operations; SPC700: 127, single and two-operand forms)
+  dispatch through generated 256-entry tables and two small switches; the
+  other cases are unchanged, as are the helpers and the order they run in.
+- SNESRECOMP_COMPACT_INTERP=1 (the N64 Makefile sets it) compiles both files
+  for size (#pragma GCC optimize "Os"); other hosts keep their flags.
+Sizes (N64): interp816.c 25,324 -> 9,976 bytes (decoder 13,952 -> 6,564);
+spc.c 27,140 -> 6,224 (decoder 15,080 -> 4,692). The tables alone, at -O2:
+interp816.c 18,272, spc.c 19,236 -- -Os matters because the memory accessors
+and helpers were inlined into every case (spc_adrIdy alone was 468 bytes:
+three full copies of spc_read).
+
+Verification: differential tests running the original and rewritten cores
+side by side on random states, comparing registers, flags, cycles and the
+exact sequence of bus accesses (65816: every opcode, all 16 M/X/E/D
+combinations, with and without the word-bus handlers, 41 million runs; SPC700:
+every opcode, I/O, DSP-pending and watch-log paths, the whole ARAM, 2 million
+runs per configuration): no mismatch; a deliberately corrupted table entry is
+caught. Native SMW TAS replay identical over 90,000 frames with both settings;
+interp816 89/89, interp_bridge 432/432, SA-1, DSP-1 and APU C tests pass.
+
+_interp_run_core (13.8 KB): 8 blocks that never ran in SMW or Pitfall
+(diagnostics, step-cap reports, idle-poll replay, cooperative polling, and
+title-specific special cases keyed on guest PCs) are marked cold
+(BRIDGE_COLD_PATH, layout only). Its frequently entered code (lines entered
+>= 0.1% of the hottest) shrinks from 4,320 to 2,784 bytes but still spans
+10 KB of the function: GCC moves only part of the cold code to the end. A
+compact per-instruction loop needs the function split.
+
+Hot runtime code in the emulation stage (lines entered >= 0.1% of the
+hottest), new build: Pitfall (interpreter-bound) 9.9 KB -- the interpreter
+kernel fits; SMW 32.3 KB -- the same kernel plus the hardware-access layer
+compiled game code calls (ppu_write, snes_writeReg, DMA).
+
+Not yet re-placed: icache_order.ld predates these changes (SMW 1.88M ->
+1.91M misses, Pitfall 9.4M -> 19.3M with the stale layout).
+
 ## Next steps
 
 1. Audio: check the RSP DSP by ear on hardware (output arrives later than
