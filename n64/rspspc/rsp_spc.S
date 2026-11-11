@@ -65,19 +65,38 @@ LINES:      .ds.b 2048              # 32 slots x 64 bytes
 
     .text
 
+/* The borrowed IMEM: rspq's code, from _start to the overlay's code, which
+ * rspq does not run during a command. rsp_spc_ext.S is linked there and
+ * starts with an entry table. */
+#define RSPQ_IMEM_SIZE  (_ovl_text_start - _start)
+#define EXT_SAVE_OFS    0x280           /* save area after the code (spc_rsp.c) */
+#define EXT_TSYNC_NOW   0x1000
+#define EXT_TSYNC       0x1008
+#define EXT_F1          0x1010
+#define EXT_DIV         0x1018
+
 SpcCmd_Run:
     sw ra, %lo(RET_RA)
     li t0, 0xffffff
     and s0, a0, t0                  # top byte of a0 is the command id
     move s7, s0                     # state block address, kept until done
     li s4, %lo(ST)
-    jal DMAIn
+    jal SDmaIn
     li t0, DMA_SIZE(SPCST_SIZE, 1)
     sw s7, %lo(ST + SPCST_USED)     # remember the block address (USED is output)
     lw s0, %lo(ST + SPCST_ARAM)
     li s4, %lo(ZP)
-    jal DMAIn
+    jal SDmaIn
     li t0, DMA_SIZE(0x200, 1)
+    lw s0, %lo(ST + SPCST_EXT)      # rspq's IMEM out to its save area, our
+    addiu s0, s0, EXT_SAVE_OFS      # code in (both while the run starts)
+    li s4, 0x1000
+    jal SDmaOutA
+    li t0, DMA_SIZE(RSPQ_IMEM_SIZE, 1)
+    lw s0, %lo(ST + SPCST_EXT)
+    li s4, 0x1000
+    jal SDmaInA
+    li t0, DMA_SIZE(RSPQ_IMEM_SIZE, 1)
     li t0, 0x7fff                   # all line slots empty
     li t1, %lo(TAGS)
 1:  sh t0, 0(t1)
@@ -283,108 +302,58 @@ wr_io:
     nop
     b wr_zp
     sb a1, %lo(ST + SPCST_DSPREGS)(t0)
-6:  move t8, ra                     # $F1: timer enables, port clears, IPL ROM
-    jal tsync_now
+6:  li t1, EXT_F1                   # $F1: in the borrowed IMEM (rsp_spc_ext.S)
+    j ext_go
     nop
-    move ra, t8
-    li s4, %lo(ST + SPCST_TIMERS)
-    li t2, 1
-7:  lbu t0, 4(s4)                   # enabled before
-    and t1, a1, t2
-    sltu t1, zero, t1
-    bnez t0, 8f
-    sb t1, 4(s4)
-    beqz t1, 8f
-    nop
-    sb zero, 1(s4)                  # newly enabled: divider and counter reset
-    sb zero, 3(s4)
-8:  addiu s4, s4, 8
-    sll t2, t2, 1
-    li t0, 8
-    bne t2, t0, 7b
-    nop
-    andi t0, a1, 0x10
-    beqz t0, 9f
-    andi t0, a1, 0x20
-    sh zero, %lo(ST + SPCST_INPORTS)
-9:  beqz t0, 9f
-    srl t0, a1, 7
-    sh zero, %lo(ST + SPCST_INPORTS + 2)
-9:  b wr_zp
-    sb t0, %lo(ST + SPCST_ROMREADABLE)
 
-# Timers, as apu_native_timer: bring all three to cycle t2 (tsync) or to the
-# start of the instruction in progress (tsync_now). Uses t0-t2, t9, v0, s0,
-# s4, k0.
-tsync_now:
-    lw t2, %lo(END)
-    subu t2, t2, fp
-    subu t2, t2, t4                 # fp was charged this instruction's cycles
-tsync:
-    lw t0, %lo(ST + SPCST_TSYNC)
-    subu s0, t2, t0                 # clocks
-    beqz s0, 9f
-    sw t2, %lo(ST + SPCST_TSYNC)
-    li s4, %lo(ST + SPCST_TIMERS)
-    li k0, 7
-tm_one:
-    lbu t0, 0(s4)                   # prescaler
-    sltu t1, t0, s0
-    bnez t1, 1f
-    subu t2, t0, s0
-    b tm_next
-    sb t2, 0(s4)
-1:  subu t1, s0, t0                 # rest
-    addiu t2, t1, -1
-    srlv t2, t2, k0
-    addiu t2, t2, 1                 # ticks
-    sllv t0, t2, k0
-    subu t0, t0, t1
-    sb t0, 0(s4)
-    lbu t0, 4(s4)
-    beqz t0, tm_next                # disabled: only the prescaler runs
-    lbu t1, 2(s4)                   # target
-    lbu t0, 1(s4)                   # divider
-    subu t9, t1, t0
-    addiu t9, t9, -1
-    andi t9, t9, 0xff
-    addiu t9, t9, 1                 # first
-    sltu v0, t2, t9
-    beqz v0, 2f
-    addu t0, t0, t2
-    b tm_next
-    sb t0, 1(s4)                    # divider += ticks
-2:  subu t2, t2, t9                 # after
-    bnez t1, 3f
-    sll t1, t1, 16
-    li t1, 0x1000000                # target 0: every 256
-3:  li v0, 16                       # after / every, after % every
-4:  sll t2, t2, 1
-    sltu t0, t2, t1
-    bnez t0, 5f
-    addiu v0, v0, -1
-    subu t2, t2, t1
-    ori t2, t2, 1
-5:  bnez v0, 4b
+# Code in the borrowed IMEM (rsp_spc_ext.S, loaded over rspq's code for the
+# run): wait for that load, then enter through the table at its start.
+tsync_now:                          # timers to the start of this instruction
+    li t1, EXT_TSYNC_NOW
+    j ext_go
     nop
-    srl t0, t2, 16
-    sb t0, 1(s4)                    # divider = after % every
-    andi t2, t2, 0xffff
-    lbu t0, 3(s4)
-    addu t0, t0, t2
-    addiu t0, t0, 1                 # counter += 1 + after / every
-    andi t0, t0, 15
-    sb t0, 3(s4)
-tm_next:
-    addiu s4, s4, 8
-    li t0, %lo(ST + SPCST_TIMERS) + 24
-    beq s4, t0, 9f
-    li t0, %lo(ST + SPCST_TIMERS) + 16
-    bne s4, t0, tm_one
+tsync:                              # timers to cycle t2
+    li t1, EXT_TSYNC
+ext_go:
+    .set noat
+1:  mfc0 $1, COP0_SP_STATUS
+    andi $1, $1, SP_STATUS_DMA_BUSY | SP_STATUS_DMA_FULL
+    bnez $1, 1b
     nop
-    b tm_one
-    li k0, 4                        # timer 2: 64 kHz
-9:  jr ra
+    .set at
+    jr t1
+    nop
+
+# DMA. rspq's own routines sit in the borrowed IMEM, so the run has its own.
+# s0 RDRAM, s4 DMEM or IMEM (0x1000 | offset), t0 DMA_SIZE. *A: asynchronous.
+SDmaIn:
+    b sdma
+    li t2, DMA_IN
+SDmaOut:
+    b sdma
+    li t2, DMA_OUT
+SDmaInA:
+    b sdma
+    li t2, DMA_IN_ASYNC
+SDmaOutA:
+    li t2, DMA_OUT_ASYNC
+sdma:
+    .set noat
+1:  mfc0 $1, COP0_DMA_FULL
+    bnez $1, 1b
+    mtc0 s0, COP0_DMA_RAMADDR
+    bgez t2, 2f
+    mtc0 s4, COP0_DMA_SPADDR
+    b 3f
+    mtc0 t0, COP0_DMA_WRITE
+2:  mtc0 t0, COP0_DMA_READ
+3:  andi t2, t2, 0xf
+4:  mfc0 $1, COP0_SP_STATUS
+    and $1, $1, t2
+    bnez $1, 4b
+    nop
+    .set at
+    jr ra
     nop
 
 # fill: bring line t9 into its slot (writing back a dirty occupant).
@@ -402,7 +371,7 @@ fill:
     sll t2, t2, 6
     lw s0, %lo(ST + SPCST_ARAM)
     addu s0, s0, t2
-    jal DMAOut
+    jal SDmaOut
     li t0, DMA_SIZE(64, 1)
 1:  andi s4, t9, 31
     sll s4, s4, 6
@@ -410,7 +379,7 @@ fill:
     sll t2, t9, 6
     lw s0, %lo(ST + SPCST_ARAM)
     addu s0, s0, t2
-    jal DMAIn
+    jal SDmaIn
     li t0, DMA_SIZE(64, 1)
     andi t1, t9, 31
     sll t1, t1, 1
@@ -648,6 +617,11 @@ OP_CMP:
     move a0, a2
     b cmp_c
     move t3, s1
+OP_CMPY:
+    jal rd
+    move a0, a2
+    b cmp_c
+    move t3, s3
 OP_CMPX:
     jal rd
     move a0, a2
@@ -946,6 +920,10 @@ OP_XFER:                            # movxa movax movxp movay movya
 4:  move s1, s3
     j zn_loop
     move v0, s1
+OP_DIV:                             # on the vector unit, in the borrowed IMEM
+    li t1, EXT_DIV
+    j ext_go
+    nop
 OP_XCN:
     srl t0, s1, 4
     sll s1, s1, 4
@@ -1056,6 +1034,11 @@ done:
     sw t2, %lo(ST + SPCST_CYCLES)
     jal tsync                       # timers current at the end, as apu_runCycles
     sw zero, %lo(ST + SPCST_COUNT)  # (instruction count: not kept)
+    lw s0, %lo(ST + SPCST_EXT)      # rspq's IMEM back (nothing borrowed is
+    addiu s0, s0, EXT_SAVE_OFS      # called after this), during the writebacks
+    li s4, 0x1000
+    jal SDmaInA
+    li t0, DMA_SIZE(RSPQ_IMEM_SIZE, 1)
     li s5, 0                        # write back dirty lines
 1:  lhu t2, %lo(TAGS)(s5)
     andi t0, t2, 0x8000
@@ -1066,7 +1049,7 @@ done:
     sll t2, t2, 6
     lw s0, %lo(ST + SPCST_ARAM)
     addu s0, s0, t2
-    jal DMAOut
+    jal SDmaOut
     li t0, DMA_SIZE(64, 1)
 2:  addiu s5, s5, 2
     li t0, 64
@@ -1074,11 +1057,11 @@ done:
     nop
     lw s0, %lo(ST + SPCST_ARAM)
     li s4, %lo(ZP)
-    jal DMAOut
+    jal SDmaOut
     li t0, DMA_SIZE(0x200, 1)
     move s0, s7
     li s4, %lo(ST)
     lw ra, %lo(RET_RA)
-    j DMAOut                        # returns to rspq
+    j SDmaOut                       # returns to rspq (restored by then)
     li t0, DMA_SIZE(SPCST_SIZE, 1)
 

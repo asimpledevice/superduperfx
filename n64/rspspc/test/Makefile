@@ -33,10 +33,17 @@ $(BUILD_DIR)/n64_compat.o: ../../src/n64_compat.c
 $(BUILD_DIR)/rsp_spc_tables.inc: ../gen_tables.py $(RUNNER)/snes/spc.c
 	@mkdir -p $(dir $@)
 	python3 ../gen_tables.py $(RUNNER)/snes/spc.c $@ $(BUILD_DIR)/rsp_spc_traps.h
+$(BUILD_DIR)/rsp_spc_syms.inc: $(BUILD_DIR)/rsp_spc.o ../gen_syms.py
+	python3 ../gen_syms.py $(BUILD_DIR)/rsp_spc.elf $@ $(N64_INST)/bin/mips64-elf-nm
+$(BUILD_DIR)/rsp_spc_ext.o: $(BUILD_DIR)/rsp_spc_syms.inc
+$(BUILD_DIR)/rsp_spc_ext.o: RSPASFLAGS += -I$(BUILD_DIR)
+$(BUILD_DIR)/ext.check: $(BUILD_DIR)/rsp_spc_ext.o $(BUILD_DIR)/rsp_spc.o
+	python3 ../gen_syms.py --check $(BUILD_DIR)/rsp_spc.elf $(BUILD_DIR)/rsp_spc_ext.elf $(N64_INST)/bin/mips64-elf-nm
+	@touch $@
 $(BUILD_DIR)/rsp_spc.o: $(BUILD_DIR)/rsp_spc_tables.inc
 $(BUILD_DIR)/rsp_spc.o: RSPASFLAGS += -I$(BUILD_DIR)
 
-$(BUILD_DIR)/rspspc_test.elf: $(BUILD_DIR)/n64_compat.o $(BUILD_DIR)/test_main.o $(BUILD_DIR)/test_ref.o $(BUILD_DIR)/spc_rsp_run.o $(BUILD_DIR)/spc_rsp.o $(BUILD_DIR)/rsp_spc.o $(BUILD_DIR)/spc.o $(BUILD_DIR)/apu.o
+$(BUILD_DIR)/rspspc_test.elf: $(BUILD_DIR)/n64_compat.o $(BUILD_DIR)/test_main.o $(BUILD_DIR)/test_ref.o $(BUILD_DIR)/spc_rsp_run.o $(BUILD_DIR)/spc_rsp.o $(BUILD_DIR)/rsp_spc.o $(BUILD_DIR)/rsp_spc_ext.o $(BUILD_DIR)/ext.check $(BUILD_DIR)/spc.o $(BUILD_DIR)/apu.o
 
 rspspc_test.z64: N64_ROM_TITLE = "RSP SPC test"
 

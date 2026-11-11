@@ -129,6 +129,8 @@ void run_tests(void) {
       for (int i = 0; i < 0x10000; i++) while (is_trap(aa->ram[i])) aa->ram[i] = rnd();
     if (t % 4 == 1)   /* timer-heavy: many reads of $FD-$FF */
       for (int i = 0; i < 0xfffe; i += 3) { aa->ram[i] = 0xe4; aa->ram[i + 1] = 0xfd + rnd() % 3; }
+    if (t % 4 == 3)   /* DIV-heavy: random A/Y/X from the code around it */
+      for (int i = 0; i < 0x10000; i += 2 + rnd() % 4) aa->ram[i] = 0x9e;
     random_state(aa);
     copy_apu(ab, aa);
     copy_apu(ai, aa);

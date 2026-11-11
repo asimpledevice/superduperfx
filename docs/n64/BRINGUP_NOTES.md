@@ -1776,6 +1776,49 @@ Bugs the test found:
 - the timers synced at the wrong cycle when an opcode is fetched from the
   I/O page.
 
+### SPC700 on the RSP: borrowed IMEM and DIV on the vector unit (2026-11-11)
+
+**Borrowing rspq's IMEM.** rspq's own code (632 bytes of IMEM, from
+`_start` to the overlay's code) runs only between commands. So during an
+SPC run, the overlay uses that space for colder code (`rsp_spc_ext.S`):
+
+1. **Start.** After the state block and zero page arrive, two asynchronous
+   DMAs are queued: rspq's IMEM out to a save area, and the ext code in.
+   The run starts at once; the first call into the ext code waits for the
+   DMA to be idle (`ext_go`).
+2. **End.** The restore is queued right after the last ext call (the final
+   timer sync) and overlaps the write-backs. The command returns to rspq
+   only once all DMA is done.
+3. **Linking.** The core has its own DMA routine (rspq's sits in the
+   borrowed bytes). The ext code is linked at IMEM 0 like any ucode, and
+   calls into the core through `C_*` symbols that `gen_syms.py` exports
+   from the core ELF. The core enters it through a table at its start.
+4. **Size check.** `gen_syms.py --check` fails the build if the ext code is
+   larger than rspq's IMEM: now 592 of 632 bytes.
+
+What moved: the timer catch-up, the `$F1` handler and DIV. The core now has
+160 bytes of IMEM free, for milestone 2c.
+
+**DIV on the vector unit.** VRCP gives R, about 2^31 / X (512-entry table,
+as ares models it). The quotient is then:
+
+- R16 = R >> 15;
+- q = (YA x R16) >> 16, one VMUDL;
+- one remainder check: VMUDN gives the low 16 bits of q x X; if the
+  remainder is X or more, q and the remainder are fixed by one step.
+
+`n64/rspspc/vdiv_model.c` checks this on every YA < 65536 and X = 1..255:
+q is exact or one less, so one correction always suffices. X = 0 follows
+spc.c (quotient $FFFF, remainder A). DIV and CMPY no longer trap.
+
+**Test.** One test in four is now DIV-heavy.
+
+- 2,000 of 2,000 pass, over about 78,000 RSP runs, each borrowing and
+  restoring rspq's IMEM.
+- Removing the correction step fails 154 of 1,000.
+- Milestone 2b alone: 10,000 of 10,000 pass. A wrong timer counter step
+  fails 239 of 1,000.
+
 ## Next steps
 
 1. Audio: check the RSP DSP by ear on hardware (output arrives later than

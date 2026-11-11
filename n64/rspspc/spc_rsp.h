@@ -13,7 +13,8 @@ typedef struct __attribute__((aligned(16))) {
   int32_t budget;
   uint32_t used, count, exit;
   uint8_t ccl, dspAdr, romReadable, pad0;
-  uint8_t inPorts[6], outPorts[4], pad1[6];
+  uint8_t inPorts[6], outPorts[4], pad1[2];
+  uint32_t ext;                    /* filled by spc_rsp_exec */
   struct { uint8_t cycles, divider, target, counter, enabled, pad[3]; } timer[3];
   uint32_t cycles, timerSync;
   uint8_t dspRegs[128];

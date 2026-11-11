@@ -51,8 +51,7 @@ sp([0x5d, 0x7d, 0x9d, 0xdd, 0xfd], "NONE", "XFER")
 # out of the 4 KB IMEM. Exact either way: the C core runs them.
 CPU_OPS = {"ROL", "ROLA", "ROR", "ORMM2", "ANDMM2", "EORMM2", "ADCMM2", "SBCMM2",
            "MOVSINDP", "MOVINDP", "MOVPX", "CLRV", "NOTC", "SLEEP", "MOVMD",
-           "CMPW", "DECW", "INCW", "JMPIAX", "DBNZ", "DBNZY",
-           "DIV", "CMPY"}   # DIV: 35 a frame in SMW; a vector-unit DIV is the way back
+           "CMPW", "DECW", "INCW", "JMPIAX", "DBNZ", "DBNZY"}
 OPS = ops1 + [o + "M2" for o in ops2]
 for m, o in sorted(set(SPECIAL.values())):
     if o not in OPS: OPS.append(o)

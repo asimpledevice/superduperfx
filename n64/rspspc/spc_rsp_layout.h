@@ -21,6 +21,8 @@
 #define SPCST_ROMREADABLE 0x1e /* u8: IPL ROM mapped at $FFC0 */
 #define SPCST_INPORTS  0x20   /* u8[6]: $F4-$F7 from the CPU, $F8-$F9 */
 #define SPCST_OUTPORTS 0x26   /* u8[4]: $F4-$F7 to the CPU */
+#define SPCST_EXT      0x2c   /* u32: RDRAM: rsp_spc_ext.S code, then a save area
+                                 for the rspq IMEM it replaces during the run */
 #define SPCST_TIMERS   0x30   /* 3 x 8: cycles, divider, target, counter, enabled */
 #define SPCST_CYCLES   0x48   /* u32: APU cycles (apu->cycles) */
 #define SPCST_TSYNC    0x4c   /* u32: cycle the timers are current to */
