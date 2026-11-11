@@ -658,16 +658,6 @@ static void spc_doOpcode(Spc* spc, uint8_t opcode) {
       spc_doBranch(spc, spc_readOpcode(spc), (val & (1 << (opcode >> 5))) == 0);
       break;
     }
-    case 0x0a: { // or1 abs.bit
-      uint16_t adr = 0;
-      uint8_t bit = spc_adrAbsBit(spc, &adr);
-      spc->c = spc->c | ((spc_read(spc, adr) >> bit) & 1);
-      break;
-    }
-    case 0x0d: { // pushp imp
-      spc_pushByte(spc, spc_getFlags(spc));
-      break;
-    }
     case 0x0e: { // tset1 abs
       uint16_t adr = spc_adrAbs(spc);
       uint8_t val = spc_read(spc, adr);
@@ -682,10 +672,6 @@ static void spc_doOpcode(Spc* spc, uint8_t opcode) {
       spc->i = false;
       spc->b = true;
       spc->pc = spc_readWord(spc, 0xffde, 0xffdf);
-      break;
-    }
-    case 0x10: { // bpl rel
-      spc_doBranch(spc, spc_readOpcode(spc), !spc->n);
       break;
     }
     case 0x1a: { // decw dp
@@ -703,28 +689,9 @@ static void spc_doOpcode(Spc* spc, uint8_t opcode) {
       spc_setZN(spc, spc->a);
       break;
     }
-    case 0x1d: { // decx imp
-      spc->x--;
-      spc_setZN(spc, spc->x);
-      break;
-    }
     case 0x1f: { // jmp iax
       uint16_t pointer = spc_readOpcodeWord(spc);
       spc->pc = spc_readWord(spc, (pointer + spc->x) & 0xffff, (pointer + spc->x + 1) & 0xffff);
-      break;
-    }
-    case 0x20: { // clrp imp
-      spc->p = false;
-      break;
-    }
-    case 0x2a: { // or1n abs.bit
-      uint16_t adr = 0;
-      uint8_t bit = spc_adrAbsBit(spc, &adr);
-      spc->c = spc->c | (~(spc_read(spc, adr) >> bit) & 1);
-      break;
-    }
-    case 0x2d: { // pusha imp
-      spc_pushByte(spc, spc->a);
       break;
     }
     case 0x2e: { // cbne dp, rel
@@ -735,10 +702,6 @@ static void spc_doOpcode(Spc* spc, uint8_t opcode) {
     }
     case 0x2f: { // bra rel
       spc->pc += (int8_t) spc_readOpcode(spc);
-      break;
-    }
-    case 0x30: { // bmi rel
-      spc_doBranch(spc, spc_readOpcode(spc), spc->n);
       break;
     }
     case 0x3a: { // incw dp
@@ -757,29 +720,10 @@ static void spc_doOpcode(Spc* spc, uint8_t opcode) {
       spc_setZN(spc, spc->a);
       break;
     }
-    case 0x3d: { // incx imp
-      spc->x++;
-      spc_setZN(spc, spc->x);
-      break;
-    }
     case 0x3f: { // call abs
       uint16_t dst = spc_readOpcodeWord(spc);
       spc_pushWord(spc, spc->pc);
       spc->pc = dst;
-      break;
-    }
-    case 0x40: { // setp imp
-      spc->p = true;
-      break;
-    }
-    case 0x4a: { // and1 abs.bit
-      uint16_t adr = 0;
-      uint8_t bit = spc_adrAbsBit(spc, &adr);
-      spc->c = spc->c & ((spc_read(spc, adr) >> bit) & 1);
-      break;
-    }
-    case 0x4d: { // pushx imp
-      spc_pushByte(spc, spc->x);
       break;
     }
     case 0x4e: { // tclr1 abs
@@ -794,10 +738,6 @@ static void spc_doOpcode(Spc* spc, uint8_t opcode) {
       uint8_t dst = spc_readOpcode(spc);
       spc_pushWord(spc, spc->pc);
       spc->pc = 0xff00 | dst;
-      break;
-    }
-    case 0x50: { // bvc rel
-      spc_doBranch(spc, spc_readOpcode(spc), !spc->v);
       break;
     }
     case 0x5a: { // cmpw dp
@@ -817,27 +757,8 @@ static void spc_doOpcode(Spc* spc, uint8_t opcode) {
       spc_setZN(spc, spc->a);
       break;
     }
-    case 0x5d: { // movxa imp
-      spc->x = spc->a;
-      spc_setZN(spc, spc->x);
-      break;
-    }
     case 0x5f: { // jmp abs
       spc->pc = spc_readOpcodeWord(spc);
-      break;
-    }
-    case 0x60: { // clrc imp
-      spc->c = false;
-      break;
-    }
-    case 0x6a: { // and1n abs.bit
-      uint16_t adr = 0;
-      uint8_t bit = spc_adrAbsBit(spc, &adr);
-      spc->c = spc->c & (~(spc_read(spc, adr) >> bit) & 1);
-      break;
-    }
-    case 0x6d: { // pushy imp
-      spc_pushByte(spc, spc->y);
       break;
     }
     case 0x6e: { // dbnz dp, rel
@@ -849,10 +770,6 @@ static void spc_doOpcode(Spc* spc, uint8_t opcode) {
     }
     case 0x6f: { // ret imp
       spc->pc = spc_pullWord(spc);
-      break;
-    }
-    case 0x70: { // bvs rel
-      spc_doBranch(spc, spc_readOpcode(spc), spc->v);
       break;
     }
     case 0x7a: { // addw dp
@@ -877,28 +794,9 @@ static void spc_doOpcode(Spc* spc, uint8_t opcode) {
       spc_setZN(spc, spc->a);
       break;
     }
-    case 0x7d: { // movax imp
-      spc->a = spc->x;
-      spc_setZN(spc, spc->a);
-      break;
-    }
     case 0x7f: { // reti imp
       spc_setFlags(spc, spc_pullByte(spc));
       spc->pc = spc_pullWord(spc);
-      break;
-    }
-    case 0x80: { // setc imp
-      spc->c = true;
-      break;
-    }
-    case 0x8a: { // eor1 abs.bit
-      uint16_t adr = 0;
-      uint8_t bit = spc_adrAbsBit(spc, &adr);
-      spc->c = spc->c ^ ((spc_read(spc, adr) >> bit) & 1);
-      break;
-    }
-    case 0x8e: { // popp imp
-      spc_setFlags(spc, spc_pullByte(spc));
       break;
     }
     case 0x8f: { // movm dp, imm
@@ -907,10 +805,6 @@ static void spc_doOpcode(Spc* spc, uint8_t opcode) {
       uint8_t val = spc_read(spc, src);
       spc_read(spc, dst);
       spc_write(spc, dst, val);
-      break;
-    }
-    case 0x90: { // bcc rel
-      spc_doBranch(spc, spc_readOpcode(spc), !spc->c);
       break;
     }
     case 0x9a: { // subw dp
@@ -926,16 +820,6 @@ static void spc_doOpcode(Spc* spc, uint8_t opcode) {
       spc->n = result & 0x8000;
       spc->a = result & 0xff;
       spc->y = result >> 8;
-      break;
-    }
-    case 0x9c: { // deca imp
-      spc->a--;
-      spc_setZN(spc, spc->a);
-      break;
-    }
-    case 0x9d: { // movxp imp
-      spc->x = spc->sp;
-      spc_setZN(spc, spc->x);
       break;
     }
     case 0x9e: { // div imp
@@ -959,27 +843,9 @@ static void spc_doOpcode(Spc* spc, uint8_t opcode) {
       spc_setZN(spc, spc->a);
       break;
     }
-    case 0xa0: { // ei  imp
-      spc->i = true;
-      break;
-    }
-    case 0xaa: { // mov1 abs.bit
-      uint16_t adr = 0;
-      uint8_t bit = spc_adrAbsBit(spc, &adr);
-      spc->c = (spc_read(spc, adr) >> bit) & 1;
-      break;
-    }
-    case 0xae: { // popa imp
-      spc->a = spc_pullByte(spc);
-      break;
-    }
     case 0xaf: { // movs ind+
       uint16_t adr = spc_adrIndP(spc);
       spc_write(spc, adr, spc->a);
-      break;
-    }
-    case 0xb0: { // bcs rel
-      spc_doBranch(spc, spc_readOpcode(spc), spc->c);
       break;
     }
     case 0xba: { // movw dp
@@ -990,11 +856,6 @@ static void spc_doOpcode(Spc* spc, uint8_t opcode) {
       spc->y = val >> 8;
       spc->z = val == 0;
       spc->n = val & 0x8000;
-      break;
-    }
-    case 0xbc: { // inca imp
-      spc->a++;
-      spc_setZN(spc, spc->a);
       break;
     }
     case 0xbd: { // movpx imp
@@ -1018,19 +879,11 @@ static void spc_doOpcode(Spc* spc, uint8_t opcode) {
       spc_setZN(spc, spc->a);
       break;
     }
-    case 0xc0: { // di  imp
-      spc->i = false;
-      break;
-    }
     case 0xca: { // mov1s abs.bit
       uint16_t adr = 0;
       uint8_t bit = spc_adrAbsBit(spc, &adr);
       uint8_t result = (spc_read(spc, adr) & (~(1 << bit))) | (spc->c << bit);
       spc_write(spc, adr, result);
-      break;
-    }
-    case 0xce: { // popx imp
-      spc->x = spc_pullByte(spc);
       break;
     }
     case 0xcf: { // mul imp
@@ -1040,26 +893,12 @@ static void spc_doOpcode(Spc* spc, uint8_t opcode) {
       spc_setZN(spc, spc->y);
       break;
     }
-    case 0xd0: { // bne rel
-      spc_doBranch(spc, spc_readOpcode(spc), !spc->z);
-      break;
-    }
     case 0xda: { // movws dp
       uint16_t low = 0;
       uint16_t high = spc_adrDpWord(spc, &low);
       spc_read(spc, low);
       spc_write(spc, low, spc->a);
       spc_write(spc, high, spc->y);
-      break;
-    }
-    case 0xdc: { // decy imp
-      spc->y--;
-      spc_setZN(spc, spc->y);
-      break;
-    }
-    case 0xdd: { // movay imp
-      spc->a = spc->y;
-      spc_setZN(spc, spc->a);
       break;
     }
     case 0xde: { // cbne dpx, rel
@@ -1095,16 +934,8 @@ static void spc_doOpcode(Spc* spc, uint8_t opcode) {
       spc->c = !spc->c;
       break;
     }
-    case 0xee: { // popy imp
-      spc->y = spc_pullByte(spc);
-      break;
-    }
     case 0xef: { // sleep imp
       spc->stopped = true; // no interrupts, so sleeping stops as well
-      break;
-    }
-    case 0xf0: { // beq rel
-      spc_doBranch(spc, spc_readOpcode(spc), spc->z);
       break;
     }
     case 0xfa: { // movm dp, dp
@@ -1112,16 +943,6 @@ static void spc_doOpcode(Spc* spc, uint8_t opcode) {
       uint16_t dst = spc_adrDpDp(spc, &src);
       uint8_t val = spc_read(spc, src);
       spc_write(spc, dst, val);
-      break;
-    }
-    case 0xfc: { // incy imp
-      spc->y++;
-      spc_setZN(spc, spc->y);
-      break;
-    }
-    case 0xfd: { // movya imp
-      spc->y = spc->a;
-      spc_setZN(spc, spc->y);
       break;
     }
     case 0xfe: { // dbnzy rel
@@ -1133,7 +954,54 @@ static void spc_doOpcode(Spc* spc, uint8_t opcode) {
       spc->stopped = true;
       break;
     }
-    default: {  /* addressing mode + operation (k_spc_mode/op, k_spc_mode2/op2) */
+
+    /* Families of opcodes that differ only in the register or flag they use
+     * (selected from the opcode): one case each, same helpers in the same
+     * order as the per-opcode cases they replace. */
+    case 0x10: case 0x30: case 0x50: case 0x70:
+    case 0x90: case 0xb0: case 0xd0: case 0xf0: { // bpl bmi bvc bvs bcc bcs bne beq
+      const uint8_t sel = opcode >> 6;   /* N, V, C, Z; taken when it equals bit 5 */
+      const bool flag = sel == 0 ? spc->n : sel == 1 ? spc->v : sel == 2 ? spc->c : spc->z;
+      spc_doBranch(spc, spc_readOpcode(spc), flag == ((opcode >> 5) & 1));
+      break;
+    }
+    case 0x20: case 0x40: case 0x60: case 0x80: case 0xa0: case 0xc0: { // clrp setp clrc setc ei di
+      bool* const f = opcode <= 0x40 ? &spc->p : opcode <= 0x80 ? &spc->c : &spc->i;
+      *f = opcode == 0x40 || opcode == 0x80 || opcode == 0xa0;
+      break;
+    }
+    case 0x0d: case 0x2d: case 0x4d: case 0x6d: { // pushp pusha pushx pushy
+      spc_pushByte(spc, opcode == 0x0d ? spc_getFlags(spc) : opcode == 0x2d ? spc->a :
+                        opcode == 0x4d ? spc->x : spc->y);
+      break;
+    }
+    case 0x8e: case 0xae: case 0xce: case 0xee: { // popp popa popx popy
+      const uint8_t v = spc_pullByte(spc);
+      if(opcode == 0x8e) spc_setFlags(spc, v);
+      else *(opcode == 0xae ? &spc->a : opcode == 0xce ? &spc->x : &spc->y) = v;
+      break;
+    }
+    case 0x1d: case 0x3d: case 0x9c: case 0xbc: case 0xdc: case 0xfc: { // decx incx deca inca decy incy
+      uint8_t* const r = (opcode & 0x0f) == 0x0d ? &spc->x : opcode < 0xc0 ? &spc->a : &spc->y;
+      *r += (opcode == 0x3d || opcode == 0xbc || opcode == 0xfc) ? 1 : -1;
+      spc_setZN(spc, *r);
+      break;
+    }
+    case 0x5d: case 0x7d: case 0x9d: case 0xdd: case 0xfd: { // movxa movax movxp movay movya
+      uint8_t* const dst = opcode == 0x5d || opcode == 0x9d ? &spc->x : opcode == 0xfd ? &spc->y : &spc->a;
+      *dst = opcode == 0x5d || opcode == 0xfd ? spc->a : opcode == 0x7d ? spc->x :
+             opcode == 0x9d ? spc->sp : spc->y;
+      spc_setZN(spc, *dst);
+      break;
+    }
+    case 0x0a: case 0x2a: case 0x4a: case 0x6a: case 0x8a: case 0xaa: { // or1 or1n and1 and1n eor1 mov1
+      uint16_t adr = 0;
+      uint8_t bit = spc_adrAbsBit(spc, &adr);
+      const bool b = ((spc_read(spc, adr) >> bit) & 1) ^ (opcode == 0x2a || opcode == 0x6a);
+      spc->c = opcode <= 0x2a ? (spc->c | b) : opcode <= 0x6a ? (spc->c & b) :
+               opcode == 0x8a ? (spc->c ^ b) : b;
+      break;
+    }    default: {  /* addressing mode + operation (k_spc_mode/op, k_spc_mode2/op2) */
       if (k_spc_mode[opcode]) {
         uint16_t adr = 0;
         switch (k_spc_mode[opcode]) {

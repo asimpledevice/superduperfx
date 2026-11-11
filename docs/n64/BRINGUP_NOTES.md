@@ -1489,6 +1489,42 @@ kernel without a rule for the rest moves every other hot function. Next:
 consolidate the decoders' special cases, then a complete deterministic
 layout (kernel sets + Idea 1 colouring for the rest).
 
+### Interpreter kernel: decoder consolidation (2026-11-11)
+
+65816 core: opcode families that differ only in the register or flag they
+use are one case each (8 branches -- flag by bits 7-6, taken when it equals
+bit 5; 7 flag set/clear; X/Y transfers; X/Y increment/decrement; A transfers
+and INC/DEC A; register push and pull; PHP/PHK/PHB): 37 opcodes. The
+per-operation functions for the read-operand, store and read-modify-write
+shapes (22 functions, each with an 8-bit and a 16-bit copy) are now three
+width-generic blocks in the decoder (M, or X for the index registers, selects
+the width; m is its mask); ADC/SBC keep theirs (decimal mode). SPC700 core:
+the same treatment for 39 opcodes (branches -- same encoding as the 65816 --,
+flag set/clear, push/pop, register INC/DEC and moves, the abs.bit carry
+operations); its other cases were already one-liners -Os merges well.
+
+Title-specific code in the shared 65816 core, preserved as is (the tests
+compare against the original): PEA ($F4) sets Y to 0 when its operand is
+$C2AE (`if (w == 0xC2AE) cpu->y = 0;`) -- any game executing PEA #$C2AE
+gets that, which hardware does not do. Like the guest-PC special cases in
+_interp_run_core, it belongs in a title adapter.
+
+Verified against the original (pre-table) cores by the differential tests:
+65816 24.6M runs per configuration, SPC700 1.0M, no mismatch; native SMW TAS
+replay identical over 90,000 frames; C and pytest suites pass.
+
+Sizes (N64 build): interp816_runOpcode 8,744 -> 6,276; spc_runOpcode
+6,896 -> 5,008 (the SPC700 decoder is 3.8 KB with its helpers out of line).
+Kernel by role: 39.2 KB (49 functions) -> 28.4 KB (48).
+
+The two cores cannot share cache sets: they alternate 316 times a frame in
+SMW and 744 in Pitfall, in short SPC700 batches (median 123 and 51 code-line
+entries); each switch would refill the other's working set. The kernel's
+hot code per game is ~11 KB (SMW) / ~5.5 KB (Pitfall); the whole kernel,
+which a game-agnostic layout must hold, is 28 KB, and SMW's emulation stage
+also keeps ~20 KB of hardware-access code hot. 16 KB cannot hold the
+emulation stage's hot set in SMW whatever the layout.
+
 ## Next steps
 
 1. Audio: check the RSP DSP by ear on hardware (output arrives later than

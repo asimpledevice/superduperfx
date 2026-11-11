@@ -639,41 +639,8 @@ static uint16_t interp816_adrIax(Interp816* cpu) {
 
 // opcode functions
 
-static void interp816_and(Interp816* cpu, uint32_t low, uint32_t high) {
-  if(cpu->mf) {
-    uint8_t value = interp816_read(cpu, low);
-    cpu->a = (cpu->a & 0xff00) | ((cpu->a & value) & 0xff);
-  } else {
-    cpu->cyclesUsed++; // m = 0: 1 extra cycle
-    uint16_t value = interp816_readWord(cpu, low, high);
-    cpu->a &= value;
-  }
-  interp816_setZN(cpu, cpu->a, cpu->mf);
-}
 
-static void interp816_ora(Interp816* cpu, uint32_t low, uint32_t high) {
-  if(cpu->mf) {
-    uint8_t value = interp816_read(cpu, low);
-    cpu->a = (cpu->a & 0xff00) | ((cpu->a | value) & 0xff);
-  } else {
-    cpu->cyclesUsed++; // m = 0: 1 extra cycle
-    uint16_t value = interp816_readWord(cpu, low, high);
-    cpu->a |= value;
-  }
-  interp816_setZN(cpu, cpu->a, cpu->mf);
-}
 
-static void interp816_eor(Interp816* cpu, uint32_t low, uint32_t high) {
-  if(cpu->mf) {
-    uint8_t value = interp816_read(cpu, low);
-    cpu->a = (cpu->a & 0xff00) | ((cpu->a ^ value) & 0xff);
-  } else {
-    cpu->cyclesUsed++; // m = 0: 1 extra cycle
-    uint16_t value = interp816_readWord(cpu, low, high);
-    cpu->a ^= value;
-  }
-  interp816_setZN(cpu, cpu->a, cpu->mf);
-}
 
 static void interp816_adc(Interp816* cpu, uint32_t low, uint32_t high) {
   if(cpu->mf) {
@@ -751,251 +718,24 @@ static void interp816_sbc(Interp816* cpu, uint32_t low, uint32_t high) {
   interp816_setZN(cpu, cpu->a, cpu->mf);
 }
 
-static void interp816_cmp(Interp816* cpu, uint32_t low, uint32_t high) {
-  int result = 0;
-  if(cpu->mf) {
-    uint8_t value = interp816_read(cpu, low) ^ 0xff;
-    result = (cpu->a & 0xff) + value + 1;
-    cpu->c = result > 0xff;
-  } else {
-    cpu->cyclesUsed++; // m = 0: 1 extra cycle
-    uint16_t value = interp816_readWord(cpu, low, high) ^ 0xffff;
-    result = cpu->a + value + 1;
-    cpu->c = result > 0xffff;
-  }
-  interp816_setZN(cpu, result, cpu->mf);
-}
 
-static void interp816_cpx(Interp816* cpu, uint32_t low, uint32_t high) {
-  int result = 0;
-  if(cpu->xf) {
-    uint8_t value = interp816_read(cpu, low) ^ 0xff;
-    result = (cpu->x & 0xff) + value + 1;
-    cpu->c = result > 0xff;
-  } else {
-    cpu->cyclesUsed++; // x = 0: 1 extra cycle
-    uint16_t value = interp816_readWord(cpu, low, high) ^ 0xffff;
-    result = cpu->x + value + 1;
-    cpu->c = result > 0xffff;
-  }
-  interp816_setZN(cpu, result, cpu->xf);
-}
 
-static void interp816_cpy(Interp816* cpu, uint32_t low, uint32_t high) {
-  int result = 0;
-  if(cpu->xf) {
-    uint8_t value = interp816_read(cpu, low) ^ 0xff;
-    result = (cpu->y & 0xff) + value + 1;
-    cpu->c = result > 0xff;
-  } else {
-    cpu->cyclesUsed++; // x = 0: 1 extra cycle
-    uint16_t value = interp816_readWord(cpu, low, high) ^ 0xffff;
-    result = cpu->y + value + 1;
-    cpu->c = result > 0xffff;
-  }
-  interp816_setZN(cpu, result, cpu->xf);
-}
 
-static void interp816_bit(Interp816* cpu, uint32_t low, uint32_t high) {
-  if(cpu->mf) {
-    uint8_t value = interp816_read(cpu, low);
-    uint8_t result = (cpu->a & 0xff) & value;
-    cpu->z = result == 0;
-    cpu->n = value & 0x80;
-    cpu->v = value & 0x40;
-  } else {
-    cpu->cyclesUsed++; // m = 0: 1 extra cycle
-    uint16_t value = interp816_readWord(cpu, low, high);
-    uint16_t result = cpu->a & value;
-    cpu->z = result == 0;
-    cpu->n = value & 0x8000;
-    cpu->v = value & 0x4000;
-  }
-}
 
-static void interp816_lda(Interp816* cpu, uint32_t low, uint32_t high) {
-  if(cpu->mf) {
-    cpu->a = (cpu->a & 0xff00) | interp816_read(cpu, low);
-  } else {
-    cpu->cyclesUsed++; // m = 0: 1 extra cycle
-    cpu->a = interp816_readWord(cpu, low, high);
-  }
-  interp816_setZN(cpu, cpu->a, cpu->mf);
-}
 
-static void interp816_ldx(Interp816* cpu, uint32_t low, uint32_t high) {
-  if(cpu->xf) {
-    cpu->x = interp816_read(cpu, low);
-  } else {
-    cpu->cyclesUsed++; // x = 0: 1 extra cycle
-    cpu->x = interp816_readWord(cpu, low, high);
-  }
-  interp816_setZN(cpu, cpu->x, cpu->xf);
-}
 
-static void interp816_ldy(Interp816* cpu, uint32_t low, uint32_t high) {
-  if(cpu->xf) {
-    cpu->y = interp816_read(cpu, low);
-  } else {
-    cpu->cyclesUsed++; // x = 0: 1 extra cycle
-    cpu->y = interp816_readWord(cpu, low, high);
-  }
-  interp816_setZN(cpu, cpu->y, cpu->xf);
-}
 
-static void interp816_sta(Interp816* cpu, uint32_t low, uint32_t high) {
-  if(cpu->mf) {
-    interp816_write(cpu, low, (uint8_t)cpu->a);
-  } else {
-    cpu->cyclesUsed++; // m = 0: 1 extra cycle
-    interp816_writeWord(cpu, low, high, cpu->a, false);
-  }
-}
 
-static void interp816_stx(Interp816* cpu, uint32_t low, uint32_t high) {
-  if(cpu->xf) {
-    interp816_write(cpu, low, (uint8_t)cpu->x);
-  } else {
-    cpu->cyclesUsed++; // x = 0: 1 extra cycle
-    interp816_writeWord(cpu, low, high, cpu->x, false);
-  }
-}
 
-static void interp816_sty(Interp816* cpu, uint32_t low, uint32_t high) {
-  if(cpu->xf) {
-    interp816_write(cpu, low, (uint8_t)cpu->y);
-  } else {
-    cpu->cyclesUsed++; // x = 0: 1 extra cycle
-    interp816_writeWord(cpu, low, high, cpu->y, false);
-  }
-}
 
-static void interp816_stz(Interp816* cpu, uint32_t low, uint32_t high) {
-  if(cpu->mf) {
-    interp816_write(cpu, low, 0);
-  } else {
-    cpu->cyclesUsed++; // m = 0: 1 extra cycle
-    interp816_writeWord(cpu, low, high, 0, false);
-  }
-}
 
-static void interp816_ror(Interp816* cpu, uint32_t low, uint32_t high) {
-  bool carry = false;
-  int result = 0;
-  if(cpu->mf) {
-    uint8_t value = interp816_read(cpu, low);
-    carry = value & 1;
-    result = (value >> 1) | (cpu->c << 7);
-    interp816_write(cpu, low, result);
-  } else {
-    cpu->cyclesUsed += 2; // m = 0: 2 extra cycles
-    uint16_t value = interp816_readWord(cpu, low, high);
-    carry = value & 1;
-    result = (value >> 1) | (cpu->c << 15);
-    interp816_writeWord(cpu, low, high, result, true);
-  }
-  interp816_setZN(cpu, result, cpu->mf);
-  cpu->c = carry;
-}
 
-static void interp816_rol(Interp816* cpu, uint32_t low, uint32_t high) {
-  int result = 0;
-  if(cpu->mf) {
-    result = (interp816_read(cpu, low) << 1) | cpu->c;
-    cpu->c = result & 0x100;
-    interp816_write(cpu, low, result);
-  } else {
-    cpu->cyclesUsed += 2; // m = 0: 2 extra cycles
-    result = (interp816_readWord(cpu, low, high) << 1) | cpu->c;
-    cpu->c = result & 0x10000;
-    interp816_writeWord(cpu, low, high, result, true);
-  }
-  interp816_setZN(cpu, result, cpu->mf);
-}
 
-static void interp816_lsr(Interp816* cpu, uint32_t low, uint32_t high) {
-  int result = 0;
-  if(cpu->mf) {
-    uint8_t value = interp816_read(cpu, low);
-    cpu->c = value & 1;
-    result = value >> 1;
-    interp816_write(cpu, low, result);
-  } else {
-    cpu->cyclesUsed += 2; // m = 0: 2 extra cycles
-    uint16_t value = interp816_readWord(cpu, low, high);
-    cpu->c = value & 1;
-    result = value >> 1;
-    interp816_writeWord(cpu, low, high, result, true);
-  }
-  interp816_setZN(cpu, result, cpu->mf);
-}
 
-static void interp816_asl(Interp816* cpu, uint32_t low, uint32_t high) {
-  int result = 0;
-  if(cpu->mf) {
-    result = interp816_read(cpu, low) << 1;
-    cpu->c = result & 0x100;
-    interp816_write(cpu, low, result);
-  } else {
-    cpu->cyclesUsed += 2; // m = 0: 2 extra cycles
-    result = interp816_readWord(cpu, low, high) << 1;
-    cpu->c = result & 0x10000;
-    interp816_writeWord(cpu, low, high, result, true);
-  }
-  interp816_setZN(cpu, result, cpu->mf);
-}
 
-static void interp816_inc(Interp816* cpu, uint32_t low, uint32_t high) {
-  int result = 0;
-  if(cpu->mf) {
-    result = interp816_read(cpu, low) + 1;
-    interp816_write(cpu, low, result);
-  } else {
-    cpu->cyclesUsed += 2; // m = 0: 2 extra cycles
-    result = interp816_readWord(cpu, low, high) + 1;
-    interp816_writeWord(cpu, low, high, result, true);
-  }
-  interp816_setZN(cpu, result, cpu->mf);
-}
 
-static void interp816_dec(Interp816* cpu, uint32_t low, uint32_t high) {
-  int result = 0;
-  if(cpu->mf) {
-    result = interp816_read(cpu, low) - 1;
-    interp816_write(cpu, low, result);
-  } else {
-    cpu->cyclesUsed += 2; // m = 0: 2 extra cycles
-    result = interp816_readWord(cpu, low, high) - 1;
-    interp816_writeWord(cpu, low, high, result, true);
-  }
-  interp816_setZN(cpu, result, cpu->mf);
-}
 
-static void interp816_tsb(Interp816* cpu, uint32_t low, uint32_t high) {
-  if(cpu->mf) {
-    uint8_t value = interp816_read(cpu, low);
-    cpu->z = ((cpu->a & 0xff) & value) == 0;
-    interp816_write(cpu, low, value | (cpu->a & 0xff));
-  } else {
-    cpu->cyclesUsed += 2; // m = 0: 2 extra cycles
-    uint16_t value = interp816_readWord(cpu, low, high);
-    cpu->z = (cpu->a & value) == 0;
-    interp816_writeWord(cpu, low, high, value | cpu->a, true);
-  }
-}
 
-static void interp816_trb(Interp816* cpu, uint32_t low, uint32_t high) {
-  if(cpu->mf) {
-    uint8_t value = interp816_read(cpu, low);
-    cpu->z = ((cpu->a & 0xff) & value) == 0;
-    interp816_write(cpu, low, value & ~(cpu->a & 0xff));
-  } else {
-    cpu->cyclesUsed += 2; // m = 0: 2 extra cycles
-    uint16_t value = interp816_readWord(cpu, low, high);
-    cpu->z = (cpu->a & value) == 0;
-    interp816_writeWord(cpu, low, high, value & ~cpu->a, true);
-  }
-}
 
 
 /* Opcodes that are an addressing mode followed by an operation: their
@@ -1108,10 +848,6 @@ static void interp816_doOpcode(Interp816* cpu, uint8_t opcode) {
       cpu->pc = interp816_readWord(cpu, 0xffe4, 0xffe5);
       break;
     }
-    case 0x08: { // php imp
-      interp816_pushByte(cpu, interp816_getFlags(cpu));
-      break;
-    }
     case 0x0a: { // asla imp
       if(cpu->mf) {
         cpu->c = cpu->a & 0x80;
@@ -1125,23 +861,6 @@ static void interp816_doOpcode(Interp816* cpu, uint8_t opcode) {
     }
     case 0x0b: { // phd imp
       interp816_pushWord(cpu, cpu->dp);
-      break;
-    }
-    case 0x10: { // bpl rel
-      interp816_doBranch(cpu, interp816_readOpcode(cpu), !cpu->n);
-      break;
-    }
-    case 0x18: { // clc imp
-      cpu->c = false;
-      break;
-    }
-    case 0x1a: { // inca imp
-      if(cpu->mf) {
-        cpu->a = (cpu->a & 0xff00) | ((cpu->a + 1) & 0xff);
-      } else {
-        cpu->a++;
-      }
-      interp816_setZN(cpu, cpu->a, cpu->mf);
       break;
     }
     case 0x1b: { // tcs imp
@@ -1186,23 +905,6 @@ static void interp816_doOpcode(Interp816* cpu, uint8_t opcode) {
       interp816_setZN(cpu, cpu->dp, false);
       break;
     }
-    case 0x30: { // bmi rel
-      interp816_doBranch(cpu, interp816_readOpcode(cpu), cpu->n);
-      break;
-    }
-    case 0x38: { // sec imp
-      cpu->c = true;
-      break;
-    }
-    case 0x3a: { // deca imp
-      if(cpu->mf) {
-        cpu->a = (cpu->a & 0xff00) | ((cpu->a - 1) & 0xff);
-      } else {
-        cpu->a--;
-      }
-      interp816_setZN(cpu, cpu->a, cpu->mf);
-      break;
-    }
     case 0x3b: { // tsc imp
       cpu->a = cpu->sp;
       interp816_setZN(cpu, cpu->a, false);
@@ -1236,15 +938,6 @@ static void interp816_doOpcode(Interp816* cpu, uint8_t opcode) {
       }
       break;
     }
-    case 0x48: { // pha imp
-      if(cpu->mf) {
-        interp816_pushByte(cpu, (uint8_t)cpu->a);
-      } else {
-        cpu->cyclesUsed++; // m = 0: 1 extra cycle
-        interp816_pushWord(cpu, cpu->a);
-      }
-      break;
-    }
     case 0x4a: { // lsra imp
       cpu->c = cpu->a & 1;
       if(cpu->mf) {
@@ -1255,16 +948,8 @@ static void interp816_doOpcode(Interp816* cpu, uint8_t opcode) {
       interp816_setZN(cpu, cpu->a, cpu->mf);
       break;
     }
-    case 0x4b: { // phk imp
-      interp816_pushByte(cpu, cpu->k);
-      break;
-    }
     case 0x4c: { // jmp abs
       cpu->pc = interp816_readOpcodeWord(cpu);
-      break;
-    }
-    case 0x50: { // bvc rel
-      interp816_doBranch(cpu, interp816_readOpcode(cpu), !cpu->v);
       break;
     }
     case 0x54: { // mvn bm
@@ -1281,19 +966,6 @@ static void interp816_doOpcode(Interp816* cpu, uint8_t opcode) {
       if(cpu->xf) {
         cpu->x &= 0xff;
         cpu->y &= 0xff;
-      }
-      break;
-    }
-    case 0x58: { // cli imp
-      cpu->i = false;
-      break;
-    }
-    case 0x5a: { // phy imp
-      if(cpu->xf) {
-        interp816_pushByte(cpu, (uint8_t)cpu->y);
-      } else {
-        cpu->cyclesUsed++; // m = 0: 1 extra cycle
-        interp816_pushWord(cpu, cpu->y);
       }
       break;
     }
@@ -1318,16 +990,6 @@ static void interp816_doOpcode(Interp816* cpu, uint8_t opcode) {
       interp816_pushWord(cpu, cpu->pc + (int16_t) value);
       break;
     }
-    case 0x68: { // pla imp
-      if(cpu->mf) {
-        cpu->a = (cpu->a & 0xff00) | interp816_pullByte(cpu);
-      } else {
-        cpu->cyclesUsed++; // 16-bit m: 1 extra cycle
-        cpu->a = interp816_pullWord(cpu);
-      }
-      interp816_setZN(cpu, cpu->a, cpu->mf);
-      break;
-    }
     case 0x6a: { // rora imp
       bool carry = cpu->a & 1;
       if(cpu->mf) {
@@ -1349,24 +1011,6 @@ static void interp816_doOpcode(Interp816* cpu, uint8_t opcode) {
       cpu->pc = interp816_readWord(cpu, adr, (adr + 1) & 0xffff);
       break;
     }
-    case 0x70: { // bvs rel
-      interp816_doBranch(cpu, interp816_readOpcode(cpu), cpu->v);
-      break;
-    }
-    case 0x78: { // sei imp
-      cpu->i = true;
-      break;
-    }
-    case 0x7a: { // ply imp
-      if(cpu->xf) {
-        cpu->y = interp816_pullByte(cpu);
-      } else {
-        cpu->cyclesUsed++; // 16-bit x: 1 extra cycle
-        cpu->y = interp816_pullWord(cpu);
-      }
-      interp816_setZN(cpu, cpu->y, cpu->xf);
-      break;
-    }
     case 0x7b: { // tdc imp
       cpu->a = cpu->dp;
       interp816_setZN(cpu, cpu->a, false);
@@ -1386,15 +1030,6 @@ static void interp816_doOpcode(Interp816* cpu, uint8_t opcode) {
       cpu->pc += (int16_t) offset;
       break;
     }
-    case 0x88: { // dey imp
-      if(cpu->xf) {
-        cpu->y = (cpu->y - 1) & 0xff;
-      } else {
-        cpu->y--;
-      }
-      interp816_setZN(cpu, cpu->y, cpu->xf);
-      break;
-    }
     case 0x89: { // biti imm(m)
       if(cpu->mf) {
         uint8_t result = (cpu->a & 0xff) & interp816_readOpcode(cpu);
@@ -1406,61 +1041,8 @@ static void interp816_doOpcode(Interp816* cpu, uint8_t opcode) {
       }
       break;
     }
-    case 0x8a: { // txa imp
-      if(cpu->mf) {
-        cpu->a = (cpu->a & 0xff00) | (cpu->x & 0xff);
-      } else {
-        cpu->a = cpu->x;
-      }
-      interp816_setZN(cpu, cpu->a, cpu->mf);
-      break;
-    }
-    case 0x8b: { // phb imp
-      interp816_pushByte(cpu, cpu->db);
-      break;
-    }
-    case 0x90: { // bcc rel
-      interp816_doBranch(cpu, interp816_readOpcode(cpu), !cpu->c);
-      break;
-    }
-    case 0x98: { // tya imp
-      if(cpu->mf) {
-        cpu->a = (cpu->a & 0xff00) | (cpu->y & 0xff);
-      } else {
-        cpu->a = cpu->y;
-      }
-      interp816_setZN(cpu, cpu->a, cpu->mf);
-      break;
-    }
     case 0x9a: { // txs imp
       cpu->sp = cpu->x;
-      break;
-    }
-    case 0x9b: { // txy imp
-      if(cpu->xf) {
-        cpu->y = cpu->x & 0xff;
-      } else {
-        cpu->y = cpu->x;
-      }
-      interp816_setZN(cpu, cpu->y, cpu->xf);
-      break;
-    }
-    case 0xa8: { // tay imp
-      if(cpu->xf) {
-        cpu->y = cpu->a & 0xff;
-      } else {
-        cpu->y = cpu->a;
-      }
-      interp816_setZN(cpu, cpu->y, cpu->xf);
-      break;
-    }
-    case 0xaa: { // tax imp
-      if(cpu->xf) {
-        cpu->x = cpu->a & 0xff;
-      } else {
-        cpu->x = cpu->a;
-      }
-      interp816_setZN(cpu, cpu->x, cpu->xf);
       break;
     }
     case 0xab: { // plb imp
@@ -1468,79 +1050,18 @@ static void interp816_doOpcode(Interp816* cpu, uint8_t opcode) {
       interp816_setZN(cpu, cpu->db, true);
       break;
     }
-    case 0xb0: { // bcs rel
-      interp816_doBranch(cpu, interp816_readOpcode(cpu), cpu->c);
-      break;
-    }
-    case 0xb8: { // clv imp
-      cpu->v = false;
-      break;
-    }
-    case 0xba: { // tsx imp
-      if(cpu->xf) {
-        cpu->x = cpu->sp & 0xff;
-      } else {
-        cpu->x = cpu->sp;
-      }
-      interp816_setZN(cpu, cpu->x, cpu->xf);
-      break;
-    }
-    case 0xbb: { // tyx imp
-      if(cpu->xf) {
-        cpu->x = cpu->y & 0xff;
-      } else {
-        cpu->x = cpu->y;
-      }
-      interp816_setZN(cpu, cpu->x, cpu->xf);
-      break;
-    }
     case 0xc2: { // rep imm(s)
       interp816_setFlags(cpu, interp816_getFlags(cpu) & ~interp816_readOpcode(cpu));
-      break;
-    }
-    case 0xc8: { // iny imp
-      if(cpu->xf) {
-        cpu->y = (cpu->y + 1) & 0xff;
-      } else {
-        cpu->y++;
-      }
-      interp816_setZN(cpu, cpu->y, cpu->xf);
-      break;
-    }
-    case 0xca: { // dex imp
-      if(cpu->xf) {
-        cpu->x = (cpu->x - 1) & 0xff;
-      } else {
-        cpu->x--;
-      }
-      interp816_setZN(cpu, cpu->x, cpu->xf);
       break;
     }
     case 0xcb: { // wai imp
       cpu->waiting = true;
       break;
     }
-    case 0xd0: { // bne rel
-      interp816_doBranch(cpu, interp816_readOpcode(cpu), !cpu->z);
-      break;
-    }
     case 0xd4: { // pei dp
       uint32_t low = 0;
       uint32_t high = interp816_adrDp(cpu, &low);
       interp816_pushWord(cpu, interp816_readWord(cpu, low, high));
-      break;
-    }
-    case 0xd8: { // cld imp
-      cpu->d = false;
-      break;
-    }
-    case 0xda: { // phx imp
-      if(cpu->xf) {
-        interp816_pushByte(cpu, (uint8_t)cpu->x);
-      } else {
-        cpu->cyclesUsed++; // m = 0: 1 extra cycle
-        interp816_pushWord(cpu, cpu->x);
-      }
       break;
     }
     case 0xdb: { // stp imp
@@ -1557,15 +1078,6 @@ static void interp816_doOpcode(Interp816* cpu, uint8_t opcode) {
       interp816_setFlags(cpu, interp816_getFlags(cpu) | interp816_readOpcode(cpu));
       break;
     }
-    case 0xe8: { // inx imp
-      if(cpu->xf) {
-        cpu->x = (cpu->x + 1) & 0xff;
-      } else {
-        cpu->x++;
-      }
-      interp816_setZN(cpu, cpu->x, cpu->xf);
-      break;
-    }
     case 0xea: { // nop imp
       // no operation
       break;
@@ -1577,30 +1089,12 @@ static void interp816_doOpcode(Interp816* cpu, uint8_t opcode) {
       interp816_setZN(cpu, high, true);
       break;
     }
-    case 0xf0: { // beq rel
-      interp816_doBranch(cpu, interp816_readOpcode(cpu), cpu->z);
-      break;
-    }
     case 0xf4: { // pea imm(l)
       uint16_t w = interp816_readOpcodeWord(cpu);
       if (w == 0xC2AE)
         cpu->y = 0;
       interp816_pushWord(cpu, w);
   
-      break;
-    }
-    case 0xf8: { // sed imp
-      cpu->d = true;
-      break;
-    }
-    case 0xfa: { // plx imp
-      if(cpu->xf) {
-        cpu->x = interp816_pullByte(cpu);
-      } else {
-        cpu->cyclesUsed++; // 16-bit x: 1 extra cycle
-        cpu->x = interp816_pullWord(cpu);
-      }
-      interp816_setZN(cpu, cpu->x, cpu->xf);
       break;
     }
     case 0xfb: { // xce imp
@@ -1616,7 +1110,72 @@ static void interp816_doOpcode(Interp816* cpu, uint8_t opcode) {
       cpu->pc = value;
       break;
     }
-    default: {  /* addressing mode + operation (k_i816_mode, k_i816_op) */
+
+    /* Families of opcodes that differ only in the register or flag they use
+     * (selected from the opcode): one case each, same helpers in the same
+     * order as the per-opcode cases they replace. */
+    case 0x10: case 0x30: case 0x50: case 0x70:
+    case 0x90: case 0xb0: case 0xd0: case 0xf0: { // bpl bmi bvc bvs bcc bcs bne beq
+      const uint8_t sel = opcode >> 6;   /* N, V, C, Z; taken when it equals bit 5 */
+      const bool flag = sel == 0 ? cpu->n : sel == 1 ? cpu->v : sel == 2 ? cpu->c : cpu->z;
+      interp816_doBranch(cpu, interp816_readOpcode(cpu), flag == ((opcode >> 5) & 1));
+      break;
+    }
+    case 0x18: case 0x38: case 0x58: case 0x78:
+    case 0xb8: case 0xd8: case 0xf8: { // clc sec cli sei clv cld sed
+      bool* const f = opcode < 0x40 ? &cpu->c : opcode < 0x80 ? &cpu->i : opcode < 0xc0 ? &cpu->v : &cpu->d;
+      *f = (opcode & 0x20) && opcode != 0xb8;
+      break;
+    }
+    case 0xa8: case 0xaa: case 0x9b: case 0xbb: case 0xba: { // tay tax txy tyx tsx
+      uint16_t* const dst = (opcode == 0xa8 || opcode == 0x9b) ? &cpu->y : &cpu->x;
+      const uint16_t src = opcode == 0xba ? cpu->sp : opcode == 0x9b ? cpu->x :
+                           opcode == 0xbb ? cpu->y : cpu->a;
+      *dst = cpu->xf ? (src & 0xff) : src;
+      interp816_setZN(cpu, *dst, cpu->xf);
+      break;
+    }
+    case 0xe8: case 0xc8: case 0xca: case 0x88: { // inx iny dex dey
+      uint16_t* const r = (opcode == 0xe8 || opcode == 0xca) ? &cpu->x : &cpu->y;
+      const uint16_t v = (opcode == 0xe8 || opcode == 0xc8) ? (uint16_t)(*r + 1) : (uint16_t)(*r - 1);
+      *r = cpu->xf ? (v & 0xff) : v;
+      interp816_setZN(cpu, *r, cpu->xf);
+      break;
+    }
+    case 0x8a: case 0x98: case 0x1a: case 0x3a: { // txa tya inca deca
+      const uint16_t v = opcode == 0x8a ? cpu->x : opcode == 0x98 ? cpu->y :
+                         opcode == 0x1a ? (uint16_t)(cpu->a + 1) : (uint16_t)(cpu->a - 1);
+      cpu->a = cpu->mf ? (uint16_t)((cpu->a & 0xff00) | (v & 0xff)) : v;
+      interp816_setZN(cpu, cpu->a, cpu->mf);
+      break;
+    }
+    case 0x48: case 0xda: case 0x5a: { // pha phx phy
+      const uint16_t v = opcode == 0x48 ? cpu->a : opcode == 0xda ? cpu->x : cpu->y;
+      if(opcode == 0x48 ? cpu->mf : cpu->xf) {
+        interp816_pushByte(cpu, (uint8_t)v);
+      } else {
+        cpu->cyclesUsed++; // 16-bit: 1 extra cycle
+        interp816_pushWord(cpu, v);
+      }
+      break;
+    }
+    case 0x68: case 0xfa: case 0x7a: { // pla plx ply
+      uint16_t* const r = opcode == 0x68 ? &cpu->a : opcode == 0xfa ? &cpu->x : &cpu->y;
+      const bool byte = opcode == 0x68 ? cpu->mf : cpu->xf;
+      if(byte) {
+        /* 8-bit A keeps its high byte; 8-bit X and Y have none */
+        *r = (opcode == 0x68 ? (*r & 0xff00) : 0) | interp816_pullByte(cpu);
+      } else {
+        cpu->cyclesUsed++; // 16-bit: 1 extra cycle
+        *r = interp816_pullWord(cpu);
+      }
+      interp816_setZN(cpu, *r, byte);
+      break;
+    }
+    case 0x08: case 0x4b: case 0x8b: { // php phk phb
+      interp816_pushByte(cpu, opcode == 0x08 ? interp816_getFlags(cpu) : opcode == 0x4b ? cpu->k : cpu->db);
+      break;
+    }    default: {  /* addressing mode + operation (k_i816_mode, k_i816_op) */
       uint32_t low = 0, high = 0;
       switch (k_i816_mode[opcode]) {
         case I816_M_IDX: high = interp816_adrIdx(cpu, &low); break;
@@ -1641,32 +1200,101 @@ static void interp816_doOpcode(Interp816* cpu, uint8_t opcode) {
         case I816_M_IMM_TRUE: high = interp816_adrImm(cpu, &low, true); break;
         default: I816_UNREACHABLE();
       }
-      switch (k_i816_op[opcode]) {
-        case I816_O_ORA: interp816_ora(cpu, low, high); break;
-        case I816_O_TSB: interp816_tsb(cpu, low, high); break;
-        case I816_O_ASL: interp816_asl(cpu, low, high); break;
-        case I816_O_TRB: interp816_trb(cpu, low, high); break;
-        case I816_O_AND: interp816_and(cpu, low, high); break;
-        case I816_O_BIT: interp816_bit(cpu, low, high); break;
-        case I816_O_ROL: interp816_rol(cpu, low, high); break;
-        case I816_O_EOR: interp816_eor(cpu, low, high); break;
-        case I816_O_LSR: interp816_lsr(cpu, low, high); break;
+      /* Operations of one shape share their code across widths: M (or X for
+       * the index registers) selects 8 or 16 bits, m is its mask. ADC and SBC
+       * keep their functions (decimal mode). Expressions, bus accesses and
+       * cycle charges are those of the per-operation functions they replace. */
+      const uint8_t op = k_i816_op[opcode];
+      switch (op) {
         case I816_O_ADC: interp816_adc(cpu, low, high); break;
-        case I816_O_STZ: interp816_stz(cpu, low, high); break;
-        case I816_O_ROR: interp816_ror(cpu, low, high); break;
-        case I816_O_STA: interp816_sta(cpu, low, high); break;
-        case I816_O_STY: interp816_sty(cpu, low, high); break;
-        case I816_O_STX: interp816_stx(cpu, low, high); break;
-        case I816_O_LDY: interp816_ldy(cpu, low, high); break;
-        case I816_O_LDA: interp816_lda(cpu, low, high); break;
-        case I816_O_LDX: interp816_ldx(cpu, low, high); break;
-        case I816_O_CPY: interp816_cpy(cpu, low, high); break;
-        case I816_O_CMP: interp816_cmp(cpu, low, high); break;
-        case I816_O_DEC: interp816_dec(cpu, low, high); break;
-        case I816_O_CPX: interp816_cpx(cpu, low, high); break;
         case I816_O_SBC: interp816_sbc(cpu, low, high); break;
-        case I816_O_INC: interp816_inc(cpu, low, high); break;
-        default: I816_UNREACHABLE();
+        case I816_O_STA: case I816_O_STX: case I816_O_STY: case I816_O_STZ: {
+          const bool byte = (op == I816_O_STX || op == I816_O_STY) ? cpu->xf : cpu->mf;
+          const uint16_t v = op == I816_O_STA ? cpu->a : op == I816_O_STX ? cpu->x :
+                             op == I816_O_STY ? cpu->y : 0;
+          if(byte) {
+            interp816_write(cpu, low, (uint8_t)v);
+          } else {
+            cpu->cyclesUsed++; // 16-bit: 1 extra cycle
+            interp816_writeWord(cpu, low, high, v, false);
+          }
+          break;
+        }
+        case I816_O_ASL: case I816_O_LSR: case I816_O_ROL: case I816_O_ROR:
+        case I816_O_INC: case I816_O_DEC: case I816_O_TSB: case I816_O_TRB: {
+          const bool byte = cpu->mf;
+          const int m = byte ? 0xff : 0xffff;
+          uint16_t value;
+          if(byte) {
+            value = interp816_read(cpu, low);
+          } else {
+            cpu->cyclesUsed += 2; // 16-bit: 2 extra cycles
+            value = interp816_readWord(cpu, low, high);
+          }
+          int result;
+          bool flags = true;   /* N and Z from the result (not TSB/TRB) */
+          switch (op) {
+            case I816_O_ASL: result = value << 1; cpu->c = result & (m + 1); break;
+            case I816_O_ROL: result = (value << 1) | cpu->c; cpu->c = result & (m + 1); break;
+            case I816_O_LSR: cpu->c = value & 1; result = value >> 1; break;
+            case I816_O_ROR: {
+              const bool carry = value & 1;
+              result = (value >> 1) | (cpu->c << (byte ? 7 : 15));
+              if(byte) interp816_write(cpu, low, result);
+              else interp816_writeWord(cpu, low, high, result, true);
+              interp816_setZN(cpu, result, byte);
+              cpu->c = carry;
+              flags = false;
+              goto rmw_done;
+            }
+            case I816_O_INC: result = value + 1; break;
+            case I816_O_DEC: result = value - 1; break;
+            case I816_O_TSB:
+              cpu->z = ((cpu->a & m) & value) == 0;
+              result = value | (cpu->a & m); flags = false; break;
+            default: /* TRB */
+              cpu->z = ((cpu->a & m) & value) == 0;
+              result = value & ~(cpu->a & m); flags = false; break;
+          }
+          if(byte) interp816_write(cpu, low, result);
+          else interp816_writeWord(cpu, low, high, result, true);
+          if(flags) interp816_setZN(cpu, result, byte);
+        rmw_done:
+          break;
+        }
+        default: {  /* read an operand: AND ORA EOR CMP CPX CPY BIT LDA LDX LDY */
+          const bool xop = op == I816_O_CPX || op == I816_O_CPY || op == I816_O_LDX || op == I816_O_LDY;
+          const bool byte = xop ? cpu->xf : cpu->mf;
+          const uint16_t m = byte ? 0xff : 0xffff;
+          uint16_t value;
+          if(byte) {
+            value = interp816_read(cpu, low);
+          } else {
+            cpu->cyclesUsed++; // 16-bit: 1 extra cycle
+            value = interp816_readWord(cpu, low, high);
+          }
+          switch (op) {
+            case I816_O_AND: cpu->a = (cpu->a & ~m) | ((cpu->a & value) & m); interp816_setZN(cpu, cpu->a, byte); break;
+            case I816_O_ORA: cpu->a = (cpu->a & ~m) | ((cpu->a | value) & m); interp816_setZN(cpu, cpu->a, byte); break;
+            case I816_O_EOR: cpu->a = (cpu->a & ~m) | ((cpu->a ^ value) & m); interp816_setZN(cpu, cpu->a, byte); break;
+            case I816_O_LDA: cpu->a = (cpu->a & ~m) | value; interp816_setZN(cpu, cpu->a, byte); break;
+            case I816_O_LDX: cpu->x = value; interp816_setZN(cpu, cpu->x, byte); break;
+            case I816_O_LDY: cpu->y = value; interp816_setZN(cpu, cpu->y, byte); break;
+            case I816_O_BIT:
+              cpu->z = ((cpu->a & m) & value) == 0;
+              cpu->n = value & (byte ? 0x80 : 0x8000);
+              cpu->v = value & (byte ? 0x40 : 0x4000);
+              break;
+            default: {  /* CMP CPX CPY */
+              const uint16_t reg = op == I816_O_CPX ? cpu->x : op == I816_O_CPY ? cpu->y : cpu->a;
+              const int result = (reg & m) + (value ^ m) + 1;
+              cpu->c = result > m;
+              interp816_setZN(cpu, result, byte);
+              break;
+            }
+          }
+          break;
+        }
       }
       break;
     }
