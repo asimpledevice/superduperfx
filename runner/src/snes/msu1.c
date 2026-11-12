@@ -36,7 +36,7 @@ extern void RtlApuUnlock(void);
 /* The device rate the host actually opened (common_rtl.c RtlSetAudioOutputRate
  * / RtlAudioOutputRate). msu1_mix resamples the fixed 44.1 kHz track rate onto
  * this, the same conversion rtl_render_native does for the S-DSP output. */
-extern double RtlAudioOutputRate(void);
+extern int RtlAudioOutputRate(void);
 
 #define MSU1_RATE            44100
 #define MSU1_FRAMES_PER_BLK  (MSU1_RATE / 60)   /* 735 = 44100/60; historical unit, no
@@ -509,7 +509,7 @@ void msu1_mix(int16_t *out, int out_frames) {
      * exactly one 735-frame block's worth of track audio per call regardless
      * of how much output time out_frames actually spanned -- roughly 1.7x
      * too fast, and warped at every chunk boundary. */
-    double output_rate = RtlAudioOutputRate();
+    double output_rate = (double)RtlAudioOutputRate();
     if (output_rate < 1.0) output_rate = MSU1_RATE;
     const double ratio = (double)MSU1_RATE / output_rate;
 

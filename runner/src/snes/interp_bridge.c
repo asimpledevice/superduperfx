@@ -37,7 +37,6 @@ extern uint64_t g_apu_last_sync_master;   /* common_rtl.c — keep synced so a b
 extern int g_interp_apu_driving;          /* common_rtl.c — suppresses the per-touch synthetic catch-up while set */
 void RtlApuLock(void);                    /* real mutex in the windowed runner (audio thread also cycles the SPC); no-op in headless/cosim */
 void RtlApuUnlock(void);
-static const double kInterpApuPerMaster = (32040.0 * 32.0) / (1364.0 * 262.0 * 60.0);
 
 /* Batched guest-time APU advance. v1 advanced the SPC per interpreted opcode:
  * RtlApuLock + snes_catchupApu once per opcode. In the windowed build that
@@ -143,7 +142,7 @@ static void bridge_apu_flush(CpuState *cpu) {
       if (s_was_ready) { s_was_ready = false; s_apu_pending_master = 0; return; } }
 #endif
     RtlApuLock();
-    g_snes->apuCatchupCycles += (double)s_apu_pending_master * kInterpApuPerMaster;
+    g_snes->apuCatchupCycles += (int64_t)s_apu_pending_master * SNES_APU_CATCHUP_PER_GUEST_MASTER;
     g_apu_last_sync_master = cpu->master_cycles;
     snes_catchupApu(g_snes);
     /* After the relative catch-up, resync the SPC to the absolute guest clock.
@@ -2109,12 +2108,12 @@ static BRIDGE_COLD void bridge_vblank_ff(CpuState *cpu, uint32_t pc_before) {
                      * advance AGAIN (double count). Flushing
                      * pre-jump anchors to pre-skip guest time
                      * (no-op re-anchor), catchup adds exactly
-                     * skip * kInterpApuPerMaster. */
+                     * skip * 2136/44671 SPC cycles. */
                     s_apu_pending_master += skip;
                     for (int _g = 0; s_apu_pending_master && _g < 64;
                          _g++) {
                         const uint64_t _max_feed =
-                            (uint64_t)(9000.0 / kInterpApuPerMaster);
+                            (uint64_t)9000 * 44671 / 2136;   /* 9000 SPC cycles */
                         uint64_t _chunk = s_apu_pending_master;
                         if (_chunk > _max_feed) _chunk = _max_feed;
                         uint64_t _rest = s_apu_pending_master - _chunk;

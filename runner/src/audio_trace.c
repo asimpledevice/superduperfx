@@ -572,7 +572,7 @@ int audio_trace_dump_wav(const char *path, int64_t start_idx, uint64_t count,
   }
   uint32_t data_bytes = (uint32_t)(count * 4);
   /* The PCM ring stores DSP output at the S-DSP NATIVE rate, which is 32040 Hz
-   * (1364*262*60 master / 32 per sample; the same rate apuCyclesPerMaster and
+   * (1364*262*60 master / 32 per sample; the same rate SNES_APU_CATCHUP_* and
    * the config default are derived from, and byuu's measured real-SNES DSP
    * rate). A previous 32000 here mislabeled the dump: every drift-tolerant A/B
    * (tools/audio_ab_diff.py) then resampled the recomp 32000->32040 against the

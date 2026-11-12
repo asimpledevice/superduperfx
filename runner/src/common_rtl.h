@@ -54,12 +54,11 @@ extern uint64_t g_apu_last_sync_master;
  * same elapsed master cycles. */
 bool rtl_apu_frame_timeline_active(void);
 /* Opt in before the first RtlRunFrame when the host can pace extended guest
- * iterations. It MUST advance its simulation deadline by RtlLastFramePeriods
- * nominal frame periods after each call, including non-interactive loading.
+ * iterations. It MUST advance its simulation deadline by the guest frame
+ * periods each call took, including non-interactive loading.
  * Audio stays on one carried guest clock across multi-frame work. Existing
  * hosts retain their timing until they adopt this contract. */
 void RtlEnableExtendedFrameTiming(void);
-double RtlLastFramePeriods(void);
 bool rtl_apu_extended_frame_timing(void);
 void rtl_apu_snapshot_pacing(uint64_t *frame_start_master, uint8_t *frame_time_valid);
 void rtl_apu_restore_pacing(uint64_t frame_start_master, uint8_t frame_time_valid);

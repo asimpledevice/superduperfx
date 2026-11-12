@@ -211,11 +211,6 @@ bool rtl_apu_frame_timeline_active(void) {
   return g_apu_frame_time_valid;
 }
 
-double RtlLastFramePeriods(void) {
-  return g_extended_frame_timing && g_apu_frame_clock.last_duration
-      ? (double)g_apu_frame_clock.last_duration / RTL_APU_CYCLES_PER_FRAME : 1.0;
-}
-
 void RtlEnableExtendedFrameTiming(void) {
   g_extended_frame_timing = true;
 }
@@ -313,7 +308,7 @@ static uint64_t fp_fnv1a(const uint8_t *p, size_t n) {
  * v8: multitap chunk (seats, IOBit lines, per-bank shift counters, latched
  *     automatic-read words). Older files load with no multitap configured,
  *     which is the pre-multitap two-pad machine exactly. */
-#define RTL_SAV_VERSION 10u /* RDNMI pending latch; v9 added Super FX state. */
+#define RTL_SAV_VERSION 11u /* v11: exact apuCatchupCycles; v10 RDNMI latch; v9 Super FX. */
 /* 4 and 5 described a Snes tail layout this struct no longer has; see
  * snes_saveload(). Loading one would mis-map the interrupt fields, so
  * they are rejected by the header check instead. */
@@ -1903,15 +1898,15 @@ void rtl_accumulate_apu_catchup(void) {
    * realtime, 220s of APU audio discarded at the output ring). Set
    * SNESRECOMP_APU_TOUCH_CYCLES=20 to charge ~20 master cycles per touch. */
   {
-    static double s_touch_scale = -1.0;
-    if (s_touch_scale < 0.0) {
+    static int s_touch_cycles = -1;   /* master cycles charged per touch; 256 nominal */
+    if (s_touch_cycles < 0) {
       const char *e = getenv("SNESRECOMP_APU_TOUCH_CYCLES");
-      s_touch_scale = (e && e[0]) ? (atof(e) / 256.0) : 1.0;
-      if (s_touch_scale <= 0.0) s_touch_scale = 1.0;
+      s_touch_cycles = (e && e[0]) ? atoi(e) : 256;
+      if (s_touch_cycles <= 0) s_touch_cycles = 256;
     }
-    delta = (uint64_t)((double)delta * s_touch_scale);
+    if (s_touch_cycles != 256) delta = delta * (uint64_t)s_touch_cycles / 256u;
   }
-  g_snes->apuCatchupCycles += (double)delta * 2.0 / 7.0;
+  g_snes->apuCatchupCycles += (int64_t)delta * SNES_APU_CATCHUP_PER_TOUCH_MASTER;
   // Keep the master sync pointer current so the (now inert) accumulator's delta
   // never balloons if a future change re-enables master-clock pacing.
   g_apu_last_sync_master = g_cpu.master_cycles;
@@ -1955,7 +1950,7 @@ void rtl_accumulate_apu_catchup(void) {
       uint64_t elapsed = now_ms - wall_last_ms;
       if (elapsed > 32) elapsed = 32;  /* burst cap: ~32 ms of SPC time */
       baseline = (uint32_t)(elapsed * 1024);  /* SPC ~1.024 MHz */
-      g_snes->apuCatchupCycles += (double)baseline;
+      g_snes->apuCatchupCycles += (int64_t)baseline * SNES_APU_CATCHUP_DEN;
     }
     wall_last_ms = now_ms;
     audio_trace_on_pace(consumer_active, baseline);
@@ -2366,27 +2361,29 @@ void RtlAudioSetFastForward(bool active) {
  * clock and let audio drift behind video after turbo. The consumer bending by
  * half a percent cannot become a clock.
  */
-#define RTL_AUDIO_NATIVE_RATE    32040.0 /* SPC output rate: 1.024 MHz / 32   */
-#define RTL_AUDIO_SERVO_GAIN     0.05  /* gentle: full-scale error -> 5%, clamped */
-#define RTL_AUDIO_SERVO_MAX      0.005 /* +/-0.5% == ~8 cents, inaudible        */
+#define RTL_AUDIO_NATIVE_RATE    32040u   /* SPC output rate: 1.024 MHz / 32       */
+#define RTL_AUDIO_SERVO_GAIN_DIV 20       /* gain 0.05 (full-scale error -> 5%)    */
+#define RTL_AUDIO_SERVO_MAX_Q32  21474836 /* clamp 0.005 * 2^32: +/-0.5%, ~8 cents */
 /* Occupancy is sampled at callback entry, but production arrives in 534-native
  * bursts once per emulated frame, so the raw reading sawtooths by more than the
  * servo's whole proportional band (+/-160 natives). Feeding that straight in
  * slams the ratio rail-to-rail every callback — ~1% peak-to-peak pitch flutter
  * at the callback rate, which is an order of magnitude above where tape wow
  * becomes objectionable. Smooth the burst out before the servo sees it. */
-#define RTL_AUDIO_OCC_EMA        0.05
+#define RTL_AUDIO_OCC_EMA_DIV    20   /* EMA weight 0.05 = 1/20 */
 /* Fade length for starvation edges. A hard cut to zero and back is a click at
  * both edges; 64 frames (~2 ms) is short enough to be inaudible as a gain
  * change but long enough to remove the click. */
 #define RTL_AUDIO_FADE_FRAMES    64
 
-static double s_render_phase;      /* fractional native position, carried over */
+/* All integer (32.32 fixed point for positions and steps): the N64 keeps the
+ * FPU for state it reserves (BRINGUP_NOTES.md). */
+static uint32_t s_render_phase;    /* fractional native position (.32), carried over */
 static int16 s_render_hold_l;      /* last native delivered — fade anchor and  */
 static int16 s_render_hold_r;      /* interpolation partner across calls       */
 static int s_render_starved;       /* in a starvation episode (drives fade-in) */
 static int s_render_fade_pos;      /* fade-in progress, carried across calls   */
-static double s_render_occ_ema = -1.0; /* burst-filtered occupancy, -1 = unset */
+static int64_t s_render_occ_ema = -1; /* burst-filtered occupancy (16.16), -1 = unset */
 static bool s_render_priming = true;
 static int s_render_fade_out;
 
@@ -2396,7 +2393,7 @@ static int s_render_fade_out;
  * fill it: only completed guest frames may produce the missing samples. */
 static void rtl_reset_audio_delivery(void) {
   s_render_phase = 0;
-  s_render_occ_ema = -1.0;
+  s_render_occ_ema = -1;
   s_render_priming = true;
   s_render_starved = 1;
   s_render_fade_pos = 0;
@@ -2415,7 +2412,7 @@ static void rtl_render_wait(int16 *out, int frames) {
  * RtlSetAudioOutputRate behaves exactly as if no conversion were needed —
  * which is correct for every shipped default config, all of which open the
  * device at 32040 (or 32000, inside the servo's range). */
-static double s_render_output_rate = RTL_AUDIO_NATIVE_RATE;
+static int s_render_output_rate = RTL_AUDIO_NATIVE_RATE;
 
 /* Tell the consumer what rate the host actually opened the device at.
  *
@@ -2430,7 +2427,7 @@ static double s_render_output_rate = RTL_AUDIO_NATIVE_RATE;
  * before any callback can run, so no lock is needed. */
 void RtlSetAudioOutputRate(int freq) {
   if (freq >= 8000 && freq <= 192000)
-    s_render_output_rate = (double)freq;
+    s_render_output_rate = freq;
 }
 
 /* Accessor for other consumers that must resample onto the same device rate
@@ -2438,7 +2435,7 @@ void RtlSetAudioOutputRate(int freq) {
  * conversion in snes/msu1.c). Declared extern locally there rather than
  * pulled in through a header, matching this file's existing convention for
  * small cross-module hooks (see msu1.c's RtlApuLock/RtlApuUnlock externs). */
-double RtlAudioOutputRate(void) {
+int RtlAudioOutputRate(void) {
   return s_render_output_rate;
 }
 
@@ -2453,29 +2450,31 @@ static void rtl_render_native(Dsp *dsp, int16 *out, int frames) {
       return;
     }
     s_render_priming = false;
-    s_render_occ_ema = (double)available;
+    s_render_occ_ema = (int64_t)available << 16;
     s_render_starved = 1;
     s_render_fade_pos = 0;
   }
 
   /* Servo: steer ring occupancy toward the target cushion, on top of the fixed
    * native->device rate conversion. */
-  if (s_render_occ_ema < 0.0) s_render_occ_ema = (double)available;
-  else s_render_occ_ema += RTL_AUDIO_OCC_EMA *
-                           ((double)available - s_render_occ_ema);
-  double err = (s_render_occ_ema - (double)RTL_AUDIO_TARGET_NATIVES) /
-               (double)RTL_AUDIO_TARGET_NATIVES;
-  double servo = 1.0 + RTL_AUDIO_SERVO_GAIN * err;
-  if (servo > 1.0 + RTL_AUDIO_SERVO_MAX) servo = 1.0 + RTL_AUDIO_SERVO_MAX;
-  if (servo < 1.0 - RTL_AUDIO_SERVO_MAX) servo = 1.0 - RTL_AUDIO_SERVO_MAX;
-  /* Natives to advance per output frame: the rate ratio, trimmed by the servo. */
-  double ratio = (RTL_AUDIO_NATIVE_RATE / s_render_output_rate) * servo;
+  if (s_render_occ_ema < 0) s_render_occ_ema = (int64_t)available << 16;
+  else s_render_occ_ema += (((int64_t)available << 16) - s_render_occ_ema) /
+                           RTL_AUDIO_OCC_EMA_DIV;
+  /* Servo deviation, .32: gain * (ema - target) / target, clamped. */
+  int64_t dev = ((s_render_occ_ema - ((int64_t)RTL_AUDIO_TARGET_NATIVES << 16)) << 16) /
+                ((int64_t)RTL_AUDIO_TARGET_NATIVES * RTL_AUDIO_SERVO_GAIN_DIV);
+  if (dev > RTL_AUDIO_SERVO_MAX_Q32) dev = RTL_AUDIO_SERVO_MAX_Q32;
+  if (dev < -RTL_AUDIO_SERVO_MAX_Q32) dev = -RTL_AUDIO_SERVO_MAX_Q32;
+  /* Natives to advance per output frame (32.32): the rate ratio, trimmed by
+   * the servo. */
+  const uint64_t base = ((uint64_t)RTL_AUDIO_NATIVE_RATE << 32) / (uint32_t)s_render_output_rate;
+  const uint64_t ratio = base + (uint64_t)(((int64_t)base * dev) >> 32);
 
   /* Natives spanned by this request, including the carried phase. The last
    * output frame interpolates between floor(pos) and floor(pos)+1, so one
    * extra native must be present. */
-  double span = s_render_phase + (double)(frames - 1) * ratio;
-  uint32_t need = (uint32_t)span + 2;
+  uint64_t span = s_render_phase + (uint64_t)(frames - 1) * ratio;
+  uint32_t need = (uint32_t)(span >> 32) + 2;
 
   int usable = frames;
   if (available < need) {
@@ -2485,21 +2484,21 @@ static void rtl_render_native(Dsp *dsp, int16 *out, int frames) {
     if (available < 2) {
       usable = 0;
     } else {
-      double max_span = (double)(available - 2) - s_render_phase;
-      usable = max_span <= 0.0 ? 0 : (int)(max_span / ratio) + 1;
+      int64_t max_span = ((int64_t)(available - 2) << 32) - (int64_t)s_render_phase;
+      usable = max_span <= 0 ? 0 : (int)(max_span / (int64_t)ratio) + 1;
       if (usable > frames) usable = frames;
     }
   }
 
   for (int i = 0; i < usable; i++) {
-    double pos = s_render_phase + (double)i * ratio;
-    uint32_t idx = (uint32_t)pos;
-    double frac = pos - (double)idx;
+    uint64_t pos = s_render_phase + (uint64_t)i * ratio;
+    uint32_t idx = (uint32_t)(pos >> 32);
+    int64_t frac = (int64_t)(pos & 0xFFFFFFFFu);
     int16 l0, r0, l1, r1;
     dsp_peek(dsp, idx, &l0, &r0);
     dsp_peek(dsp, idx + 1, &l1, &r1);
-    int16 l = (int16)((double)l0 + ((double)l1 - (double)l0) * frac);
-    int16 r = (int16)((double)r0 + ((double)r1 - (double)r0) * frac);
+    int16 l = (int16)(l0 + (((int64_t)(l1 - l0) * frac) >> 32));
+    int16 r = (int16)(r0 + (((int64_t)(r1 - r0) * frac) >> 32));
     /* Fade in out of a starvation episode so the recovery edge is not a step.
      * The fade-out below ends at silence, so this ramps 0 -> signal.
      *
@@ -2525,10 +2524,10 @@ static void rtl_render_native(Dsp *dsp, int16 *out, int frames) {
     s_render_hold_r = out[(usable - 1) * 2 + 1];
     /* Retire only the natives fully behind the new phase, so the interpolation
      * partner for the next call stays resident. */
-    double consumed_span = s_render_phase + (double)usable * ratio;
-    uint32_t retire = (uint32_t)consumed_span;
+    uint64_t consumed_span = s_render_phase + (uint64_t)usable * ratio;
+    uint32_t retire = (uint32_t)(consumed_span >> 32);
     dsp_advance(dsp, retire);
-    s_render_phase = consumed_span - (double)retire;
+    s_render_phase = (uint32_t)consumed_span;
   }
 
   if (usable < frames) {
@@ -2566,7 +2565,7 @@ void RtlRenderAudio(int16 *audio_buffer, int samples, int channels) {
   /* Overlay follows the native+MSU mix and precedes recovery fade, so trusted
    * one-shots share the final discontinuity smoothing. */
   snes_mod_audio_mix(audio_buffer, samples,
-                      (uint32_t)(RtlAudioOutputRate() + 0.5), channels);
+                      (uint32_t)RtlAudioOutputRate(), channels);
   for (int i = 0; i < samples && g_audio_recovery_remaining != 0; i++) {
     uint32_t progressed = RTL_AUDIO_RECOVERY_RAMP -
                           g_audio_recovery_remaining + 1;

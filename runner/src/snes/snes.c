@@ -24,7 +24,6 @@
 #include "../ppu_dma_trace.h"
 
 int snes_frame_counter;
-static const double apuCyclesPerMaster = (32040 * 32) / (1364 * 262 * 60.0);
 
 bool snes_next_irq_master(const Snes *snes, uint64_t now, uint64_t *out) {
   if (!snes || !out) return false;
@@ -119,10 +118,10 @@ void snes_free(Snes* snes) {
 
 /* RTLS v5 and earlier serialized beamMasterLast between vPos and
  * apuCatchupCycles (+8 bytes). v6+ keeps it host-only (before hPos). */
-static uint32_t s_saveload_version = 10;
+static uint32_t s_saveload_version = 11;
 
 void snes_saveload_set_version(uint32_t version) {
-  s_saveload_version = version ? version : 10;
+  s_saveload_version = version ? version : 11;
 }
 
 uint32_t snes_saveload_get_version(void) { return s_saveload_version; }
@@ -196,6 +195,13 @@ void snes_saveload(Snes *snes, SaveLoadInfo *sli) {
                    "Snes savestate tail changed size -- bump RTL_SAV_VERSION");
     sli->func(sli, &snes->hPos, sizeof(*snes) - offsetof(Snes, hPos));
   }
+  if (s_saveload_version <= 10) {
+    /* Formats up to 10 stored apuCatchupCycles as a double, in SPC cycles.
+     * Only a load sees an old version (a save writes the current one). */
+    double owed;
+    memcpy(&owed, &snes->apuCatchupCycles, sizeof owed);
+    snes->apuCatchupCycles = owed > 0 ? (int64_t)(owed * SNES_APU_CATCHUP_DEN) : 0;
+  }
   sli->func(sli, snes->ram, 0x20000);
   sli->func(sli, &snes->ramAdr, 4);
   if (s_saveload_version >= 7) {
@@ -237,7 +243,7 @@ void snes_reset(Snes* snes, bool hard) {
   snes->ramAdr = 0;
   snes->hPos = 0;
   snes->vPos = 0;
-  snes->apuCatchupCycles = 0.0;
+  snes->apuCatchupCycles = 0;
   snes->hIrqEnabled = false;
   snes->vIrqEnabled = false;
   snes->nmiEnabled = false;
@@ -273,8 +279,8 @@ void snes_catchupApu(Snes* snes) {
   /* Upper cap is a guard against accumulator runaway after a long
    * stall; SPC runs at ~1 MHz so 10000 cycles is about 10 ms of real
    * SPC time per catchup, plenty to absorb any spike. */
-  if (snes->apuCatchupCycles > 10000)
-    snes->apuCatchupCycles = 10000;
+  if (snes->apuCatchupCycles > 10000 * (int64_t)SNES_APU_CATCHUP_DEN)
+    snes->apuCatchupCycles = 10000 * (int64_t)SNES_APU_CATCHUP_DEN;
 
   /* No artificial minimum. Earlier code floored to 1024 SPC cycles
    * per call, which was needed to brute-force progress while the
@@ -289,7 +295,7 @@ void snes_catchupApu(Snes* snes) {
    * cycles the SPC in bulk via RtlRenderAudio (534 samples is about 17 k
    * cycles per audio callback), so the SPC always gets enough
    * time even when the CPU is busy elsewhere. */
-  int catchupCycles = (int) snes->apuCatchupCycles;
+  int catchupCycles = (int)(snes->apuCatchupCycles / SNES_APU_CATCHUP_DEN);
   if (catchupCycles < 0) catchupCycles = 0;
 
   audio_trace_set_producer(AUDIO_TRACE_PRODUCER_CPU);
@@ -302,8 +308,8 @@ void snes_catchupApu(Snes* snes) {
   apucyc_prof_ms += 1000.0 * ((double)(clock() - _t1)) / CLOCKS_PER_SEC;
 #endif
   audio_trace_set_producer(AUDIO_TRACE_PRODUCER_UNKNOWN);
-  snes->apuCatchupCycles -= (double) catchupCycles;
-  if (snes->apuCatchupCycles < 0.0) snes->apuCatchupCycles = 0.0;
+  snes->apuCatchupCycles -= (int64_t)catchupCycles * SNES_APU_CATCHUP_DEN;
+  if (snes->apuCatchupCycles < 0) snes->apuCatchupCycles = 0;
   s_catchup_calls++;
   s_catchup_cycles_total += (uint64_t)catchupCycles;
 }

@@ -8,6 +8,14 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+/* apuCatchupCycles counts owed SPC cycles in units of 1/SNES_APU_CATCHUP_DEN,
+ * so every ratio that feeds it is exact: 2/7 SPC cycle per touch-estimate
+ * master cycle, and 2136/44671 per guest master cycle (32040 * 32 SPC cycles
+ * in 1364 * 262 * 60 master cycles). 312697 = 7 * 44671. */
+#define SNES_APU_CATCHUP_DEN 312697
+#define SNES_APU_CATCHUP_PER_TOUCH_MASTER (2 * 44671)   /* 2/7 */
+#define SNES_APU_CATCHUP_PER_GUEST_MASTER (2136 * 7)    /* 2136/44671 */
+
 typedef struct Snes Snes;
 typedef void (*SnesMasterClockChargeHook)(Snes *snes, uint64_t clocks);
 typedef void (*SnesWramWriteLogHook)(uint32_t ram_off, uint8_t value,
@@ -53,7 +61,7 @@ struct Snes {
   // --- saveload blob starts here (hPos .. divideResult) ---
   uint16_t hPos;
   uint16_t vPos;
-  double apuCatchupCycles;
+  int64_t apuCatchupCycles;   /* SPC cycles owed, in 1/SNES_APU_CATCHUP_DEN units */
   // nmi / irq
   bool hIrqEnabled;
   bool vIrqEnabled;
