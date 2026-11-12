@@ -15,7 +15,6 @@
 #include "recomp_hw.h"
 #include "framedump.h"
 #include "util.h"
-#include "config.h"
 #include "snes/snes.h"
 #include "snes/apu.h"
 #include "snes/joypad.h"

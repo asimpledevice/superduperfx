@@ -440,9 +440,8 @@ echo "=== Super FX PC hooks ==="
 "$OUT/superfx_pc_hook_test"
 
 # Both include common_rtl.c whole; -fwhole-program drops the host entry
-# points they do not exercise instead of linking the full runtime. config.h
-# comes from the N64 build's wrapper (n64/include/config.h), as on the N64.
-RTL_UNIT_FLAGS="-std=c11 -O2 -flto -fwhole-program -ffunction-sections -fdata-sections -DSNESRECOMP_TRACE=0 -D_POSIX_C_SOURCE=200809L -I $ROOT/n64/include -I $ROOT/runner/src"
+# points they do not exercise instead of linking the full runtime.
+RTL_UNIT_FLAGS="-std=c11 -O2 -flto -fwhole-program -ffunction-sections -fdata-sections -DSNESRECOMP_TRACE=0 -D_POSIX_C_SOURCE=200809L -I $ROOT/runner/src"
 
 echo "=== audio delivery + console reset ==="
 "$CC" $RTL_UNIT_FLAGS "$ROOT/tests/audio_delivery_test.c" \
