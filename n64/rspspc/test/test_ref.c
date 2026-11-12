@@ -67,6 +67,13 @@ static void random_state(Apu *a) {
   a->cycles = rnd();
   a->timerSyncCycle = a->cycles - rnd() % 2000;
   a->cpuCyclesLeft = (rnd() & 1) ? rnd() % 12 : 0;
+  /* CPU port writes queued for cycles ahead (apu_schedulePortWrite's queue). */
+  a->portClock = rnd(); a->portQHead = a->portQTail = 0;
+  for (uint64_t c = a->portClock; a->portQTail < 6 && (rnd() & 3); a->portQTail++) {
+    c += rnd() % 600;
+    ApuPortWrite *w = &a->portQueue[a->portQTail & (APU_PORT_QUEUE_LEN - 1)];
+    w->target_cycle = c; w->port = rnd() & 3; w->val = rnd();
+  }
 #if SNESRECOMP_APU_DEFER_DSP
   dsp_reset(a->dsp);
   for (int i = 0; i < 128; i++) dsp_write(a->dsp, (uint8_t)i, (uint8_t)rnd());
@@ -102,6 +109,7 @@ static const char *differs(const Apu *a, const Apu *b) {
   if (a->timerSyncCycle != b->timerSyncCycle) return "timerSyncCycle";
   if (a->dspAdr != b->dspAdr || a->romReadable != b->romReadable) return "dspAdr/romReadable";
   if (memcmp(a->inPorts, b->inPorts, 6) || memcmp(a->outPorts, b->outPorts, 4)) return "ports";
+  if (a->portQHead != b->portQHead) return "port queue";
   for (int i = 0; i < 3; i++)
     if (a->timer[i].cycles != b->timer[i].cycles || a->timer[i].divider != b->timer[i].divider ||
         a->timer[i].target != b->timer[i].target || a->timer[i].counter != b->timer[i].counter ||

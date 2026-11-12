@@ -154,6 +154,10 @@ static inline void apu_drainPortQueue(Apu* apu) {
   }
 }
 
+/* For an SPC700 core outside spc.c (n64/rspspc): apply the CPU port writes
+ * due by now, as the native loop does before each instruction. */
+void apu_drainDuePortWrites(Apu* apu) { apu_drainPortQueue(apu); }
+
 bool apu_runUntilPortQueueEmpty(Apu* apu, uint32_t max_cycles) {
   while (apu->portQHead != apu->portQTail) {
     if (!max_cycles) return false;

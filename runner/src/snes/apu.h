@@ -187,6 +187,7 @@ bool apu_schedulePortWrite(Apu* apu, uint8_t port, uint8_t val,
                            uint64_t guest_cycle);
 uint32_t apu_portQueueDepth(const Apu* apu);
 /* Advance real SPC execution until every queued bus event has landed. */
+void apu_drainDuePortWrites(Apu* apu);
 bool apu_runUntilPortQueueEmpty(Apu* apu, uint32_t max_cycles);
 /* Advance the live SPC to a guest timestamp using the same mapping as queued
  * CPU writes. This is the fast-forward coupling point: game frames and SPC

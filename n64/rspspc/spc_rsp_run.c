@@ -87,6 +87,14 @@ uint8_t *spc_rsp_dsp_regs(Apu *apu) {
 void spc_rsp_run_apu(Apu *apu, uint32_t clocks) {
   while (clocks) {
     uint32_t n = clocks < SPC_RSP_MAX_RUN ? clocks : SPC_RSP_MAX_RUN;
+    /* CPU port writes: those due now apply before the next instruction, as
+     * in apu_runCycles_native, and the run stops at the next one's cycle. */
+    apu_drainDuePortWrites(apu);
+    if (apu->portQHead != apu->portQTail) {
+      const uint64_t d = apu->portQueue[apu->portQHead & (APU_PORT_QUEUE_LEN - 1u)].target_cycle -
+                         apu->portClock;
+      if (d < n) n = (uint32_t)d;
+    }
 #if SNESRECOMP_APU_DEFER_DSP
     apu_dspJoinNow(apu);
     /* Sample edges the C path takes: a batch start (none pending) and the
