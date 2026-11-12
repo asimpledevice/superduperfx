@@ -1966,6 +1966,61 @@ After the fixes, all 10,000 random tests pass (run in three ranges), and
 so do the three earlier failures (4308, 6778, 6970). The SMW state hashes
 still match `RSPSPC=0` (34 common frames, to frame 1,980).
 
+### Pinned ideas: CPU/RSP coordination (2026-11-12, not scheduled)
+
+Ideas from design discussion, kept for when measurements call for them.
+The first measurement: how long the CPU waits for an asynchronous SPC.
+
+**Signals the hardware offers** (libdragon commit 39d0d60):
+
+- **`SP_STATUS`:** shared by both sides. It has 8 SIG flag bits, written
+  as per-bit set/clear masks, so one write can set all eight (a byte).
+  rspq owns all eight. Two can be borrowed during an rspq command:
+  - SIG0, if no rdpq validator runs, no `rspq_signal` is used, and no SP
+    interrupt is raised while it holds our value;
+  - SIG3, if no high-priority queue is used, and it is cleared before
+    the command returns.
+- **`SP_SEMAPHORE`:** a hardware test-and-set lock (reading takes it,
+  writing 0 releases it). libdragon does not use it.
+- **The SP interrupt:** the RSP's way to wake the CPU. The RSP itself has
+  no interrupts; it polls.
+- **DMEM:** the CPU can read and write it directly (uncached, 32-bit
+  only). libdragon documents this as safe only while the RSP is halted.
+  An EverDrive test should settle whether it works during a run, and
+  what it costs next to uncached RDRAM.
+
+**Pinned:**
+
+1. **Mailbox.** A few words of DMEM (or RDRAM, if DMEM access during a
+   run is unsafe). The semaphore is the lock; SIG0 is the RSP-to-CPU
+   doorbell and SIG3 the CPU-to-RSP one. The receiver clears its
+   doorbell. Never wait on the other side while holding the lock. For
+   one writer and one reader, a sequence counter needs no lock.
+2. **Progress channel.** The RSP posts (SPC cycle, out-ports), so a
+   port-read wait ends when the SPC passes the cycle, not when the run
+   ends.
+3. **Lower per-run overhead inside rspq.** Chain SPC runs, and keep the
+   zero page and line cache warm between back-to-back SPC commands.
+   Measure first: time a run with a budget of 0.
+4. **An RSP kernel that schedules RSP jobs and CPU threads.** Policy on
+   the RSP, mechanism on the CPU: libdragon's `kthread` scheduler, or
+   our guest fiber, switched from the SP interrupt handler. Main use:
+   turn waits into switches (the 65816 thread blocks on the SPC; the CPU
+   runs PPU work until the RSP rings). Constraints:
+   - switches must be coarse (the I-cache);
+   - every cross-thread handoff goes through emulated-time sync points
+     (determinism);
+   - IMEM is the hard budget, since the SPC overlay fills it today;
+   - rdpq is built on rspq, so the practical route is to extend rspq in
+     our libdragon checkout rather than replace it.
+5. **FPU registers as a register bank** for one parked context, or for
+   emulator state. Needs the FPU free: the APU catch-up path uses
+   `double` today (`apuCatchupCycles`), which fixed point would replace.
+6. **The vector unit for syncing.** Compare up to 8 event deadlines with
+   the current time in one operation (timers, sample edges, port
+   writes, line events), and find the next deadline with a few lane
+   operations. Watch bitmaps in two quad loads.
+
 ## Next steps
 
 1. Audio: check the RSP DSP by ear on hardware (output arrives later than
