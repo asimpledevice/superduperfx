@@ -2020,6 +2020,36 @@ The first measurement: how long the CPU waits for an asynchronous SPC.
    the current time in one operation (timers, sample edges, port
    writes, line events), and find the next deadline with a few lane
    operations. Watch bitmaps in two quad loads.
+7. **Our own copy of libdragon in the repo** (public domain; nothing
+   upstream to follow), built by our build. It is what makes rspq
+   changes and reserved FPU registers possible. Copy only the sources,
+   headers, tools, `n64.mk` and linker scripts; the GCC toolchain stays
+   external.
+8. **FPU registers as the home of the 65816 registers and
+   `master_cycles`.** Raw integer bits, moved with `DMTC1`/`DMFC1` (one
+   cycle each, VR4300 manual Table 7-13); 32 64-bit FPRs with FR=1, which
+   libdragon sets. Reserved with `-ffixed-` in every compiled unit,
+   libdragon included. A thread switcher must skip them so all threads
+   share them. The runner is shared with desktop builds, so this is an
+   N64 build option with `CpuState` as the reference.
+   Doing 65816 arithmetic *in* the FPU is out:
+   - the VR4300 FPU has no logical operations, conditional moves or
+     fused multiply-add;
+   - add takes 3 cycles, `CVT`/`FLOOR` take 5;
+   - out-of-range conversions and denormals raise exceptions.
+
+**The overall shape, as discussed:** an RSP microkernel (extended rspq,
+still hosting rdpq's overlay) schedules RSP jobs, and decides CPU thread
+switches. It signals them through the SP interrupt and the mailbox; the
+CPU does the switch. The CPU work is split into threads, so a wait for
+the RSP becomes other work. Gates:
+
+- the SPC runs asynchronously in rspq first;
+- measure the port-read waits and the per-run fixed cost;
+- an EverDrive test of CPU access to DMEM during a run;
+- emulated-time sync points for every cross-thread handoff (state-hash
+  A/B in every test game);
+- all of it opt-in at build time, with the current path as the reference.
 
 ## Next steps
 
