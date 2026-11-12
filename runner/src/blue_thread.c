@@ -7,6 +7,7 @@
 #include <string.h>
 
 #include "common_cpu_infra.h"
+#include "fpu_slots.h"
 #include "snes/interp_bridge.h"
 
 #if SNESRECOMP_BLUE_THREAD
@@ -22,29 +23,58 @@ uint32_t g_blue_pauses, g_blue_resumes, g_blue_unwinds;
 #if !defined(__mips__)
 #error "The Blue thread is the N64 (MIPS) context switch"
 #endif
-/* Callee-saved state of the MIPS ABIs: s0-s7, s8, gp, sp and ra. The
- * callee-saved FPU registers ($f20-$f31) are not switched: every FPU register
- * compiled code may keep is caller-saved, and the rest belong to state both
- * threads share (n64/fpu_reserve.mk). Everything else is caller-saved, so the
- * switch is an ordinary call for the compiler. */
-typedef struct { uint64_t r[12]; } ThreadCtx;
-void thread_ctx_switch(ThreadCtx *save, const ThreadCtx *load);
+/* The thread not running is parked in reserved FPU registers (fpu_slots.h):
+ * its callee-saved GPRs s0-s8, and sp and ra packed into one (both are 32-bit
+ * KSEG0 addresses). gp is the same for both threads. A switch swaps each
+ * live register with its slot, so the same call goes either way and touches
+ * no memory. Everything else is caller-saved, so for the compiler the switch
+ * is an ordinary call; that also frees t0-t2 for the swap.
+ *
+ * DMFC1's result is undefined for one instruction (VR4300 manual, DMFC1), so
+ * slots are read two ahead of their use. */
+#define PARK_SWAP2(ra_, fa_, rb_, fb_) \
+    "  dmfc1 $8, " fa_ "\n  dmfc1 $9, " fb_ "\n" \
+    "  dmtc1 " ra_ ", " fa_ "\n  dmtc1 " rb_ ", " fb_ "\n" \
+    "  or " ra_ ", $8, $0\n  or " rb_ ", $9, $0\n"
+void thread_park_swap(void);
+void thread_park_init(uintptr_t sp, uintptr_t ra);
 __asm__(
     ".text\n"
     ".set push\n.set noreorder\n.set noat\n"
-    ".globl thread_ctx_switch\n.type thread_ctx_switch, @function\n"
-    "thread_ctx_switch:\n"
-    "  sd $16, 0($4)\n  sd $17, 8($4)\n  sd $18, 16($4)\n  sd $19, 24($4)\n"
-    "  sd $20, 32($4)\n  sd $21, 40($4)\n  sd $22, 48($4)\n  sd $23, 56($4)\n"
-    "  sd $30, 64($4)\n  sd $28, 72($4)\n  sd $29, 80($4)\n  sd $31, 88($4)\n"
-    "  ld $16, 0($5)\n  ld $17, 8($5)\n  ld $18, 16($5)\n  ld $19, 24($5)\n"
-    "  ld $20, 32($5)\n  ld $21, 40($5)\n  ld $22, 48($5)\n  ld $23, 56($5)\n"
-    "  ld $30, 64($5)\n  ld $28, 72($5)\n  ld $29, 80($5)\n  ld $31, 88($5)\n"
-    "  jr $31\n  nop\n"
-    ".size thread_ctx_switch, .-thread_ctx_switch\n"
+    ".globl thread_park_swap\n.type thread_park_swap, @function\n"
+    "thread_park_swap:\n"
+    PARK_SWAP2("$16", FPU_PARK_S0, "$17", FPU_PARK_S1)
+    PARK_SWAP2("$18", FPU_PARK_S2, "$19", FPU_PARK_S3)
+    PARK_SWAP2("$20", FPU_PARK_S4, "$21", FPU_PARK_S5)
+    PARK_SWAP2("$22", FPU_PARK_S6, "$23", FPU_PARK_S7)
+    "  dmfc1 $8, " FPU_PARK_S8 "\n"
+    "  dmfc1 $9, " FPU_PARK_SP_RA "\n"
+    "  dmtc1 $30, " FPU_PARK_S8 "\n"
+    "  dsll32 $10, $29, 0\n"           /* sp -> high half */
+    "  dsll32 $11, $31, 0\n"
+    "  dsrl32 $11, $11, 0\n"           /* ra -> low half, zero-extended */
+    "  or $10, $10, $11\n"
+    "  dmtc1 $10, " FPU_PARK_SP_RA "\n"
+    "  or $30, $8, $0\n"
+    "  sll $31, $9, 0\n"               /* ra, sign-extended: return into the other thread */
+    "  jr $31\n"
+    "  dsra32 $29, $9, 0\n"            /* (delay slot) sp, sign-extended */
+    ".size thread_park_swap, .-thread_park_swap\n"
+    /* Park a thread that has not run yet: s0-s8 zero, given sp and ra. */
+    ".globl thread_park_init\n.type thread_park_init, @function\n"
+    "thread_park_init:\n"
+    "  dmtc1 $0, " FPU_PARK_S0 "\n  dmtc1 $0, " FPU_PARK_S1 "\n  dmtc1 $0, " FPU_PARK_S2 "\n"
+    "  dmtc1 $0, " FPU_PARK_S3 "\n  dmtc1 $0, " FPU_PARK_S4 "\n  dmtc1 $0, " FPU_PARK_S5 "\n"
+    "  dmtc1 $0, " FPU_PARK_S6 "\n  dmtc1 $0, " FPU_PARK_S7 "\n  dmtc1 $0, " FPU_PARK_S8 "\n"
+    "  dsll32 $8, $4, 0\n"
+    "  dsll32 $9, $5, 0\n"
+    "  dsrl32 $9, $9, 0\n"
+    "  or $8, $8, $9\n"
+    "  jr $31\n"
+    "  dmtc1 $8, " FPU_PARK_SP_RA "\n"
+    ".size thread_park_init, .-thread_park_init\n"
     ".set pop\n");
 
-static ThreadCtx s_green_ctx, s_blue_ctx;
 static void blue_main(void);
 static void blue_trampoline(void) {
   blue_main();
@@ -53,15 +83,10 @@ static void blue_trampoline(void) {
 static void ctx_init(void *stack_lo, void *stack_top) {
   (void)stack_lo;
   uintptr_t top = (uintptr_t)stack_top & ~(uintptr_t)15;
-  uint64_t gp;
-  __asm__ volatile("move %0, $28" : "=r"(gp));
-  memset(&s_blue_ctx, 0, sizeof s_blue_ctx);
-  s_blue_ctx.r[9] = gp;
-  s_blue_ctx.r[10] = (uint64_t)(intptr_t)(top - 64);   /* sp, with argument space */
-  s_blue_ctx.r[11] = (uint64_t)(intptr_t)blue_trampoline;
+  thread_park_init(top - 64 /* argument space */, (uintptr_t)blue_trampoline);
 }
-static inline void switch_to_blue(void) { thread_ctx_switch(&s_green_ctx, &s_blue_ctx); }
-static inline void switch_to_green(void) { thread_ctx_switch(&s_blue_ctx, &s_green_ctx); }
+static inline void switch_to_blue(void) { thread_park_swap(); }
+static inline void switch_to_green(void) { thread_park_swap(); }
 
 
 /* ---- Runs and pauses ----------------------------------------------------- */

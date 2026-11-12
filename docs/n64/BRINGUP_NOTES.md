@@ -2021,8 +2021,28 @@ callee-saved: a function that uses one restores it before returning.
   the allow-listed owners.
 - newlib is rebuilt with the same flags (`third_party/newlib`); its
   `setjmp`/`longjmp` save no FPU registers. libgcc needs no rebuild.
-- Budget: run flags 1, `master_cycles` 1, 65816 registers 2, Blue parking
-  10, Green parking 10 (sp and ra packed into one register each), spare 1.
+- Budget (revised 2026-11-12): parked context 10, 65816 registers 8, run
+  flags 1, `master_cycles` 1, spare 5. Only the thread not running is
+  parked, so one set of 10 slots serves both: the switch swaps each
+  callee-saved GPR with its slot (s0-s7, s8, and sp and ra packed into one;
+  gp is the same for both threads). No GPR-FPR swap instruction exists, so
+  each swap goes through a caller-saved temporary, free at the switch call.
+- Plan for `CpuState` (owner direction 2026-11-12; organisation counts as
+  value, not only cycles):
+  1. Swap parking (Blue/Green) in FPU registers. Done: `thread_park_swap`
+     (`runner/src/blue_thread.c`, slots in `runner/src/fpu_slots.h`), 36
+     instructions, no memory access, no nops (each slot is read two
+     instructions ahead of its use, as DMFC1 requires). `BLUE=1` builds:
+     state hashes identical to the memory switch (SMW 56, Pitfall 14, JM2 27
+     frames), every pause resumed.
+  2. The 65816's architectural state in FPU registers, one register each:
+     A, X, Y, S, D, DB, PB, and P with E.
+  3. The `m_flag`/`x_flag` mirrors go (testing P's bit costs the same).
+  4. `host_return_valid` becomes a call argument: it is the generated
+     calling convention's return-frame size, not CPU state.
+  5. The per-flag mirrors are the lazy N/Z question (separate).
+  6. The `g_cpu`/main-stack D-cache conflict is fixed through the layout
+     tool regardless.
 - Interrupts: libdragon's lazy save covers `$f0-$f19` and restores them on
   exit, so a reserved register there keeps its value as long as the handler
   (compiled with the flags) does not write it. `$f20-$f31` are not saved;

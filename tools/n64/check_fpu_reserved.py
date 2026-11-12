@@ -20,7 +20,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 
 def mk_list(name):
-    text = (ROOT / "n64" / "fpu_reserve.mk").read_text()
+    text = (ROOT / "n64" / "fpu_reserve.mk").read_text().replace("\\\n", " ")
     m = re.search(r"^" + name + r"\s*:=\s*(.+)$", text, re.M)
     return m.group(1).split()
 

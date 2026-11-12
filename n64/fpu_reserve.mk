@@ -10,8 +10,10 @@ SDFX_FPU_FIXED := $(foreach r,$(SDFX_FPU_RESERVED),-ffixed-f$(r))
 
 # The only functions allowed to touch reserved registers
 # (tools/n64/check_fpu_reserved.py). libdragon's exception path saves and
-# restores the whole FPU file around a handler (inthandler.S).
-SDFX_FPU_OWNERS := save_fpu_regs end_interrupt finalize_exception_frame end_exception_restore_all
+# restores the whole FPU file around a handler (inthandler.S); the Blue
+# thread parks the idle thread in its slots (runner/src/fpu_slots.h).
+SDFX_FPU_OWNERS := save_fpu_regs end_interrupt finalize_exception_frame end_exception_restore_all \
+	thread_park_swap thread_park_init
 
 # For scripts: make -s -f n64/fpu_reserve.mk print-fixed
 .PHONY: print-fixed print-reserved
