@@ -1991,12 +1991,20 @@ physically and logically:
 
 **Where shared state lives:**
 
-- FPU registers hold state only thread code touches: the 65816 registers,
-  `master_cycles`, parked Blue/Green contexts. Never anything an interrupt
-  handler writes. libdragon runs interrupt handlers with the FPU disabled;
-  an FPU instruction there saves all 32 FPU registers into the interrupted
-  frame and restores them on exit, which undoes the handler's write and adds
-  an exception per interrupt (`src/inthandler.S`).
+- FPU registers hold the CPU's shared state: the 65816 registers,
+  `master_cycles`, parked Blue/Green contexts, and the Blue/Green run flags.
+  An interrupt handler may write `$f20-$f31` only. libdragon's interrupt
+  path (`src/inthandler.S`) lazily saves and restores `$f0-$f19`; `$f20-$f31`
+  are restored only on the `kthread` scheduler path, which we do not use.
+  The handler sets the COP1 enable bit, writes the register and clears the
+  bit again before exit (with the bit left set, the exit "restores"
+  `$f0-$f19` from slots that were never saved). Conditions:
+  - every reserved register is `-ffixed-` in our code and our libdragon;
+  - a build-time check disassembles the ELF and fails if any other code
+    (newlib, which is prebuilt, included) writes a reserved register: a
+    callee-save window around an interrupt would lose the write;
+  - our fiber switch skips reserved registers;
+  - no libdragon `kthread`s.
 - Data another bus master writes to RDRAM (RSP DMA, RDP, PI) is read uncached
   or after an invalidate. Data the CPU writes for itself, an interrupt handler
   included, is read cached through `volatile`. So the SP interrupt handler
