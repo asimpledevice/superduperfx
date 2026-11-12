@@ -1989,6 +1989,20 @@ physically and logically:
 - **Yellow**: an RSP overlay (a job the kernel runs: SPC700, S-DSP, BG lines,
   ...).
 
+**Where shared state lives:**
+
+- FPU registers hold state only thread code touches: the 65816 registers,
+  `master_cycles`, parked Blue/Green contexts. Never anything an interrupt
+  handler writes. libdragon runs interrupt handlers with the FPU disabled;
+  an FPU instruction there saves all 32 FPU registers into the interrupted
+  frame and restores them on exit, which undoes the handler's write and adds
+  an exception per interrupt (`src/inthandler.S`).
+- Data another bus master writes to RDRAM (RSP DMA, RDP, PI) is read uncached
+  or after an invalidate. Data the CPU writes for itself, an interrupt handler
+  included, is read cached through `volatile`. So the SP interrupt handler
+  makes the one uncached read of Red's message and publishes it into a
+  `volatile` CPU-side flag that Blue and Green check at their safe points.
+
 **Signals the hardware offers** (libdragon commit 39d0d60):
 
 - **`SP_STATUS`:** shared by both sides. It has 8 SIG flag bits, written
