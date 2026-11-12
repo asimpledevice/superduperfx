@@ -46,6 +46,9 @@ RSPQ_EndSavedState
 BRMASK:     .byte 0x80, 0x40, 0x01, 0x02    # bpl/bmi, bvc/bvs, bcc/bcs, bne/beq
 FLMASK:     .byte 0, 0x20, 0x20, 0x01, 0x01, 0x04, 0x04, 0   # by opcode >> 5
 FLSET:      .byte 0, 0,    0x20, 0,    0x01, 0x04, 0,    0
+# REGS slots (0 psw, 1 a, 2 x, 3 y, 4 sp) by opcode >> 5.
+XFT:        .byte 0,0, 0,0, 1,2, 2,1, 4,2, 0,0, 3,1, 1,3   # 5d x=a 7d a=x 9d x=sp dd a=y fd y=a
+IDT:        .byte 2,-1, 2,1, 0,0, 0,0, 1,-1, 1,1, 3,-1, 3,1 # 1d 3d x, 9c bc a, dc fc y
 
     .bss
     .align 4
@@ -55,7 +58,7 @@ END:        .ds.b 4                 # CYCLES + BUDGET: the cycle the run ends at
 PC0:        .ds.b 2                 # PC of the instruction in progress
     .align 2
 FP0:        .ds.b 4                 # fp before it (a trap rolls back to both)
-REGS:       .ds.b 4                 # psw a x y, for pushes
+REGS:       .ds.b 8                 # psw a x y sp, for register families
     .align 4
 TAGS:       .ds.b 64                # line number per slot, bit 15 dirty; 0x7fff empty
     .align 4
@@ -883,53 +886,36 @@ OP_FLAGS:                           # clrp setp clrc setc ei di
     andi k1, s7, 0x20
     j loop
     sll k1, k1, 3
+# Register families through REGS (psw a x y sp), slots and deltas by
+# opcode >> 5 (XFT, IDT): smaller than a branch per register.
+OP_XFER:                            # movxa movax movxp movay movya
+    srl t0, t7, 4
+    andi t0, t0, 0xe
+    lbu t1, %lo(XFT)(t0)            # source slot
+    lbu t2, %lo(XFT) + 1(t0)        # destination slot
+    sb s1, %lo(REGS) + 1
+    sb s2, %lo(REGS) + 2
+    sb s3, %lo(REGS) + 3
+    sb s5, %lo(REGS) + 4
+    lbu v0, %lo(REGS)(t1)
+xr_st:                              # REGS[t2] = v0, back into a x y, Z/N from v0
+    sb v0, %lo(REGS)(t2)
+    lbu s1, %lo(REGS) + 1
+    lbu s2, %lo(REGS) + 2
+    j zn_loop
+    lbu s3, %lo(REGS) + 3
 OP_INCDEC:                          # decx incx deca inca decy incy
     srl t0, t7, 4
-    andi t0, t0, 2
-    addiu t0, t0, -1                # +1 when bit 5 of the opcode is set
-    andi t1, t7, 0x0f
-    li t2, 0x0d
-    beq t1, t2, 1f                  # x
-    sltiu t2, t7, 0xc0
-    bnez t2, 2f                     # a
-    addu s3, s3, t0                 # y (undone below for a)
-    andi s3, s3, 0xff
-    j zn_loop
-    move v0, s3
-1:  addu s2, s2, t0
-    andi s2, s2, 0xff
-    j zn_loop
-    move v0, s2
-2:  subu s3, s3, t0
-    addu s1, s1, t0
-    andi s1, s1, 0xff
-    j zn_loop
-    move v0, s1
-OP_XFER:                            # movxa movax movxp movay movya
-    li t0, 0x5d
-    beq t7, t0, 1f
-    li t0, 0x7d
-    beq t7, t0, 2f
-    li t0, 0x9d
-    beq t7, t0, 3f
-    li t0, 0xdd
-    beq t7, t0, 4f
-    nop
-    move s3, s1                     # fd: y = a
-    j zn_loop
-    move v0, s3
-1:  move s2, s1
-    j zn_loop
-    move v0, s2
-2:  move s1, s2
-    j zn_loop
-    move v0, s1
-3:  move s2, s5
-    j zn_loop
-    move v0, s2
-4:  move s1, s3
-    j zn_loop
-    move v0, s1
+    andi t0, t0, 0xe
+    lbu t2, %lo(IDT)(t0)            # register slot
+    lb t1, %lo(IDT) + 1(t0)         # +1 or -1
+    sb s1, %lo(REGS) + 1
+    sb s2, %lo(REGS) + 2
+    sb s3, %lo(REGS) + 3
+    lbu v0, %lo(REGS)(t2)
+    addu v0, v0, t1
+    b xr_st
+    andi v0, v0, 0xff
 OP_DIV:                             # on the vector unit, in the borrowed IMEM
     li t1, EXT_DIV
     j ext_go
