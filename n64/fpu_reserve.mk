@@ -1,0 +1,14 @@
+# FPU registers SuperDuperFX reserves for its own state (BRINGUP_NOTES.md,
+# "The FPU register split"). Compiled code keeps $f0-$f4 (scratch and the
+# return value) and $f12/$f13 (the first two floating-point arguments under
+# libdragon's o64 ABI); everything else is ours. Every unit that runs in an
+# N64 build must be compiled with SDFX_FPU_FIXED: our code, our libdragon and
+# newlib (third_party/newlib/build.sh). This file is the single list. The
+# register names have no "$" (GCC accepts f5), so make and the shell leave them be.
+SDFX_FPU_RESERVED := 5 6 7 8 9 10 11 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31
+SDFX_FPU_FIXED := $(foreach r,$(SDFX_FPU_RESERVED),-ffixed-f$(r))
+
+# For scripts: make -s -f n64/fpu_reserve.mk print-fixed
+.PHONY: print-fixed print-reserved
+print-fixed: ; @echo '$(SDFX_FPU_FIXED)'
+print-reserved: ; @echo '$(SDFX_FPU_RESERVED)'

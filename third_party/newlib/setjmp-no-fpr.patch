@@ -1,0 +1,15 @@
+--- a/newlib/libc/machine/mips/setjmp.S
++++ b/newlib/libc/machine/mips/setjmp.S
+@@ -22,7 +22,11 @@
+ 
+ #define NUM_GPRS_SAVED 11
+ 
+-#ifdef __mips_hard_float
++/* SuperDuperFX: every callee-saved FPU register ($f20-$f31) is reserved
++ * (-ffixed-, n64/fpu_reserve.mk), so compiled code keeps none of them live
++ * across a call and setjmp/longjmp save and restore no FPRs. Restoring them
++ * would roll the reserved registers back to their values at setjmp time. */
++#if 0
+ #if _MIPS_SIM == _ABIN32
+ #define FPR_LAYOUT		\
+ 	FPR_OFFSET ($f20, 0);	\

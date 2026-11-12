@@ -2014,19 +2014,25 @@ physically and logically:
 **The FPU register split.** 32 registers, `$f0-$f31` (FR=1). Under libdragon's
 ABI (o64), `$f0-$f19` are scratch: any call may change them. `$f20-$f31` are
 callee-saved: a function that uses one restores it before returning.
-- Reserved registers come from `$f20-$f31` (12 registers): they survive both
-  calls and interrupt exits. `$f0-$f19` stay the compiler's and the
-  libraries' scratch registers.
-- Budget: run flags 1, `master_cycles` 1, 65816 registers 2, leaving 8.
-  Parked Blue/Green contexts (10 registers per thread, with sp and ra packed
-  into one) do not fit there. They stay in memory unless newlib is rebuilt
-  with the same `-ffixed-` flags (tools/build-toolchain.sh can rebuild it),
-  which would make some of `$f0-$f19` ours too.
+- Compiled code (ours, libdragon, newlib) keeps 7: `$f0-$f4` for scratch
+  and results, `$f12` and `$f13` for arguments. The other 25 (`$f5-$f11`,
+  `$f14-$f31`) are reserved by `-ffixed-fN` (`n64/fpu_reserve.mk`).
+  `tools/n64/check_fpu_reserved.py` fails a build whose ELF uses one outside
+  the allow-listed owners.
+- newlib is rebuilt with the same flags (`third_party/newlib`); its
+  `setjmp`/`longjmp` save no FPU registers. libgcc needs no rebuild.
+- Budget: run flags 1, `master_cycles` 1, 65816 registers 2, Blue parking
+  10, Green parking 10 (sp and ra packed into one register each), spare 1.
+- Interrupts: libdragon's lazy save covers `$f0-$f19` and restores them on
+  exit, so a reserved register there keeps its value as long as the handler
+  (compiled with the flags) does not write it. `$f20-$f31` are not saved;
+  a handler may write one on purpose (the run flags) by enabling COP1
+  around the write.
 
 **Decisions (2026-11-12):**
-- No FPU in interrupt handlers, except the run-flag write, which enables COP1
-  around itself. In our libdragon, an FPU instruction in a handler becomes a
-  crash instead of a lazy save of `$f0-$f19`.
+- libdragon's vblank callback keeps its float code; compiled with the
+  flags, it uses only the 7 unreserved registers. The run-flag write
+  enables COP1 around itself.
 - The guest fiber is the Blue thread (`runner/src/blue_thread.c`): it will be
   on by default, switch through FPU slots where they fit, and switch on
   waits as well as deadlines.
@@ -2128,7 +2134,26 @@ the CPU becomes integer.
 - **libdragon's vblank interrupt** (`__display_callback`, `vi_show`) is float
   throughout (Kalman FPS filters, FPS limiter, VI scaling). Its lazy FPU save
   costs about 0.01% of the CPU. With every unit compiled with `-ffixed-`, it
-  cannot touch reserved registers. Whether to convert it is an open question.
+  cannot touch reserved registers, so it stays as it is.
+
+### FPU step 2: newlib with the reservation (2026-11-12)
+
+- **`third_party/newlib/build.sh`** downloads newlib 4.4.0.20231231 (the
+  toolchain's version), checks its SHA-512, applies `setjmp-no-fpr.patch`
+  and builds with libdragon's configure options plus `SDFX_FPU_FIXED`.
+- **Check.** `check_fpu_reserved.py`: stock `libc.a`/`libm.a` have 125
+  functions on reserved registers (`__kernel_rem_pio2` uses `$f20-$f25`,
+  for one); the rebuild has none. A test ROM printing the bit patterns of
+  sin, cos, tan, asin, sqrt, floor, ceilf, scalbn, `%.17g` and
+  strtod/strtof results, plus a setjmp/longjmp round trip, gives identical
+  output (442 lines) in ares linked against either library.
+- **Linking.** n64.mk puts `LDFLAGS` after `-lc`, so the `-L` for the
+  rebuilt library must go in `N64_C_AND_CXX_FLAGS` (step 3 does this).
+- Remaining users of reserved registers in that ROM are libdragon
+  (`vi_show`, `display_set_fps_limit`), `main`, and the exception-frame
+  code (`save_fpu_regs`, `end_interrupt`, `finalize_exception_frame`,
+  `end_exception_restore_all`), which will be allow-listed. Step 3 builds
+  libdragon and our code with the flags.
 
 ## Next steps
 
