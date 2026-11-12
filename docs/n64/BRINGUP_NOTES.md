@@ -1962,6 +1962,10 @@ To make room for the undo (40 bytes):
 - the command id is no longer masked off the block address, since the
   DMA ignores the top byte.
 
+After the fixes, all 10,000 random tests pass (run in three ranges), and
+so do the three earlier failures (4308, 6778, 6970). The SMW state hashes
+still match `RSPSPC=0` (34 common frames, to frame 1,980).
+
 ## Next steps
 
 1. Audio: check the RSP DSP by ear on hardware (output arrives later than
