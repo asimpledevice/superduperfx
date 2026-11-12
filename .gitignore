@@ -88,3 +88,4 @@ n64/rspdsp/test/*.z64
 n64/rspbg/test/build/
 n64/rspbg/test/*.z64
 n64/rspbg/test/build.log
+icprof.txt
