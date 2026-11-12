@@ -309,6 +309,10 @@ static inline void apu_dspJoin(Apu* apu) {
 #endif
 }
 
+/* For an SPC700 core outside spc.c (n64/rspspc): take a batch still in
+ * flight, so the host's Dsp and ARAM are current before that core runs. */
+void apu_dspJoinNow(Apu* apu) { apu_dspJoin(apu); }
+
 #ifdef SNESRECOMP_DSP_LAUNCH_HOOK
 /* After a launch the Dsp shows the in-flight batch's start state until the
  * join, so mark what the next batch can read from that state conservatively:

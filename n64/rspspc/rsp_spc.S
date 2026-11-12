@@ -46,6 +46,26 @@ RSPQ_EndSavedState
 BRMASK:     .byte 0x80, 0x40, 0x01, 0x02    # bpl/bmi, bvc/bvs, bcc/bcs, bne/beq
 FLMASK:     .byte 0, 0x20, 0x20, 0x01, 0x01, 0x04, 0x04, 0   # by opcode >> 5
 FLSET:      .byte 0, 0,    0x20, 0,    0x01, 0x04, 0,    0
+# Per DSP register: 1 a write the CPU must make (FLG ESA EDL DIR, SRCN,
+# ENDX), 2 a read the CPU must make (ENVX, OUTX, ENDX).
+DSPF:       .byte 0,0,0,0,1,0,0,0, 2,2,0,0,0,0,0,0
+            .byte 0,0,0,0,1,0,0,0, 2,2,0,0,0,0,0,0
+            .byte 0,0,0,0,1,0,0,0, 2,2,0,0,0,0,0,0
+            .byte 0,0,0,0,1,0,0,0, 2,2,0,0,0,0,0,0
+            .byte 0,0,0,0,1,0,0,0, 2,2,0,0,0,0,0,0
+            .byte 0,0,0,0,1,0,0,0, 2,2,0,0,0,1,0,0
+            .byte 0,0,0,0,1,0,0,0, 2,2,0,0,1,1,0,0
+            .byte 0,0,0,0,1,0,0,0, 2,2,0,0,3,1,0,0
+# $F0-$FF handlers (rd_io, wr_io).
+    .align 1
+RIOT:       .half rio_zero - _start, rio_zero - _start, rio_f2 - _start, rio_f3 - _start
+            .half rio_port - _start, rio_port - _start, rio_port - _start, rio_port - _start
+            .half rio_port - _start, rio_port - _start, rio_zero - _start, rio_zero - _start
+            .half rio_zero - _start, rd_tim - _start, rd_tim - _start, rd_tim - _start
+WIOT:       .half wr_zp - _start, wio_f1 - _start, wio_f2 - _start, wio_f3 - _start
+            .half wio_out - _start, wio_out - _start, wio_out - _start, wio_out - _start
+            .half wio_in - _start, wio_in - _start, wio_tgt - _start, wio_tgt - _start
+            .half wio_tgt - _start, wr_zp - _start, wr_zp - _start, wr_zp - _start
 # REGS slots (0 psw, 1 a, 2 x, 3 y, 4 sp) by opcode >> 5.
 XFT:        .byte 0,0, 0,0, 1,2, 2,1, 4,2, 0,0, 3,1, 1,3   # 5d x=a 7d a=x 9d x=sp dd a=y fd y=a
 IDT:        .byte 2,-1, 2,1, 0,0, 0,0, 1,-1, 1,1, 3,-1, 3,1 # 1d 3d x, 9c bc a, dc fc y
@@ -82,6 +102,7 @@ LINES:      .ds.b 2048              # 32 slots x 64 bytes
 #define EXT_TSYNC       0x1008
 #define EXT_F1          0x1010
 #define EXT_DIV         0x1018
+#define EXT_MUL         0x1020
 
 SpcCmd_Run:
     sw ra, %lo(RET_RA)
@@ -137,11 +158,14 @@ SpcCmd_Run:
     move fp, zero
 2:  sll k1, k1, 3
     sw zero, %lo(ST + SPCST_EXIT)
+    sw zero, %lo(ST + SPCST_RAWN)   # raw log bytes so far (staging: the last RAWN & 63)
 
 loop:
     blez fp, done
     sh s6, %lo(PC0)
     sw fp, %lo(FP0)
+    sb s5, SPCRUN_SP0               # a trap inside a store rolls these back too
+    sb s7, SPCRUN_PSW0
     move t4, zero                   # this instruction's cycles: none charged yet
     move a0, s6
     jal rd
@@ -215,8 +239,13 @@ wr:
     beqz t1, wr_io                  # $00F0-$00FF (then RAM, as apu_cpuWrite)
     nop
 wr_zp:
+    addiu t1, a0, %lo(ZP)
+wr_st:                              # store a1 at DMEM t1 (logged while a batch is open)
+    lbu t0, %lo(ST + SPCST_LOGGING)
+    bnez t0, wr_log
+    nop
     jr ra
-    sb a1, %lo(ZP)(a0)
+    sb a1, 0(t1)
 wr_hi:
     srl t0, a0, 6
     andi t1, t0, 31
@@ -229,8 +258,8 @@ wr_hi:
     sll t1, t1, 5
     andi t2, a0, 63
     addu t1, t1, t2
-    jr ra
-    sb a1, %lo(LINES)(t1)
+    b wr_st
+    addiu t1, t1, %lo(LINES)
 wr_miss:
     move t8, ra
     jal fill
@@ -239,28 +268,75 @@ wr_miss:
     b wr_hi
     nop
 
+# Logging while a DSP batch is open (apu_dspLogRam, the $F3 path): every
+# ARAM write and DSP register write, with the instruction's cycle offset.
+# Checked before anything is stored, since a trap re-runs the instruction.
+wr_log:
+    lhu t0, %lo(ST + SPCST_DIRPAGE)
+    subu t0, a0, t0
+    andi t0, t0, 0xffff
+    sltiu t0, t0, 0x400
+    bnez t0, OP_TRAP                # the sample directory: the CPU (watch marks)
+    move t8, ra
+    lbu v0, 0(t1)                   # old value
+    move t9, a0
+    jal log_put
+    move t2, zero                   # an ARAM write
+    move ra, t8
+    jr ra
+    sb a1, 0(t1)
+# log_put: entry (t9 address or register, a1 value, v0 old, t2 1 for a
+# register). Keeps a0, a1, t1, t3-t8. The run is sized so it cannot fill.
+log_put:
+    lw t0, %lo(ST + SPCST_RAWN)
+    andi s4, t0, 63
+    lw s0, %lo(ST + SPCST_BUDGET)
+    subu s0, s0, fp
+    subu s0, s0, t4                 # cycle offset of this instruction in the run
+    sh t9, SPCLOG_STAGE + 0(s4)
+    sb a1, SPCLOG_STAGE + 2(s4)
+    sb v0, SPCLOG_STAGE + 3(s4)
+    sh s0, SPCLOG_STAGE + 4(s4)
+    sb t2, SPCLOG_STAGE + 6(s4)
+    addiu t0, t0, 8
+    andi s4, t0, 63
+    bnez s4, 1f
+    sw t0, %lo(ST + SPCST_RAWN)
+    move k0, ra                     # 8 entries: out to the raw log
+    lw s0, %lo(ST + SPCST_RAWBUF)
+    addu s0, s0, t0
+    addiu s0, s0, -64
+    li s4, SPCLOG_STAGE
+    jal SDmaOut
+    li t0, DMA_SIZE(64, 1)
+    move ra, k0
+1:  jr ra
+    nop
+
 # The I/O page. rd_io: v0 = apu_cpuRead(a0). wr_io: apu_cpuWrite(a0, a1)
 # before the RAM write. Keep a0, a1, a2, a3, v1, t3-t7.
-rd_io:
-    addiu t1, a0, -0xf4
-    sltiu t2, t1, 6
-    bnez t2, 1f                     # $F4-$F9: ports from the CPU, $F8-$F9
-    addiu t2, a0, -0xfd
-    sltiu t0, t2, 3
-    bnez t0, rd_tim                 # $FD-$FF: timer counters
-    addiu t1, a0, -0xf2
-    beqz t1, 2f                     # $F2
-    addiu t1, t1, -1
-    beqz t1, 3f                     # $F3
+rd_io:                              # by RIOT ($F0-$FF)
+    andi t1, a0, 0xf
+    sll t2, t1, 1
+    lhu t2, %lo(RIOT)(t2)
+    jr t2
     nop
-    jr ra                           # $F0 $F1 $FA-$FC read 0
+rio_zero:                           # $F0 $F1 $FA-$FC read 0
+    jr ra
     move v0, zero
-1:  jr ra
-    lbu v0, %lo(ST + SPCST_INPORTS)(t1)
-2:  jr ra
+rio_port:                           # $F4-$F7 from the CPU, $F8-$F9
+    jr ra
+    lbu v0, %lo(ST + SPCST_INPORTS - 4)(t1)
+rio_f2:
+    jr ra
     lbu v0, %lo(ST + SPCST_DSPADR)
-3:  lbu t0, %lo(ST + SPCST_DSPADR)
+rio_f3:
+    lbu t0, %lo(ST + SPCST_DSPADR)
     andi t0, t0, 0x7f
+    lbu t1, %lo(DSPF)(t0)
+    andi t1, t1, 2
+    bnez t1, OP_TRAP                # ENVX OUTX ENDX: the CPU syncs the DSP
+    nop
     jr ra
     lbu v0, %lo(ST + SPCST_DSPREGS)(t0)
 rd_tim:                             # sync the timers, read and clear the counter
@@ -275,31 +351,20 @@ rd_tim:                             # sync the timers, read and clear the counte
     jr ra
     sb zero, %lo(ST + SPCST_TIMERS + 3)(t2)
 
-wr_io:
-    addiu t1, a0, -0xf4
-    sltiu t2, t1, 4
-    bnez t2, 1f                     # $F4-$F7: ports to the CPU
-    addiu t2, a0, -0xf8
-    sltiu t0, t2, 2
-    bnez t0, 2f                     # $F8-$F9
-    addiu t2, a0, -0xfa
-    sltiu t0, t2, 3
-    bnez t0, 3f                     # $FA-$FC: timer targets
-    addiu t1, a0, -0xf2
-    beqz t1, 4f                     # $F2
-    addiu t1, t1, -1
-    beqz t1, 5f                     # $F3
-    addiu t1, a0, -0xf1
-    beqz t1, 6f                     # $F1
+wr_io:                              # by WIOT ($F0-$FF), then the RAM write
+    andi t1, a0, 0xf
+    sll t2, t1, 1
+    lhu t2, %lo(WIOT)(t2)
+    jr t2
     nop
-    b wr_zp                         # $F0, $FD-$FF: RAM only
-    nop
-1:  b wr_zp
-    sb a1, %lo(ST + SPCST_OUTPORTS)(t1)
-2:  andi t2, a0, 1                  # (t2 was reused in the delay slot above)
+wio_out:                            # $F4-$F7: ports to the CPU
     b wr_zp
-    sb a1, %lo(ST + SPCST_INPORTS + 4)(t2)
-3:  move t8, ra
+    sb a1, %lo(ST + SPCST_OUTPORTS - 4)(t1)
+wio_in:                             # $F8-$F9
+    b wr_zp
+    sb a1, %lo(ST + SPCST_INPORTS - 4)(t1)
+wio_tgt:                            # $FA-$FC: timer targets
+    move t8, ra
     jal tsync_now
     nop
     move ra, t8
@@ -307,15 +372,28 @@ wr_io:
     sll t2, t2, 3
     b wr_zp
     sb a1, %lo(ST + SPCST_TIMERS + 2)(t2)
-4:  b wr_zp
+wio_f2:
+    b wr_zp
     sb a1, %lo(ST + SPCST_DSPADR)
-5:  lbu t0, %lo(ST + SPCST_DSPADR)
+wio_f3:
+  lbu t0, %lo(ST + SPCST_DSPADR)
     sltiu t1, t0, 0x80
     beqz t1, wr_zp
-    nop
-    b wr_zp
+    lbu t1, %lo(ST + SPCST_LOGGING)
+    beqz t1, OP_TRAP                # no batch open: the CPU writes the DSP
+    lbu t1, %lo(DSPF)(t0)
+    andi t1, t1, 1
+    bnez t1, OP_TRAP                # FLG ESA EDL DIR, SRCN, ENDX: the CPU
+    move t8, ra
     sb a1, %lo(ST + SPCST_DSPREGS)(t0)
-6:  li t1, EXT_F1                   # $F1: in the borrowed IMEM (rsp_spc_ext.S)
+    move t9, t0
+    move v0, zero
+    jal log_put
+    li t2, 1                        # a register write
+    b wr_zp
+    move ra, t8
+wio_f1:                             # $F1: in the borrowed IMEM (rsp_spc_ext.S)
+    li t1, EXT_F1
     j ext_go
     nop
 
@@ -372,6 +450,13 @@ sdma:
 # fill: bring line t9 into its slot (writing back a dirty occupant).
 # Keeps a0, a1, t3-t7, v1.
 fill:
+    srl t0, t9, 5                   # a page whose reads need the DSP current
+    lbu t0, %lo(ST + SPCST_SYNC)(t0)
+    srl t1, t9, 2
+    andi t1, t1, 7
+    srlv t0, t0, t1
+    andi t0, t0, 1
+    bnez t0, OP_TRAP
     move k0, ra
     andi t1, t9, 31
     sll t1, t1, 1
@@ -853,27 +938,23 @@ OP_PUSH:                            # pushp pusha pushx pushy
     lbu a1, %lo(REGS)(t0)
     j push                          # returns to loop
     li ra, %lo(loop)
-OP_POP:                             # popp popa popx popy
+OP_POP:                             # popp popa popx popy, through REGS
     jal pull
     nop
+    sb s7, %lo(REGS) + 0
+    sb s1, %lo(REGS) + 1
+    sb s2, %lo(REGS) + 2
+    sb s3, %lo(REGS) + 3
     srl t0, t7, 5
-    li t1, 5
-    beq t0, t1, 1f
-    li t1, 6
-    beq t0, t1, 2f
-    li t1, 7
-    beq t0, t1, 3f
-    nop
-    move s7, v0                     # popp
+    andi t0, t0, 3
+    sb v0, %lo(REGS)(t0)
+    lbu s7, %lo(REGS) + 0
+    lbu s1, %lo(REGS) + 1
+    lbu s2, %lo(REGS) + 2
+    lbu s3, %lo(REGS) + 3
     andi k1, s7, 0x20
     j loop
     sll k1, k1, 3
-1:  j loop
-    move s1, v0
-2:  j loop
-    move s2, v0
-3:  j loop
-    move s3, v0
 
 # Registers, flags.
 OP_FLAGS:                           # clrp setp clrc setc ei di
@@ -927,16 +1008,10 @@ OP_XCN:
     andi s1, s1, 0xff
     j zn_loop
     move v0, s1
-OP_MUL:                             # ya = y * a, on the vector unit
-    mtc2 s1, $v01.e0
-    mtc2 s3, $v02.e0
-    vmudn $v03, $v01, $v02, e(0)    # low 16 bits of the product, unclamped
-    mfc2 t0, $v03.e0
-    andi t0, t0, 0xffff
-    andi s1, t0, 0xff
-    srl s3, t0, 8
-    j zn_loop
-    move v0, s3
+OP_MUL:                             # on the vector unit, in the borrowed IMEM
+    li t1, EXT_MUL
+    j ext_go
+    nop
 # Words (direct page): a2 low address, a3 high.
 OP_MOVW:
     jal rdw_dp
@@ -1006,6 +1081,8 @@ addw_c:                             # ya + t5 + t6, H as spc.c (always +1)
 OP_TRAP:                            # also from an access the CPU must make
     lhu s6, %lo(PC0)
     lw fp, %lo(FP0)
+    lbu s5, SPCRUN_SP0
+    lbu s7, SPCRUN_PSW0
     li t0, SPCEXIT_TRAP
     sw t0, %lo(ST + SPCST_EXIT)
 
@@ -1029,13 +1106,22 @@ done:
     addu t2, t2, t0
     sw t2, %lo(ST + SPCST_CYCLES)
     jal tsync                       # timers current at the end, as apu_runCycles
-    sw zero, %lo(ST + SPCST_COUNT)  # (instruction count: not kept)
+    nop
     lw s0, %lo(EXTBUF)              # rspq's IMEM back (nothing borrowed is
     addiu s0, s0, EXT_SAVE_OFS      # called after this), during the writebacks
     li s4, 0x1000
     jal SDmaInA
     li t0, DMA_SIZE(RSPQ_IMEM_SIZE, 1)
-    li s5, 0                        # write back dirty lines
+    lw t1, %lo(ST + SPCST_RAWN)     # the raw log's last entries
+    andi t0, t1, 63
+    beqz t0, 1f
+    lw s0, %lo(ST + SPCST_RAWBUF)
+    subu t1, t1, t0
+    addu s0, s0, t1
+    li s4, SPCLOG_STAGE
+    jal SDmaOut
+    addiu t0, t0, -1                # DMA_SIZE(bytes, 1)
+1:  li s5, 0                        # write back dirty lines
 1:  lhu t2, %lo(TAGS)(s5)
     andi t0, t2, 0x8000
     beqz t0, 2f

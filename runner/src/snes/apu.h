@@ -145,6 +145,9 @@ void apu_port_sched_restore(Apu *apu, const ApuPortSched *in);
 /* Bring a deferred DSP up to date (no-op without SNESRECOMP_APU_DEFER_DSP).
  * Call before host code reads DSP output or writes ARAM directly. */
 void apu_dspSync(Apu* apu);
+#if SNESRECOMP_APU_DEFER_DSP
+void apu_dspJoinNow(Apu* apu);
+#endif
 /* Frame boundaries. Normally apu_dspSync. With SNESRECOMP_DSP_HOST_ASYNC
  * (a host whose frame-boundary code reads no DSP state, e.g. the N64) the
  * owed samples are started on the batch hook without waiting (or, while a

@@ -15,7 +15,10 @@ _Static_assert(offsetof(SpcRspBlock, psw) == SPCST_PSW && offsetof(SpcRspBlock, 
                offsetof(SpcRspBlock, romReadable) == SPCST_ROMREADABLE &&
                offsetof(SpcRspBlock, inPorts) == SPCST_INPORTS && offsetof(SpcRspBlock, outPorts) == SPCST_OUTPORTS &&
                offsetof(SpcRspBlock, timer) == SPCST_TIMERS && offsetof(SpcRspBlock, cycles) == SPCST_CYCLES &&
-               offsetof(SpcRspBlock, timerSync) == SPCST_TSYNC && offsetof(SpcRspBlock, dspRegs) == SPCST_DSPREGS,
+               offsetof(SpcRspBlock, timerSync) == SPCST_TSYNC && offsetof(SpcRspBlock, dspRegs) == SPCST_DSPREGS &&
+               offsetof(SpcRspBlock, logging) == SPCST_LOGGING && offsetof(SpcRspBlock, sync) == SPCST_SYNC &&
+               offsetof(SpcRspBlock, rawBuf) == SPCST_RAWBUF && offsetof(SpcRspBlock, rawN) == SPCST_RAWN &&
+               offsetof(SpcRspBlock, dirPage) == SPCST_DIRPAGE,
                "SpcRspState offsets");
 
 static uint32_t s_ovl;
@@ -33,8 +36,18 @@ void spc_rsp_init(void) {
   data_cache_hit_writeback_invalidate(s_ext, EXT_BUF_SIZE);
 }
 
+void *spc_rsp_raw_log(void) {   /* RDRAM buffer the RSP writes its raw log to */
+  static void *s_raw;
+  if (!s_raw) s_raw = memalign(16, SPC_RSP_RAW_BYTES);
+  return s_raw;
+}
+
 int spc_rsp_exec(SpcRspBlock *b, uint8_t *aram) {
   b->aram = PhysicalAddr(aram);
+  if (b->logging) {
+    b->rawBuf = PhysicalAddr(spc_rsp_raw_log());
+    data_cache_hit_writeback_invalidate(spc_rsp_raw_log(), SPC_RSP_RAW_BYTES);
+  }
   data_cache_hit_writeback_invalidate(b, sizeof *b);
   data_cache_hit_writeback_invalidate(aram, 0x10000);
   rspq_write(s_ovl, 0, PhysicalAddr(b), PhysicalAddr(s_ext));

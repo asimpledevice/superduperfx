@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <malloc.h>
+#include <stddef.h>
 #include "spc.h"
 #include "apu.h"
 #include "dsp.h"
@@ -14,7 +15,9 @@
 uint32_t test_ticks(void);
 #define debugf(...) fprintf(stderr, __VA_ARGS__)
 
-/* DSP stub: a register file (Dsp* points at 128 bytes). */
+uint64_t g_apu_timer0_total_ticks;
+#if !SNESRECOMP_APU_DEFER_DSP
+/* DSP stub (milestone 2b): a register file (Dsp* points at 128 bytes). */
 Dsp *dsp_init(uint8_t *ram) { (void)ram; return (Dsp *)calloc(1, 128); }
 void dsp_free(Dsp *d) { free(d); }
 void dsp_reset(Dsp *d) { memset(d, 0, 128); }
@@ -22,8 +25,11 @@ void dsp_cycle(Dsp *d) { (void)d; }
 uint8_t dsp_read(Dsp *d, uint8_t adr) { return ((uint8_t *)d)[adr & 0x7f]; }
 void dsp_write(Dsp *d, uint8_t adr, uint8_t val) { ((uint8_t *)d)[adr & 0x7f] = val; }
 void dsp_saveload(Dsp *d, SaveLoadInfo *sli) { (void)d; (void)sli; }
-uint64_t g_apu_timer0_total_ticks;
-uint8_t *spc_rsp_dsp_regs(struct Apu *apu) { return (uint8_t *)apu->dsp; }
+#define DSP_REGS(a) ((uint8_t *)(a)->dsp)
+#else
+/* The real DSP, deferred (apu.c's batches, replayed in C). */
+#define DSP_REGS(a) ((a)->dspRegs)
+#endif
 
 static uint32_t s_rng = 0x2468aceu;
 static uint32_t rnd(void) { s_rng ^= s_rng << 13; s_rng ^= s_rng >> 17; s_rng ^= s_rng << 5; return s_rng; }
@@ -61,7 +67,15 @@ static void random_state(Apu *a) {
   a->cycles = rnd();
   a->timerSyncCycle = a->cycles - rnd() % 2000;
   a->cpuCyclesLeft = (rnd() & 1) ? rnd() % 12 : 0;
+#if SNESRECOMP_APU_DEFER_DSP
+  dsp_reset(a->dsp);
+  for (int i = 0; i < 128; i++) dsp_write(a->dsp, (uint8_t)i, (uint8_t)rnd());
+  for (int i = 0; i < 128; i++) a->dspRegs[i] = dsp_read(a->dsp, (uint8_t)i);
+  a->dspPending = 0; a->dspLogN = 0;
+  memset(a->spc->dspWatchLog, 0, 32); memset(a->spc->dspWatchSync, 0, 32);
+#else
   for (int i = 0; i < 128; i++) ((uint8_t *)a->dsp)[i] = rnd();
+#endif
 }
 
 static void copy_apu(Apu *dst, const Apu *src) {   /* state and ARAM; keep dst's own objects */
@@ -69,7 +83,12 @@ static void copy_apu(Apu *dst, const Apu *src) {   /* state and ARAM; keep dst's
   memcpy(dst, src, sizeof(Apu));
   dst->spc = ds; dst->dsp = dd;
   Apu *keep = ds->apu; *ds = *src->spc; ds->apu = keep;
+#if SNESRECOMP_APU_DEFER_DSP
+  *dd = *src->dsp;
+  dd->apu_ram = dst->ram;
+#else
   memcpy(dd, src->dsp, 128);
+#endif
 }
 
 static const char *differs(const Apu *a, const Apu *b) {
@@ -87,7 +106,18 @@ static const char *differs(const Apu *a, const Apu *b) {
     if (a->timer[i].cycles != b->timer[i].cycles || a->timer[i].divider != b->timer[i].divider ||
         a->timer[i].target != b->timer[i].target || a->timer[i].counter != b->timer[i].counter ||
         a->timer[i].enabled != b->timer[i].enabled) return "timers";
+#if SNESRECOMP_APU_DEFER_DSP
+  if (a->dspPending != b->dspPending) return "dspPending";
+  if (memcmp(a->dspRegs, b->dspRegs, 128)) return "DSP register mirror";
+  /* Every owed sample replayed: DSP state, output and ARAM must agree. */
+  apu_dspSync((Apu *)a); apu_dspSync((Apu *)b);
+  const size_t lo = offsetof(Dsp, ram), hi = offsetof(Dsp, sampleBuffer);
+  if (memcmp((const uint8_t *)a->dsp + lo, (const uint8_t *)b->dsp + lo, hi - lo)) return "DSP state";
+  if (a->dsp->sampleWrite != b->dsp->sampleWrite) return "DSP sample count";
+  if (memcmp(a->dsp->sampleBuffer, b->dsp->sampleBuffer, sizeof a->dsp->sampleBuffer)) return "DSP output";
+#else
   if (memcmp(a->dsp, b->dsp, 128)) return "DSP registers";
+#endif
   if (memcmp(a->ram, b->ram, 0x10000)) return "ARAM";
   return NULL;
 }
@@ -129,12 +159,17 @@ void run_tests(void) {
       for (int i = 0; i < 0x10000; i++) while (is_trap(aa->ram[i])) aa->ram[i] = rnd();
     if (t % 4 == 1)   /* timer-heavy: many reads of $FD-$FF */
       for (int i = 0; i < 0xfffe; i += 3) { aa->ram[i] = 0xe4; aa->ram[i + 1] = 0xfd + rnd() % 3; }
+    if (t % 4 == 2)   /* DSP-heavy: mov $F2,#reg / mov $F3,#value while voices play */
+      for (int i = 0; i + 6 <= 0x10000; i += 6 + rnd() % 3) {
+        aa->ram[i] = 0x8f; aa->ram[i + 1] = rnd() & 0x7f; aa->ram[i + 2] = 0xf2;
+        aa->ram[i + 3] = 0x8f; aa->ram[i + 4] = rnd(); aa->ram[i + 5] = 0xf3;
+      }
     if (t % 4 == 3)   /* DIV-heavy: random A/Y/X from the code around it */
       for (int i = 0; i < 0x10000; i += 2 + rnd() % 4) aa->ram[i] = 0x9e;
     random_state(aa);
     copy_apu(ab, aa);
     copy_apu(ai, aa);
-    const uint32_t clocks = 1 + rnd() % ((t & 7) ? 300 : 20000);
+    const uint32_t clocks = 1 + rnd() % ((t & 7) ? 2000 : 40000);
     uint32_t t0 = test_ticks();
     apu_runCycles(aa, clocks);
     uint32_t t1 = test_ticks();

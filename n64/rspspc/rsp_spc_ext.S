@@ -26,6 +26,8 @@ ext_begin:
     nop
     j x_div                         # 0x18
     nop
+    j x_mul                         # 0x20
+    nop
 
 x_f1:                               # $F1: timer enables, port clears, IPL ROM
     move t8, ra
@@ -71,8 +73,8 @@ x_tsync:
     beqz s0, 9f
     sw t2, %lo(C_ST + SPCST_TSYNC)
     li s4, %lo(C_ST + SPCST_TIMERS)
-    li k0, 7
 tm_one:
+    lbu k0, 5(s4)                   # prescaler period shift (7, 7, 4; spc_rsp_run.c)
     lbu t0, 0(s4)                   # prescaler
     sltu t1, t0, s0
     bnez t1, 1f
@@ -123,12 +125,8 @@ tm_one:
 tm_next:
     addiu s4, s4, 8
     li t0, %lo(C_ST + SPCST_TIMERS) + 24
-    beq s4, t0, 9f
-    li t0, %lo(C_ST + SPCST_TIMERS) + 16
     bne s4, t0, tm_one
     nop
-    b tm_one
-    li k0, 4                        # timer 2: 64 kHz
 9:  jr ra
     nop
 
@@ -182,3 +180,14 @@ x_div:
     andi s3, t5, 0xff
     j C_zn_loop
     move v0, s1
+
+x_mul:                              # ya = y * a, on the vector unit
+    mtc2 s1, $v01.e0
+    mtc2 s3, $v02.e0
+    vmudn $v03, $v01, $v02, e(0)    # low 16 bits of the product, unclamped
+    mfc2 t0, $v03.e0
+    andi t0, t0, 0xffff
+    andi s1, t0, 0xff
+    srl s3, t0, 8
+    j C_zn_loop
+    move v0, s3

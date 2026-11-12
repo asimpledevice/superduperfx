@@ -1830,6 +1830,73 @@ spc.c (quotient $FFFF, remainder A). DIV and CMPY no longer trap.
 - Milestone 2b alone: 10,000 of 10,000 pass. A wrong timer counter step
   fails 239 of 1,000.
 
+### SPC700 on the RSP, milestone 2c: the deferred DSP (2026-11-12)
+
+The SPC700 on the RSP now feeds the deferred DSP exactly as `apu.c` does
+with the SPC in C.
+
+What SMW does (frames 0-300, deferred DSP), which set the design:
+
+| Event | Per frame |
+|---|---|
+| DSP register writes | about 30 |
+| Logged ARAM writes | about 700 |
+| Batch starts | about 5 |
+| Full batches | about 3 |
+| Reads of ENVX, OUTX or ENDX | 0 |
+| Echo-region reads | 0 |
+| FLG/ESA/EDL/DIR/SRCN writes | under 0.1 |
+
+**Sample edges the C path handles.** The glue (`spc_rsp_run.c`) ends each
+RSP run just before a batch-start edge (no samples pending) or the edge
+that fills a batch. `apu_runCycles(apu, 1)` then runs that cycle in C, so
+the existing code starts or launches the batch. Inside a run:
+
+- "batch open" is constant (the `LOGGING` flag);
+- the watch marks and echo-sync pages cannot change, since everything
+  that changes them traps.
+
+**Logging.** While a batch is open, the RSP logs every ARAM write and DSP
+register write into a raw buffer in RDRAM: the address or register, the
+value, the old value, and the instruction's cycle offset. Entries go out
+in 64-byte DMAs from a staging buffer in borrowed DMEM. After the run, the
+glue keeps the entries `apu_spcWriteRam` and the `$F3` path would have
+logged (ARAM writes on log-watched pages, all register writes) and turns
+each offset into its sample tag. Runs are sized so neither the raw buffer
+nor `apu->dspLog` can overflow (at most 3 entries per 5 cycles).
+
+**Traps to the CPU:**
+
+- FLG, ESA, EDL, DIR, SRCN and ENDX writes;
+- DSP writes with no batch open;
+- ENVX, OUTX and ENDX reads (the DSP must be current);
+- writes to the sample directory;
+- lines on echo-sync pages, which are never cached while a batch is open.
+
+All trap checks come before the store. A trap also restores SP and PSW,
+since pushes and memory shifts change them before they store.
+
+`apu_dspJoinNow` (new in `apu.c`) joins an in-flight batch before each run.
+
+**Compaction to make room:**
+
+- the `$F0-$FF` decode is table-driven;
+- POP goes through the register file;
+- MUL moved to the borrowed IMEM;
+- the timer loop reads each prescaler shift from the state block.
+
+IMEM is full (4,088 bytes), as is the borrowed IMEM (620 of 632) and the
+overlay's DMEM.
+
+**Test.** The real `apu.c`, `spc.c` and `dsp.c`, deferred, replayed in C.
+After each run both sides force a DSP sync, then compare DSP state, every
+output sample, ARAM, pending samples and the register mirror, plus every
+field compared before. One test in four is DSP-heavy (`mov $F2,#r` /
+`mov $F3,#v` pairs while voices play).
+
+- 2,000 of 2,000 pass; milestone 2b mode (`DEFER=0`) still passes.
+- An offset off by one instruction's cycles fails 32 of 1,000.
+
 ## Next steps
 
 1. Audio: check the RSP DSP by ear on hardware (output arrives later than
