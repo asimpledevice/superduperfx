@@ -27,7 +27,8 @@
 #define SPCST_DSPREGS  0x50   /* u8[128]: DSP register file as the SPC reads it */
 #define SPCST_SYNC     0xd0   /* u8[32]: pages whose reads need the DSP current (echo) */
 #define SPCST_RAWBUF   0xf0   /* u32: RDRAM: raw log of the run (SpcRspLog entries) */
-#define SPCST_RAWCAP   0xf4   /* u32: raw log room, bytes */
+#define SPCST_UNDOFP   0xf4   /* u32: FP0 of the last instruction to read a timer, 0 none;
+                                 * the counters before it in each timer's pad[1] */
 #define SPCST_RAWN     0xf8   /* u32 out: raw log written, bytes */
 #define SPCST_DIRPAGE  0xfc   /* u16: DSP sample directory (writes there trap) */
 #define SPCST_SIZE     0x100

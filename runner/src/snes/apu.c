@@ -567,11 +567,28 @@ void apu_cycle(Apu* apu) {
 #endif
 }
 
-void apu_runCycles(Apu* apu, uint32_t clocks) {
+/* The C SPC700 core (the LLE reference). */
+void apu_runCyclesC(Apu* apu, uint32_t clocks) {
 #if SNESRECOMP_APU_NATIVE
   apu_runCycles_native(apu, clocks);
 #else
   while (clocks--) apu_cycle(apu);
+#endif
+}
+
+/* SNESRECOMP_APU_RUN_HOOK names another SPC700 core for bulk runs (e.g.
+ * n64/rspspc); it must keep the C core's contract and may call
+ * apu_runCyclesC for what it does not cover. Single steps (apu_cycle) stay
+ * in C. */
+#ifdef SNESRECOMP_APU_RUN_HOOK
+void SNESRECOMP_APU_RUN_HOOK(Apu* apu, uint32_t clocks);
+#endif
+
+void apu_runCycles(Apu* apu, uint32_t clocks) {
+#ifdef SNESRECOMP_APU_RUN_HOOK
+  SNESRECOMP_APU_RUN_HOOK(apu, clocks);
+#else
+  apu_runCyclesC(apu, clocks);
 #endif
 }
 

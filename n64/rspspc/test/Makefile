@@ -9,7 +9,7 @@ SPCRSP_TESTS ?= 2000
 DEFER ?= 1   # 1: the deferred DSP (production); 0: milestone 2b, a register-file DSP
 N64_CFLAGS += -I.. -I$(BUILD_DIR) -I$(RUNNER) -I$(RUNNER)/snes -I../../include -DSNESRECOMP_TRACE=0 \
 	-DSNESRECOMP_APU_DEFER_DSP=$(DEFER) -DSNESRECOMP_APU_NATIVE=1 -DSNESRECOMP_AUDIO_TRACE_HOOKS=0 -DSNESRECOMP_COMPACT_INTERP=1 -DSPCRSP_TESTS=$(SPCRSP_TESTS) \
-	-include ../../include/n64_compat.h -Wno-error $(TEST_CFLAGS)
+	-DSPC_RSP_MIN_RUN=1 -include ../../include/n64_compat.h -Wno-error $(TEST_CFLAGS)
 
 all: rspspc_test.z64
 

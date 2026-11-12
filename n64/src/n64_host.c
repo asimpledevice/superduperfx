@@ -582,6 +582,12 @@ static int host_main(void) {
                            (unsigned long)g_apu_dsp_join_why[4], (unsigned long)g_apu_dsp_join_why[5],
                            (unsigned long)g_apu_dsp_join_why[6], (unsigned long)g_apu_dsp_join_why[7]); }
 #endif
+#ifdef N64_RSPSPC
+        { extern uint32_t g_spc_rsp_runs, g_spc_rsp_traps, g_spc_rsp_cycles, g_spc_rsp_c_cycles;
+          n64_platform_log("[rspspc] %lu runs, %lu traps; %lu cycles on the RSP, %lu in C\n",
+                           (unsigned long)g_spc_rsp_runs, (unsigned long)g_spc_rsp_traps,
+                           (unsigned long)g_spc_rsp_cycles, (unsigned long)g_spc_rsp_c_cycles); }
+#endif
       }
     }
 #endif
@@ -602,6 +608,15 @@ static int host_main(void) {
       n64_platform_log("[fiber] %lu pauses, %lu resumed, %lu unwound\n",
                        (unsigned long)g_guest_fiber_pauses, (unsigned long)g_guest_fiber_resumes,
                        (unsigned long)g_guest_fiber_unwinds);
+    }
+#endif
+#if defined(N64_RSPSPC) && !defined(N64_STATE_HASH)
+    if (frame % 60 == 59) {
+      extern uint32_t g_spc_rsp_exec_ticks, g_spc_rsp_hook_ticks, g_spc_rsp_cycles, g_spc_rsp_c_cycles;
+      n64_platform_log("[rspspc] per frame: SPC %lu us (waiting on the RSP %lu us); %lu cycles on the RSP, %lu in C\n",
+                       (unsigned long)(g_spc_rsp_hook_ticks / 60 / 47), (unsigned long)(g_spc_rsp_exec_ticks / 60 / 47),
+                       (unsigned long)(g_spc_rsp_cycles / 60), (unsigned long)(g_spc_rsp_c_cycles / 60));
+      g_spc_rsp_exec_ticks = g_spc_rsp_hook_ticks = g_spc_rsp_cycles = g_spc_rsp_c_cycles = 0;
     }
 #endif
 #if defined(N64_RSPDSP) && !defined(N64_STATE_HASH)

@@ -155,6 +155,69 @@ static void step_diagnose(Apu *init, Apu *aa, Apu *ab, uint32_t clocks) {
   debugf("  step replay: no difference\n");
 }
 
+/* Run both in lockstep chunks of `chunk` cycles; report the first chunk after
+ * which they differ, and with trace set, the C side's instructions in it. */
+static int chunk_diagnose(Apu *init, Apu *aa, Apu *ab, uint32_t clocks, uint32_t chunk, int trace) {
+  copy_apu(aa, init); copy_apu(ab, init);
+  for (uint32_t k = 0; k < clocks; k += chunk) {
+    const uint32_t n = clocks - k < chunk ? clocks - k : chunk;
+    if (trace) {
+      Apu *ac = new_apu(); copy_apu(ac, aa);
+      for (uint32_t j = 0; j < n; j++) {
+        const uint16_t pc = ac->spc->pc;
+        if (!ac->cpuCyclesLeft)
+          debugf("    +%lu pc %04x op %02x %02x %02x a %02x x %02x y %02x sp %02x dspPend %u logN %u\n",
+                 (unsigned long)j, pc, ac->ram[pc], ac->ram[(uint16_t)(pc + 1)], ac->ram[(uint16_t)(pc + 2)],
+                 ac->spc->a, ac->spc->x, ac->spc->y, ac->spc->sp,
+#if SNESRECOMP_APU_DEFER_DSP
+                 ac->dspPending, ac->dspLogN
+#else
+                 0u, 0u
+#endif
+                 );
+        apu_runCycles(ac, 1);
+      }
+    }
+    apu_runCycles(aa, n);
+    spc_rsp_run_apu(ab, n);
+    const char *d = differs(aa, ab);
+    if (d) {
+      debugf("  chunk %lu: %s differ after [%lu, +%lu)\n", (unsigned long)chunk, d, (unsigned long)k, (unsigned long)n);
+      return (int)k;
+    }
+    if (trace) return -2;
+  }
+  return -1;
+}
+
+static void chunk_search(Apu *init, Apu *aa, Apu *ab, uint32_t clocks) {
+  static const uint32_t sizes[] = {1024, 256, 64, 16, 4, 2};
+  uint32_t best = 0; int at = -1;
+  for (unsigned i = 0; i < sizeof sizes / sizeof sizes[0]; i++) {
+    const int k = chunk_diagnose(init, aa, ab, clocks, sizes[i], 0);
+    if (k < 0) { debugf("  chunk %lu: no difference\n", (unsigned long)sizes[i]); break; }
+    best = sizes[i]; at = k;
+  }
+  if (at < 0) return;
+  /* Replay to the diverging chunk's start, then trace it. */
+  Apu *st = new_apu(); copy_apu(st, init);
+  apu_runCycles(st, (uint32_t)at);
+  chunk_diagnose(st, aa, ab, best, best, 1);
+}
+
+#ifdef SPCRSP_ONLY
+static const int k_only[] = {SPCRSP_ONLY};
+static int wanted(int t) {
+  for (unsigned i = 0; i < sizeof k_only / sizeof k_only[0]; i++) if (k_only[i] == t) return 1;
+  return 0;
+}
+#else
+#ifndef SPCRSP_FIRST
+#define SPCRSP_FIRST 0
+#endif
+static int wanted(int t) { return t >= SPCRSP_FIRST; }
+#endif
+
 void run_tests(void) {
   Apu *aa = new_apu(), *ab = new_apu(), *ai = new_apu();
   int fails = 0;
@@ -178,6 +241,7 @@ void run_tests(void) {
     copy_apu(ab, aa);
     copy_apu(ai, aa);
     const uint32_t clocks = 1 + rnd() % ((t & 7) ? 2000 : 40000);
+    if (!wanted(t)) continue;
     uint32_t t0 = test_ticks();
     apu_runCycles(aa, clocks);
     uint32_t t1 = test_ticks();
@@ -195,7 +259,11 @@ void run_tests(void) {
     }
     if (d && fails < 8) debugf("  portClock %llu/%llu stopped %d/%d romReadable %d\n", (unsigned long long)aa->portClock,
                                (unsigned long long)ab->portClock, aa->spc->stopped, ab->spc->stopped, aa->romReadable);
+#ifdef SPCRSP_ONLY
+    if (d) chunk_search(ai, aa, ab, clocks);
+#else
     if (d && fails < 4) step_diagnose(ai, aa, ab, clocks);
+#endif
     if (d && fails++ < 8)
       debugf("FAIL test %d (%lu clocks): %s differ; pc %04x/%04x a %02x/%02x ccl %u/%u cycles %lu/%lu\n", t,
              (unsigned long)clocks, d, aa->spc->pc, ab->spc->pc, aa->spc->a, ab->spc->a, aa->cpuCyclesLeft,

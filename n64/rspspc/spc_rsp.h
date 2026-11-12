@@ -17,15 +17,16 @@ typedef struct __attribute__((aligned(16))) {
   uint8_t ccl, dspAdr, romReadable, pad0;
   uint8_t inPorts[6], outPorts[4], pad1[2];
   uint32_t pad2;
-  struct { uint8_t cycles, divider, target, counter, enabled, pad[3]; } timer[3];
+  struct { uint8_t cycles, divider, target, counter, enabled, pad[3]; } timer[3];   /* pad[0] shift, pad[1] undo */
   uint32_t cycles, timerSync;
   uint8_t dspRegs[128];
   uint8_t sync[32];                /* echo pages: reads trap while logging */
-  uint32_t rawBuf, rawCap, rawN;   /* raw log: RDRAM address, room and bytes written */
+  uint32_t rawBuf, undoFp, rawN;   /* raw log: RDRAM address and bytes written; undoFp: SPCST_UNDOFP */
   uint16_t dirPage, pad4;
 } SpcRspBlock;
 
 void spc_rsp_init(void);
+uint32_t spc_rsp_ticks(void);   /* CPU timer (TICKS_READ) */
 /* The raw log buffer (SPC_RSP_RAW_BYTES; the CPU reads it after a run). */
 #define SPC_RSP_RAW_BYTES (2048 * 8)
 void *spc_rsp_raw_log(void);

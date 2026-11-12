@@ -1897,6 +1897,71 @@ field compared before. One test in four is DSP-heavy (`mov $F2,#r` /
 - 2,000 of 2,000 pass; milestone 2b mode (`DEFER=0`) still passes.
 - An offset off by one instruction's cycles fails 32 of 1,000.
 
+### SPC700 on the RSP, milestone 3: in the emulator (2026-11-12, not adopted)
+
+`RSPSPC=1` (n64/Makefile, needs `RSPDSP=1`; default 0) runs the SPC700 on
+the RSP for bulk runs.
+
+**Hook.** `apu.c` has a new run hook, `SNESRECOMP_APU_RUN_HOOK`:
+`apu_runCycles` calls the named core. `apu_runCyclesC` is always the C core,
+the LLE reference, and single steps (`apu_cycle`) stay in C. The glue
+(`spc_rsp_run.c`) leaves calls under 256 cycles to C, since each run
+costs a queue round trip.
+
+**Cache coherence.** Before each run, `data_cache_writeback_invalidate_all`
+(512 index ops) replaces 4,096 hit ops over ARAM. It also covers the state
+block and the raw log.
+
+**Validation (ares, SMW, no input).** Builds with `N64_STATE_HASH`,
+`RSPSPC` 0 against 1, give the same WRAM, ARAM and DSP-output hashes at
+every compared frame (28 frames, to frame 1,620). 94% of SPC cycles ran
+on the RSP; there was one trap per 9 runs.
+
+**Cost (ares, SMW, per frame).**
+
+| | C core | RSP core |
+|---|---|---|
+| SPC, CPU time in `apu_runCycles` | 35-38 ms | 54 ms |
+| of which waiting for the RSP | - | 23 ms |
+| DSP join wait | 0.6 ms | 18 ms |
+| Frame run time | 73-78 ms | 85-101 ms |
+| I-cache misses (profile window) | 1,705,504 | 1,770,603 |
+
+Per SPC instruction, the RSP (about 130 RSP cycles) is somewhat faster
+than the C core (about 240 CPU cycles), but two costs outweigh that:
+
+- a run is synchronous, so the CPU waits for it;
+- each run first waits for the DSP batch in flight on the RSP, so the DSP
+  no longer overlaps the CPU.
+
+So the synchronous design is slower and stays off. The SPC is still about
+half of SMW's frame time on the CPU, so the next step is an asynchronous
+SPC that trails the CPU. Runs go out up to the CPU's current time with
+the port writes known by then; the CPU waits only where it needs the SPC
+(port reads, DSP syncs, state saves). The run cost itself is mostly line
+fills, a synchronous 64-byte DMA each into a 2 KB direct-mapped cache.
+
+**Two bugs from 10,000 random tests** (tests 0-8,750 ran; 2,000-case runs
+had missed both):
+
+- **Timer read before a trap.** A timer read ($FD-$FF) clears the
+  counter. If a later access in the same instruction traps, the C core
+  re-runs the instruction and read 0. Example: `ADC A,[dp+X]` whose
+  pointer is $FF/$00, then a fill that traps. Fix: the RSP keeps the three
+  counters at an instruction's first timer read, stamped with the
+  instruction's start, and the glue puts them back when the run traps on
+  that instruction.
+- **Directory over the I/O page.** An I/O register write's effect comes
+  before the RAM write's sample-directory check. So a directory at
+  $0000 or $FD00-$FF00 could trap after the effect. Such runs stay in C.
+
+To make room for the undo (40 bytes):
+
+- the miss stubs share `fill`'s return;
+- empty tags are 0, cleared with `$v00`;
+- the command id is no longer masked off the block address, since the
+  DMA ignores the top byte.
+
 ## Next steps
 
 1. Audio: check the RSP DSP by ear on hardware (output arrives later than

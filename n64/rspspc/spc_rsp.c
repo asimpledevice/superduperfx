@@ -17,7 +17,7 @@ _Static_assert(offsetof(SpcRspBlock, psw) == SPCST_PSW && offsetof(SpcRspBlock, 
                offsetof(SpcRspBlock, timer) == SPCST_TIMERS && offsetof(SpcRspBlock, cycles) == SPCST_CYCLES &&
                offsetof(SpcRspBlock, timerSync) == SPCST_TSYNC && offsetof(SpcRspBlock, dspRegs) == SPCST_DSPREGS &&
                offsetof(SpcRspBlock, logging) == SPCST_LOGGING && offsetof(SpcRspBlock, sync) == SPCST_SYNC &&
-               offsetof(SpcRspBlock, rawBuf) == SPCST_RAWBUF && offsetof(SpcRspBlock, rawN) == SPCST_RAWN &&
+               offsetof(SpcRspBlock, rawBuf) == SPCST_RAWBUF && offsetof(SpcRspBlock, undoFp) == SPCST_UNDOFP && offsetof(SpcRspBlock, rawN) == SPCST_RAWN &&
                offsetof(SpcRspBlock, dirPage) == SPCST_DIRPAGE,
                "SpcRspState offsets");
 
@@ -42,15 +42,20 @@ void *spc_rsp_raw_log(void) {   /* RDRAM buffer the RSP writes its raw log to */
   return s_raw;
 }
 
+uint32_t g_spc_rsp_exec_ticks, g_spc_rsp_hook_ticks;
+uint32_t spc_rsp_ticks(void) { return TICKS_READ(); }
+
 int spc_rsp_exec(SpcRspBlock *b, uint8_t *aram) {
+  const uint32_t t0 = TICKS_READ();
   b->aram = PhysicalAddr(aram);
-  if (b->logging) {
-    b->rawBuf = PhysicalAddr(spc_rsp_raw_log());
-    data_cache_hit_writeback_invalidate(spc_rsp_raw_log(), SPC_RSP_RAW_BYTES);
-  }
-  data_cache_hit_writeback_invalidate(b, sizeof *b);
-  data_cache_hit_writeback_invalidate(aram, 0x10000);
+  if (b->logging) b->rawBuf = PhysicalAddr(spc_rsp_raw_log());
+  /* The CPU caches ARAM lines between runs (C steps, the DSP's page copies):
+   * writing back and dropping the whole 8 KB D-cache (512 index ops) costs
+   * less than 4096 hit ops over the 64 KB, and covers the block and the raw
+   * log too. The CPU touches none of them until rspq_wait returns. */
+  data_cache_writeback_invalidate_all();
   rspq_write(s_ovl, 0, PhysicalAddr(b), PhysicalAddr(s_ext));
   rspq_wait();
+  g_spc_rsp_exec_ticks += TICKS_READ() - t0;
   return (int)b->exit;
 }

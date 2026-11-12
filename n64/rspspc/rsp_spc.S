@@ -80,7 +80,7 @@ PC0:        .ds.b 2                 # PC of the instruction in progress
 FP0:        .ds.b 4                 # fp before it (a trap rolls back to both)
 REGS:       .ds.b 8                 # psw a x y sp, for register families
     .align 4
-TAGS:       .ds.b 64                # line number per slot, bit 15 dirty; 0x7fff empty
+TAGS:       .ds.b 64                # line number per slot, bit 15 dirty; 0 empty
     .align 4
 ZP:         .ds.b 0x200             # ARAM $0000-$01FF
     .align 4
@@ -107,8 +107,7 @@ LINES:      .ds.b 2048              # 32 slots x 64 bytes
 SpcCmd_Run:
     sw ra, %lo(RET_RA)
     sw a1, %lo(EXTBUF)
-    li t0, 0xffffff
-    and s7, a0, t0                  # state block (top byte of a0: command id)
+    move s7, a0                     # state block (the DMA ignores the top byte: command id)
     addiu s0, a1, EXT_DSAVE_OFS     # rspq's DMEM out first, then the block in
     li s4, 0
     jal SDmaOutA
@@ -131,13 +130,11 @@ SpcCmd_Run:
     li s4, 0x1000
     jal SDmaInA
     li t0, DMA_SIZE(RSPQ_IMEM_SIZE, 1)
-    li t0, 0x7fff                   # all line slots empty
-    li t1, %lo(TAGS)
-1:  sh t0, 0(t1)
-    addiu t1, t1, 2
-    li t2, %lo(TAGS) + 64
-    bne t1, t2, 1b
-    nop
+    li t1, %lo(TAGS)                # all line slots empty (tag 0: lines 0-7 are ZP)
+    sqv $v00, 0x00, 0x00, t1
+    sqv $v00, 0x00, 0x10, t1
+    sqv $v00, 0x00, 0x20, t1
+    sqv $v00, 0x00, 0x30, t1
     lbu s1, %lo(ST + SPCST_A)
     lbu s2, %lo(ST + SPCST_X)
     lbu s3, %lo(ST + SPCST_Y)
@@ -223,13 +220,10 @@ rd_hc:
     addu t1, t1, t2
     jr ra
     lbu v0, %lo(LINES)(t1)
-rd_miss:
-    move t8, ra
-    jal fill
+rd_miss:                            # fill, then the lookup again
+    li k0, rd_hi
+    b fill
     move t9, t0
-    move ra, t8
-    b rd_hi
-    nop
 
 wr:
     sltiu t0, a0, 0x200
@@ -261,12 +255,9 @@ wr_hi:
     b wr_st
     addiu t1, t1, %lo(LINES)
 wr_miss:
-    move t8, ra
-    jal fill
+    li k0, wr_hi
+    b fill
     move t9, t0
-    move ra, t8
-    b wr_hi
-    nop
 
 # Logging while a DSP batch is open (apu_dspLogRam, the $F3 path): every
 # ARAM write and DSP register write, with the instruction's cycle offset.
@@ -345,7 +336,17 @@ rd_tim:                             # sync the timers, read and clear the counte
     jal tsync_now
     nop
     move ra, t8
-    addiu t2, a0, -0xfd
+    lw t0, %lo(FP0)                 # the instruction's first timer read: keep the
+    lw t1, %lo(ST + SPCST_UNDOFP)   # counters, which spc_rsp_run.c puts back if
+    beq t0, t1, 1f                  # it traps (the C core then runs it whole)
+    lbu t1, %lo(ST + SPCST_TIMERS + 3)
+    sw t0, %lo(ST + SPCST_UNDOFP)
+    sb t1, %lo(ST + SPCST_TIMERS + 6)
+    lbu t1, %lo(ST + SPCST_TIMERS + 11)
+    sb t1, %lo(ST + SPCST_TIMERS + 14)
+    lbu t1, %lo(ST + SPCST_TIMERS + 19)
+    sb t1, %lo(ST + SPCST_TIMERS + 22)
+1:    addiu t2, a0, -0xfd
     sll t2, t2, 3
     lbu v0, %lo(ST + SPCST_TIMERS + 3)(t2)
     jr ra
@@ -447,8 +448,8 @@ sdma:
     jr ra
     nop
 
-# fill: bring line t9 into its slot (writing back a dirty occupant).
-# Keeps a0, a1, t3-t7, v1.
+# fill: bring line t9 into its slot (writing back a dirty occupant), then
+# continue at k0 with ra kept. Keeps a0, a1, t3-t7, v1.
 fill:
     srl t0, t9, 5                   # a page whose reads need the DSP current
     lbu t0, %lo(ST + SPCST_SYNC)(t0)
@@ -457,7 +458,7 @@ fill:
     srlv t0, t0, t1
     andi t0, t0, 1
     bnez t0, OP_TRAP
-    move k0, ra
+    move t8, ra
     andi t1, t9, 31
     sll t1, t1, 1
     lhu t2, %lo(TAGS)(t1)
@@ -481,8 +482,9 @@ fill:
     li t0, DMA_SIZE(64, 1)
     andi t1, t9, 31
     sll t1, t1, 1
-    jr k0
     sh t9, %lo(TAGS)(t1)
+    jr k0
+    move ra, t8
 
 push:                               # a1 -> [$100 + SP], SP--
     ori a0, s5, 0x100

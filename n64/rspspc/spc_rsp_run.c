@@ -10,7 +10,7 @@
 #include "apu_dsp_batch.h"
 #endif
 
-uint32_t g_spc_rsp_runs, g_spc_rsp_traps, g_spc_rsp_insns;
+uint32_t g_spc_rsp_runs, g_spc_rsp_traps, g_spc_rsp_insns, g_spc_rsp_cycles, g_spc_rsp_c_cycles;
 
 /* Longest single RSP run: the timers' closed form divides 16-bit tick counts. */
 #define SPC_RSP_MAX_RUN (1u << 19)
@@ -32,6 +32,7 @@ static void to_block(Apu *apu, SpcRspBlock *b) {
     b->timer[i].pad[0] = i == 2 ? 4 : 7;   /* prescaler period shift (rsp_spc_ext.S) */
   }
   b->cycles = apu->cycles; b->timerSync = apu->timerSyncCycle;
+  b->undoFp = 0;
   memcpy(b->dspRegs, spc_rsp_dsp_regs(apu), 128);
 }
 
@@ -84,7 +85,26 @@ uint8_t *spc_rsp_dsp_regs(Apu *apu) {
 #endif
 }
 
+/* Shorter calls stay in C: a run costs a queue round trip and a D-cache flush. */
+#ifndef SPC_RSP_MIN_RUN
+#define SPC_RSP_MIN_RUN 256u
+#endif
+
+extern uint32_t g_spc_rsp_hook_ticks;
+static void run_apu(Apu *apu, uint32_t clocks);
+
 void spc_rsp_run_apu(Apu *apu, uint32_t clocks) {
+  const uint32_t t0 = spc_rsp_ticks();
+  if (clocks < SPC_RSP_MIN_RUN) {
+    g_spc_rsp_c_cycles += clocks;
+    apu_runCyclesC(apu, clocks);
+  } else {
+    run_apu(apu, clocks);
+  }
+  g_spc_rsp_hook_ticks += spc_rsp_ticks() - t0;
+}
+
+static void run_apu(Apu *apu, uint32_t clocks) {
   while (clocks) {
     uint32_t n = clocks < SPC_RSP_MAX_RUN ? clocks : SPC_RSP_MAX_RUN;
     /* CPU port writes: those due now apply before the next instruction, as
@@ -103,6 +123,9 @@ void spc_rsp_run_apu(Apu *apu, uint32_t clocks) {
     const uint32_t special = p ? f + 32u * (APU_DSP_MAX_PENDING - p - 1u) : f;
     if (special < n) n = special;
     if (p && (apu->spc->dspWatchSync[0] & 3)) n = 0;   /* page 0/1 reads would need the DSP */
+    /* The RSP checks the sample directory at the RAM write after an I/O
+     * register write's effect: a directory over $00F0-$00FF stays in C. */
+    if (p && (apu->dsp->dirPage == 0 || apu->dsp->dirPage >= 0xfd00)) n = 0;
     if (p) {
       /* Room for every write the run can log (at most 3 entries in 5 cycles:
        * MOVWS to $F2/$F3), in the RSP's buffer and in apu->dspLog. */
@@ -114,8 +137,9 @@ void spc_rsp_run_apu(Apu *apu, uint32_t clocks) {
       if (room < n) n = room;
     }
     if (!n) {
-      apu_runCycles(apu, 1);
+      apu_runCyclesC(apu, 1);
       clocks--;
+      g_spc_rsp_c_cycles++;
       continue;
     }
 #endif
@@ -131,8 +155,12 @@ void spc_rsp_run_apu(Apu *apu, uint32_t clocks) {
 #endif
     const int exit = spc_rsp_exec(&s_blk, apu->ram);
     from_block(apu, &s_blk);
+    /* A trap re-runs the instruction in C: undo its timer reads' clears. */
+    if (exit == SPCEXIT_TRAP && s_blk.undoFp && s_blk.undoFp == (uint32_t)(s_blk.budget - (int32_t)s_blk.used))
+      for (int i = 0; i < 3; i++) apu->timer[i].counter = s_blk.timer[i].pad[1];
     apu->portClock += s_blk.used;
     clocks -= s_blk.used;
+    g_spc_rsp_cycles += s_blk.used;
 #if SNESRECOMP_APU_DEFER_DSP
     if (p) take_log(apu, c0, p, s_blk.rawN);
     apu->dspPending = p + edges_in(c0, s_blk.used);
@@ -140,8 +168,9 @@ void spc_rsp_run_apu(Apu *apu, uint32_t clocks) {
     g_spc_rsp_runs++;
 
     if (exit == SPCEXIT_TRAP && clocks) {  /* one instruction in C, its carry back to the RSP */
-      apu_runCycles(apu, 1);
+      apu_runCyclesC(apu, 1);
       clocks--;
+      g_spc_rsp_c_cycles++;
       g_spc_rsp_traps++;
     }
   }
