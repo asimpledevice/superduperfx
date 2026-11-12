@@ -4,6 +4,17 @@
 
 Contributors are not required to create their own fork.
 
+## Target (owner direction, 2026-11-12)
+
+SuperDuperFX targets only the Nintendo 64: libdragon, the VR4300 CPU, the RSP
+and the RDP. Every recompiled game builds for N64 hardware and nothing else.
+There are no desktop, Windows, Xbox or mobile targets. Do not keep
+cross-platform fallbacks or abstractions for N64-specific mechanisms (FPU
+register use, RSP microcode, cache layout). Host-side tools that run on the
+developer's machine (the recompiler, generators, test harnesses) remain tools,
+not targets. Measure on N64: ares, and the owner's EverDrive for hardware
+questions.
+
 ## Optimization scope (owner direction, 2026-10-28)
 
 Prioritize game-agnostic mechanisms in the shared snesrecomp engine. Each game
@@ -26,8 +37,8 @@ See the [full native/HLE burndown](docs/NATIVE_HLE_BURNDOWN.md) for the current
 original-list reconciliation and remaining engine work. The nine-item
 [follow-up register](docs/OPTIMIZATION_BURNDOWN.md) is historical context, not
 a completion percentage for the full campaign. Owner direction 2026-10-29:
-reject concrete proposals that show no value; explicitly defer further
-Xbox/platform and dedicated memory-budget work. Games remain test consumers;
+reject concrete proposals that show no value; explicitly defer dedicated
+memory-budget work. Non-N64 platforms are out of scope (see Target). Games remain test consumers;
 new title-specific adoption is outside the engine queue. Publish at the end.
 
 ## HLE/LLE policy
@@ -41,7 +52,7 @@ LLE at build time; preserve the caller contract while allowing different
 algorithms, private state, internal timing and documented minute differences.
 Keep exact-core validation requirements scoped to exact-core changes.
 
-Measure representative whole-title host cost and validate affected gameplay
+Measure representative whole-title N64 cost and validate affected gameplay
 before promoting HLE defaults. Follow `docs/PERFORMANCE.md` for measurement
-and `docs/DSP1_IMPLEMENTATIONS.md` for DSP-1 build selection. Do not infer
-mobile or original Xbox qualification from desktop results.
+and `docs/DSP1_IMPLEMENTATIONS.md` for DSP-1 build selection. Desktop results
+do not apply.
