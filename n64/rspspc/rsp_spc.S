@@ -33,7 +33,7 @@
     .data
 
 RSPQ_BeginOverlayHeader
-    RSPQ_DefineCommand SpcCmd_Run, 4
+    RSPQ_DefineCommand SpcCmd_Run, 8   # a0 state block, a1 ext buffer (spc_rsp.c)
 RSPQ_EndOverlayHeader
 
 RSPQ_BeginSavedState
@@ -49,7 +49,7 @@ FLSET:      .byte 0, 0,    0x20, 0,    0x01, 0x04, 0,    0
 
     .bss
     .align 4
-ST:         .ds.b SPCST_SIZE
+EXTBUF:     .ds.b 4                 # RDRAM: ext code, then the IMEM and DMEM save areas
 RET_RA:     .ds.b 4
 END:        .ds.b 4                 # CYCLES + BUDGET: the cycle the run ends at
 PC0:        .ds.b 2                 # PC of the instruction in progress
@@ -69,7 +69,12 @@ LINES:      .ds.b 2048              # 32 slots x 64 bytes
  * rspq does not run during a command. rsp_spc_ext.S is linked there and
  * starts with an entry table. */
 #define RSPQ_IMEM_SIZE  (_ovl_text_start - _start)
-#define EXT_SAVE_OFS    0x280           /* save area after the code (spc_rsp.c) */
+#define EXT_SAVE_OFS    0x280           /* rspq IMEM save area after the code (spc_rsp.c) */
+#define EXT_DSAVE_OFS   0x500           /* rspq DMEM save area */
+/* The borrowed DMEM: rspq's, below the overlay's data (its command buffer
+ * and state; untouched during a command). The state block lives there. */
+#define RSPQ_DMEM_SIZE  (_ovl_data_start - _data_start)
+    .set ST, 0
 #define EXT_TSYNC_NOW   0x1000
 #define EXT_TSYNC       0x1008
 #define EXT_F1          0x1010
@@ -77,9 +82,14 @@ LINES:      .ds.b 2048              # 32 slots x 64 bytes
 
 SpcCmd_Run:
     sw ra, %lo(RET_RA)
+    sw a1, %lo(EXTBUF)
     li t0, 0xffffff
-    and s0, a0, t0                  # top byte of a0 is the command id
-    move s7, s0                     # state block address, kept until done
+    and s7, a0, t0                  # state block (top byte of a0: command id)
+    addiu s0, a1, EXT_DSAVE_OFS     # rspq's DMEM out first, then the block in
+    li s4, 0
+    jal SDmaOutA
+    li t0, DMA_SIZE(RSPQ_DMEM_SIZE, 1)
+    move s0, s7
     li s4, %lo(ST)
     jal SDmaIn
     li t0, DMA_SIZE(SPCST_SIZE, 1)
@@ -88,12 +98,12 @@ SpcCmd_Run:
     li s4, %lo(ZP)
     jal SDmaIn
     li t0, DMA_SIZE(0x200, 1)
-    lw s0, %lo(ST + SPCST_EXT)      # rspq's IMEM out to its save area, our
+    lw s0, %lo(EXTBUF)              # rspq's IMEM out to its save area, our
     addiu s0, s0, EXT_SAVE_OFS      # code in (both while the run starts)
     li s4, 0x1000
     jal SDmaOutA
     li t0, DMA_SIZE(RSPQ_IMEM_SIZE, 1)
-    lw s0, %lo(ST + SPCST_EXT)
+    lw s0, %lo(EXTBUF)
     li s4, 0x1000
     jal SDmaInA
     li t0, DMA_SIZE(RSPQ_IMEM_SIZE, 1)
@@ -1034,7 +1044,7 @@ done:
     sw t2, %lo(ST + SPCST_CYCLES)
     jal tsync                       # timers current at the end, as apu_runCycles
     sw zero, %lo(ST + SPCST_COUNT)  # (instruction count: not kept)
-    lw s0, %lo(ST + SPCST_EXT)      # rspq's IMEM back (nothing borrowed is
+    lw s0, %lo(EXTBUF)              # rspq's IMEM back (nothing borrowed is
     addiu s0, s0, EXT_SAVE_OFS      # called after this), during the writebacks
     li s4, 0x1000
     jal SDmaInA
@@ -1061,7 +1071,14 @@ done:
     li t0, DMA_SIZE(0x200, 1)
     move s0, s7
     li s4, %lo(ST)
-    lw ra, %lo(RET_RA)
-    j SDmaOut                       # returns to rspq (restored by then)
+    jal SDmaOutA                    # the block out, then rspq's DMEM back
     li t0, DMA_SIZE(SPCST_SIZE, 1)
+    lw s0, %lo(EXTBUF)
+    addiu s0, s0, EXT_DSAVE_OFS
+    li s4, 0
+    jal SDmaIn                      # waits for every transfer: rspq whole again
+    li t0, DMA_SIZE(RSPQ_DMEM_SIZE, 1)
+    lw ra, %lo(RET_RA)
+    jr ra
+    nop
 

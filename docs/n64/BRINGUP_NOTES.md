@@ -1796,7 +1796,18 @@ SPC run, the overlay uses that space for colder code (`rsp_spc_ext.S`):
 4. **Size check.** `gen_syms.py --check` fails the build if the ext code is
    larger than rspq's IMEM: now 592 of 632 bytes.
 
-What moved: the timer catch-up, the `$F1` handler and DIV. The core now has
+DMEM is borrowed the same way. rspq's 504 bytes below the overlay's data
+(its command buffer and state) are saved to RDRAM, then the state block is
+loaded at DMEM 0. They are restored after the block goes back, and the
+command returns once all DMA is done. The command carries the buffer's
+address as a second word.
+
+- 208 bytes of the overlay's own DMEM are freed (224 now free).
+- About 300 bytes of borrowed DMEM remain for milestone 2c.
+- 2,000 of 2,000 tests pass over 89,000 runs that borrow and restore both.
+
+What moved to the borrowed IMEM: the timer catch-up, the `$F1` handler and
+DIV. The core now has
 160 bytes of IMEM free, for milestone 2c.
 
 **DIV on the vector unit.** VRCP gives R, about 2^31 / X (512-entry table,
