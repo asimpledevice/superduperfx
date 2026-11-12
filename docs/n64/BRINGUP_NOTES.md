@@ -1979,6 +1979,14 @@ still match `RSPSPC=0` (34 common frames, to frame 1,980).
 Ideas from design discussion, kept for when measurements call for them.
 The first measurement: how long the CPU waits for an asynchronous SPC.
 
+**Colour names** (owner convention, 2026-11-12), for where code runs, both
+physically and logically:
+
+- **Blue** and **Green**: the CPU's two threads;
+- **Red**: the RSP microkernel;
+- **Yellow**: an RSP overlay (a job the kernel runs: SPC700, S-DSP, BG lines,
+  ...).
+
 **Signals the hardware offers** (libdragon commit 39d0d60):
 
 - **`SP_STATUS`:** shared by both sides. It has 8 SIG flag bits, written
