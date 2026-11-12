@@ -1,12 +1,5 @@
-"""The CMake emitter and the Python emitter must agree, byte for byte.
-
-rom_identity.txt is the single source of truth for a project's ROM digests.
-Two things generate snesrecomp_rom_identity.h from it -- CMake at configure
-time (runner/runner.cmake) and tools/rom_identity.py for CI, which cannot
-configure a project that has no generated sources yet. The data is not
-duplicated, but the parser is, so this pins them together: if one learns a
-quoting rule or a field the other does not, these fail.
-"""
+"""tools/rom_identity.py: rom_identity.txt, a project's single source of truth
+for its ROM digests, becomes snesrecomp_rom_identity.h."""
 
 import pathlib
 import shutil
@@ -18,7 +11,6 @@ import pytest
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 EMITTER = REPO_ROOT / "tools" / "rom_identity.py"
-CMAKE_MODULE = REPO_ROOT / "runner" / "runner.cmake"
 
 IDENTITY = """\
 # a comment, and a blank line follow
@@ -39,43 +31,6 @@ def _python_header(tmp: pathlib.Path, identity: pathlib.Path) -> str:
         [sys.executable, str(EMITTER), str(identity), "--header", str(out)],
         check=True, capture_output=True, text=True)
     return (out / "snesrecomp_rom_identity.h").read_text(encoding="utf-8")
-
-
-def _cmake_header(tmp: pathlib.Path, identity: pathlib.Path) -> str:
-    """Drive the real CMake function, so this tests the shipped code path."""
-    proj = tmp / "cm"
-    proj.mkdir()
-    (proj / "CMakeLists.txt").write_text(f"""
-cmake_minimum_required(VERSION 3.16)
-project(identity_probe C)
-set(SNESRECOMP_RUNNER_ROOT "{(REPO_ROOT / 'runner').as_posix()}")
-include("{CMAKE_MODULE.as_posix()}")
-add_library(probe STATIC probe.c)
-snesrecomp_rom_identity(probe "{identity.as_posix()}")
-""", encoding="utf-8")
-    (proj / "probe.c").write_text("int probe(void) { return 0; }\n",
-                                  encoding="utf-8")
-    r = subprocess.run(["cmake", "-S", str(proj), "-B", str(proj / "b")],
-                       capture_output=True, text=True)
-    assert r.returncode == 0, r.stdout + r.stderr
-    found = list((proj / "b").rglob("snesrecomp_rom_identity.h"))
-    assert found, "CMake did not generate the header"
-    return found[0].read_text(encoding="utf-8")
-
-
-@pytest.mark.skipif(shutil.which("cmake") is None, reason="cmake not present")
-def test_emitters_agree():
-    with tempfile.TemporaryDirectory() as directory:
-        tmp = pathlib.Path(directory)
-        identity = tmp / "rom_identity.txt"
-        identity.write_text(IDENTITY, encoding="utf-8")
-
-        py = _python_header(tmp, identity)
-        cm = _cmake_header(tmp, identity)
-        # The source path is embedded in the banner; compare the rest.
-        strip = lambda t: [l for l in t.splitlines()
-                           if "Generated from" not in l]
-        assert strip(py) == strip(cm)
 
 
 def test_values_reach_the_header():

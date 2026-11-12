@@ -110,58 +110,6 @@ Symbol names, RAM addresses, and hardware facts are used as facts; no upstream
 text or code is vendored here. SMWDisX itself credits mikeyk's original 2013
 disassembly and loveemu's SPC700 work.
 
-## libretro API header
-
-`tools/snesref/libretro.h` is the libretro API header from the RetroArch team.
-It is included so the developer-only `snesref` frontend can load an emulator
-core selected by the developer at runtime.
-
-- Upstream: https://github.com/libretro/RetroArch
-- File of origin: `libretro-common/include/libretro.h`
-- License: MIT
-
-### MIT License
-
-```
-Copyright (C) 2010-2024 The RetroArch team
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
-of the Software, and to permit persons to whom the Software is furnished to do
-so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-```
-
-## snesref runtime dependencies (not vendored)
-
-`tools/snesref/frontend.cpp` builds against SDL2 and loads a libretro emulator
-core as a runtime DLL. These dependencies are supplied locally by developers.
-Their source and binaries are not committed, incorporated into SNESRecomp
-release archives, or linked into shipping game executables.
-
-- SDL2: zlib license, https://github.com/libsdl-org/SDL
-- bsnes libretro core: GPLv3, https://github.com/libretro/bsnes-libretro
-- Snes9x libretro core: Snes9x non-commercial license,
-  https://github.com/libretro/snes9x
-
-The `tools/snesref/.gitignore` rules exclude SDL packages and binaries,
-`snesref.exe`, and `*_libretro.dll`. A developer-only label does not waive a
-dependency's terms if someone distributes it; downstream packages must either
-comply with the selected dependency's license or continue to require developers
-to supply it separately.
-
 ## PSXRecomp screen-color models
 
 `runner/src/snes/color_lut.{c,h}` adapts the present-time screen-color LUT from
@@ -489,27 +437,14 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## third_party/gl_core — OpenGL 3.1 core loader
+## third_party/libdragon — libdragon
 
-`third_party/gl_core/gl_core_3_1.{c,h}` is generated output from
-[glLoadGen](https://github.com/Alfonse/glLoadGen) (Jason McKesson, "Alfonse"),
-an OpenGL loader generator. glLoadGen is distributed under the MIT licence and
-its generated loaders are explicitly unencumbered — the generator's own
-documentation places no restriction on the output.
+`third_party/libdragon` is SuperDuperFX's own copy of
+[libdragon](https://github.com/DragonMinded/libdragon), the open-source N64
+development library, from the `preview` branch at
+`39d0d6096130836a65710da6730290701d060272`. It provides the N64 runtime the
+builds link (boot, interrupts, video, RDP and RSP queues, audio, input,
+cartridge filesystem) and the host tools that package a ROM.
+`third_party/libdragon/SUPERDUPERFX.md` records what was kept and every change.
 
-It arrived here from the desktop hosts of the SNES ports, seven of which
-carried byte-identical copies of these two files alongside byte-identical
-copies of the GL presenter that uses them. It is vendored once, here, so that
-`runner/src/desktop/opengl.c` has a loader to call and a port does not.
-
-## third_party/stb — stb_image
-
-`third_party/stb/stb_image.h` is Sean Barrett's single-header image loader
-from [nothings/stb](https://github.com/nothings/stb), dual-licensed MIT /
-public domain. `runner/src/desktop/glsl_shader.c` uses it to load the textures
-a GLSL preset references.
-
-Vendored here for the same reason as the GL loader above: eight repositories
-in this workspace carried byte-identical copies, because the include in
-glsl_shader.c was spelled relative to a game repo's layout and so compiled
-nowhere else.
+- License: public domain, under the Unlicense (`third_party/libdragon/LICENSE.md`).

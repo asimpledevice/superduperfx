@@ -21,8 +21,7 @@ REPO = pathlib.Path(__file__).resolve().parents[2]
 ENTRY_POINTS = [
     "snesrecomp_cli.py",
     "tools/rom_identity.py",
-    "tools/new_project/probe_rom.py",
-    "tools/new_project/setup_project.sh",   # shell: existence only
+    "tools/probe_rom.py",
 ]
 
 

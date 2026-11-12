@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Build and run the ROM-free C regression harnesses on a POSIX host.
+# Build and run the ROM-free C regression harnesses on a POSIX host (Linux or
+# macOS): the emulation core the N64 build compiles, checked on the PC in
+# seconds. A tool, not a target (AGENTS.md).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -7,57 +9,21 @@ OUT="${OUT:-$ROOT/build/c-tests}"
 CC="${CC:-gcc}"
 mkdir -p "$OUT"
 
-LAUNCHER_LIBS=""
 GC_SECTIONS_LINKER="-Wl,--gc-sections"
-FIBER_PLATFORM_FLAGS=""
 case "$(uname -s)" in
-    Darwin) GC_SECTIONS_LINKER="-Wl,-dead_strip"; FIBER_PLATFORM_FLAGS="-Wno-error=deprecated-declarations" ;;
-    MINGW*|MSYS*) LAUNCHER_LIBS="-lcomdlg32" ;;
+    Darwin) GC_SECTIONS_LINKER="-Wl,-dead_strip" ;;
 esac
-
-echo "=== launcher ==="
-"$CC" -std=c11 -Wall -Wextra -Werror -O1 \
-    -D_POSIX_C_SOURCE=200809L -I "$ROOT/runner/src" \
-    "$ROOT/tests/launcher/launcher_test.c" \
-    "$ROOT/runner/src/launcher.c" \
-    "$ROOT/runner/src/launcher_cache.c" \
-    "$ROOT/runner/src/launcher_picker.c" \
-    "$ROOT/runner/src/rom_image_verify.c" \
-    "$ROOT/runner/src/rom_identity.c" \
-    "$ROOT/runner/src/host_paths.c" \
-    "$ROOT/runner/src/crc32.c" \
-    "$ROOT/runner/src/sha1.c" \
-    "$ROOT/runner/src/sha256.c" \
-    $LAUNCHER_LIBS \
-    -o "$OUT/launcher_test"
-"$OUT/launcher_test"
 
 echo "=== ROM identity (wrong revision / unknown dump / archive messages) ==="
 "$CC" -std=c11 -Wall -Wextra -Werror -O1 \
     -I "$ROOT/runner/src" \
-    "$ROOT/tests/launcher/rom_identity_test.c" \
+    "$ROOT/tests/rom_identity/rom_identity_test.c" \
     "$ROOT/runner/src/rom_identity.c" \
     "$ROOT/runner/src/crc32.c" \
     "$ROOT/runner/src/sha1.c" \
     "$ROOT/runner/src/sha256.c" \
     -o "$OUT/rom_identity_test"
 (cd "$OUT" && ./rom_identity_test)
-
-echo "=== Windows UTF-8 process code page (non-ASCII install paths) ==="
-case "$(uname -s)" in
-    MINGW*|MSYS*)
-        # windres is a native program: hand it a Windows path.
-        MANIFEST="$ROOT/runner/windows/snesrecomp_utf8.manifest"
-        command -v cygpath >/dev/null 2>&1 && MANIFEST="$(cygpath -m "$MANIFEST")"
-        printf '1 24 "%s"\n' "$MANIFEST" > "$OUT/utf8_manifest.rc"
-        "${WINDRES:-windres}" "$OUT/utf8_manifest.rc" -O coff -o "$OUT/utf8_manifest.o"
-        "$CC" -std=c11 -Wall -Wextra -Werror -O1 \
-            "$ROOT/tests/host/utf8_codepage_test.c" "$OUT/utf8_manifest.o" \
-            -o "$OUT/utf8_codepage_test"
-        (cd "$OUT" && ./utf8_codepage_test)
-        ;;
-    *) echo "  (skipped: Windows only)" ;;
-esac
 
 echo "=== DSP capture cursor ==="
 "$CC" -std=c11 -Wall -Wextra -Werror -O1 \
@@ -155,16 +121,6 @@ echo "=== DMA / HDMA ==="
     "$ROOT/runner/src/snes/sdd1.c" \
     $GC_SECTIONS_LINKER -o "$OUT/hdma_timing_test"
 "$OUT/hdma_timing_test"
-
-echo "=== fiber snapshot (rewindable execution position) ==="
-# Darwin exposes the POSIX context API but marks it deprecated.
-"$CC" $FIBER_PLATFORM_FLAGS -std=c11 -Wall -Wextra -Werror -O1 \
-    -D_POSIX_C_SOURCE=200809L \
-    -I "$ROOT/runner/src" -I "$ROOT/runner/src/desktop" \
-    "$ROOT/tests/host/fiber_snapshot_test.c" \
-    "$ROOT/runner/src/desktop/fiber_compat.c" \
-    -o "$OUT/fiber_snapshot_test"
-"$OUT/fiber_snapshot_test"
 
 echo "=== interpreter and bridge ==="
 "$CC" -std=c11 -Wall -Wextra -Werror -O1 \
@@ -328,19 +284,6 @@ echo "=== production diagnostic gates ==="
     $GC_SECTIONS_LINKER -o "$OUT/diagnostic_gates_test"
 "$OUT/diagnostic_gates_test"
 
-echo "=== rollback state digest ==="
-"$CC" -std=c11 -Wall -Wextra -Werror -O1 \
-    -I "$ROOT/runner/src" -I "$ROOT/runner/src/snes" \
-    "$ROOT/tests/netplay/rb_state_digest_test.c" \
-    "$ROOT/runner/src/netplay/snes_state_digest.c" \
-    "$ROOT/runner/src/snes/joypad.c" \
-    "$ROOT/runner/src/snes/apu.c" \
-    "$ROOT/runner/src/snes/spc.c" \
-    "$ROOT/runner/src/snes/dsp.c" \
-    "$ROOT/runner/src/crc32.c" \
-    -o "$OUT/rb_state_digest_test"
-"$OUT/rb_state_digest_test"
-
 echo "=== APU guest-time pacing ==="
 "$CC" -std=c11 -Wall -Wextra -Werror \
     -Wno-error=unknown-pragmas -Wno-error=comment \
@@ -352,22 +295,6 @@ echo "=== APU guest-time pacing ==="
     "$ROOT/runner/src/snes/dsp.c" \
     $GC_SECTIONS_LINKER -o "$OUT/apu_port_guest_time_test"
 "$OUT/apu_port_guest_time_test"
-
-echo "=== benchmark helper ==="
-"$CC" -std=c11 -Wall -Wextra -Werror -O1 \
-    -I "$ROOT/runner/src" \
-    "$ROOT/tests/benchmark/benchmark_helper_test.c" \
-    "$ROOT/runner/src/benchmark.c" \
-    -o "$OUT/benchmark_helper_test_phaseoff"
-"$OUT/benchmark_helper_test_phaseoff"
-
-"$CC" -std=c11 -Wall -Wextra -Werror -O1 \
-    -DSNESRECOMP_BENCHMARK_PHASES=1 \
-    -I "$ROOT/runner/src" \
-    "$ROOT/tests/benchmark/benchmark_helper_test.c" \
-    "$ROOT/runner/src/benchmark.c" \
-    -o "$OUT/benchmark_helper_test_phaseon"
-"$OUT/benchmark_helper_test_phaseon"
 
 echo "=== audio trace history modes ==="
 for mode in 0 1 2 3; do
@@ -414,101 +341,6 @@ for mode in 0 1 2 3; do
         "./audio_trace_clock_gate_test_$mode" open-fail)
 done
 
-echo "=== SNES lobby caps (widescreen keys over recomp-net's client) ==="
-# The lobby client moved to recomp-net (its codec/state-machine test is
-# lib/recomp-net tests/lobby_client_test.c). This compiles the SNES adapter
-# together with the real client to test the SNES keys end to end.
-"$CC" -std=c11 -Wall -Wextra -O1 \
-    -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE \
-    -I "$ROOT/runner/src" -I "$ROOT/runner/src/lobby" \
-    -I "$ROOT/lib/recomp-net/include" -I "$ROOT/lib/recomp-net/src" \
-    "$ROOT/tests/netplay/snes_lobby_caps_test.c" \
-    "$ROOT/lib/recomp-net/src/chat/rnet_chat_filter.c" \
-    "$ROOT/lib/recomp-net/src/chat/rnet_chat_report.c" \
-    "$ROOT/lib/recomp-net/src/platform/rnet_platform.c" \
-    "$ROOT/lib/recomp-net/src/platform/rnet_stun.c" \
-    "$ROOT/lib/recomp-net/src/nat/rnet_host_relay.c" \
-    "$ROOT/lib/recomp-net/src/nat/rnet_host_ice.c" \
-    "$ROOT/lib/recomp-net/src/nat/rnet_sig_hold.c" \
-    "$ROOT/lib/recomp-net/src/lobby/rnet_ice_rtt.c" \
-    -o "$OUT/snes_lobby_caps_test"
-"$OUT/snes_lobby_caps_test"
-
-echo "=== keybinds: the runner-layout keyboard word ==="
-# Needs SDL headers for the scancode enum only (no window, no device). Skipped
-# rather than failed where they are absent, like the OSD test below.
-KB_SDL_CFLAGS=""; KB_SDL_LIBS=""; KB_SDL_DEF=""
-if pkg-config --exists sdl3 2>/dev/null; then
-    KB_SDL_CFLAGS="$(pkg-config --cflags sdl3)"
-    KB_SDL_LIBS="$(pkg-config --libs sdl3)"
-    KB_SDL_DEF="-DSNESRECOMP_SDL3=1"
-elif pkg-config --exists sdl2 2>/dev/null; then
-    KB_SDL_CFLAGS="$(pkg-config --cflags sdl2)"
-    KB_SDL_LIBS="$(pkg-config --libs sdl2)"
-fi
-if [ -n "$KB_SDL_LIBS" ]; then
-    "$CC" -std=c11 -Wall -Wextra -O1 $KB_SDL_DEF $KB_SDL_CFLAGS \
-        -I "$ROOT/runner/src" \
-        "$ROOT/tests/joypad/keybinds_runner_layout_test.c" \
-        "$ROOT/runner/src/keybinds.c" \
-        $KB_SDL_LIBS -o "$OUT/keybinds_runner_layout_test"
-    ( cd "$OUT" && ./keybinds_runner_layout_test )
-    "$CC" -std=c11 -Wall -Wextra -O1 $KB_SDL_DEF $KB_SDL_CFLAGS \
-        -I "$ROOT/runner/src" \
-        "$ROOT/tests/joypad/keybinds_appimage_test.c" \
-        "$ROOT/runner/src/keybinds.c" \
-        $KB_SDL_LIBS -o "$OUT/keybinds_appimage_test"
-    "$OUT/keybinds_appimage_test"
-else
-    echo "  (skipped: no SDL headers)"
-fi
-
-echo "=== config.ini round trip (launcher-editable settings) ==="
-# Needs SDL headers for the keycode names config.c resolves [KeyMap] through
-# (no window, no device). Skipped rather than failed where they are absent.
-if [ -n "$KB_SDL_LIBS" ]; then
-    # SDL_MAIN_HANDLED: config.h reaches SDL through sdl_compat.h, and SDL
-    # would otherwise rename main() out from under this harness.
-    "$CC" -std=c11 -Wall -Wextra -O1 -DSDL_MAIN_HANDLED $KB_SDL_DEF $KB_SDL_CFLAGS \
-        -I "$ROOT/runner/src" -I "$ROOT/runner/src/desktop" \
-        "$ROOT/tests/host/config_roundtrip_test.c" \
-        "$ROOT/runner/src/desktop/mmx_config.c" \
-        "$ROOT/runner/src/util.c" \
-        $KB_SDL_LIBS -o "$OUT/config_roundtrip_test"
-    ( cd "$OUT" && ./config_roundtrip_test )
-else
-    echo "  (skipped: no SDL headers)"
-fi
-
-echo "=== standalone save-state browser (no netplay helper) ==="
-if [ -n "$KB_SDL_LIBS" ] && command -v cmake >/dev/null; then
-    STANDALONE_SDL=SDL2
-    if [ -n "$KB_SDL_DEF" ]; then STANDALONE_SDL=SDL3; fi
-    cmake -S "$ROOT/tests/netplay/standalone" -B "$OUT/standalone-menu" \
-        -DCMAKE_C_COMPILER="$CC" -DSNESRECOMP_SDL_BACKEND="$STANDALONE_SDL"
-    cmake --build "$OUT/standalone-menu" --parallel 2
-    ctest --test-dir "$OUT/standalone-menu" --output-on-failure
-else
-    echo "  (skipped: needs SDL headers and CMake)"
-fi
-
-echo "=== mod runtime: presentation_only is not compared by netplay ==="
-# C++ because mod_runtime is C++, and it is compiled here rather than mocked so
-# the real manifest parser, the real effective-set text and the real adopt
-# sweep are what the cases run against. The fixture catalog is written into
-# $OUT by the test itself, so this stays ROM-free and leaves nothing in the
-# source tree.
-"${CXX:-g++}" -std=c++17 -Wall -Wextra -O1 \
-    -I "$ROOT/runner/src" \
-    -x c++ "$ROOT/tests/netplay/mod_presentation_only_test.c" \
-    "$ROOT/runner/src/mod_runtime.cpp" \
-    "$ROOT/runner/src/sha256.c" "$ROOT/runner/src/snes/tier2_capture.c" \
-    "$ROOT/runner/src/crc32.c" \
-    "$ROOT/runner/src/rom_identity.c" "$ROOT/runner/src/sha1.c" \
-    -o "$OUT/mod_presentation_only_test"
-rm -rf "$OUT/mod_presentation_only_fixture"
-"$OUT/mod_presentation_only_test" "$OUT/mod_presentation_only_fixture"
-
 echo "=== mod runtime: exceptions stay inside the C boundary ==="
 "${CXX:-g++}" -std=c++17 -Wall -Wextra -O1 \
     -I "$ROOT/runner/src" \
@@ -546,47 +378,6 @@ if [ -f "$RECOMP_UI_SRC/recomp_launcher.h" ]; then
 else
     echo "  (skipped: no recomp-ui; set RECOMP_UI_DIR)"
 fi
-
-echo "=== host OSD (FPS readout / turbo / toasts) ==="
-# Needs SDL for its clock only (no window; SDL_INIT_TIMER). Skipped rather than
-# failed where SDL headers are absent, so this stays a ROM-free harness that
-# also runs on a machine without the game's build deps.
-OSD_SDL_CFLAGS=""
-OSD_SDL_LIBS=""
-OSD_SDL_BACKEND=""
-if pkg-config --exists sdl3 2>/dev/null; then
-    OSD_SDL_CFLAGS="$(pkg-config --cflags sdl3)"
-    OSD_SDL_LIBS="$(pkg-config --libs sdl3)"
-    OSD_SDL_BACKEND="-DSNESRECOMP_SDL3=1"
-elif pkg-config --exists sdl2 2>/dev/null; then
-    OSD_SDL_CFLAGS="$(pkg-config --cflags sdl2)"
-    OSD_SDL_LIBS="$(pkg-config --libs sdl2)"
-    OSD_SDL_BACKEND=""
-fi
-if [ -n "$OSD_SDL_LIBS" ]; then
-    # shellcheck disable=SC2086
-    "$CC" -std=c11 -Wall -Wextra -O1 \
-        -I "$ROOT/runner/src" -I "$ROOT/runner/src/desktop" \
-        $OSD_SDL_CFLAGS $OSD_SDL_BACKEND \
-        "$ROOT/tests/osd/osd_test.c" \
-        "$ROOT/runner/src/snes_osd.c" \
-        $OSD_SDL_LIBS -o "$OUT/osd_test"
-    "$OUT/osd_test"
-else
-    echo "  (skipped: no SDL2/SDL3 pkg-config)"
-fi
-
-echo "=== account secret path (rebuild must not sign you out) ==="
-# _GNU_SOURCE: rnet_auth.c uses getaddrinfo, and the test uses mkdtemp.
-"$CC" -std=gnu11 -Wall -Wextra -O1 -D_GNU_SOURCE \
-    -I "$ROOT/lib/recomp-net/include" -I "$ROOT/lib/recomp-net/src" \
-    "$ROOT/tests/auth/secret_path_test.c" \
-    "$ROOT/lib/recomp-net/src/auth/rnet_auth.c" \
-    "$ROOT/lib/recomp-net/src/auth/rnet_open_url.c" \
-    "$ROOT/lib/recomp-net/src/auth/rnet_sha256.c" \
-    "$ROOT/lib/recomp-net/src/platform/rnet_platform.c" \
-    -lpthread -o "$OUT/secret_path_test"
-"$OUT/secret_path_test"
 
 echo "=== rewind ring (ordering, clamping, what commit discards) ==="
 # The snapshot API is stubbed, so this tests the ring rather than re-testing
@@ -649,13 +440,15 @@ echo "=== Super FX PC hooks ==="
 "$OUT/superfx_pc_hook_test"
 
 # Both include common_rtl.c whole; -fwhole-program drops the host entry
-# points they do not exercise instead of linking the full runtime. Its
-# desktop config header needs SDL headers, not the library.
-RTL_UNIT_FLAGS="$(pkg-config --cflags sdl2) -std=c11 -O2 -flto -fwhole-program -ffunction-sections -fdata-sections -DSNESRECOMP_TRACE=0 -D_POSIX_C_SOURCE=200809L -I $ROOT/runner/src/desktop -I $ROOT/runner/src"
+# points they do not exercise instead of linking the full runtime. config.h
+# comes from the N64 build's wrapper (n64/include/config.h), as on the N64.
+RTL_UNIT_FLAGS="-std=c11 -O2 -flto -fwhole-program -ffunction-sections -fdata-sections -DSNESRECOMP_TRACE=0 -D_POSIX_C_SOURCE=200809L -I $ROOT/n64/include -I $ROOT/runner/src"
 
 echo "=== audio delivery + console reset ==="
 "$CC" $RTL_UNIT_FLAGS "$ROOT/tests/audio_delivery_test.c" \
     "$ROOT/runner/src/snes/dsp.c" "$ROOT/runner/src/audio_trace.c" \
+    "$ROOT/runner/src/snes/apu.c" "$ROOT/runner/src/snes/spc.c" \
+    "$ROOT/runner/src/snes/dsp_shadow.c" "$ROOT/runner/src/snes/audio_shadow.c" \
     -Wl,--gc-sections -lm -o "$OUT/audio_delivery_test"
 "$OUT/audio_delivery_test"
 
