@@ -12,9 +12,12 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-N64_INST="${N64_INST:-/opt/libdragon}"
-GCC="$N64_INST/bin/mips64-elf-gcc"
-SIZE="$N64_INST/bin/mips64-elf-size"
+# The GCC toolchain: N64_GCCPREFIX, else N64_INST. libdragon's headers come
+# from the repo's own copy, installed by any N64 build (n64/libdragon.mk).
+TOOLCHAIN="${N64_GCCPREFIX:-${N64_INST:-/opt/libdragon}}"
+LIBDRAGON="$ROOT/build/libdragon"
+GCC="$TOOLCHAIN/bin/mips64-elf-gcc"
+SIZE="$TOOLCHAIN/bin/mips64-elf-size"
 GEN_DIR=""
 OPT="-Os"
 JOBS="$(nproc)"
@@ -33,12 +36,14 @@ while [ $# -gt 0 ]; do
   esac
 done
 [ -n "$GEN_DIR" ] || { echo "--gen-dir is required" >&2; exit 2; }
-[ -x "$GCC" ] || { echo "N64 toolchain not found at $N64_INST" >&2; exit 1; }
+[ -x "$GCC" ] || { echo "N64 toolchain not found at $TOOLCHAIN" >&2; exit 1; }
+[ -f "$LIBDRAGON/mips64-elf/include/libdragon.h" ] || {
+  echo "libdragon not installed in $LIBDRAGON: run an N64 build (make -C n64 libdragon)" >&2; exit 1; }
 OUT="${OUT:-$(mktemp -d)}"
 mkdir -p "$OUT"
 
 CFLAGS=(-march=vr4300 -mtune=vr4300 -mabi=o64
-  "-I$N64_INST/mips64-elf/include/newlib_overrides" "-I$N64_INST/mips64-elf/include"
+  "-I$LIBDRAGON/mips64-elf/include/newlib_overrides" "-I$LIBDRAGON/mips64-elf/include"
   -include ktls.h -std=gnu17 -G0 "$OPT"
   "-I$ROOT/runner/src" "-I$ROOT/runner/src/snes" "${INCS[@]}"
   -DSNESRECOMP_TRACE=0)

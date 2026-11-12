@@ -2,7 +2,7 @@
 # states and reports over the debug log (run headless with ares_run.sh).
 BUILD_DIR = build
 SOURCE_DIR = ..
-include $(N64_INST)/include/n64.mk
+include ../../libdragon.mk
 
 RUNNER = ../../../runner/src
 N64_CFLAGS += -I.. -I$(RUNNER) -I$(RUNNER)/snes -I../../include -DSNESRECOMP_TRACE=0 -DSNESRECOMP_AUDIO_TRACE_HOOKS=0 -include ../../include/n64_compat.h -Wno-error $(TEST_CFLAGS)

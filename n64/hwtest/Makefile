@@ -2,7 +2,7 @@
 # screen, made to be photographed, and in the debug log.
 BUILD_DIR = build
 SOURCE_DIR = .
-include $(N64_INST)/include/n64.mk
+include ../libdragon.mk
 
 N64_CFLAGS += -Wno-error
 

@@ -2,7 +2,7 @@
 # random states and programs; reports over the debug log (ares, headless).
 BUILD_DIR = build
 SOURCE_DIR = ..
-include $(N64_INST)/include/n64.mk
+include ../../libdragon.mk
 
 RUNNER = ../../../runner/src
 SPCRSP_TESTS ?= 2000
@@ -43,11 +43,11 @@ $(BUILD_DIR)/rsp_spc_tables.inc: ../gen_tables.py $(RUNNER)/snes/spc.c
 	@mkdir -p $(dir $@)
 	python3 ../gen_tables.py $(RUNNER)/snes/spc.c $@ $(BUILD_DIR)/rsp_spc_traps.h
 $(BUILD_DIR)/rsp_spc_syms.inc: $(BUILD_DIR)/rsp_spc.o ../gen_syms.py
-	python3 ../gen_syms.py $(BUILD_DIR)/rsp_spc.elf $@ $(N64_INST)/bin/mips64-elf-nm
+	python3 ../gen_syms.py $(BUILD_DIR)/rsp_spc.elf $@ $(N64_NM)
 $(BUILD_DIR)/rsp_spc_ext.o: $(BUILD_DIR)/rsp_spc_syms.inc
 $(BUILD_DIR)/rsp_spc_ext.o: RSPASFLAGS += -I$(BUILD_DIR)
 $(BUILD_DIR)/ext.check: $(BUILD_DIR)/rsp_spc_ext.o $(BUILD_DIR)/rsp_spc.o
-	python3 ../gen_syms.py --check $(BUILD_DIR)/rsp_spc.elf $(BUILD_DIR)/rsp_spc_ext.elf $(N64_INST)/bin/mips64-elf-nm
+	python3 ../gen_syms.py --check $(BUILD_DIR)/rsp_spc.elf $(BUILD_DIR)/rsp_spc_ext.elf $(N64_NM)
 	@touch $@
 $(BUILD_DIR)/rsp_spc.o: $(BUILD_DIR)/rsp_spc_tables.inc
 $(BUILD_DIR)/rsp_spc.o: RSPASFLAGS += -I$(BUILD_DIR)

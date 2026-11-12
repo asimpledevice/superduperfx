@@ -6,8 +6,16 @@ Target: N64 with Expansion Pak (8 MB RDRAM), VR4300 at 93.75 MHz.
 ## Toolchain
 
 - `mips64-elf-gcc` 16.2.0 from libdragon's prebuilt `gcc-toolchain-mips64`
-  package, installed to `/opt/libdragon` (`N64_INST`).
-- libdragon `preview` branch, pinned to `39d0d6096130836a65710da6730290701d060272`.
+  package, installed to `/opt/libdragon`. `N64_INST` (or `N64_GCCPREFIX`)
+  in the environment points at it; it is the only external dependency.
+- libdragon is part of the repository (`third_party/libdragon`, from the
+  `preview` branch at `39d0d6096130836a65710da6730290701d060272`; see its
+  `SUPERDUPERFX.md`). Every N64 Makefile includes `n64/libdragon.mk`, which
+  builds it and its host tools into `build/libdragon` (about a minute, once)
+  and uses that as `N64_INST`. `make -C n64 libdragon` rebuilds it.
+  Checked: an SMW build against it has the same code, data and filesystem as
+  one against `/opt/libdragon`. Only the source paths in the backtrace
+  symbol table differ.
 - Flags follow libdragon's `n64.mk`: `-march=vr4300 -mtune=vr4300 -mabi=o64`,
   plus `-G0` for large objects.
 

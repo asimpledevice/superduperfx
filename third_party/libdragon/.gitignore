@@ -1,0 +1,19 @@
+# Build output of the in-tree libdragon build (n64/libdragon.mk)
+build/
+libdragon.a
+libdragonsys.a
+*.o
+*.d
+tools/common/*.a
+tools/common/mips_decomp_l*.bin
+tools/n64tool
+tools/n64metadata
+tools/ed64romconfig
+tools/n64sym/n64sym
+tools/n64sym/n64symdump
+tools/n64elfcompress/n64elfcompress
+tools/mkdfs/mkdfs
+tools/dumpdfs/dumpdfs
+tools/rdpvalidate/rdpvalidate
+*.exe
+src/magma/rsp_magma.h

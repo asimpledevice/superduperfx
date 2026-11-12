@@ -11,7 +11,7 @@
 
 BUILD_DIR = build
 SOURCE_DIR = src
-include $(N64_INST)/include/n64.mk
+include libdragon.mk
 
 RUNNER = ../runner/src
 
@@ -83,12 +83,12 @@ $(BUILD_DIR)/rsp_spc.o: rspspc/rsp_spc.S rspspc/spc_rsp_layout.h $(BUILD_DIR)/rs
 	@$(MAKE) --no-print-directory -f $(N64_INST)/include/n64.mk SOURCE_DIR=rspspc \
 		BUILD_DIR=$(BUILD_DIR) RSPASFLAGS="$(N64_RSPASFLAGS) -I$(abspath $(BUILD_DIR))" $@
 $(BUILD_DIR)/rsp_spc_syms.inc: $(BUILD_DIR)/rsp_spc.o rspspc/gen_syms.py
-	python3 rspspc/gen_syms.py $(BUILD_DIR)/rsp_spc.elf $@ $(N64_INST)/bin/mips64-elf-nm
+	python3 rspspc/gen_syms.py $(BUILD_DIR)/rsp_spc.elf $@ $(N64_NM)
 # rsp_spc_ext runs in the rspq IMEM it borrows: check it fits there.
 $(BUILD_DIR)/rsp_spc_ext.o: rspspc/rsp_spc_ext.S rspspc/spc_rsp_layout.h $(BUILD_DIR)/rsp_spc_syms.inc
 	@$(MAKE) --no-print-directory -f $(N64_INST)/include/n64.mk SOURCE_DIR=rspspc \
 		BUILD_DIR=$(BUILD_DIR) RSPASFLAGS="$(N64_RSPASFLAGS) -I$(abspath $(BUILD_DIR))" $@
-	python3 rspspc/gen_syms.py --check $(BUILD_DIR)/rsp_spc.elf $(BUILD_DIR)/rsp_spc_ext.elf $(N64_INST)/bin/mips64-elf-nm
+	python3 rspspc/gen_syms.py --check $(BUILD_DIR)/rsp_spc.elf $(BUILD_DIR)/rsp_spc_ext.elf $(N64_NM)
 endif
 
 # ROMPAGING=1: the cartridge reads the SNES ROM through a TLB-mapped window
@@ -157,13 +157,13 @@ $(BUILD_DIR)/cc/%.o: $(CC_SPLIT)/cc/%.c
 CC_EXTERNS := $(BUILD_DIR)/snesrecomp_interp.externs
 $(CC_EXTERNS): $(CC_MODOBJS)
 	@echo "    [EXTERNS] $@"
-	python3 ../tools/n64/code_cache_externs.py $@ $(BUILD_DIR)/cc $(N64_INST)/bin/mips64-elf-nm
+	python3 ../tools/n64/code_cache_externs.py $@ $(BUILD_DIR)/cc $(N64_NM)
 $(BUILD_DIR)/snesrecomp_interp.elf: $(CC_EXTERNS)
 $(BUILD_DIR)/filesystem/cc.pack: $(BUILD_DIR)/snesrecomp_interp.elf $(CC_MODOBJS) cc_module.ld ../tools/n64/pack_code_cache.py
 	@mkdir -p $(dir $@)
 	@echo "    [PACK] $@"
 	python3 ../tools/n64/pack_code_cache.py $@ $(CC_SPLIT)/resident/dispatch_v2.c $(BUILD_DIR)/cc \
-		$< $(N64_INST)/bin/mips64-elf-ld cc_module.ld $(BUILD_DIR)/ccmod 8
+		$< $(N64_LD) cc_module.ld $(BUILD_DIR)/ccmod 8
 $(BUILD_DIR)/snesrecomp_interp.dfs: $(BUILD_DIR)/filesystem/cc.pack
 endif
 
@@ -288,7 +288,7 @@ snesrecomp_interp.z64: $(BUILD_DIR)/snesrecomp_interp.dfs
 ifneq ($(ICACHE_ORDER),)
 snesrecomp_interp.z64: $(BUILD_DIR)/placement.check
 $(BUILD_DIR)/placement.check: $(BUILD_DIR)/snesrecomp_interp.elf icache_order.ld
-	@python3 profile/check_placement.py $< icache_order.ld --nm $(N64_INST)/bin/mips64-elf-nm \
+	@python3 profile/check_placement.py $< icache_order.ld --nm $(N64_NM) \
 		|| echo "*** WARNING: code placement shifted (see above) ***"
 	@touch $@
 endif

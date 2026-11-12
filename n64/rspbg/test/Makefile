@@ -2,7 +2,7 @@
 # with a CPU expansion; reports over the debug log (run headless in ares).
 BUILD_DIR = build
 SOURCE_DIR = ..
-include $(N64_INST)/include/n64.mk
+include ../../libdragon.mk
 
 N64_CFLAGS += -I.. -Wno-error $(TEST_CFLAGS)
 
