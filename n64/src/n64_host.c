@@ -605,7 +605,7 @@ static int host_main(void) {
 #endif
 #if SNESRECOMP_BLUE_THREAD
     if (frame % 60 == 59) {
-      n64_platform_log("[fiber] %lu pauses, %lu resumed, %lu unwound\n",
+      n64_platform_log("[blue] %lu pauses, %lu resumed, %lu unwound\n",
                        (unsigned long)g_blue_pauses, (unsigned long)g_blue_resumes,
                        (unsigned long)g_blue_unwinds);
     }

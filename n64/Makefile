@@ -185,11 +185,14 @@ N64_CFLAGS += -Iinclude -I$(RUNNER) -I$(RUNNER)/snes -I$(RUNNER)/desktop \
 	-Wno-error -Wno-unused-parameter -Wno-unused-variable \
 	-Wno-unused-function -Wno-sign-compare -Wno-unused-but-set-variable
 N64_CFLAGS += -O2
+# BLUE=1: the 65816 runs on the Blue thread (runner/src/blue_thread.c), paused
+# at deadlines instead of unwound. Off by default for now.
+BLUE ?= 0
 N64_CFLAGS += -DSNESRECOMP_FAST_READ_MAP=1 -DSNESRECOMP_QUIESCENT_BACKEDGE=1 \
 	-DSNESRECOMP_LAZY_BEAM=1 -DSNESRECOMP_REVERSE_DEBUG=0 -DSNESRECOMP_INTERP_EDGE_TRACE=0 \
 	-DSNESRECOMP_WRAM_POLL_QUIESCENT=1 -DSNESRECOMP_PARK_TO_VBLANK=1 \
 	-DSNESRECOMP_FRAME_FINGERPRINTS=0 -DSNESRECOMP_PPU_DMA_HISTORY=0 -DSNESRECOMP_INTERP_DIAG=0 \
-	-DSNESRECOMP_BLUE_THREAD=0 \
+	-DSNESRECOMP_BLUE_THREAD=$(BLUE) \
 	-DSNESRECOMP_APU_NATIVE=1 -DSNESRECOMP_AUDIO_TRACE_HOOKS=0 \
 	'-DSNESRECOMP_HOT_BSS=__attribute__((section(".sbss.hot")))'
 

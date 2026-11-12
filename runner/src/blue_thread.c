@@ -22,10 +22,12 @@ uint32_t g_blue_pauses, g_blue_resumes, g_blue_unwinds;
 #if !defined(__mips__)
 #error "The Blue thread is the N64 (MIPS) context switch"
 #endif
-/* Callee-saved state of the MIPS ABIs: s0-s7, s8, gp, sp, ra and $f20-$f31
- * (libdragon runs the FPU with 32 64-bit registers). Everything else is
- * caller-saved, so the switch is an ordinary call for the compiler. */
-typedef struct { uint64_t r[12]; uint64_t f[12]; } ThreadCtx;
+/* Callee-saved state of the MIPS ABIs: s0-s7, s8, gp, sp and ra. The
+ * callee-saved FPU registers ($f20-$f31) are not switched: every FPU register
+ * compiled code may keep is caller-saved, and the rest belong to state both
+ * threads share (n64/fpu_reserve.mk). Everything else is caller-saved, so the
+ * switch is an ordinary call for the compiler. */
+typedef struct { uint64_t r[12]; } ThreadCtx;
 void thread_ctx_switch(ThreadCtx *save, const ThreadCtx *load);
 __asm__(
     ".text\n"
@@ -35,15 +37,9 @@ __asm__(
     "  sd $16, 0($4)\n  sd $17, 8($4)\n  sd $18, 16($4)\n  sd $19, 24($4)\n"
     "  sd $20, 32($4)\n  sd $21, 40($4)\n  sd $22, 48($4)\n  sd $23, 56($4)\n"
     "  sd $30, 64($4)\n  sd $28, 72($4)\n  sd $29, 80($4)\n  sd $31, 88($4)\n"
-    "  sdc1 $f20, 96($4)\n  sdc1 $f21, 104($4)\n  sdc1 $f22, 112($4)\n  sdc1 $f23, 120($4)\n"
-    "  sdc1 $f24, 128($4)\n  sdc1 $f25, 136($4)\n  sdc1 $f26, 144($4)\n  sdc1 $f27, 152($4)\n"
-    "  sdc1 $f28, 160($4)\n  sdc1 $f29, 168($4)\n  sdc1 $f30, 176($4)\n  sdc1 $f31, 184($4)\n"
     "  ld $16, 0($5)\n  ld $17, 8($5)\n  ld $18, 16($5)\n  ld $19, 24($5)\n"
     "  ld $20, 32($5)\n  ld $21, 40($5)\n  ld $22, 48($5)\n  ld $23, 56($5)\n"
     "  ld $30, 64($5)\n  ld $28, 72($5)\n  ld $29, 80($5)\n  ld $31, 88($5)\n"
-    "  ldc1 $f20, 96($5)\n  ldc1 $f21, 104($5)\n  ldc1 $f22, 112($5)\n  ldc1 $f23, 120($5)\n"
-    "  ldc1 $f24, 128($5)\n  ldc1 $f25, 136($5)\n  ldc1 $f26, 144($5)\n  ldc1 $f27, 152($5)\n"
-    "  ldc1 $f28, 160($5)\n  ldc1 $f29, 168($5)\n  ldc1 $f30, 176($5)\n  ldc1 $f31, 184($5)\n"
     "  jr $31\n  nop\n"
     ".size thread_ctx_switch, .-thread_ctx_switch\n"
     ".set pop\n");

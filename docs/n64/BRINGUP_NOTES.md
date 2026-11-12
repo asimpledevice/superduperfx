@@ -678,13 +678,13 @@ instructions, by the routine and CPU mode containing each PC):
 | No routine at all in the manifest | 13.5% |
 | A routine, but not for this mode | 10% |
 
-### Blue thread (formerly the Blue thread) (`SNESRECOMP_BLUE_THREAD`, off by default)
+### Blue thread (formerly the guest fiber) (`SNESRECOMP_BLUE_THREAD`, off by default)
 
 Generated code's deadline checks now call `interp_bridge_lle_deadline_pause(cpu, pc)`
 (same result as `..._master_deadline_reached` without fibers; all hashes
 unchanged). With `SNESRECOMP_BLUE_THREAD=1` the frame driver runs the guest
-on its own stack (`runner/src/blue_thread.c`; MIPS context switch on the
-N64, ucontext elsewhere): at a deadline the native code pauses instead of
+on its own stack (`runner/src/blue_thread.c`, a MIPS context switch):
+at a deadline the native code pauses instead of
 unwinding, the driver sees exactly what an unwind leaves (resume PC, APU
 flush, beam catch-up, bridge nesting state and shadow stack at their
 run-start values), and a run at the same PC/S resumes the native code.
@@ -2154,6 +2154,26 @@ the CPU becomes integer.
   code (`save_fpu_regs`, `end_interrupt`, `finalize_exception_frame`,
   `end_exception_restore_all`), which will be allow-listed. Step 3 builds
   libdragon and our code with the flags.
+
+### FPU step 3a: everything built with the reservation (2026-11-12)
+
+- `n64.mk` (ours) adds `SDFX_FPU_FIXED` to every compile, libdragon
+  included, and links newlib from `build/newlib` (built on first use).
+  Every build ends with `check_fpu_reserved.py` on the ELF and the
+  code-cache modules; the allow list is `SDFX_FPU_OWNERS`.
+- Found on the way: through `-Wl,-L`, libdragon's and newlib's directories
+  came after the toolchain's, so `libdragon.a` and `n64.ld` had been taken
+  from `/opt/libdragon` since vendoring (same commit, same code). They are
+  now passed to the driver.
+- The Blue thread's switch no longer saves `$f20-$f31` (the check caught
+  it). `BLUE=1` builds it. Blue builds before and after: identical hashes
+  (SMW 51, Pitfall 12, JM2 24 frames); Blue off: identical to step 1.
+- D-cache evidence for moving state into FPU registers (SMW, frames
+  400-460): `g_cpu` (56 bytes, four lines) takes 1.13% of misses, about
+  440 per frame, and 81% of them come from one conflict with a deep frame
+  of the main-loop stack (`s_host_stack` +232 KB, same cache index). The
+  line with `cycles` and `master_cycles` misses most (10,441); the 65816
+  registers' line 4,754. Moving only some fields leaves each line in use.
 
 ## Next steps
 
