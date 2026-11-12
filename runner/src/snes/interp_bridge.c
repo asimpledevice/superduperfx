@@ -20,13 +20,9 @@
 #include "sdd1.h"
 #include "debug_server.h"
 #include "common_rtl.h"
-#include "cosim.h"  /* cosim_insn — instruction-granular lockstep (no-op unless SNES_COSIM) */
 #include "common_cpu_infra.h"  /* cpu_take_tailcall_return_context — swallow a stale
                                 * tail-armed context on the LLE yield unwind */
 #include "ppu_dma_trace.h"      /* ppudma_note_interrupt — per-frame tally */
-#if defined(_MSC_VER) && !defined(__clang__)
-#include <intrin.h>             /* _BitScanForward64 */
-#endif
 
 /* Guest-time-anchored APU (Rockman X JP gate #3 / audio pacing): the interp
  * tier advances the SPC per interpreted opcode by guest master cycles, exactly
@@ -39,9 +35,6 @@
 extern Snes *g_snes;
 extern uint64_t g_apu_last_sync_master;   /* common_rtl.c — keep synced so a bounce's accurate-mode delta excludes interp opcodes */
 extern int g_interp_apu_driving;          /* common_rtl.c — suppresses the per-touch synthetic catch-up while set */
-#ifdef SNES_COSIM
-extern int cosim_apu_shared_clock(void);  /* common_rtl.c — SNES_COSIM_APU_SHARED touch-only APU pacing */
-#endif
 void RtlApuLock(void);                    /* real mutex in the windowed runner (audio thread also cycles the SPC); no-op in headless/cosim */
 void RtlApuUnlock(void);
 static const double kInterpApuPerMaster = (32040.0 * 32.0) / (1364.0 * 262.0 * 60.0);
@@ -248,13 +241,7 @@ static unsigned bridge_region_speed(uint32_t adr) {
 
 /* Index of the lowest set bit; v must be non-zero. */
 static inline unsigned bridge_ctz64(uint64_t v) {
-#if defined(_MSC_VER) && !defined(__clang__)
-    unsigned long i;
-    _BitScanForward64(&i, v);
-    return (unsigned)i;
-#else
     return (unsigned)__builtin_ctzll(v);
-#endif
 }
 
 static void bridge_timing_bus(uint32_t adr) {
@@ -1711,22 +1698,8 @@ void interp_bridge_dump_recent(int n, FILE *out) {
  * that compiles this file. MSVC's equivalent is a function pointer placed in
  * the .CRT$XCU section, which the CRT walks before main(). */
 static void itrace_install_dump_hook(void);
-#if defined(_MSC_VER)
-#  pragma section(".CRT$XCU", read)
-__declspec(allocate(".CRT$XCU"))
-/* External linkage: /include: below needs a symbol the linker can see,
- * and it stops the section pointer being discarded. */
-void (*itrace_install_dump_hook_ctor)(void) = itrace_install_dump_hook;
-#  if defined(_M_IX86)
-#    pragma comment(linker, "/include:_itrace_install_dump_hook_ctor")
-#  else
-#    pragma comment(linker, "/include:itrace_install_dump_hook_ctor")
-#  endif
-static void itrace_install_dump_hook(void)
-#else
 __attribute__((constructor))
 static void itrace_install_dump_hook(void)
-#endif
 {
     g_interp_recent_dump_hook = interp_bridge_dump_recent;
 }
@@ -1880,8 +1853,6 @@ static const uint8_t k_bridge_op_class[256] = {
  * cold functions in .text.unlikely.* sections. */
 #if defined(__GNUC__)
 #define BRIDGE_COLD __attribute__((noinline, cold))
-#elif defined(_MSC_VER)
-#define BRIDGE_COLD __declspec(noinline)
 #else
 #define BRIDGE_COLD
 #endif
@@ -2956,13 +2927,6 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
                 }
             }
         }
-#ifdef SNES_COSIM
-        /* Instruction-granular co-sim checkpoint: sync the live interp state into
-         * g_cpu (what cosim_state snapshots on the recomp A-side) and offer this
-         * opcode boundary. No-op unless SNES_COSIM_SYNC_PC is armed. */
-        sync_interp_to_cpu(&in, cpu);
-        cosim_insn(pc_before);
-#endif
         /* Cooperative-loop yield: stop when the loop reaches its wait point with
          * the vblank flag cleared (one frame's dispatch complete). Checked BEFORE
          * executing so we don't re-enter the spin.
@@ -3287,15 +3251,6 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
             bridge_beam_after_step(cpu);
             if (has_coprocessor)
                 cart_sync_coprocessors(g_snes->cart, cpu->master_cycles);
-#ifdef SNES_COSIM
-            /* Shared APU clock (common_rtl.h): the guest-time advance is a
-             * per-side clock (master-cycle accounting differs between the
-             * interp and compiled models), so under SNES_COSIM_APU_SHARED the
-             * SPC is paced ONLY by the HW-touch estimate — identical on both
-             * sides of an A/B pair. The opcode's own port access (if any)
-             * paces via rtl_accumulate_apu_catchup like compiled code. */
-            if (!cosim_apu_shared_clock())
-#endif
             {
                 /* Guest-time APU, batched (see bridge_apu_flush): accumulate;
                  * convert on APU-port access / ~4096 master / exits. */
@@ -3770,11 +3725,6 @@ static int interp_bridge_run_ex2(CpuState *cpu, uint32_t entry_pc24,
                                  const uint32_t *stop_pcs, int n_stop,
                                  int stop_on_rti) {
     int _saved = g_interp_apu_driving;
-#ifdef SNES_COSIM
-    /* Shared APU clock: leave the flag clear so interpreted HW touches pace
-     * the SPC through the same per-touch path compiled code uses. */
-    if (!cosim_apu_shared_clock())
-#endif
     g_interp_apu_driving = 1;
     if (yield_pc) s_lle_sched_depth++;
     const uint32_t _saved_sched_yield_pc    = s_sched_yield_pc;

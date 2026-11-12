@@ -12,44 +12,6 @@ static uint64_t wall_ms(void) { return audio_trace_test_wall_ms(); }
 #define AUDIO_TRACE_WALL_MS_DEFINED 1
 #endif
 
-#ifdef SNES_COSIM
-/* Co-sim determinism (docs/COSIM.md, Gate 1): every audio-pacing consumer that
- * reads the wall clock (APU catch-up baseline, RtlApuWrite port-write scheduler)
- * would otherwise diverge run-to-run. Replace the host clock at its source with
- * a VIRTUAL clock derived purely from guest execution (the 21.47727 MHz master
- * clock: ~46.5665 ns / 21477.27 cyc-per-ms per master cycle), so two runs pace
- * the SPC and schedule port writes identically. Dev/diagnostics only.
- * (mc*4657/100 ≈ mc*46.57 ns; no overflow for years.) */
-#ifdef SNES_COSIM_REF
-/* B side: the interp816 driver owns the master-cycle accumulator (no g_cpu). */
-extern uint64_t g_ref_master_cycles;
-#ifndef AUDIO_TRACE_WALL_MS_DEFINED
-static uint64_t wall_ms(void) { return g_ref_master_cycles / 21477ull; }
-#endif
-static uint64_t wall_ns(void) { return g_ref_master_cycles * 4657ull / 100ull; }
-#else
-#include "cpu_state.h"
-extern CpuState g_cpu;
-#ifndef AUDIO_TRACE_WALL_MS_DEFINED
-static uint64_t wall_ms(void) { return g_cpu.master_cycles / 21477ull; }
-#endif
-static uint64_t wall_ns(void) { return g_cpu.master_cycles * 4657ull / 100ull; }
-#endif
-#elif defined(_WIN32)
-#include <windows.h>
-#ifndef AUDIO_TRACE_WALL_MS_DEFINED
-static uint64_t wall_ms(void) { return (uint64_t)GetTickCount64(); }
-#endif
-/* High-resolution monotonic nanoseconds — GetTickCount64's ~15 ms
- * granularity is far too coarse for intra-frame port-write spacing. */
-static uint64_t wall_ns(void) {
-  static LARGE_INTEGER freq;
-  LARGE_INTEGER now;
-  if (!freq.QuadPart) QueryPerformanceFrequency(&freq);
-  QueryPerformanceCounter(&now);
-  return (uint64_t)((double)now.QuadPart * 1e9 / (double)freq.QuadPart);
-}
-#else
 #include <time.h>
 #ifndef AUDIO_TRACE_WALL_MS_DEFINED
 static uint64_t wall_ms(void) {
@@ -63,7 +25,6 @@ static uint64_t wall_ns(void) {
   clock_gettime(CLOCK_MONOTONIC, &ts);
   return (uint64_t)ts.tv_sec * 1000000000u + (uint64_t)ts.tv_nsec;
 }
-#endif
 
 /* Provided by the game's main.c — serialises against both APU producers. */
 void RtlApuLock(void);

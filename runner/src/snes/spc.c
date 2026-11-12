@@ -53,8 +53,6 @@ static void spc_writeWord(Spc* spc, uint16_t adrl, uint16_t adrh, uint16_t value
 #endif
 #if defined(__GNUC__)
 #define SPC_UNREACHABLE() __builtin_unreachable()
-#elif defined(_MSC_VER)
-#define SPC_UNREACHABLE() __assume(0)
 #else
 #define SPC_UNREACHABLE() ((void)0)
 #endif

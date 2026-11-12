@@ -74,14 +74,7 @@ const SnesProgramModule *snes_program_module_active(void);
 
 /* Constructor plumbing shared with mod_runtime.h's SNES_MOD_CONSTRUCTOR; kept
  * separate so generated code depends on nothing but this header. */
-#if defined(_MSC_VER)
-#pragma section(".CRT$XCU", read)
-#define SNES_PROGRAM_MODULE_CONSTRUCTOR(name)                                \
-    static void __cdecl name(void);                                          \
-    __declspec(allocate(".CRT$XCU"))                                         \
-    static void (__cdecl *name##_constructor)(void) = name;                  \
-    static void __cdecl name(void)
-#elif defined(__GNUC__) || defined(__clang__)
+#if defined(__GNUC__) || defined(__clang__)
 #define SNES_PROGRAM_MODULE_CONSTRUCTOR(name)                                \
     static void name(void) __attribute__((constructor));                     \
     static void name(void)

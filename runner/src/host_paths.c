@@ -11,17 +11,9 @@
 #include <string.h>
 #include <stdint.h>
 
-#ifdef _WIN32
-#  define WIN32_LEAN_AND_MEAN
-#  include <windows.h>
-#  include <direct.h>
-#  define snesrecomp_chdir _chdir
-#  define snesrecomp_getcwd _getcwd
-#else
 #  include <unistd.h>
 #  define snesrecomp_chdir chdir
 #  define snesrecomp_getcwd getcwd
-#endif
 #ifdef __APPLE__
 #  include <mach-o/dyld.h>
 #endif
@@ -30,10 +22,7 @@
  * without a query mechanism (e.g. Switch homebrew) return 0 and callers
  * fall back to cwd-relative behavior. */
 static int get_exe_path(char *out, size_t max_len) {
-#if defined(_WIN32)
-    DWORD n = GetModuleFileNameA(NULL, out, (DWORD)max_len);
-    return (n > 0 && n < max_len) ? 1 : 0;
-#elif defined(__APPLE__)
+#if defined(__APPLE__)
     uint32_t size = (uint32_t)max_len;
     return _NSGetExecutablePath(out, &size) == 0 ? 1 : 0;
 #elif defined(__linux__)
@@ -77,13 +66,6 @@ static void get_exe_dir(char *out, size_t max_len) {
 
 int snesrecomp_abspath(const char *path, char *out, size_t max_len) {
     if (!path || !*path || !out || max_len == 0) return 0;
-#ifdef _WIN32
-    char tmp[1024];
-    if (!_fullpath(tmp, path, sizeof(tmp))) return 0;
-    if (strlen(tmp) >= max_len) return 0;
-    strcpy(out, tmp);
-    return 1;
-#else
     if (path[0] == '/') {
         if (strlen(path) >= max_len) return 0;
         strcpy(out, path);
@@ -93,7 +75,6 @@ int snesrecomp_abspath(const char *path, char *out, size_t max_len) {
     if (!snesrecomp_getcwd(cwd, sizeof(cwd))) return 0;
     if (snprintf(out, max_len, "%s/%s", cwd, path) >= (int)max_len) return 0;
     return 1;
-#endif
 }
 
 int snesrecomp_exe_path(char *out, size_t max_len) {

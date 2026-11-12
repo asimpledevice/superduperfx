@@ -35,11 +35,7 @@ extern unsigned char g_snesrecomp_last_hdmaen;
 /* Detached pictures share the pixel algorithms, but must not publish live
  * machine diagnostics or consult callbacks owned by another picture. Keep
  * this render scope private and per thread; it is not emulated PPU state. */
-#ifdef _MSC_VER
-static __declspec(thread) unsigned s_detached_line_depth;
-#else
 static _Thread_local unsigned s_detached_line_depth;
-#endif
 
 #ifdef SNESRECOMP_INTERP_PROFILE
 static double g_ppu_sec_eval_ms = 0;

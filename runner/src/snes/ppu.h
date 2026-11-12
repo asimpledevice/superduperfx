@@ -83,13 +83,8 @@ typedef struct PpuExtraObject {
   const uint16_t *pixels;
 } PpuExtraObject;
 
-#if defined(_MSC_VER)
-#define PPU_ALIGN8_PRE __declspec(align(8))
-#define PPU_ALIGN8_POST
-#else
 #define PPU_ALIGN8_PRE
 #define PPU_ALIGN8_POST __attribute__((aligned(8)))
-#endif
 typedef PPU_ALIGN8_PRE struct PpuPixelPrioBufs {
   // This holds the prio in the upper 8 bits and the color in the lower 8 bits.
   // Sized for the widescreen border; logical screen x maps to

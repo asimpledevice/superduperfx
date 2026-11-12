@@ -3,13 +3,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#ifdef _WIN32
-#include <direct.h>
-#define variant_mkdir(p) _mkdir(p)
-#else
 #include <sys/stat.h>
 #define variant_mkdir(p) mkdir((p), 0755)
-#endif
 
 #include "common_cpu_infra.h"
 #include "common_rtl.h"

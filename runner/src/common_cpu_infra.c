@@ -980,43 +980,6 @@ void WatchdogCheck(void) {
    * would bypass scope cleanup and strand the audio lock. */
   if (RtlGuestScopeActive()) return;
   snes_refresh_charge();
-#ifdef SNES_COSIM
-  /* Co-sim WRAM watchpoint (dev, env-gated): name the recompiled function that
-   * writes a given low-WRAM address. WatchdogCheck runs per-block with
-   * g_last_recomp_func = the live current function, so a change first observed
-   * here is attributed to the function whose block just ran. Set
-   * SNESRECOMP_WRAM_WATCH=0xADDR (e.g. 0x02fa). Zero cost when unset. */
-  {
-    static int watch = -2;          /* -2 unresolved, -1 off, else addr */
-    static uint8_t last; static int primed = 0; static int hits = 0;
-    static FILE *wlog = NULL;
-    if (watch == -2) {
-      const char *e = getenv("SNESRECOMP_WRAM_WATCH");
-      watch = (e && e[0]) ? (int)strtol(e, NULL, 0) : -1;
-      if (watch >= 0) {
-        const char *lp = getenv("SNESRECOMP_WRAM_WATCH_LOG");
-        wlog = fopen(lp && lp[0] ? lp : "wramwatch.log", "w");
-        if (wlog) { fprintf(wlog, "[wramwatch] armed on $%04x\n", watch); fflush(wlog); }
-      }
-    }
-    if (watch >= 0 && wlog) {
-      uint8_t v = g_ram[watch];
-      if (!primed) {
-        last = v; primed = 1;
-        fprintf(wlog, "[wramwatch] primed f%d $%04x = %02x  (at %s)\n",
-                snes_frame_counter, watch, v, g_last_recomp_func); fflush(wlog);
-      } else if (v != last) {
-        if (hits < 300) {
-          fprintf(wlog, "[wramwatch] f%d $%04x: %02x -> %02x  by %s  (m=%d x=%d)\n",
-                  snes_frame_counter, watch, last, v, g_last_recomp_func,
-                  g_cpu.m_flag & 1, g_cpu.x_flag & 1);
-          fflush(wlog);
-        }
-        hits++; last = v;
-      }
-    }
-  }
-#endif
   /* Boot-spin observability. During boot (frame 0) the normal frame
    * watchdog is disabled below (the SPC IPL upload is legitimately slow,
    * real-time paced by the audio thread). But a genuine boot spin
@@ -1101,20 +1064,6 @@ void WatchdogCheck(void) {
 }
 
 Snes *SnesInit(const uint8 *data, int data_size) {
-#if defined(SNESRECOMP_SETUP_HOST)
-  /* A setup host carries no recompiled code (runner.cmake,
-   * snesrecomp_target_generated_code). Booting a guest here would run every
-   * instruction through the interpreter tier with nothing to hand off to --
-   * a build that "works" by never being the product. Refuse, and say what the
-   * player should do instead. Die() is the host's fatal path: the GUI
-   * launcher shows it, a console host prints it. */
-  (void)data;
-  (void)data_size;
-  Die("This is a setup build with no recompiled game code.\n"
-      "Start it with --launcher and use \"Generate & rebuild\" with your own "
-      "ROM; the rebuilt executable in build/ is the playable one.");
-  return NULL;
-#else
   g_snes = snes_init(g_ram);
   snes_set_master_clock_charge_hook(rtl_snes_charge_master_cycles);
   snes_set_wram_write_log_hook(wlog_addr_note_direct);
@@ -1200,7 +1149,6 @@ Snes *SnesInit(const uint8 *data, int data_size) {
   g_sram = g_snes->cart->ram;
   g_sram_size = g_snes->cart->ramSize;
   return g_snes;
-#endif /* SNESRECOMP_SETUP_HOST */
 }
 
 /* Host call-chain state of generated code (the shadow stack and what hangs

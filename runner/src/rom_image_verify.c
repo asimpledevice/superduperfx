@@ -7,10 +7,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#ifdef _WIN32
-#  define WIN32_LEAN_AND_MEAN
-#  include <windows.h>
-#endif
 
 typedef struct RomImage {
     uint8_t *storage;
@@ -93,9 +89,6 @@ int snesrecomp_rom_verify_crc32(const char *path, uint32_t expected_crc) {
              "Please select the correct ROM file.",
              expected_crc, actual);
     fprintf(stderr, "[Launcher] %s\n", msg);
-#ifdef _WIN32
-    MessageBoxA(NULL, msg, "Wrong ROM", MB_ICONWARNING | MB_OK);
-#endif
     return 0;
 }
 
@@ -120,9 +113,6 @@ int snesrecomp_rom_verify_sha256(const char *path,
              "Please select the correct ROM file.",
              expected_hex, actual_hex);
     fprintf(stderr, "[Launcher] %s\n", msg);
-#ifdef _WIN32
-    MessageBoxA(NULL, msg, "Wrong ROM", MB_ICONWARNING | MB_OK);
-#endif
     return 0;
 }
 

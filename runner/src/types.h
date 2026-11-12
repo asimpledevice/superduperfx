@@ -5,22 +5,12 @@
 #ifndef SM_TYPES_H_
 #define SM_TYPES_H_
 
-#ifdef _MSC_VER
-#pragma warning(disable: 4244)
-#endif
 
 #include <stdint.h>
 #include <stdlib.h>
 #include <stdbool.h>
 
-#if defined(_WIN32)
-#include <crtdbg.h>
-#ifndef assert
-#define assert _ASSERTE
-#endif
-#else
 #include <assert.h>
-#endif
 
 typedef uint8_t uint8;
 typedef int8_t int8;
@@ -36,17 +26,10 @@ typedef uint16 VoidP;
 
 #define arraysize(x) sizeof(x)/sizeof(x[0])
 
-#ifdef _MSC_VER
-#define countof _countof
-#define NORETURN __declspec(noreturn)
-#define FORCEINLINE __forceinline
-#define NOINLINE __declspec(noinline)
-#else
 #define countof(a) (sizeof(a)/sizeof(*(a)))
 #define NORETURN
 #define FORCEINLINE inline
 #define NOINLINE
-#endif
 
 #ifdef _DEBUG
 #define kDebugFlag 1

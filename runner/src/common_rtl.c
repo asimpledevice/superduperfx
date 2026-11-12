@@ -1,8 +1,4 @@
-#ifdef _WIN32
-#include <io.h>
-#else
 #include <unistd.h>
-#endif
 #include "common_rtl.h"
 #include "save_state_slots.h"
 #include "apu_frame_clock.h"
@@ -14,13 +10,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <limits.h>
-#ifdef _WIN32
-#include <direct.h>
-#include <io.h>
-#else
 #include <sys/stat.h>
 #include <unistd.h>
-#endif
 #include "recomp_hw.h"
 #include "framedump.h"
 #include "util.h"
@@ -47,22 +38,14 @@
 #include "audio_trace.h"
 #include "ppu_dma_trace.h"
 #include "host_report.h"
-#include "cosim.h"
 static void rtl_reset_audio_delivery(void);
 #include "snes_runahead.h"
-#if defined(SNESRECOMP_NET)
-#include "snes_netplay.h"
-#endif
 
 /* See RtlSetSpeculativeFrame in common_rtl.h. Run-ahead drives this on every
  * build, netplay or not, so it must not sit behind the netplay guard. */
 static bool g_rtl_speculative_frame;
 static bool s_guest_scope_active;
-#if defined(_MSC_VER)
-static __declspec(thread) bool s_guest_main_thread;
-#else
 static _Thread_local bool s_guest_main_thread;
-#endif
 static RtlStateExtraBoundCallback *s_state_extra_bound;
 void RtlSetStateExtraBound(RtlStateExtraBoundCallback *callback) {s_state_extra_bound=callback;}
 static uint32_t s_guest_scope_budget;
@@ -144,19 +127,11 @@ int rtl_apu_port_observers_filter(uint16 reg, uint8 value) {
 }
 
 #include "snes/interp_bridge.h"
-#ifdef SNESRECOMP_NET_ROLLBACK
-#include "netplay/snes_rb_probe.h"
-#endif
 
 /* Netplay suppresses the pre-frame wall-clock fallback below. Once frames
  * begin, every runner uses the same guest-frame/APU coupling, and the audio
  * callback only consumes samples without advancing emulation. */
 static int rtl_netplay_locks_audio(void) {
-#if defined(SNESRECOMP_NET_ROLLBACK)
-  /* An armed rollback probe is held to the same rule: see snes_rb_probe.c. */
-  if (snes_rb_probe_armed())
-    return 1;
-#endif
   /* Run-ahead is held to it too, and for the identical reason: it rewinds.
    * The fallback below charges the SPC by WALL-CLOCK elapsed time, and
    * run-ahead spends roughly twice the wall time per displayed frame because
@@ -169,11 +144,7 @@ static int rtl_netplay_locks_audio(void) {
    * boot-window baseline. */
   if (snes_runahead_active())
     return 1;
-#if defined(SNESRECOMP_NET)
-  return snes_netplay_active();
-#else
   return 0;
-#endif
 }
 
 static int rtl_fps_heartbeat_enabled(void) {
@@ -222,18 +193,6 @@ uint64_t g_apu_last_sync_cycles = 0;
 // the interp path sets it; the compiled steady-state path is unaffected.
 int g_interp_apu_driving = 0;
 
-#ifdef SNES_COSIM
-/* Shared APU clock knob (common_rtl.h). Cached once; both A/B processes of a
- * same-binary pair must be launched with the same value. */
-int cosim_apu_shared_clock(void) {
-  static int v = -1;
-  if (v < 0) {
-    const char *e = getenv("SNES_COSIM_APU_SHARED");
-    v = (e && e[0] && e[0] != '0') ? 1 : 0;
-  }
-  return v;
-}
-#endif
 
 // Axis-5 off-cue: APU pacing now derives from the recompiler's region-weighted
 // MASTER-clock accumulator (g_cpu.master_cycles) instead of the +256-per-touch
@@ -827,21 +786,6 @@ bool RtlRunFrame(uint32 inputs) {
   s_guest_main_thread = true;
   if (g_rtl_game_info->frame_begin && !g_rtl_game_info->frame_begin(&inputs)) return false;
   recomp_dspout_begin_frame();
-#ifdef SNES_COSIM
-  /* Co-sim (dev/diagnostics only): connect the coordinator once, before the
-   * first frame executes. Boot ran deterministically already; the co-sim
-   * compares from frame 1 onward. SNES_COSIM_OFF=1 skips the engine entirely
-   * (used by the harness standalone mode: no coordinator, free-run). */
-  { static int s_cosim_started = 0;
-    const char *s_co = getenv("SNES_COSIM_OFF");
-    if (!s_cosim_started && !(s_co && s_co[0] && s_co[0] != '0')) {
-      s_cosim_started = 1;
-      cosim_init();
-    } else {
-      s_cosim_started = 1;
-    }
-  }
-#endif
   // Avoid up/down and left/right from being pressed at the same time.
   // SNESRECOMP_ALLOW_OPPOSING_DIRECTIONS=1 passes them through, as the
   // hardware does (needed to replay movies recorded on an accurate emulator).
@@ -880,50 +824,6 @@ bool RtlRunFrame(uint32 inputs) {
     g_rtl_game_info->run_frame();
     apu_dspFrameSync(g_snes->apu);
   }
-#ifdef SNES_COSIM
-  /* DETERMINISTIC AUDIO CONSUMER (SNES_COSIM_AUDIO=1). Production is paced by the
-   * guest frame (rtl_sync_apu_frame_boundary), NOT by the audio device. An
-   * earlier design had RtlRenderAudio cycle the SPC for its own shortfall so the
-   * consumer set the rate; that is retired — the callback only consumes.
-   * Headless has no audio thread, so the SPC starves (~40x slow). Here we MODEL
-   * the consumer deterministically: drain one frame of samples at the exact SNES
-   * rate (32040 / 60.0988 = 533.12 samples/frame). This paces the SPC to the
-   * correct tempo, reproduces the producer(CPU-catchup)/consumer(this) dynamics
-   * incl. any ring drops, and stays fully deterministic (no host thread). The
-   * dev dump's samples= then reflects real production audio behaviour. */
-  {
-    static int s_audio = -1;
-    if (s_audio < 0) { const char *e = getenv("SNES_COSIM_AUDIO");
-                       s_audio = (e && e[0] && e[0] != '0') ? 1 : 0; }
-    if (s_audio && !rtl_netplay_locks_audio()) {
-      static double s_acc = 0.0;
-      static int16 s_buf[1024 * 2];
-      s_acc += 32040.0 / 60.0988;           /* SNES native audio samples per frame */
-      int want = (int)s_acc; s_acc -= (double)want;
-      while (want > 0) {
-        int chunk = want > 1024 ? 1024 : want;
-        RtlRenderAudio(s_buf, chunk, 2);     /* self-balances SPC production to demand */
-        want -= chunk;
-      }
-    }
-  }
-#endif
-#ifdef SNES_COSIM
-  /* Co-sim fidelity (env-gated for A/B): production's main loop calls
-   * draw_ppu_frame() AFTER run_frame() every frame — PPU line render + HDMA +
-   * raster-IRQ simulation. The headless harness omits it, so the raster IRQ
-   * never fires and IRQ-managed guest state diverges from the oracle (e.g. MMX's
-   * $0BA0 raster-ack flag stays governed only by the bootstrap clear). Running it
-   * here makes the co-sim model the full production frame; the per-frame trace/
-   * hash below then capture post-IRQ state, matching bsnes's frame boundary. */
-  { static int s_draw = -1;
-    if (s_draw < 0) { const char *e = getenv("SNES_COSIM_DRAW_PPU");
-                      /* Default ON (faithful full production frame); opt-out with =0. */
-                      s_draw = (e && e[0] == '0') ? 0 : 1; }
-    if (s_draw && g_rtl_game_info && g_rtl_game_info->draw_ppu_frame)
-      g_rtl_game_info->draw_ppu_frame();
-  }
-#endif
   // If g_watchdog_tripped is set, frame was abandoned mid-execution;
   // continue to the next frame so the user can interrupt cleanly.
   if (g_framedump_callback)
@@ -978,10 +878,6 @@ bool RtlRunFrame(uint32 inputs) {
     snes_mod_runtime_frame_tick_c();
 #endif
 
-#ifdef SNES_COSIM
-  /* Frame-keyed checkpoint: snapshot full state + park for the coordinator. */
-  cosim_frame();
-#endif
 
   /* Axis-2 soak instrumentation: env-gated FPS heartbeat to stderr. Counts
    * frames completed per wall-clock second (the frame loop caps at ~60 fps, so
@@ -1002,11 +898,6 @@ bool RtlRunFrame(uint32 inputs) {
     }
   }
 
-#ifdef SNESRECOMP_NET_ROLLBACK
-  /* Offline rollback self-check. No-op unless SNESRECOMP_RB_PROBE is set;
-   * see snes_rb_probe.c for why the runner needs one at all. */
-  snes_rb_probe_after_frame(inputs);
-#endif
 
   apu_dspFrameSync(g_snes->apu);  /* host code between frames sees a current DSP */
   if (g_rtl_game_info->frame_end) g_rtl_game_info->frame_end();
@@ -1989,42 +1880,6 @@ void rtl_accumulate_apu_catchup(void) {
    * (guest-time-anchored, like the ref oracle). Skip the per-touch estimate so
    * an APU-port access inside interpreted code doesn't double-count. */
   if (g_interp_apu_driving) return;
-#ifdef SNES_COSIM
-  /* Shared APU clock (see common_rtl.h): pure touch-delta pacing, NO wall
-   * baseline. The baseline reads the co-sim virtual wall clock, which derives
-   * from master_cycles — a per-execution-model quantity (interp charges
-   * cyc*8, compiled blocks charge region-weighted static costs), so it would
-   * re-introduce the per-side skew this mode exists to remove. Touch credit is
-   * deliberately unscaled 256/touch (SNESRECOMP_APU_TOUCH_CYCLES ignored):
-   * both sides must use the identical constant. */
-  if (cosim_apu_shared_clock()) {
-    uint64_t delta = g_apu_pace_cycles_estimate - g_apu_last_sync_cycles;
-    g_apu_last_sync_cycles = g_apu_pace_cycles_estimate;
-    g_snes->apuCatchupCycles += (double)delta * 2.0 / 7.0;
-    g_apu_last_sync_master = g_cpu.master_cycles;
-    return;
-  }
-#endif
-#ifdef SNES_COSIM
-  /* Co-sim A-vs-B variable-under-test (docs/COSIM.md task 9): with
-   * SNES_COSIM_ACCURATE_APU=1, pace the SPC from the region-weighted master
-   * clock at the true SPC:master ratio (exactly like the interp816 ref),
-   * instead of the +256/APU-touch synthetic estimate. Two recomp instances
-   * that boot IDENTICALLY and differ ONLY in this pacing choice stay
-   * bit-identical until synthetic pacing first yields a different APU value —
-   * the off-cue's first observable effect, cleanly localized. Cached once. */
-  static int s_accurate = -1;
-  if (s_accurate < 0) { const char *e = getenv("SNES_COSIM_ACCURATE_APU");
-                        s_accurate = (e && e[0] && e[0] != '0') ? 1 : 0; }
-  if (s_accurate) {
-    static const double kApuPerMaster = (32040.0 * 32.0) / (1364.0 * 262.0 * 60.0);
-    uint64_t md = g_cpu.master_cycles - g_apu_last_sync_master;
-    g_apu_last_sync_master = g_cpu.master_cycles;
-    g_apu_last_sync_cycles = g_apu_pace_cycles_estimate;   /* keep sync ptr current */
-    g_snes->apuCatchupCycles += (double)md * kApuPerMaster;
-    return;
-  }
-#endif
   // NOTE (Axis-5 off-cue experiment, 2026-06-28): pacing the SPC from the
   // recompiler's region-weighted MASTER-clock accumulator (g_cpu.master_cycles,
   // = sum of CPU cycles x code-region speed) was tried here in place of the
@@ -2125,18 +1980,6 @@ void RtlApuWrite(uint16 adr, uint8 val) {
   clock_t _t1 = clock();
 #endif
 
-#ifdef SNES_COSIM
-  /* The shared-clock co-sim advances the SPC synchronously and compares two
-   * execution models instruction-for-instruction. Keep its bus mutation at
-   * the already-aligned current clock. */
-  if (cosim_apu_shared_clock()) {
-    RtlApuLock();
-    audio_trace_on_cpu_port_write(port, val);
-    apu_writePortNow(g_snes->apu, port, val);
-    RtlApuUnlock();
-    return;
-  }
-#endif
 
   RtlApuLock();
   if (!g_apu_frame_time_valid) {
@@ -2780,16 +2623,9 @@ void RtlSetSaveRoot(const char *root) {
 const char *RtlSaveRoot(void) { return s_save_root; }
 
 static void ensure_save_root(const char *root) {
-#ifdef _WIN32
-  /* Also ensure parent "saves" when root is saves/netplay */
-  if (strncmp(root, "saves/", 6) == 0 || strncmp(root, "saves\\", 6) == 0)
-    _mkdir("saves");
-  _mkdir(root);
-#else
   if (strncmp(root, "saves/", 6) == 0)
     mkdir("saves", 0755);
   mkdir(root, 0755);
-#endif
 }
 
 void RtlEnsureSaveDir(void) {
@@ -2881,11 +2717,7 @@ int RtlWriteSramImage(const char *path, const uint8 *bytes, size_t size) {
   }
   int ok = !size || fwrite(bytes, 1, size, f) == size;
   ok = ok && fflush(f) == 0;
-#ifdef _WIN32
-  ok = ok && _commit(_fileno(f)) == 0;
-#else
   ok = ok && fsync(fileno(f)) == 0;
-#endif
   ok = fclose(f) == 0 && ok;
   if (!ok) {
     fprintf(stderr, "Unable to write %s\n", tmp);

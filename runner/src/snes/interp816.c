@@ -21,9 +21,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdio.h>
-#ifndef _WIN32
 #include <time.h>
-#endif
 #include "interp816.h"
 
 /* SNESRECOMP_COMPACT_INTERP=1 (the N64 build): the whole core is compiled for
@@ -37,8 +35,6 @@
 #endif
 #if defined(__GNUC__)
 #define I816_UNREACHABLE() __builtin_unreachable()
-#elif defined(_MSC_VER)
-#define I816_UNREACHABLE() __assume(0)
 #else
 #define I816_UNREACHABLE() ((void)0)
 #endif
@@ -139,64 +135,15 @@ void interp816_saveload(Interp816 *cpu, SaveLoadInfo *sli) {
  * instruction so WRAM write-watches can name the store site under LLE. */
 uint32_t g_interp816_cur_pc = 0;
 
-#ifdef SNES_COSIM
-/* Always-on per-instruction ring (dev-only, cosim builds). Captures the exact
- * (pc, opcode, A-in/A-out, M-flag) trajectory so a codegen-vs-interp A-register
- * divergence can be localized to a single instruction by querying the window of
- * interest (ring-buffer discipline; never arm-then-step). Dumped via the cosim
- * server `itrace` command. */
-typedef struct { uint32_t pc; uint8_t op; uint8_t mf; uint8_t xf;
-                 uint16_t a_in, a_out, x, y; } I816RingEnt;
-#define I816_RING_N (1u << 19)
-static I816RingEnt g_i816_ring[I816_RING_N];
-static uint64_t    g_i816_ring_head = 0;
-void interp816_dump_ring(const char* path, long n) {
-  FILE* f = fopen(path, "w");
-  if (!f) return;
-  uint64_t head = g_i816_ring_head;
-  long avail = head < (uint64_t)I816_RING_N ? (long)head : (long)I816_RING_N;
-  if (n <= 0 || n > avail) n = avail;
-  for (long i = n; i > 0; i--) {
-    I816RingEnt* e = &g_i816_ring[(head - (uint64_t)i) & (I816_RING_N - 1)];
-    fprintf(f, "%06X op=%02X mf=%d xf=%d a_in=%04X a_out=%04X x=%04X y=%04X\n",
-            e->pc, e->op, e->mf, e->xf, e->a_in, e->a_out, e->x, e->y);
-  }
-  fclose(f);
-}
-#endif
 
 /* Always-on interpreter execution tally: instructions and guest cycles
  * actually run by the 65816 interpreter tier. Divided by g_cpu.master_cycles
  * (total guest cycles, AOT+interp) this gives the mode-independent fraction
  * of execution that is NOT statically recompiled. Read via interp816_*_total. */
 uint64_t snesrecomp_host_now_ns(void) {
-#ifdef _WIN32
-    /* QPC without pulling windows.h into this file. kernel32.lib is linked by
-     * default, so declaring the imports directly is safe. */
-    typedef union { long long QuadPart; } T_LARGE_INT;
-    int (__cdecl *qpc_fn)(T_LARGE_INT *) = (void *)0;
-    int (__cdecl *qpf_fn)(T_LARGE_INT *) = (void *)0;
-    {
-        /* Link-time import: kernel32.lib exports these by name. */
-        extern int __cdecl QueryPerformanceCounter(T_LARGE_INT *);
-        extern int __cdecl QueryPerformanceFrequency(T_LARGE_INT *);
-        static double s_scale = -1.0;
-        if (s_scale < 0.0) {
-            T_LARGE_INT f; f.QuadPart = 0;
-            s_scale = (QueryPerformanceFrequency(&f) && f.QuadPart > 0)
-                          ? 1e9 / (double)f.QuadPart : 0.0;
-        }
-        T_LARGE_INT c; c.QuadPart = 0;
-        if (s_scale > 0.0 && QueryPerformanceCounter(&c))
-            return (uint64_t)((double)c.QuadPart * s_scale);
-    }
-    (void)qpc_fn; (void)qpf_fn;
-    return 0;
-#else
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
-#endif
 }
 
 static uint64_t s_interp816_insns;
@@ -356,9 +303,6 @@ int interp816_runOpcode(Interp816* cpu) {
   uint8_t opcode = interp816_readOpcode(cpu);
   uint32_t _pcb = ((uint32_t)cpu->k << 16) | (uint16_t)(cpu->pc - 1);
   g_interp816_cur_pc = _pcb;
-#ifdef SNES_COSIM
-  uint16_t _ain = cpu->a; uint8_t _mf = cpu->mf ? 1 : 0, _xf = cpu->xf ? 1 : 0;
-#endif
   cpu->cyclesUsed = cyclesPerOpcode[opcode];
   /* Dev opcode-cost histogram (SNESRECOMP_INTERP_OPCODE_HIST). Measures host
    * ns spent INSIDE doOpcode per opcode, sampled every 64 instructions so the
@@ -377,12 +321,6 @@ int interp816_runOpcode(Interp816* cpu) {
     s_interp_page_cycles[_pg] += (uint64_t)cpu->cyclesUsed;
     s_interp_page_insns[_pg]++;
   }
-#endif
-#ifdef SNES_COSIM
-  { I816RingEnt* e = &g_i816_ring[g_i816_ring_head & (I816_RING_N - 1)];
-    e->pc = _pcb; e->op = opcode; e->mf = _mf; e->xf = _xf;
-    e->a_in = _ain; e->a_out = cpu->a; e->x = cpu->x; e->y = cpu->y;
-    g_i816_ring_head++; }
 #endif
   return cpu->cyclesUsed;
 }

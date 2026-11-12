@@ -10,14 +10,6 @@
 #include <time.h>
 #include <errno.h>
 #include <ctype.h>
-#ifdef _WIN32
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
-#include <direct.h>
-#include <process.h>
-#define capture_pid _getpid
-#define capture_mkdir(p) _mkdir(p)
-#else
 #include <unistd.h>
 #include <sys/stat.h>
 #ifdef __APPLE__
@@ -25,7 +17,6 @@
 #endif
 #define capture_pid getpid
 #define capture_mkdir(p) mkdir(p, 0700)
-#endif
 
 #ifndef SNESRECOMP_EXPOSE_COVERAGE_MOD
 #define SNESRECOMP_EXPOSE_COVERAGE_MOD 0
@@ -138,10 +129,7 @@ void tier2_capture_set_build_digest(const char *digest) {
 static void identify_executable(void) {
     if (s_executable_digest[0]) return;
     char path[PATH_CAP];
-#ifdef _WIN32
-    DWORD count = GetModuleFileNameA(NULL, path, sizeof path);
-    if (!count || count >= sizeof path) return;
-#elif defined(__APPLE__)
+#if defined(__APPLE__)
     uint32_t count = sizeof path;
     if (_NSGetExecutablePath(path, &count)) return;
 #else
@@ -226,18 +214,12 @@ static void init_paths(const char *title) {
         const char *base = getenv("SNESRECOMP_COVERAGE_DIR");
         if (base && *base) snprintf(root, sizeof root, "%s", base);
         else {
-#ifdef _WIN32
-            base = getenv("LOCALAPPDATA");
-            snprintf(root, sizeof root, "%s%s", base && *base ? base : ".",
-                     "/snesrecomp-coverage");
-#else
             base = getenv("XDG_STATE_HOME");
             if (base && *base) snprintf(root, sizeof root, "%s/snesrecomp-coverage", base);
             else {
                 base = getenv("HOME");
                 snprintf(root, sizeof root, "%s/.snesrecomp-coverage", base && *base ? base : ".");
             }
-#endif
         }
         if (enabled && capture_mkdir(root) && errno != EEXIST) goto bad_path;
         if (snprintf(dir, sizeof dir, "%s/%s", root, id) >= (int)sizeof dir) goto bad_path;
@@ -309,11 +291,7 @@ void tier2_capture_close(void) {
     }
 }
 int tier2_capture_replace(const char *temp, const char *path) {
-#ifdef _WIN32
-    return MoveFileExA(temp, path, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
-#else
     return rename(temp, path) == 0;
-#endif
 }
 
 void tier2_capture_instruction(uint32_t pc, uint8_t mx, uint8_t emulation, unsigned cycles) {

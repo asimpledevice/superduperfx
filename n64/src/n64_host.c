@@ -129,7 +129,7 @@ void n64_dsp_cycle_timed(Dsp *d) {
 }
 #endif
 
-/* ---- Host contract (see runner/src/desktop/host_main.h) -------------- */
+/* ---- Host contract (the hooks common_rtl.c calls) -------------------- */
 
 struct SpcPlayer *g_spc_player;
 bool g_new_ppu = true;

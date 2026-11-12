@@ -46,7 +46,6 @@ int RtlLoadSnapshotFromMemory(const void *data, size_t size) {
     return 1;
 }
 
-int snes_netplay_active(void) { return 0; }
 
 /* ---- helpers ------------------------------------------------------------ */
 

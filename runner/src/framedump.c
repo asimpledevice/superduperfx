@@ -5,12 +5,7 @@
 #include <sys/stat.h>
 #include "snes/ppu.h"
 
-#if defined(_WIN32)
-#include <direct.h>
-#define MKDIR(p) _mkdir(p)
-#else
 #define MKDIR(p) mkdir(p, 0755)
-#endif
 
 FrameDumpCallback g_framedump_callback;
 

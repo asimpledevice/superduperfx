@@ -22,7 +22,6 @@
 
 #include "snes_overlay_draw.h"
 #include "common_rtl.h"
-#include "netplay/snes_netplay.h"
 
 /* Thumbnail geometry matches the save-state menu so the two overlays look
  * like one product rather than two features. */
@@ -187,9 +186,6 @@ void snes_rewind_note_frame(void) {
     /* Rewinding is one machine moving its own clock backwards. Two peers
      * cannot do that independently and still agree, so there is nothing to
      * record during a session. */
-#if defined(SNESRECOMP_NET)
-    if (snes_netplay_active()) return;
-#endif
     if (++s_frame_tick < s_interval) return;
     s_frame_tick = 0;
     capture();
@@ -221,9 +217,6 @@ static RwSlot *slot_at(int sel) {
 
 int snes_rewind_open(void) {
     if (!snes_rewind_enabled()) return 0;
-#if defined(SNESRECOMP_NET)
-    if (snes_netplay_active()) return 0;
-#endif
     if (s_count < 2) return 0;         /* nothing to go back to */
     s_open = 1;
     s_sel = 0;
