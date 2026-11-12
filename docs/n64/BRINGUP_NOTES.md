@@ -678,12 +678,12 @@ instructions, by the routine and CPU mode containing each PC):
 | No routine at all in the manifest | 13.5% |
 | A routine, but not for this mode | 10% |
 
-### Guest fibers (`SNESRECOMP_GUEST_FIBER`, off by default)
+### Blue thread (formerly the Blue thread) (`SNESRECOMP_BLUE_THREAD`, off by default)
 
 Generated code's deadline checks now call `interp_bridge_lle_deadline_pause(cpu, pc)`
 (same result as `..._master_deadline_reached` without fibers; all hashes
-unchanged). With `SNESRECOMP_GUEST_FIBER=1` the frame driver runs the guest
-on its own stack (`runner/src/guest_fiber.c`; MIPS context switch on the
+unchanged). With `SNESRECOMP_BLUE_THREAD=1` the frame driver runs the guest
+on its own stack (`runner/src/blue_thread.c`; MIPS context switch on the
 N64, ucontext elsewhere): at a deadline the native code pauses instead of
 unwinding, the driver sees exactly what an unwind leaves (resume PC, APU
 flush, beam catch-up, bridge nesting state and shadow stack at their
@@ -1063,7 +1063,7 @@ compiled set's working set, about 1 MB less RAM than today's 2.46 MB
 selection while covering every compilable routine without a per-ROM
 capture. A miss need not stall: the interpreter already runs any routine
 exactly, so it can run the routine while the DMA completes (selection then
-varies at run time, the same validation class as guest fibers). Function
+varies at run time, the same validation class as the Blue thread). Function
 granularity is coarse: a frame enters 700 KB of compiled functions but runs
 far less of each.
 
@@ -1983,7 +1983,7 @@ The first measurement: how long the CPU waits for an asynchronous SPC.
 physically and logically:
 
 - **Blue** and **Green**: the CPU's two threads. Blue runs the 65816 (today's
-  guest fiber); Green runs everything else on the CPU (scheduler, PPU front
+  Blue thread); Green runs everything else on the CPU (scheduler, PPU front
   end, APU glue, host I/O);
 - **Red**: the RSP microkernel;
 - **Yellow**: an RSP overlay (a job the kernel runs: SPC700, S-DSP, BG lines,
@@ -2044,7 +2044,7 @@ physically and logically:
    Measure first: time a run with a budget of 0.
 4. **An RSP kernel that schedules RSP jobs and CPU threads.** Policy on
    the RSP, mechanism on the CPU: libdragon's `kthread` scheduler, or
-   our guest fiber, switched from the SP interrupt handler. Main use:
+   our Blue thread, switched from the SP interrupt handler. Main use:
    turn waits into switches (the 65816 thread blocks on the SPC; the CPU
    runs PPU work until the RSP rings). Constraints:
    - switches must be coarse (the I-cache);

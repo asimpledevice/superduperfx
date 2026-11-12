@@ -2123,7 +2123,7 @@ def emit_function(rom: bytes, bank: int, start: int,
     # calls to cross an event-driven host's frame deadline. Yield before
     # entering the next architectural callee so the owning interpreter can
     # deliver NMI/IRQ without discarding the already-pushed guest return frame.
-    # interp_bridge_lle_deadline_pause: on a guest fiber the call pauses here
+    # interp_bridge_lle_deadline_pause: on a Blue thread the call pauses here
     # and returns 0 when resumed; otherwise it is the plain deadline test.
     if lean:
         # One shared yield exit per function (emitted after the last block):

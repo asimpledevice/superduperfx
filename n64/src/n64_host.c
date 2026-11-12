@@ -16,7 +16,7 @@
  */
 
 #include "n64_platform.h"
-#include "guest_fiber.h"
+#include "blue_thread.h"
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -287,10 +287,10 @@ static volatile uint32_t s_dcprof_start = 0xffffffffu, s_dcprof_stop = 0xfffffff
 static int host_main(void);
 #if N64_STACK_COLOR >= 0 && defined(__mips__)
 static uint8_t s_host_stack[256 * 1024] __attribute__((aligned(8192)));
-#if SNESRECOMP_GUEST_FIBER
-/* The guest runs on its own stack (guest_fiber.h); its frames are the hot
+#if SNESRECOMP_BLUE_THREAD
+/* The guest runs on its own stack (blue_thread.h); its frames are the hot
  * ones, so it gets the placement the main stack was tuned for. */
-static uint8_t s_guest_stack[256 * 1024] __attribute__((aligned(8192)));
+static uint8_t s_blue_stack[256 * 1024] __attribute__((aligned(8192)));
 #endif
 #endif
 int main(void) {
@@ -396,8 +396,8 @@ static uint8_t *rom_window_provider(const uint8_t *data, int length) {
 #endif
 
 static int host_main(void) {
-#if N64_STACK_COLOR >= 0 && defined(__mips__) && SNESRECOMP_GUEST_FIBER
-  guest_fiber_set_stack(s_guest_stack, s_guest_stack + sizeof s_guest_stack - 8192 +
+#if N64_STACK_COLOR >= 0 && defined(__mips__) && SNESRECOMP_BLUE_THREAD
+  blue_set_stack(s_blue_stack, s_blue_stack + sizeof s_blue_stack - 8192 +
                                            (N64_STACK_COLOR & 8191) - 64);
 #endif
   n64_platform_init();
@@ -603,11 +603,11 @@ static int host_main(void) {
       n64_platform_log("[dspsync] 600 frames, syncs/samples:%s\n", b);
     }
 #endif
-#if SNESRECOMP_GUEST_FIBER
+#if SNESRECOMP_BLUE_THREAD
     if (frame % 60 == 59) {
       n64_platform_log("[fiber] %lu pauses, %lu resumed, %lu unwound\n",
-                       (unsigned long)g_guest_fiber_pauses, (unsigned long)g_guest_fiber_resumes,
-                       (unsigned long)g_guest_fiber_unwinds);
+                       (unsigned long)g_blue_pauses, (unsigned long)g_blue_resumes,
+                       (unsigned long)g_blue_unwinds);
     }
 #endif
 #if defined(N64_RSPSPC) && !defined(N64_STATE_HASH)

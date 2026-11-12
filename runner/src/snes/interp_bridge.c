@@ -7,7 +7,7 @@
 #include <string.h>
 #include <time.h>
 #include "interp_bridge.h"
-#include "../guest_fiber.h"
+#include "../blue_thread.h"
 #include "cpu_fast_map.h"
 #include "cpu_plain_rom_read.h"
 #include "interp816.h"
@@ -1214,10 +1214,10 @@ int interp_bridge_lle_master_deadline_reached(const CpuState *cpu) {
     return reached;
 }
 
-/* ── guest fibers (guest_fiber.c) ─────────────────────────────────────── */
+/* ── the Blue thread (blue_thread.c) ─────────────────────────────────────── */
 
 /* The bridge's host nesting state: which interpreter/scheduler frames and
- * paired bounces are live on the host stack. A paused guest fiber keeps its
+ * paired bounces are live on the host stack. A paused Blue thread keeps its
  * own while the driver runs interrupts on the run-start state. */
 typedef struct {
     int sched_depth, unwind_active, unwind_owner_depth, unwind_is_deadline;
@@ -1278,20 +1278,20 @@ void interp_bridge_nest_load(const void *in) {
 }
 
 /* Generated code's deadline check (every block and function entry). Without
- * a guest fiber this is interp_bridge_lle_master_deadline_reached: 1 sends the
- * code down its yield-unwind path. On a guest fiber the code pauses here
+ * a Blue thread this is interp_bridge_lle_master_deadline_reached: 1 sends the
+ * code down its yield-unwind path. On a Blue thread the code pauses here
  * instead, leaving what the unwind would leave for the driver (the resume
  * PC, the APU flush, a current beam), and continues (0) when the driver
  * resumes this PC. */
 int interp_bridge_lle_deadline_pause(CpuState *cpu, uint32_t resume_pc24) {
     if (!interp_bridge_lle_master_deadline_reached(cpu)) return 0;
-#if SNESRECOMP_GUEST_FIBER
-    if (guest_fiber_on_guest()) {
+#if SNESRECOMP_BLUE_THREAD
+    if (blue_is_current()) {
         s_lle_next_unwind_is_deadline = 0;
         lle_resume_set(resume_pc24 & 0xFFFFFFu, INTERP_RESUME_SITE_DEADLINE_UNWIND, cpu->S);
         bridge_apu_flush(cpu);
         bridge_beam_catchup(cpu);
-        if (guest_fiber_pause(resume_pc24 & 0xFFFFFFu, cpu->S)) {
+        if (blue_pause(resume_pc24 & 0xFFFFFFu, cpu->S)) {
             /* As a fresh run would: the driver moved the beam and may have
              * changed the cartridge mapping. */
 #if SNESRECOMP_LAZY_BEAM

@@ -8,7 +8,7 @@ ap.add_argument("--nm", default="mips64-elf-nm"); a = ap.parse_args()
 ROLE = {  # object basename -> role
  'interp816': 'kernel', 'spc': 'kernel', 'interp_bridge': 'kernel', 'apu': 'kernel', 'dsp': 'kernel',
  'ppu': 'hw', 'dma': 'hw', 'snes': 'hw', 'cpu_state': 'hw', 'common_rtl': 'hw', 'common_cpu_infra': 'hw',
- 'cpu_fast_map': 'hw', 'cart': 'hw', 'guest_fiber': 'hw', 'beam_frame_driver': 'hw', 'snes_other': 'hw',
+ 'cpu_fast_map': 'hw', 'cart': 'hw', 'blue_thread': 'hw', 'beam_frame_driver': 'hw', 'snes_other': 'hw',
  'n64_ppu_build': 'ppu', 'n64_ppu_draw': 'present', 'n64_host': 'host', 'n64_platform': 'host',
 }
 def objrole(path):

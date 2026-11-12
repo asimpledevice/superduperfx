@@ -1152,8 +1152,8 @@ Snes *SnesInit(const uint8 *data, int data_size) {
 }
 
 /* Host call-chain state of generated code (the shadow stack and what hangs
- * off it). A guest fiber paused inside generated code keeps its own copy
- * while the scheduler runs interrupts on the base state (guest_fiber.c). */
+ * off it). A Blue thread paused inside generated code keeps its own copy
+ * while the scheduler runs interrupts on the base state (blue_thread.c). */
 struct RecompNestState {
   int top;
   unsigned interrupt_depth;
