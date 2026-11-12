@@ -1982,7 +1982,9 @@ The first measurement: how long the CPU waits for an asynchronous SPC.
 **Colour names** (owner convention, 2026-11-12), for where code runs, both
 physically and logically:
 
-- **Blue** and **Green**: the CPU's two threads;
+- **Blue** and **Green**: the CPU's two threads. Blue runs the 65816 (today's
+  guest fiber); Green runs everything else on the CPU (scheduler, PPU front
+  end, APU glue, host I/O);
 - **Red**: the RSP microkernel;
 - **Yellow**: an RSP overlay (a job the kernel runs: SPC700, S-DSP, BG lines,
   ...).
