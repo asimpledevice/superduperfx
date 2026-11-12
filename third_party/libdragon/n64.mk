@@ -84,6 +84,16 @@ N64_C_AND_CXX_FLAGS += -ffast-math -ftrapping-math -fno-associative-math
 N64_C_AND_CXX_FLAGS += -DN64 -O2 -Wall -Werror -Wno-error=deprecated-declarations -fdiagnostics-color=always
 N64_C_AND_CXX_FLAGS += -Wno-error=unused-variable -Wno-error=unused-but-set-variable -Wno-error=unused-function -Wno-error=unused-parameter -Wno-error=unused-but-set-parameter -Wno-error=unused-label -Wno-error=unused-local-typedefs -Wno-error=unused-const-variable
 N64_C_AND_CXX_FLAGS += -ftrivial-auto-var-init=pattern
+# SuperDuperFX: compiled code leaves the reserved FPU registers alone, and
+# programs link the C library built the same way. Both come from
+# n64/libdragon.mk (n64/fpu_reserve.mk, third_party/newlib).
+ifeq ($(strip $(SDFX_FPU_FIXED)),)
+$(error SDFX_FPU_FIXED is not set: build through n64/libdragon.mk)
+endif
+ifeq ($(strip $(SDFX_NEWLIB_LIBDIR)),)
+$(error SDFX_NEWLIB_LIBDIR is not set: build through n64/libdragon.mk)
+endif
+N64_C_AND_CXX_FLAGS += $(SDFX_FPU_FIXED)
 N64_CFLAGS = $(N64_C_AND_CXX_FLAGS) -std=gnu17
 N64_CXXFLAGS = $(N64_C_AND_CXX_FLAGS) -std=gnu++17
 N64_ASFLAGS = -mtune=vr4300 -march=vr4300 -mabi=o64 -Wa,--fatal-warnings -I$(N64_INCLUDEDIR)
@@ -239,10 +249,10 @@ $(BUILD_DIR)/%.o: $(SOURCE_DIR)/%.cpp
 	EXTERNS_FILE="$(filter %.externs, $^)"; \
 	if [ -z "$$EXTERNS_FILE" ]; then \
 		$(CXX) $(N64_C_AND_CXX_FLAGS) -o $@ $(filter %.o, $^) $(filter-out $(N64_LIBDIR)/libdragon.a $(N64_LIBDIR)/libdragonsys.a, $(filter %.a, $^)) \
-			-lc -mabi=o64 $(patsubst %,-Wl$(COMMA)%,$(LDFLAGS)) -Wl,-Map=$(BUILD_DIR)/$(notdir $(basename $@)).map,--cref; \
+			-L$(N64_LIBDIR) -L$(SDFX_NEWLIB_LIBDIR) -lc -mabi=o64 $(patsubst %,-Wl$(COMMA)%,$(LDFLAGS)) -Wl,-Map=$(BUILD_DIR)/$(notdir $(basename $@)).map,--cref; \
 	else \
 		$(CXX) $(N64_C_AND_CXX_FLAGS) -o $@ $(filter %.o, $^) $(filter-out $(N64_LIBDIR)/libdragon.a $(N64_LIBDIR)/libdragonsys.a, $(filter %.a, $^)) \
-			-lc -mabi=o64 $(patsubst %,-Wl$(COMMA)%,$(LDFLAGS)) -Wl,-T"$$EXTERNS_FILE" -Wl,-Map=$(BUILD_DIR)/$(notdir $(basename $@)).map,--cref; \
+			-L$(N64_LIBDIR) -L$(SDFX_NEWLIB_LIBDIR) -lc -mabi=o64 $(patsubst %,-Wl$(COMMA)%,$(LDFLAGS)) -Wl,-T"$$EXTERNS_FILE" -Wl,-Map=$(BUILD_DIR)/$(notdir $(basename $@)).map,--cref; \
 	fi
 	$(N64_SIZE) -G $@
 

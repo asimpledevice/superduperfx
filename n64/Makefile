@@ -293,6 +293,15 @@ $(BUILD_DIR)/placement.check: $(BUILD_DIR)/snesrecomp_interp.elf icache_order.ld
 	@touch $@
 endif
 
+# Fail the build if any linked code (or a code-cache module) touches a
+# reserved FPU register outside SDFX_FPU_OWNERS (n64/fpu_reserve.mk).
+snesrecomp_interp.z64: $(BUILD_DIR)/fpu_reserved.check
+$(BUILD_DIR)/fpu_reserved.check: $(BUILD_DIR)/snesrecomp_interp.elf $(CC_MODOBJS) fpu_reserve.mk \
+		../tools/n64/check_fpu_reserved.py
+	@echo "    [FPUCHECK] $<"
+	@python3 ../tools/n64/check_fpu_reserved.py --objdump $(N64_OBJDUMP) $< $(CC_MODOBJS)
+	@touch $@
+
 clean:
 	rm -rf $(BUILD_DIR) snesrecomp_interp.z64
 

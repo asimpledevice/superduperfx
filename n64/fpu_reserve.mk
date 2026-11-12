@@ -8,6 +8,11 @@
 SDFX_FPU_RESERVED := 5 6 7 8 9 10 11 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31
 SDFX_FPU_FIXED := $(foreach r,$(SDFX_FPU_RESERVED),-ffixed-f$(r))
 
+# The only functions allowed to touch reserved registers
+# (tools/n64/check_fpu_reserved.py). libdragon's exception path saves and
+# restores the whole FPU file around a handler (inthandler.S).
+SDFX_FPU_OWNERS := save_fpu_regs end_interrupt finalize_exception_frame end_exception_restore_all
+
 # For scripts: make -s -f n64/fpu_reserve.mk print-fixed
 .PHONY: print-fixed print-reserved
 print-fixed: ; @echo '$(SDFX_FPU_FIXED)'

@@ -27,6 +27,14 @@ Left out: `examples/`, `tests/`, `website/`, `scripts/`, the Docker and
 ## Changes from the origin
 
 - `tools/Makefile`: `TOOLS` lists only the tools kept.
+- `n64.mk`: adds `SDFX_FPU_FIXED` (the reserved FPU registers,
+  `n64/fpu_reserve.mk`) to `N64_C_AND_CXX_FLAGS`, and refuses to build
+  without it or `SDFX_NEWLIB_LIBDIR`. The program link passes
+  `-L$(N64_LIBDIR) -L$(SDFX_NEWLIB_LIBDIR)` to the GCC driver ahead of `-lc`.
+  Before, `-L$(N64_LIBDIR)` reached the linker only through `-Wl`, after the
+  toolchain's own directory, so `libdragon.a`, `n64.ld` and `libc.a` were
+  taken from the toolchain install (`/opt/libdragon`) rather than from this
+  copy. Same commit, so the code was the same; it would not have stayed so.
 
 Record every further change here.
 

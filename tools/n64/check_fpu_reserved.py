@@ -4,9 +4,9 @@
     check_fpu_reserved.py --objdump OBJDUMP [--allow FUNC ...] FILE...
 
 FILE is an ELF, an object or an archive (.a). The reserved list is
-n64/fpu_reserve.mk's SDFX_FPU_RESERVED. A function named with --allow (the
-code that owns reserved registers on purpose: the context switch, the run-flag
-writer, the exception frame save) is not reported. Prints each offending
+n64/fpu_reserve.mk's SDFX_FPU_RESERVED. The functions in its SDFX_FPU_OWNERS,
+and any named with --allow, own reserved registers on purpose (the context
+switch, the run-flag writer, the exception frame save) and are not reported. Prints each offending
 function with the registers it uses, and exits 1 if there is one.
 """
 import argparse
@@ -19,10 +19,10 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 
-def reserved_registers():
+def mk_list(name):
     text = (ROOT / "n64" / "fpu_reserve.mk").read_text()
-    m = re.search(r"^SDFX_FPU_RESERVED\s*:=\s*(.+)$", text, re.M)
-    return {int(x) for x in m.group(1).split()}
+    m = re.search(r"^" + name + r"\s*:=\s*(.+)$", text, re.M)
+    return m.group(1).split()
 
 
 def main():
@@ -31,8 +31,8 @@ def main():
     ap.add_argument("--allow", action="append", default=[])
     ap.add_argument("files", nargs="+")
     a = ap.parse_args()
-    reserved = reserved_registers()
-    allow = set(a.allow)
+    reserved = {int(x) for x in mk_list("SDFX_FPU_RESERVED")}
+    allow = set(mk_list("SDFX_FPU_OWNERS")) | set(a.allow)
     bad = collections.defaultdict(set)
     for f in a.files:
         out = subprocess.run([a.objdump, "-d", "--no-show-raw-insn", f],

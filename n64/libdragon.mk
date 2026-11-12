@@ -13,6 +13,15 @@ SDFX_ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))..)
 SDFX_SAVED_GOAL := $(.DEFAULT_GOAL)
 LIBDRAGON_SRC := $(SDFX_ROOT)/third_party/libdragon
 
+# Reserved FPU registers: every unit, libdragon included, is compiled with
+# SDFX_FPU_FIXED, and programs link newlib rebuilt with it (third_party/newlib),
+# found first through SDFX_NEWLIB_LIBDIR. n64.mk refuses to build without them.
+include $(SDFX_ROOT)/n64/fpu_reserve.mk
+SDFX_NEWLIB := $(SDFX_ROOT)/build/newlib
+SDFX_NEWLIB_LIBDIR := $(SDFX_NEWLIB)/mips64-elf/lib
+export SDFX_FPU_FIXED SDFX_NEWLIB_LIBDIR
+NEWLIB_DEPS := $(wildcard $(SDFX_ROOT)/third_party/newlib/*) $(SDFX_ROOT)/n64/fpu_reserve.mk
+
 # Captured now (:=), before N64_INST is redirected to the repo install below.
 N64_GCCPREFIX := $(or $(N64_GCCPREFIX),$(N64_INST))
 ifeq ($(strip $(N64_GCCPREFIX)),)
@@ -30,10 +39,20 @@ LIBDRAGON_TOOL_DEPS := $(shell find $(LIBDRAGON_SRC)/tools -name '*.c' -o -name 
 	-o -name '*.hpp' -o -name Makefile 2>/dev/null)
 
 # Library, headers, n64.mk and linker scripts; then the host tools n64.mk runs.
-$(N64_INST)/include/n64.mk: $(LIBDRAGON_DEPS) $(N64_INST)/bin/n64tool
+# libdragon's objects depend on its sources only, so a change of reserved
+# registers rebuilds it from clean (the install records the flags it used).
+SDFX_FPU_STAMP := $(SDFX_ROOT)/build/fpu_fixed.stamp
+ifneq ($(shell cat $(SDFX_FPU_STAMP) 2>/dev/null),$(SDFX_FPU_FIXED))
+$(shell mkdir -p $(SDFX_ROOT)/build && echo '$(SDFX_FPU_FIXED)' > $(SDFX_FPU_STAMP))
+endif
+$(N64_INST)/include/n64.mk: $(LIBDRAGON_DEPS) $(SDFX_FPU_STAMP) $(N64_INST)/bin/n64tool \
+		$(SDFX_NEWLIB_LIBDIR)/libc.a
 	@echo "    [LIBDRAGON] $(LIBDRAGON_SRC) -> $(N64_INST)"
+	+@if [ "$$(cat $(N64_INST)/fpu_fixed.txt 2>/dev/null)" != "$(SDFX_FPU_FIXED)" ]; then \
+		$(MAKE) --no-print-directory -C $(LIBDRAGON_SRC) clean >/dev/null; fi
 	+@$(MAKE) --no-print-directory -C $(LIBDRAGON_SRC) install >$(SDFX_ROOT)/build/libdragon-build.log 2>&1 \
 		|| { tail -40 $(SDFX_ROOT)/build/libdragon-build.log; exit 1; }
+	@echo '$(SDFX_FPU_FIXED)' > $(N64_INST)/fpu_fixed.txt
 	@touch $@
 
 $(N64_INST)/bin/n64tool: $(LIBDRAGON_TOOL_DEPS)
@@ -41,6 +60,13 @@ $(N64_INST)/bin/n64tool: $(LIBDRAGON_TOOL_DEPS)
 	@echo "    [LIBDRAGON] tools -> $(N64_INST)/bin"
 	+@$(MAKE) --no-print-directory -C $(LIBDRAGON_SRC) tools-install >$(SDFX_ROOT)/build/libdragon-tools.log 2>&1 \
 		|| { tail -40 $(SDFX_ROOT)/build/libdragon-tools.log; exit 1; }
+	@touch $@
+
+# Downloads the newlib source on first use (third_party/newlib/build.sh).
+$(SDFX_NEWLIB_LIBDIR)/libc.a: $(NEWLIB_DEPS)
+	@mkdir -p $(SDFX_ROOT)/build
+	@echo "    [NEWLIB] -> $(SDFX_NEWLIB)"
+	@$(SDFX_ROOT)/third_party/newlib/build.sh $(SDFX_NEWLIB)
 	@touch $@
 
 .PHONY: libdragon
