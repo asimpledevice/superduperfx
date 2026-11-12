@@ -2111,6 +2111,25 @@ the RSP becomes other work. Gates:
   A/B in every test game);
 - all of it opt-in at build time, with the current path as the reference.
 
+### FPU step 1: integer catch-up and resampling (2026-11-12)
+
+The first step towards reserving FPU registers: our own floating-point code on
+the CPU becomes integer.
+
+- **APU catch-up.** `apuCatchupCycles` is an exact `int64` count of SPC cycles
+  in units of 1/312697 (7 x 44671). Every ratio feeding it is exact: 2/7 per
+  touch-estimate master cycle, 2136/44671 per guest master cycle, and whole
+  cycles of wall-clock baseline. RTLS v11; v10 and older snapshots convert
+  their `double` on load.
+- **Audio resampling.** `rtl_render_native` is 32.32 fixed point.
+- **Check.** WRAM, ARAM and DSP-output hashes match the pre-change builds in
+  ares at every common frame: SMW 34, Pitfall 3, JM2 8 (as many as the
+  baselines logged).
+- **libdragon's vblank interrupt** (`__display_callback`, `vi_show`) is float
+  throughout (Kalman FPS filters, FPS limiter, VI scaling). Its lazy FPU save
+  costs about 0.01% of the CPU. With every unit compiled with `-ffixed-`, it
+  cannot touch reserved registers. Whether to convert it is an open question.
+
 ## Next steps
 
 1. Audio: check the RSP DSP by ear on hardware (output arrives later than
