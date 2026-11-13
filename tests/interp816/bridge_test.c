@@ -162,7 +162,7 @@ uint8_t *cart_getRomPtr(Cart *cart, uint8_t bank, uint16_t adr) {
 /* cpu_state.c isn't linked here; the bridge's constructor installs its
  * step-ring dump into this hook, so provide the slot. */
 void (*g_interp_recent_dump_hook)(int n, FILE *out) = 0;
-uint8 cpu_read8(CpuState *cpu, uint8 bank, uint16 addr) {
+uint8 cpu_read8(CpuState *cpu, uint32 bank_arg, uint32 addr_arg) { uint8 bank = (uint8)bank_arg; uint16 addr = (uint16)addr_arg;
     (void)cpu; return RAM[(((uint32)bank << 16) | addr) & 0xFFFFFF];
 }
 /* Model the claimed immutable read through this harness's flat-memory bus.
@@ -179,16 +179,16 @@ bool cpu_read8_plain_rom(CpuState *cpu, uint8 bank, uint16 addr, uint8 *out) {
 extern uint32_t g_interp_wlog_pc24;
 static uint32_t g_write_site_pc24 = 0xFFFFFFFFu;
 static uint32_t g_aot_saw_site_pc24 = 0xFFFFFFFFu;
-void cpu_write8(CpuState *cpu, uint8 bank, uint16 addr, uint8 v) {
+void cpu_write8(CpuState *cpu, uint32 bank_arg, uint32 addr_arg, uint32 v_arg) { uint8 bank = (uint8)bank_arg; uint16 addr = (uint16)addr_arg; uint8 v = (uint8)v_arg;
     (void)cpu; RAM[(((uint32)bank << 16) | addr) & 0xFFFFFF] = v;
     if (bank == 0 && addr == 0x0420) g_write_site_pc24 = g_interp_wlog_pc24;
 }
-uint16 cpu_read16(CpuState *cpu, uint8 bank, uint16 addr) {
+uint16 cpu_read16(CpuState *cpu, uint32 bank_arg, uint32 addr_arg) { uint8 bank = (uint8)bank_arg; uint16 addr = (uint16)addr_arg;
     uint8 lo = cpu_read8(cpu, bank, addr);
     uint8 hi = cpu_read8(cpu, bank, (uint16)(addr + 1));
     return (uint16)(lo | ((uint16)hi << 8));
 }
-void cpu_write16(CpuState *cpu, uint8 bank, uint16 addr, uint16 v) {
+void cpu_write16(CpuState *cpu, uint32 bank_arg, uint32 addr_arg, uint32 v_arg) { uint8 bank = (uint8)bank_arg; uint16 addr = (uint16)addr_arg; uint16 v = (uint16)v_arg;
     cpu_write8(cpu, bank, addr, (uint8)v);
     cpu_write8(cpu, bank, (uint16)(addr + 1), (uint8)(v >> 8));
 }

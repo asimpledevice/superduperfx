@@ -46,6 +46,13 @@ _PULL = re.compile(r'cpu_set_S\(\(uint16\)\(cpu_S\(\) \+ 1\)\);(\s*)(?:([^;\n=()
                    r'cpu_read8\(cpu, 0x00, cpu_S\(\)\);|cpu_set_(\w+)\((\(uint\d+\))?'
                    r'cpu_read8\(cpu, 0x00, cpu_S\(\)\)\);)')
 
+# 16-bit pushes and pulls (PHA/PHX/PHY/PHD with 16-bit registers, PLA/...):
+# S moves before and after the word access.
+_PUSH16 = re.compile(r'cpu_set_S\(\(uint16\)\(cpu_S\(\) - 1\)\);\s*cpu_write16\(cpu, 0x00, cpu_S\(\), '
+                     r'([^;\n]*?)\);\s*cpu_set_S\(\(uint16\)\(cpu_S\(\) - 1\)\);')
+_PULL16 = re.compile(r'cpu_set_S\(\(uint16\)\(cpu_S\(\) \+ 1\)\);(\s*)(?:([^;\n=()]*?) = (\(uint\d+\))?'
+                     r'cpu_read16\(cpu, 0x00, cpu_S\(\)\);|cpu_set_(\w+)\((\(uint\d+\))?'
+                     r'cpu_read16\(cpu, 0x00, cpu_S\(\)\)\);)\s*cpu_set_S\(\(uint16\)\(cpu_S\(\) \+ 1\)\);')
 
 def _call_end(s: str, start: int) -> int:
     """Index just past the ')' closing the call whose argument list is open
@@ -110,6 +117,15 @@ def lean_rewrite(src: str) -> str:
             pos = end
         out.append(src[pos:])
         src = ''.join(out)
+    # The inline word push evaluates its value after the first decrement; the
+    # helper evaluates it before, so a value that reads S stays inline.
+    src = _PUSH16.sub(lambda m: (f'cpu_push16(cpu, {m.group(1)});'
+                                 if _value_ok(m.group(1)) and 'cpu_S()' not in m.group(1)
+                                 else m.group(0)), src)
+    src = _PULL16.sub(lambda m: (m.group(0) if m.group(4) == 'S' else
+                                 f'{m.group(1)}{m.group(2)} = {m.group(3) or ""}cpu_pull16(cpu);'
+                                 if m.group(2) is not None else
+                                 f'{m.group(1)}cpu_set_{m.group(4)}({m.group(5) or ""}cpu_pull16(cpu));'), src)
     src = _PUSH.sub(lambda m: (f'cpu_push8(cpu, {m.group(1)});' if _value_ok(m.group(1))
                                else m.group(0)), src)
     src = _PULL.sub(lambda m: (f'{m.group(1)}{m.group(2)} = {m.group(3) or ""}cpu_pull8(cpu);'

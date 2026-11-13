@@ -187,9 +187,10 @@ def test_pushreg_a_m1_pushes_low_byte_only():
     out = _join(_emit_pushreg(PushReg(reg=Reg.A)))
     if "m_flag" in out:
         m_branch = out.split("if (cpu_m_flag())")[1].split("} else")[0]
-        # m=1 branch must use cpu_write8 + low-byte mask.
+        # m=1 branch must push one byte: cpu_write8 stores the low byte of
+        # its value (its value parameter is 32-bit and narrowed inside).
         assert "cpu_write8" in m_branch, f"PHA m=1 must push 1 byte:\n{out}"
-        assert "& 0xFF" in m_branch, f"PHA m=1 must mask low byte:\n{out}"
+        assert "cpu_write16" not in m_branch, f"PHA m=1 must not push a word:\n{out}"
 
 
 # ── Memory-access dispatch (Follow-up A) ────────────────────────────────

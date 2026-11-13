@@ -433,7 +433,7 @@ bool cpu_read8_plain_rom(CpuState *cpu, uint8 bank, uint16 addr, uint8 *out) {
 #define CPU_LEAN_ACCESS_DEFINE
 #include "cpu_lean_access.h"
 
-uint8 cpu_read8(CpuState *cpu, uint8 bank, uint16 addr) {
+uint8 cpu_read8(CpuState *cpu, uint32 bank_arg, uint32 addr_arg) { uint8 bank = (uint8)bank_arg; uint16 addr = (uint16)addr_arg;
     if (g_snes && g_snes->cart)
         cart_note_cpu_bus(g_snes->cart, bank, addr);
     int off = cpu_wram_offset(bank, addr);
@@ -467,7 +467,7 @@ uint8 cpu_read8(CpuState *cpu, uint8 bank, uint16 addr) {
     return cpu_latch_read8(cpu, *RomPtr(((uint32)bank << 16) | addr));
 }
 
-uint16 cpu_read16(CpuState *cpu, uint8 bank, uint16 addr) {
+uint16 cpu_read16(CpuState *cpu, uint32 bank_arg, uint32 addr_arg) { uint8 bank = (uint8)bank_arg; uint16 addr = (uint16)addr_arg;
     if (g_snes && g_snes->cart)
         cart_note_cpu_bus(g_snes->cart, bank, addr);
     int off = cpu_wram_offset(bank, addr);
@@ -557,7 +557,7 @@ uint16 cpu_read16(CpuState *cpu, uint8 bank, uint16 addr) {
     return cpu_latch_read16(cpu, (uint16)p[0] | ((uint16)p[1] << 8));
 }
 
-void cpu_write8(CpuState *cpu, uint8 bank, uint16 addr, uint8 v) {
+void cpu_write8(CpuState *cpu, uint32 bank_arg, uint32 addr_arg, uint32 v_arg) { uint8 bank = (uint8)bank_arg; uint16 addr = (uint16)addr_arg; uint8 v = (uint8)v_arg;
     if (g_snes && g_snes->cart)
         cart_note_cpu_bus(g_snes->cart, bank, addr);
     cpu->open_bus = v;
@@ -610,7 +610,7 @@ void cpu_write8(CpuState *cpu, uint8 bank, uint16 addr, uint8 v) {
     /* ROM / unmapped write: drop. */
 }
 
-void cpu_write16(CpuState *cpu, uint8 bank, uint16 addr, uint16 v) {
+void cpu_write16(CpuState *cpu, uint32 bank_arg, uint32 addr_arg, uint32 v_arg) { uint8 bank = (uint8)bank_arg; uint16 addr = (uint16)addr_arg; uint16 v = (uint16)v_arg;
     if (g_snes && g_snes->cart)
         cart_note_cpu_bus(g_snes->cart, bank, addr);
     cpu->open_bus = (uint8)v;

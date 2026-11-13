@@ -38,32 +38,34 @@
 #error "SNESRECOMP_CPU_REGS_FPU keeps the 65816 registers in VR4300 FPU registers"
 #endif
 #include "fpu_slots.h"
-/* A read moves the register into a GPR through an empty asm: without it,
- * GCC 16 may fold the FPU register into an address computation and fail
- * (internal compiler error in mips_load_store_insns, e.g. indexing a table
- * by cpu_PB() >> 7). GCC still emits the MFC1 itself, so it keeps the
- * VR4300's one-instruction MFC1 hazard in view. The range check after it
- * lets the compiler drop the mask a read would otherwise need: every write
- * stores a value already converted to the type. */
-#define CPU_REG_IN_FPU(name, type, slot, max)                                \
+/* Reads move the register into a GPR through an empty asm. Without it GCC 16
+ * can fold the FPU register into a narrower access and fail (internal
+ * compiler error in mips_load_store_insns; seen reading PB to index a table
+ * and D in a condition, so every register gets it). GCC still emits the
+ * MFC1 itself, so it keeps the VR4300's one-instruction MFC1 hazard in view.
+ * The range check after the barrier lets the compiler drop some masks; it
+ * cannot see through the barrier everywhere. Every write stores a value
+ * already converted to the type. The `barrier` argument is kept so a
+ * register can go without it once a compiler handles that. */
+#define CPU_REG_IN_FPU(name, type, slot, max, barrier)                              \
   register uint32_t g_fpu_cpu_##name __asm__(slot);                         \
   static inline __attribute__((always_inline)) type cpu_##name(void) {      \
     uint32_t v = g_fpu_cpu_##name;                                          \
-    __asm__("" : "+r"(v));                                                  \
+    if (barrier) __asm__("" : "+r"(v));                                     \
     if (v > (max)) __builtin_unreachable();                                 \
     return (type)v;                                                         \
   }                                                                         \
   static inline __attribute__((always_inline)) void cpu_set_##name(uint32_t v) { \
     g_fpu_cpu_##name = (type)v;                                             \
   }
-CPU_REG_IN_FPU(A, uint16, FPU_CPU_A, 0xFFFFu)
-CPU_REG_IN_FPU(X, uint16, FPU_CPU_X, 0xFFFFu)
-CPU_REG_IN_FPU(Y, uint16, FPU_CPU_Y, 0xFFFFu)
-CPU_REG_IN_FPU(S, uint16, FPU_CPU_S, 0xFFFFu)
-CPU_REG_IN_FPU(D, uint16, FPU_CPU_D, 0xFFFFu)
-CPU_REG_IN_FPU(DB, uint8, FPU_CPU_DB, 0xFFu)
-CPU_REG_IN_FPU(PB, uint8, FPU_CPU_PB, 0xFFu)
-CPU_REG_IN_FPU(P, uint8, FPU_CPU_P, 0xFFu)
+CPU_REG_IN_FPU(A, uint16, FPU_CPU_A, 0xFFFFu, 1)
+CPU_REG_IN_FPU(X, uint16, FPU_CPU_X, 0xFFFFu, 1)
+CPU_REG_IN_FPU(Y, uint16, FPU_CPU_Y, 0xFFFFu, 1)
+CPU_REG_IN_FPU(S, uint16, FPU_CPU_S, 0xFFFFu, 1)
+CPU_REG_IN_FPU(D, uint16, FPU_CPU_D, 0xFFFFu, 1)
+CPU_REG_IN_FPU(DB, uint8, FPU_CPU_DB, 0xFFu, 1)
+CPU_REG_IN_FPU(PB, uint8, FPU_CPU_PB, 0xFFu, 1)
+CPU_REG_IN_FPU(P, uint8, FPU_CPU_P, 0xFFu, 1)
 #undef CPU_REG_IN_FPU
 #else
 CPU_REG_IN_STRUCT(A, uint16)

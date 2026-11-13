@@ -2238,6 +2238,37 @@ the CPU becomes integer.
   What would change the balance: runtime helpers taking 32-bit arguments
   (no zero-extension), and emitter forms that avoid byte extraction.
 
+### CPUFPU: closing the code-size gap (2026-11-13, in progress)
+
+Changes (both modes; hashes identical to step 3a in all three games, with
+CPUFPU=0 and =1):
+- `cpu_read8/16`, `cpu_write8/16`, the lean `cpu_write_<form>8/16`,
+  `cpu_push8` and `cpu_write_a_m/x_x/y_x` take 32-bit arguments and narrow
+  them at entry, so call sites pass a register without a mask.
+- `cpu_push16`/`cpu_pull16` (lean): 16-bit register pushes and pulls were
+  inline, two masked S updates each.
+- PHA/PHX/PHY with 8-bit registers pass the whole register to the byte
+  push; TSB/TRB drop the value cast before the narrowing write.
+- The FPU read barrier stays on every register (without it GCC 16 crashed
+  on PB and on D).
+
+JM2 bank $80 (-Os): struct 72,765 -> 69,973 bytes; FPU 78,929 -> 71,877
+(gap 8.2% -> 2.7%). SMW banks: FPU +2.2%, -1.0%, +1.8%.
+
+ares I-cache misses, 60-frame windows (struct r2 / FPU r3):
+
+| Game | Total | Code cache |
+|---|---|---|
+| SMW | 1,889,501 / 1,908,104 | 377,713 / 408,600 |
+| Pitfall | 7,827,534 / 9,934,100 | 480 / 480 |
+| Joe & Mac 2 | 9,702,023 / 10,081,750 | 13,993 / 14,042 |
+
+The struct build's totals against the previous commit moved +2.8% (SMW),
++8.9% (Pitfall), -7.5% (JM2) with almost unchanged generated-code misses:
+the fixed runtime layout (`icache_order.ld`) shifts with every size change.
+A verdict needs the engine layout retrained (icache_trg.py, best of seeds
+0-7 on SMW + Pitfall, JM2 held out) for each variant.
+
 ## Next steps
 
 1. Audio: check the RSP DSP by ear on hardware (output arrives later than

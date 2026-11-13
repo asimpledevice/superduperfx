@@ -46,21 +46,21 @@ static uint32_t mapa(uint32_t bank, uint32_t addr) {
         return WRAM + addr;
     return (bank << 16) | addr;
 }
-uint8 cpu_read8(CpuState *cpu, uint8 bank, uint16 addr) {
+uint8 cpu_read8(CpuState *cpu, uint32 bank_arg, uint32 addr_arg) { uint8 bank = (uint8)bank_arg; uint16 addr = (uint16)addr_arg;
     (void)cpu; return RAM[mapa(bank, addr)];
 }
 /* The real cpu_read16/write16 (cpu_state.c) read PHYSICALLY-CONTIGUOUS bytes
  * (cpu->ram[off],[off+1] / RomPtr p[0],p[1]), i.e. the 24-bit address increments
  * across a bank boundary ($C0:FFFF -> $C1:0000) — it does NOT wrap within the
  * bank. Mirror that here so the harness tests the recomp's real word semantics. */
-uint16 cpu_read16(CpuState *cpu, uint8 bank, uint16 addr) {
+uint16 cpu_read16(CpuState *cpu, uint32 bank_arg, uint32 addr_arg) { uint8 bank = (uint8)bank_arg; uint16 addr = (uint16)addr_arg;
     (void)cpu; uint32_t a = ((uint32)bank << 16) | addr;
     return (uint16)RAM[mapa(a >> 16, a)] | ((uint16)RAM[mapa((a + 1) >> 16, a + 1)] << 8);
 }
-void cpu_write8(CpuState *cpu, uint8 bank, uint16 addr, uint8 v) {
+void cpu_write8(CpuState *cpu, uint32 bank_arg, uint32 addr_arg, uint32 v_arg) { uint8 bank = (uint8)bank_arg; uint16 addr = (uint16)addr_arg; uint8 v = (uint8)v_arg;
     (void)cpu; RAM[mapa(bank, addr)] = v;
 }
-void cpu_write16(CpuState *cpu, uint8 bank, uint16 addr, uint16 v) {
+void cpu_write16(CpuState *cpu, uint32 bank_arg, uint32 addr_arg, uint32 v_arg) { uint8 bank = (uint8)bank_arg; uint16 addr = (uint16)addr_arg; uint16 v = (uint16)v_arg;
     (void)cpu; uint32_t a = ((uint32)bank << 16) | addr;
     RAM[mapa(a >> 16, a)] = (uint8)v;
     RAM[mapa((a + 1) >> 16, a + 1)] = (uint8)(v >> 8);

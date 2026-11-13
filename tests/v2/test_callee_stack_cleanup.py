@@ -25,17 +25,17 @@ int g_recomp_stack_top;
 uint16_t g_cpu_entry_s[64];
 static int other_exits, ancestor_skip;
 static uint32 other_target;
-uint8 cpu_read8(CpuState *cpu, uint8 bank, uint16 addr) {
+uint8 cpu_read8(CpuState *cpu, uint32 bank_arg, uint32 addr_arg) { uint8 bank = (uint8)bank_arg; uint16 addr = (uint16)addr_arg;
   (void)cpu; (void)bank; return g_ram[addr];
 }
-uint16 cpu_read16(CpuState *cpu, uint8 bank, uint16 addr) {
+uint16 cpu_read16(CpuState *cpu, uint32 bank_arg, uint32 addr_arg) { uint8 bank = (uint8)bank_arg; uint16 addr = (uint16)addr_arg;
   return cpu_read8(cpu, bank, addr) |
          ((uint16)cpu_read8(cpu, bank, (uint16)(addr + 1)) << 8);
 }
-void cpu_write8(CpuState *cpu, uint8 bank, uint16 addr, uint8 v) {
+void cpu_write8(CpuState *cpu, uint32 bank_arg, uint32 addr_arg, uint32 v_arg) { uint8 bank = (uint8)bank_arg; uint16 addr = (uint16)addr_arg; uint8 v = (uint8)v_arg;
   (void)cpu; (void)bank; g_ram[addr] = v;
 }
-void cpu_write16(CpuState *cpu, uint8 bank, uint16 addr, uint16 v) {
+void cpu_write16(CpuState *cpu, uint32 bank_arg, uint32 addr_arg, uint32 v_arg) { uint8 bank = (uint8)bank_arg; uint16 addr = (uint16)addr_arg; uint16 v = (uint16)v_arg;
   cpu_write8(cpu, bank, addr, (uint8)v);
   cpu_write8(cpu, bank, (uint16)(addr + 1), (uint8)(v >> 8));
 }

@@ -188,12 +188,12 @@ def test_compiled_routine_follows_the_edited_operand_both_ways(tmp_path):
                         end=0x810F, func_name='LiveCmp',
                         live_operand_sites={0x008102}))
     harness = seam._HARNESS.split('/* The C helpers.')[0]
-    read8 = ('uint8 cpu_read8(CpuState *cpu, uint8 bank, uint16 addr) {\n'
+    read8 = ('uint8 cpu_read8(CpuState *cpu, uint32 bank_arg, uint32 addr_arg) { uint8 bank = (uint8)bank_arg; uint16 addr = (uint16)addr_arg;\n'
              '  (void)cpu; (void)bank; return g_ram[addr];\n}')
     assert read8 in harness
     harness = harness.replace(read8, (
         'uint8 g_rom[0x8000];\n'
-        'uint8 cpu_read8(CpuState *cpu, uint8 bank, uint16 addr) {\n'
+        'uint8 cpu_read8(CpuState *cpu, uint32 bank_arg, uint32 addr_arg) { uint8 bank = (uint8)bank_arg; uint16 addr = (uint16)addr_arg;\n'
         '  (void)cpu; (void)bank;\n'
         '  return addr >= 0x8000 ? g_rom[addr - 0x8000] : g_ram[addr];\n}'))
     def table(name, data):
@@ -249,13 +249,13 @@ def test_compiled_live_operand_and_observer_use_program_bank_and_register_width(
     finally:
         set_rom_mapping(old_mapping)
     harness = seam._HARNESS.split('/* The C helpers.')[0]
-    read8 = ('uint8 cpu_read8(CpuState *cpu, uint8 bank, uint16 addr) {\n'
+    read8 = ('uint8 cpu_read8(CpuState *cpu, uint32 bank_arg, uint32 addr_arg) { uint8 bank = (uint8)bank_arg; uint16 addr = (uint16)addr_arg;\n'
              '  (void)cpu; (void)bank; return g_ram[addr];\n}')
     assert read8 in harness
     harness = harness.replace(read8, f'''
 static unsigned reads, hooks, bad_bank;
 static uint16 patched;
-uint8 cpu_read8(CpuState *cpu, uint8 bank, uint16 addr) {{
+uint8 cpu_read8(CpuState *cpu, uint32 bank_arg, uint32 addr_arg) {{ uint8 bank = (uint8)bank_arg; uint16 addr = (uint16)addr_arg;
   (void)cpu;
   if (addr >= 0x8000) {{
     reads++;

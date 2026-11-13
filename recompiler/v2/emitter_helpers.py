@@ -72,7 +72,8 @@ def assign(target: str, value: str) -> str:
 
 
 def push_byte(val_expr: str) -> List[str]:
-    """8-bit stack push: write at S, then decrement S."""
+    """8-bit stack push: write at S, then decrement S. cpu_write8 stores the
+    low byte of its 32-bit value, so a register can be passed whole."""
     return [
         f"cpu_write8(cpu, 0x00, cpu_S(), {val_expr});",
         "cpu_set_S((uint16)(cpu_S() - 1));",
