@@ -167,7 +167,7 @@ def test_aot_interrupt_tail_to_lle_preserves_rti_boundary(tmp_path):
     assert result.returncode == 0, result.stdout + result.stderr
     source = (out_dir / "bank00_v2.c").read_text(encoding="utf-8")
     assert "RecompReturn Interrupt_NMI_M1X1" in source
-    assert "interp_tier_dispatch_tail(cpu, (((uint32)cpu->PB << 16) | 0x8010u)" in source
+    assert "interp_tier_dispatch_tail(cpu, (((uint32)cpu_PB() << 16) | 0x8010u)" in source
     assert "uint8 _interrupted_hrv = cpu->host_return_valid;" in source
     assert "cpu->host_return_valid = 0;" in source
     assert "cpu_interrupt_context_enter();" in source
@@ -281,7 +281,7 @@ def test_lle_only_declared_sibling_remains_an_emission_boundary(tmp_path):
         (out_dir / "program_manifest.json").read_text(encoding="utf-8"))
     assert manifest["nodes"]["008010:M1X1"]["disposition"] == "lle_only"
     assert "RecompReturn Poison_M1X1" not in source
-    assert "interp_tier_dispatch_tail(cpu, (((uint32)cpu->PB << 16) | 0x8010u)" in source
+    assert "interp_tier_dispatch_tail(cpu, (((uint32)cpu_PB() << 16) | 0x8010u)" in source
     assert "tail-call past end: missing exact M1X1 body" in source
 
 
@@ -417,7 +417,7 @@ def test_host_alias_dispatches_live_mx_and_missing_exact_slot_to_lle(tmp_path):
     assert result.returncode == 0, result.stdout + result.stderr
 
     source = (out_dir / "bank00_v2.c").read_text(encoding="utf-8")
-    assert "switch (((cpu->m_flag & 1) << 1)" in source
+    assert "switch (((cpu_m_flag() & 1) << 1)" in source
     assert "case 3: _r = I_RESET_M1X1(cpu);" in source
     # Wrong-width reset decodes are structural and intentionally remain LLE.
     assert "interp_tier_dispatch(cpu, 0x008000u)" in source

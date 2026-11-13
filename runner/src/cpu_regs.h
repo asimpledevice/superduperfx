@@ -1,0 +1,95 @@
+/* Accessors for the 65816 registers of the one CPU state (cpu_state.h).
+ *
+ *   cpu_A()        read, in the register's C type (uint16 / uint8)
+ *   cpu_set_A(v)   write, converting v to that type (as assignment to the
+ *                  field did); returns nothing, so it cannot be used as a
+ *                  value
+ *
+ * Generated code (the v2 emitter writes these calls; see
+ * recompiler/v2/emitter_helpers.assign) and the runtime use these instead of
+ * the fields. Included from cpu_state.h only.
+ *
+ * SNESRECOMP_CPU_REGS_FPU=1 (n64 CPUFPU=1): A, X, Y, S, D, DB, PB and P live
+ * in reserved FPU registers (fpu_slots.h) as GCC global register variables,
+ * always zero-extended, so a read is one MFC1 and a write one MTC1 (plus the
+ * conversion the C type asks for). Otherwise they live in g_cpu's reg_*
+ * fields. m_flag, x_flag and emulation stay in g_cpu either way for now.
+ *
+ * Code that copies g_cpu as a whole (rollback) calls cpu_regs_store() after
+ * the copy and cpu_regs_load() before using one, which move the registers
+ * between their home and a CpuState's reg_* fields. */
+#ifndef SNESRECOMP_CPU_REGS_H
+#define SNESRECOMP_CPU_REGS_H
+
+#ifndef SNESRECOMP_CPU_REGS_FPU
+#define SNESRECOMP_CPU_REGS_FPU 0
+#endif
+
+#define CPU_REG_IN_STRUCT(name, type)                                        \
+  static inline __attribute__((always_inline)) type cpu_##name(void) {      \
+    return g_cpu.reg_##name;                                                \
+  }                                                                         \
+  static inline __attribute__((always_inline)) void cpu_set_##name(uint32_t v) { \
+    g_cpu.reg_##name = (type)v;                                             \
+  }
+
+#if SNESRECOMP_CPU_REGS_FPU
+#if !defined(__mips__)
+#error "SNESRECOMP_CPU_REGS_FPU keeps the 65816 registers in VR4300 FPU registers"
+#endif
+#include "fpu_slots.h"
+/* A read moves the register into a GPR through an empty asm: without it,
+ * GCC 16 may fold the FPU register into an address computation and fail
+ * (internal compiler error in mips_load_store_insns, e.g. indexing a table
+ * by cpu_PB() >> 7). GCC still emits the MFC1 itself, so it keeps the
+ * VR4300's one-instruction MFC1 hazard in view. The range check after it
+ * lets the compiler drop the mask a read would otherwise need: every write
+ * stores a value already converted to the type. */
+#define CPU_REG_IN_FPU(name, type, slot, max)                                \
+  register uint32_t g_fpu_cpu_##name __asm__(slot);                         \
+  static inline __attribute__((always_inline)) type cpu_##name(void) {      \
+    uint32_t v = g_fpu_cpu_##name;                                          \
+    __asm__("" : "+r"(v));                                                  \
+    if (v > (max)) __builtin_unreachable();                                 \
+    return (type)v;                                                         \
+  }                                                                         \
+  static inline __attribute__((always_inline)) void cpu_set_##name(uint32_t v) { \
+    g_fpu_cpu_##name = (type)v;                                             \
+  }
+CPU_REG_IN_FPU(A, uint16, FPU_CPU_A, 0xFFFFu)
+CPU_REG_IN_FPU(X, uint16, FPU_CPU_X, 0xFFFFu)
+CPU_REG_IN_FPU(Y, uint16, FPU_CPU_Y, 0xFFFFu)
+CPU_REG_IN_FPU(S, uint16, FPU_CPU_S, 0xFFFFu)
+CPU_REG_IN_FPU(D, uint16, FPU_CPU_D, 0xFFFFu)
+CPU_REG_IN_FPU(DB, uint8, FPU_CPU_DB, 0xFFu)
+CPU_REG_IN_FPU(PB, uint8, FPU_CPU_PB, 0xFFu)
+CPU_REG_IN_FPU(P, uint8, FPU_CPU_P, 0xFFu)
+#undef CPU_REG_IN_FPU
+#else
+CPU_REG_IN_STRUCT(A, uint16)
+CPU_REG_IN_STRUCT(X, uint16)
+CPU_REG_IN_STRUCT(Y, uint16)
+CPU_REG_IN_STRUCT(S, uint16)
+CPU_REG_IN_STRUCT(D, uint16)
+CPU_REG_IN_STRUCT(DB, uint8)
+CPU_REG_IN_STRUCT(PB, uint8)
+CPU_REG_IN_STRUCT(P, uint8)
+#endif
+CPU_REG_IN_STRUCT(m_flag, uint8)
+CPU_REG_IN_STRUCT(x_flag, uint8)
+CPU_REG_IN_STRUCT(emulation, uint8)
+#undef CPU_REG_IN_STRUCT
+
+/* Copy the registers from their home into c's reg_* fields, and back. */
+static inline void cpu_regs_store(struct CpuState *c) {
+  c->reg_A = cpu_A(); c->reg_X = cpu_X(); c->reg_Y = cpu_Y();
+  c->reg_S = cpu_S(); c->reg_D = cpu_D();
+  c->reg_DB = cpu_DB(); c->reg_PB = cpu_PB(); c->reg_P = cpu_P();
+}
+static inline void cpu_regs_load(const struct CpuState *c) {
+  cpu_set_A(c->reg_A); cpu_set_X(c->reg_X); cpu_set_Y(c->reg_Y);
+  cpu_set_S(c->reg_S); cpu_set_D(c->reg_D);
+  cpu_set_DB(c->reg_DB); cpu_set_PB(c->reg_PB); cpu_set_P(c->reg_P);
+}
+
+#endif

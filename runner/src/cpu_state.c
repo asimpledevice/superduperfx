@@ -104,9 +104,9 @@ void wlog_scope_enter(const char *tag) {
     if (!g_wlog_fp) return;
     if (g_wlog_calls >= g_wlog_max_calls) { g_wlog_active = 0; return; }
     /* snapshot entry register state from the single global CpuState */
-    g_wlog_eA = g_cpu.A; g_wlog_eX = g_cpu.X; g_wlog_eY = g_cpu.Y;
-    g_wlog_eM = (uint8)(g_cpu.m_flag & 1); g_wlog_eXf = (uint8)(g_cpu.x_flag & 1);
-    g_wlog_eDB = g_cpu.DB; g_wlog_ePB = g_cpu.PB;
+    g_wlog_eA = cpu_A(); g_wlog_eX = cpu_X(); g_wlog_eY = cpu_Y();
+    g_wlog_eM = (uint8)(cpu_m_flag() & 1); g_wlog_eXf = (uint8)(cpu_x_flag() & 1);
+    g_wlog_eDB = cpu_DB(); g_wlog_ePB = cpu_PB();
     size_t n = 0; if (tag) { while (tag[n] && n < sizeof(g_wlog_tag) - 1) { g_wlog_tag[n] = tag[n]; n++; } }
     g_wlog_tag[n] = 0;
     g_wlog_scope_open = 1; g_wlog_scope_wrote = 0; g_wlog_active = 1;
@@ -118,8 +118,8 @@ void wlog_scope_exit(void) {
     if (g_wlog_scope_wrote) {
         if (g_wlog_fp)
             fprintf(g_wlog_fp, "# EXIT %d A=%04X X=%04X Y=%04X M=%d Xf=%d DB=%02X\n",
-                    g_wlog_calls, g_cpu.A, g_cpu.X, g_cpu.Y,
-                    (int)(g_cpu.m_flag & 1), (int)(g_cpu.x_flag & 1), g_cpu.DB);
+                    g_wlog_calls, cpu_A(), cpu_X(), cpu_Y(),
+                    (int)(cpu_m_flag() & 1), (int)(cpu_x_flag() & 1), cpu_DB());
         g_wlog_calls++;
         if (g_wlog_fp) fflush(g_wlog_fp);
     }
@@ -201,23 +201,23 @@ static void wlog_addr_note_via(uint8 bank, uint16 addr, uint16 v, int width,
                 " p34=%02X%04X p38=%04X p3C=%04X p3E=%04X"
                 " p42=%02X p46=%02X p4A=%02X p4E=%02X"
                 " p52=%02X p53=%02X p54=%04X p56=%02X p57=%02X",
-                g_cpu.A, g_cpu.X, g_cpu.Y, g_cpu.S, g_cpu.D, g_cpu.DB,
-                (unsigned)(g_cpu.m_flag & 1), (unsigned)(g_cpu.x_flag & 1),
+                cpu_A(), cpu_X(), cpu_Y(), cpu_S(), cpu_D(), cpu_DB(),
+                (unsigned)(cpu_m_flag() & 1), (unsigned)(cpu_x_flag() & 1),
                 (unsigned)(g_interp_wlog_pc24 & 0xFFFFFFu),
-                cpu_read8(&g_cpu, 0x00, (uint16)(g_cpu.D + 0x36)),
-                cpu_read16(&g_cpu, 0x00, (uint16)(g_cpu.D + 0x34)),
-                cpu_read16(&g_cpu, 0x00, (uint16)(g_cpu.D + 0x38)),
-                cpu_read16(&g_cpu, 0x00, (uint16)(g_cpu.D + 0x3C)),
-                cpu_read16(&g_cpu, 0x00, (uint16)(g_cpu.D + 0x3E)),
-                cpu_read8(&g_cpu, 0x00, (uint16)(g_cpu.D + 0x42)),
-                cpu_read8(&g_cpu, 0x00, (uint16)(g_cpu.D + 0x46)),
-                cpu_read8(&g_cpu, 0x00, (uint16)(g_cpu.D + 0x4A)),
-                cpu_read8(&g_cpu, 0x00, (uint16)(g_cpu.D + 0x4E)),
-                cpu_read8(&g_cpu, 0x00, (uint16)(g_cpu.D + 0x52)),
-                cpu_read8(&g_cpu, 0x00, (uint16)(g_cpu.D + 0x53)),
-                cpu_read16(&g_cpu, 0x00, (uint16)(g_cpu.D + 0x54)),
-                cpu_read8(&g_cpu, 0x00, (uint16)(g_cpu.D + 0x56)),
-                cpu_read8(&g_cpu, 0x00, (uint16)(g_cpu.D + 0x57)));
+                cpu_read8(&g_cpu, 0x00, (uint16)(cpu_D() + 0x36)),
+                cpu_read16(&g_cpu, 0x00, (uint16)(cpu_D() + 0x34)),
+                cpu_read16(&g_cpu, 0x00, (uint16)(cpu_D() + 0x38)),
+                cpu_read16(&g_cpu, 0x00, (uint16)(cpu_D() + 0x3C)),
+                cpu_read16(&g_cpu, 0x00, (uint16)(cpu_D() + 0x3E)),
+                cpu_read8(&g_cpu, 0x00, (uint16)(cpu_D() + 0x42)),
+                cpu_read8(&g_cpu, 0x00, (uint16)(cpu_D() + 0x46)),
+                cpu_read8(&g_cpu, 0x00, (uint16)(cpu_D() + 0x4A)),
+                cpu_read8(&g_cpu, 0x00, (uint16)(cpu_D() + 0x4E)),
+                cpu_read8(&g_cpu, 0x00, (uint16)(cpu_D() + 0x52)),
+                cpu_read8(&g_cpu, 0x00, (uint16)(cpu_D() + 0x53)),
+                cpu_read16(&g_cpu, 0x00, (uint16)(cpu_D() + 0x54)),
+                cpu_read8(&g_cpu, 0x00, (uint16)(cpu_D() + 0x56)),
+                cpu_read8(&g_cpu, 0x00, (uint16)(cpu_D() + 0x57)));
         }
     fputc('\n', g_wlog_addr_fp);
     if (g_wlog_halt_off >= 0) {
@@ -1110,7 +1110,7 @@ const char *cpu_dispatch_entry_reason(uint32_t pc24, uint8_t mx) {
 static RecompReturn (*_cpu_dispatch_lookup(CpuState *cpu, uint32 pc24))(CpuState *) {
     const DispatchEntry *row = _cpu_dispatch_find(pc24);
     if (row != NULL) {
-        unsigned idx = (unsigned)(((cpu->m_flag & 1) << 1) | (cpu->x_flag & 1));
+        unsigned idx = (unsigned)(((cpu_m_flag() & 1) << 1) | (cpu_x_flag() & 1));
         RecompReturn (*fp)(CpuState *) = row->variant[idx];
         /* A WRAM body may only run while its live bytes match the snapshot. */
         if (fp != NULL && _ram_guard_blocks(cpu, pc24)) return NULL;
@@ -1124,7 +1124,7 @@ RecompReturn cpu_dispatch_pc_from(CpuState *cpu, uint32 pc24,
                                   uint32 source_pc24) {
     pc24 &= 0xFFFFFFu;
     source_pc24 &= 0xFFFFFFu;
-    unsigned mx_idx = (unsigned)(((cpu->m_flag & 1) << 1) | (cpu->x_flag & 1));
+    unsigned mx_idx = (unsigned)(((cpu_m_flag() & 1) << 1) | (cpu_x_flag() & 1));
     int via_mirror = 0;
     int known_entry = 0;
     const DispatchEntry *row = _cpu_dispatch_find(pc24);
@@ -1159,7 +1159,7 @@ RecompReturn cpu_dispatch_pc_from(CpuState *cpu, uint32 pc24,
              * continuation miss: execute the exact ROM bytes.  cpu->S already
              * reflects the RTS/RTL pop that reached this tail target. */
             cpu->host_return_valid = 0;
-            cpu->PB = (uint8)(pc24 >> 16);
+            cpu_set_PB((uint8)(pc24 >> 16));
             return interp_tier_dispatch_popped_return(
                 cpu, pc24, source_pc24, entry_s_for_miss_restore);
         }
@@ -1173,8 +1173,8 @@ RecompReturn cpu_dispatch_pc_from(CpuState *cpu, uint32 pc24,
          * bare entry_s here would under-pop by frame_size and leak the caller's
          * frame on every miss (the heavy-load DMA-queue-corruption softlock;
          * cf. MMX Dr Light "sprite vanish" 2026-05-24). */
-        cpu->S = entry_s_for_miss_restore;
-        cpu->PB = (uint8)(pc24 >> 16);
+        cpu_set_S(entry_s_for_miss_restore);
+        cpu_set_PB((uint8)(pc24 >> 16));
         return RECOMP_RETURN_NORMAL;
     }
     /* Option-1: a dispatched entry has no paired host-C caller. The target
@@ -1182,7 +1182,7 @@ RecompReturn cpu_dispatch_pc_from(CpuState *cpu, uint32 pc24,
      * popped PC rather than host-returning into this dispatch frame. The
      * chain unwinds when a dispatch misses (S restored above) -> NORMAL. */
     cpu->host_return_valid = 0;
-    cpu->PB = (uint8)(pc24 >> 16);
+    cpu_set_PB((uint8)(pc24 >> 16));
     return fp(cpu);
 }
 
@@ -1217,12 +1217,12 @@ RecompReturn cpu_dispatch_call_pc(CpuState *cpu, uint32 pc24,
      * = return_addr - 1 = source_pc24 + 2 (JSR (abs,X) is 3 bytes; RTS adds
      * 1 on pop -> source_pc24 + 3, the post-JSR instruction). */
     uint16 iret16 = (uint16)((source_pc24 + 2) & 0xFFFFu);
-    cpu_write8(cpu, 0x00, cpu->S, (uint8)((iret16 >> 8) & 0xFF));
-    cpu->S = (uint16)(cpu->S - 1);
-    cpu_write8(cpu, 0x00, cpu->S, (uint8)(iret16 & 0xFF));
-    cpu->S = (uint16)(cpu->S - 1);
+    cpu_write8(cpu, 0x00, cpu_S(), (uint8)((iret16 >> 8) & 0xFF));
+    cpu_set_S((uint16)(cpu_S() - 1));
+    cpu_write8(cpu, 0x00, cpu_S(), (uint8)(iret16 & 0xFF));
+    cpu_set_S((uint16)(cpu_S() - 1));
 
-    unsigned mx_idx = (unsigned)(((cpu->m_flag & 1) << 1) | (cpu->x_flag & 1));
+    unsigned mx_idx = (unsigned)(((cpu_m_flag() & 1) << 1) | (cpu_x_flag() & 1));
     int via_mirror = 0;
     RecompReturn (*fp)(CpuState *) = _cpu_dispatch_lookup(cpu, pc24);
     if (fp == NULL) {
@@ -1247,7 +1247,7 @@ RecompReturn cpu_dispatch_call_pc_pushed(CpuState *cpu, uint32 pc24,
                                          uint32 *return_pc24) {
     pc24 &= 0xFFFFFFu;
     source_pc24 &= 0xFFFFFFu;
-    unsigned mx_idx = (unsigned)(((cpu->m_flag & 1) << 1) | (cpu->x_flag & 1));
+    unsigned mx_idx = (unsigned)(((cpu_m_flag() & 1) << 1) | (cpu_x_flag() & 1));
     int via_mirror = 0;
     RecompReturn (*fp)(CpuState *) = _cpu_dispatch_lookup(cpu, pc24);
     if (fp == NULL) {
@@ -1264,11 +1264,11 @@ RecompReturn cpu_dispatch_call_pc_pushed(CpuState *cpu, uint32 pc24,
          * indexed indirect jumps and LLE continuations use architectural PB.
          * The unwind carries its own resume PC; the host caller still needs
          * its bank restored while propagating that unwind. */
-        uint8 saved_pb = cpu->PB;
-        if (frame_size == 3) cpu->PB = (uint8)(pc24 >> 16);
+        uint8 saved_pb = cpu_PB();
+        if (frame_size == 3) cpu_set_PB((uint8)(pc24 >> 16));
         cpu->host_return_valid = frame_size;
         RecompReturn r = fp(cpu);
-        cpu->PB = saved_pb;
+        cpu_set_PB(saved_pb);
         return r;
     }
     return interp_tier_run_call_frame(cpu, pc24, source_pc24, frame_size,
@@ -1293,7 +1293,7 @@ RecompReturn cpu_dispatch_call_pc_pushed(CpuState *cpu, uint32 pc24,
  * makes the bounce stack-exact regardless of what sits at the return address. */
 RecompReturn cpu_dispatch_pc_paired(CpuState *cpu, uint32 pc24, uint8 frame_size) {
     pc24 &= 0xFFFFFFu;
-    unsigned mx_idx = (unsigned)(((cpu->m_flag & 1) << 1) | (cpu->x_flag & 1));
+    unsigned mx_idx = (unsigned)(((cpu_m_flag() & 1) << 1) | (cpu_x_flag() & 1));
     int via_mirror = 0;
     RecompReturn (*fp)(CpuState *) = _cpu_dispatch_lookup(cpu, pc24);
     if (fp == NULL) {
@@ -1338,19 +1338,19 @@ uint8 cpu_dispatch_inline_arg_bytes(uint32 pc24) {
 }
 
 void cpu_state_init(CpuState *cpu, uint8 *ram) {
-    cpu->A = 0;
+    cpu_set_A(0);
     /* No cpu->B init — B is derived from (A >> 8) and has no separate state. */
-    cpu->X = 0;
-    cpu->Y = 0;
-    cpu->S = 0x01FF;
-    cpu->D = 0;
-    cpu->DB = 0;
-    cpu->PB = 0;
+    cpu_set_X(0);
+    cpu_set_Y(0);
+    cpu_set_S(0x01FF);
+    cpu_set_D(0);
+    cpu_set_DB(0);
+    cpu_set_PB(0);
     /* Reset state per 65816 spec: emulation=1, M=X=I=1 (P=0x34). */
-    cpu->P = CPU_P_M | CPU_P_X | CPU_P_I;
-    cpu->m_flag = 1;
-    cpu->x_flag = 1;
-    cpu->emulation = 1;
+    cpu_set_P(CPU_P_M | CPU_P_X | CPU_P_I);
+    cpu_set_m_flag(1);
+    cpu_set_x_flag(1);
+    cpu_set_emulation(1);
     cpu->host_return_valid = 0;
     cpu->_flag_N = 0;
     cpu->_flag_V = 0;

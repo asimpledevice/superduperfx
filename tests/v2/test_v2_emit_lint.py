@@ -77,10 +77,10 @@ ALLOWED = CANONICAL | SHADOWS_FROM_P | HIDDEN_REGS
 # exists so the next "let me add cpu->FOO as a tracker" attempt
 # trips a clear failure with a pointer to TROUBLESHOOTING.md.
 HISTORICAL_DELETED = {
-    'B': "cpu->B was a stale shadow of (cpu->A >> 8). Deleted in "
+    'B': "cpu->B was a stale shadow of (cpu_A() >> 8). Deleted in "
          "84b359e after it caused the SMW Layer-3 stripe-image XBA "
          "corruption (see docs/TROUBLESHOOTING.md). Read it as "
-         "((cpu->A >> 8) & 0xFF) or via cpu_read_b().",
+         "((cpu_A() >> 8) & 0xFF) or via cpu_read_b().",
 }
 
 
@@ -261,15 +261,20 @@ def test_shadow_p_sync_is_complete():
     p2m_body = _body_after(p2m_def.end())
     m2p_body = _body_after(m2p_def.end())
 
+    def _mentions(body: str, field: str) -> bool:
+        # A register (cpu_regs.h) is reached through cpu_F() / cpu_set_F().
+        return (f'cpu->{field}' in body or f'cpu_{field}()' in body
+                or f'cpu_set_{field}(' in body)
+
     for shadow in SHADOWS_FROM_P:
-        assert f'cpu->{shadow}' in p2m_body, (
+        assert _mentions(p2m_body, shadow), (
             f"shadow cpu->{shadow} declared in SHADOWS_FROM_P but not "
             f"updated by cpu_p_to_mirrors (REP/SEP/PLP/RTI would leave it "
             f"stale)"
         )
-        assert f'cpu->{shadow}' in m2p_body, (
+        assert _mentions(m2p_body, shadow), (
             f"shadow cpu->{shadow} declared in SHADOWS_FROM_P but not "
-            f"folded back into cpu->P by cpu_mirrors_to_p (PHP would push "
+            f"folded back into cpu_P() by cpu_mirrors_to_p (PHP would push "
             f"a stale P)"
         )
 
@@ -287,7 +292,8 @@ def test_canonical_set_documents_real_struct_fields():
     for field in CANONICAL:
         # Match either `uint16 A;` or `uint8 *ram;` — i.e. any decl
         # that ends with "<field>;" or "<field>;<comment>".
-        pattern = re.compile(rf'\b{re.escape(field)}\s*;')
+        # The registers are reg_<F> fields behind accessors (cpu_regs.h).
+        pattern = re.compile(rf'\b(reg_)?{re.escape(field)}\s*;')
         assert pattern.search(struct_body), (
             f"CANONICAL field cpu->{field} declared in lint but not found "
             f"in CpuState struct definition in cpu_state.h. Did the field "

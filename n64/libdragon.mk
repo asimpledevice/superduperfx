@@ -20,7 +20,7 @@ include $(SDFX_ROOT)/n64/fpu_reserve.mk
 SDFX_NEWLIB := $(SDFX_ROOT)/build/newlib
 SDFX_NEWLIB_LIBDIR := $(SDFX_NEWLIB)/mips64-elf/lib
 export SDFX_FPU_FIXED SDFX_NEWLIB_LIBDIR
-NEWLIB_DEPS := $(wildcard $(SDFX_ROOT)/third_party/newlib/*) $(SDFX_ROOT)/n64/fpu_reserve.mk
+NEWLIB_DEPS = $(wildcard $(SDFX_ROOT)/third_party/newlib/*) $(SDFX_FPU_STAMP)
 
 # Captured now (:=), before N64_INST is redirected to the repo install below.
 N64_GCCPREFIX := $(or $(N64_GCCPREFIX),$(N64_INST))

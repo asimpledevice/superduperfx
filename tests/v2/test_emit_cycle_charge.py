@@ -29,10 +29,10 @@ def test_linear_block_charges_static_cycles():
     charges = _STATIC_CHARGE.findall(src)
     assert charges == ['11'], f'expected one static block charge of 11, got {charges}'
     # dp dynamic present (Axis-5 reworded it to also charge master clocks).
-    assert "if (cpu->D & 0xFF) { cpu->cycles += 1;" in src
+    assert "if (cpu_D() & 0xFF) { cpu->cycles += 1;" in src
     # Axis-5: the static block charge is region-weighted into master_cycles.
     # The same bank-0 body can execute through its FastROM bank-80 mirror.
-    charge = "cpu->master_cycles += 11 * ((g_memsel && (cpu->PB & 0x80)) ? 6 : 8);"
+    charge = "cpu->master_cycles += 11 * ((g_memsel && (cpu_PB() & 0x80)) ? 6 : 8);"
     assert charge in src, src
     assert src.index(
         "cpu->coprocessor_master_cycles = cpu->master_cycles;"
@@ -60,14 +60,14 @@ def test_dp_dynamic_charge_emitted():
     rom = make_lorom_bank0({0x8000: bytes([0xA5, 0x00, 0x60])})
     src = emit_function(rom, bank=0, start=0x8000, entry_m=1, entry_x=1)
     # The runtime D.l!=0 charge bumps both cycles and the region-weighted master.
-    assert "if (cpu->D & 0xFF) { cpu->cycles += 1; cpu->master_cycles += ((g_memsel && (cpu->PB & 0x80)) ? 6 : 8); }" in src, src
+    assert "if (cpu_D() & 0xFF) { cpu->cycles += 1; cpu->master_cycles += ((g_memsel && (cpu_PB() & 0x80)) ? 6 : 8); }" in src, src
 
 
 def test_abs_x_page_cross_dynamic_charge_emitted():
     # LDA $1234,X (read) ; RTS — page-cross charge uses the static base $1234.
     rom = make_lorom_bank0({0x8000: bytes([0xBD, 0x34, 0x12, 0x60])})
     src = emit_function(rom, bank=0, start=0x8000, entry_m=1, entry_x=1)
-    assert "0x1234 & 0xFF00" in src and "+ cpu->X) & 0xFF00)" in src, src
+    assert "0x1234 & 0xFF00" in src and "+ cpu_X()) & 0xFF00)" in src, src
     assert "/* abs,X read page-cross */" in src
 
 
@@ -119,7 +119,7 @@ def test_master_cycles_region_weighted_static_charge():
     rom = make_lorom_bank0({0x8000: bytes([0xA9, 0x05, 0x60])})
     src = emit_function(rom, bank=0, start=0x8000, entry_m=1, entry_x=1)
     assert "cpu->cycles += 8;" in src, src
-    assert "cpu->master_cycles += 8 * ((g_memsel && (cpu->PB & 0x80)) ? 6 : 8);" in src, src
+    assert "cpu->master_cycles += 8 * ((g_memsel && (cpu_PB() & 0x80)) ? 6 : 8);" in src, src
     # Every static cpu->cycles charge has exactly one master partner (no orphan).
     cyc = re.findall(r'^\s*cpu->cycles \+= (\d+);\s*$', src, re.M)
     mas = re.findall(r'^\s*cpu->master_cycles \+= (\d+) \* [^;]+;\s*$', src, re.M)

@@ -143,15 +143,15 @@ static int fails;
     __FILE__, __LINE__, #c); fails++; } } while (0)
 
 static void call(RecompReturn (*fn)(CpuState *)) {
-  CpuState cpu;
-  memset(&cpu, 0, sizeof cpu);
+  
+  memset(&g_cpu, 0, sizeof g_cpu);
   memset(g_ram, 0, sizeof g_ram);
-  cpu.ram = g_ram;
-  cpu.S = 0x01FF; cpu.m_flag = 1; cpu.x_flag = 1; cpu.P = 0x30;
+  g_cpu.ram = g_ram;
+  cpu_set_S(0x01FF); cpu_set_m_flag(1); cpu_set_x_flag(1); cpu_set_P(0x30);
   g_tc_valid = 0; g_recomp_stack_top = 0;
-  cpu_push_jsr_return_frame(&cpu);
-  fn(&cpu);
-  CHECK(cpu.S == 0x01FF);
+  cpu_push_jsr_return_frame(&g_cpu);
+  fn(&g_cpu);
+  CHECK(cpu_S() == 0x01FF);
 }
 
 int main(void) {
@@ -265,7 +265,7 @@ uint8 cpu_read8(CpuState *cpu, uint8 bank, uint16 addr) {{
   return g_ram[addr];
 }}
 void BeforeOperand(const CpuState *cpu, uint32 pc24) {{
-  if (pc24 != 0x{bank:02X}8002 || cpu->{reg} != 0x35 ||
+  if (pc24 != 0x{bank:02X}8002 || cpu_{reg}() != 0x35 ||
       g_ram[0x40] != 1 || reads != 0) abort();
   hooks++;
 }}
@@ -274,20 +274,20 @@ void BeforeOperand(const CpuState *cpu, uint32 pc24) {{
 int main(void) {{
   /* Both runs execute the same compiled function against different ROM data. */
   for (unsigned pass = 0; pass < 2; pass++) {{
-    CpuState cpu;
-    memset(&cpu, 0, sizeof cpu);
+    
+    memset(&g_cpu, 0, sizeof g_cpu);
     memset(g_ram, 0, sizeof g_ram);
-    cpu.ram = g_ram;
-    cpu.S = 0x01FF; cpu.m_flag = {m}; cpu.x_flag = {x};
-    cpu.P = {(m << 5) | (x << 4)}; cpu.DB = 0x7E;
-    cpu.{reg} = 0x35;
+    g_cpu.ram = g_ram;
+    cpu_set_S(0x01FF); cpu_set_m_flag({m}); cpu_set_x_flag({x});
+    cpu_set_P({(m << 5) | (x << 4)}); cpu_set_DB(0x7E);
+    cpu_set_{reg}(0x35);
     reads = hooks = bad_bank = 0;
     patched = pass == 0 ? 0x1242 : 0x2363;
-    cpu_push_jsr_return_frame(&cpu);
-    Patched_M{m}X{x}(&cpu);
+    cpu_push_jsr_return_frame(&g_cpu);
+    Patched_M{m}X{x}(&g_cpu);
     unsigned want = {'(patched & 0xFF)' if narrow else 'patched'};
-    if (cpu.{reg} != want || reads != {1 if narrow else 2} || bad_bank ||
-        hooks != 1 || cpu.S != 0x01FF || g_other_exits) return 1;
+    if (cpu_{reg}() != want || reads != {1 if narrow else 2} || bad_bank ||
+        hooks != 1 || cpu_S() != 0x01FF || g_other_exits) return 1;
   }}
   puts("ok");
   return 0;

@@ -57,8 +57,8 @@ def test_pha_rts_stack_dispatch_replaces_fake_return_push():
     )
 
     assert 'RTS-stack dispatch terminator: cfg-resolved target list' in src
-    assert 'cpu->Y & 0xFFFF) / 2' in src
-    assert 'cpu->P = (uint8)(cpu->P | 0x30)' in src
+    assert 'cpu_Y() & 0xFFFF) / 2' in src
+    assert 'cpu_set_P((uint8)(cpu_P() | 0x30))' in src
     assert 'bank_00_9000_M1X1(cpu)' in src
     assert 'bank_00_9100_M1X1(cpu)' in src
     assert 'bank_00_9000_M0X0(cpu)' not in src
@@ -94,7 +94,7 @@ def test_pha_rts_dispatch_missing_exact_target_uses_lle():
 
     assert 'bank_00_9000_M1X1(cpu)' in src
     assert 'bank_00_9100_M1X1(cpu)' not in src
-    assert ('interp_tier_dispatch_tail(cpu, (((uint32)cpu->PB << 16) | 0x9100u)' in src
+    assert ('interp_tier_dispatch_tail(cpu, (((uint32)cpu_PB() << 16) | 0x9100u)' in src
             and 'authoritative LLE M1X1' in src)
 
 
@@ -129,7 +129,7 @@ def test_pei_rts_stack_dispatch_is_same_function_goto_and_preserves_mx():
     )
 
     assert 'PEI(dp); RTS consumes target-1 as an internal goto' in src
-    assert 'cpu->D + 0x0010' in src
+    assert 'cpu_D() + 0x0010' in src
     assert 'case 0x8100: goto L_8100_M1X0;' in src
     assert 'L_8100_M1X0:' in src
     assert 'CPU_STACK_OP_PEI' not in src

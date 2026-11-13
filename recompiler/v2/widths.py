@@ -63,35 +63,35 @@ def masked(expr: str, width: int) -> str:
     ALU/shift/compare/bit-test).
 
     Concrete bug class this prevents: 8-bit shifts/ALU ops on
-    `cpu->A` leaking the B-register byte (high half) into the result.
+    `cpu_A()` leaking the B-register byte (high half) into the result.
     """
     return f"({expr} & {op_mask(width)})"
 
 
 def set_nz(src_expr: str, width: int) -> List[str]:
-    """Emit the canonical N/Z mirror update PLUS the cpu->P refresh.
+    """Emit the canonical N/Z mirror update PLUS the cpu_P() refresh.
 
     Replaces the duplicated N/Z tail in _emit_alu / _emit_shift /
     _emit_incmem / _emit_increg / _emit_pullreg / _emit_transfer.
 
-    Includes the `cpu->P` packed-flag update. The earlier asymmetry
-    (where some emitters set mirrors but not cpu->P) was load-bearing
+    Includes the `cpu_P()` packed-flag update. The earlier asymmetry
+    (where some emitters set mirrors but not cpu_P()) was load-bearing
     only because cpu_p_to_mirrors at the next REP/SEP would re-sync —
     but that is exactly what produced the SEP/REP-clobber bug fixed
-    in 44c96a7. Always updating cpu->P here keeps the packed/mirror
+    in 44c96a7. Always updating cpu_P() here keeps the packed/mirror
     pair coherent without relying on the next REP/SEP to flush it.
     """
     sign = sign_bit(width)
     return [
         f"cpu->_flag_Z = (({src_expr}) == 0) ? 1 : 0;",
         f"cpu->_flag_N = ((({src_expr}) & {sign}) != 0) ? 1 : 0;",
-        "cpu->P = (uint8)((cpu->P & ~0x82) | "
-        "(cpu->_flag_Z ? 0x02 : 0) | (cpu->_flag_N ? 0x80 : 0));",
+        "cpu_set_P((uint8)((cpu_P() & ~0x82) | "
+        "(cpu->_flag_Z ? 0x02 : 0) | (cpu->_flag_N ? 0x80 : 0)));",
     ]
 
 
 def set_nz_no_p(src_expr: str, width: int) -> List[str]:
-    """Same as set_nz but omits the cpu->P update.
+    """Same as set_nz but omits the cpu_P() update.
 
     Some emitters intentionally update mirrors and defer the P flush
     to a containing helper that does multiple flag updates in

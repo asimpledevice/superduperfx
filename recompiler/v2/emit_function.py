@@ -175,19 +175,19 @@ def _dynamic_charge_lines(insn, speed_expr: str = "8") -> List[str]:
     out: List[str] = []
     if 'dp' in charges:
         out.append(
-            f"if (cpu->D & 0xFF) {{ cpu->cycles += 1; "
+            f"if (cpu_D() & 0xFF) {{ cpu->cycles += 1; "
             f"cpu->master_cycles += {speed_expr}; }}  /* D.l != 0 */")
     if 'xcross' in charges:
         mode = getattr(insn, 'mode', None)
         base = getattr(insn, 'operand', 0) & 0xFFFF
         if mode == _MODE_ABS_X:
             out.append(
-                f"if ((0x{base:04X} & 0xFF00) != ((0x{base:04X} + cpu->X) & 0xFF00))"
+                f"if ((0x{base:04X} & 0xFF00) != ((0x{base:04X} + cpu_X()) & 0xFF00))"
                 f" {{ cpu->cycles += 1; cpu->master_cycles += {speed_expr}; }}"
                 f"  /* abs,X read page-cross */")
         elif mode == _MODE_ABS_Y:
             out.append(
-                f"if ((0x{base:04X} & 0xFF00) != ((0x{base:04X} + cpu->Y) & 0xFF00))"
+                f"if ((0x{base:04X} & 0xFF00) != ((0x{base:04X} + cpu_Y()) & 0xFF00))"
                 f" {{ cpu->cycles += 1; cpu->master_cycles += {speed_expr}; }}"
                 f"  /* abs,Y read page-cross */")
         # INDIR_Y (dp),Y: effective pointer is loaded at runtime from DP — not
@@ -204,7 +204,7 @@ def _stack_width_for_xy(insn) -> int:
 
 
 def _stack_delta_for_trampoline_scan(di: DecodedInsn) -> Optional[int]:
-    """Return local cpu->S delta for stack ops.
+    """Return local cpu_S() delta for stack ops.
 
     Positive means bytes pushed below entry S; negative means bytes
     pulled. JSR/JSL/RTS/RTL stay zero because v2 uses the host C stack
@@ -314,15 +314,15 @@ def scan_tail_call_stack_delta(
         callee_exit_mx=None,
         callee_exit_mx_modes=None,
 ) -> Dict[int, int]:
-    """Compute the net cpu->S delta at every same-bank tail-call exit.
+    """Compute the net cpu_S() delta at every same-bank tail-call exit.
 
     Decodes the function, runs a stack-height dataflow identical to
     _classify_trampoline_returns, and records the accumulated delta at
     each block exit whose successor PC is in `sibling_entry_pcs`.
 
-    Returns {target_pc16: delta} where delta > 0 means net push (cpu->S
+    Returns {target_pc16: delta} where delta > 0 means net push (cpu_S()
     decreased from entry — the typical PHB/PHK-then-PLB pattern).  The
-    callee at target_pc16 should record `_entry_s = cpu->S + delta` so
+    callee at target_pc16 should record `_entry_s = cpu_S() + delta` so
     the host-return check passes after the callee's matching PLB epilogue.
 
     Only entries where ALL control-flow paths agree on the same non-zero
@@ -430,15 +430,15 @@ def scan_rts_stack_deltas(
         callee_exit_mx=None,
         callee_exit_mx_modes=None,
 ) -> Optional[int]:
-    """Compute the net cpu->S delta from function entry to all RTS/RTL exits.
+    """Compute the net cpu_S() delta from function entry to all RTS/RTL exits.
 
     Returns the single agreed-upon delta if ALL RTL/RTS exits in the
     function observe the same deterministic stack height, or None if
     any exit is indeterminate (TCS/TXS) or the exits disagree.
 
-    delta > 0 means net push (cpu->S decreased from entry — e.g. PHB at
+    delta > 0 means net push (cpu_S() decreased from entry — e.g. PHB at
     entry that isn't matched by PLB before RTL).
-    delta < 0 means net pop  (cpu->S increased from entry — e.g. PLB
+    delta < 0 means net pop  (cpu_S() increased from entry — e.g. PLB
     before RTL restoring a PHB pushed by the tail-call caller).
     delta = 0 means stack-balanced (standard case).
     """
@@ -575,7 +575,7 @@ def emit_function(rom: bytes, bank: int, start: int,
             f"  RecompStackPush(\"{variant_name}\");",
             f"  cpu_dbg_funcname(\"{variant_name}\");",
             f"  cpu_trace_func_entry(cpu, 0x{pc24:06X}, \"{variant_name}\");",
-            "  uint16 _entry_s = cpu->S;",
+            "  uint16 _entry_s = cpu_S();",
             "  uint8 _hrv = cpu->host_return_valid;",
             "  if (cpu_take_tailcall_return_context(&_entry_s, &_hrv)) {",
             "    cpu->host_return_valid = _hrv;",
@@ -584,7 +584,7 @@ def emit_function(rom: bytes, bank: int, start: int,
             "  if (_hrv == 2) {",
             "    uint16 _host_rpcl = cpu_read8(cpu, 0x00, (uint16)(_entry_s + 1u));",
             "    uint16 _host_rpch = cpu_read8(cpu, 0x00, (uint16)(_entry_s + 2u));",
-            "    _host_return_pc24 = ((uint32)cpu->PB << 16) |",
+            "    _host_return_pc24 = ((uint32)cpu_PB() << 16) |",
             "        (uint16)((((_host_rpch << 8) | _host_rpcl) + 1u) & 0xFFFFu);",
             "  }",
             f"  cpu_trace_block(cpu, 0x{pc24:06X});",
@@ -592,12 +592,12 @@ def emit_function(rom: bytes, bank: int, start: int,
             f"  if (!{upload_helper}(cpu)) {{",
             f"    fprintf(stderr, \"[apu] {base_func_name} HLE upload failed\\n\");",
             "  }",
-            "  { uint16 _ret_s = cpu->S;  /* HLE SPC upload RTS pop hardware return frame */",
-            "    cpu->S = (uint16)(cpu->S + 1);",
-            "    uint16 _rpcl = (uint16)cpu_read8(cpu, 0x00, cpu->S);",
-            "    cpu->S = (uint16)(cpu->S + 1);",
-            "    uint16 _rpch = (uint16)cpu_read8(cpu, 0x00, cpu->S);",
-            "    uint8 _rpb = cpu->PB;",
+            "  { uint16 _ret_s = cpu_S();  /* HLE SPC upload RTS pop hardware return frame */",
+            "    cpu_set_S((uint16)(cpu_S() + 1));",
+            "    uint16 _rpcl = (uint16)cpu_read8(cpu, 0x00, cpu_S());",
+            "    cpu_set_S((uint16)(cpu_S() + 1));",
+            "    uint16 _rpch = (uint16)cpu_read8(cpu, 0x00, cpu_S());",
+            "    uint8 _rpb = cpu_PB();",
             "    uint32 _rpc = (uint32)((((_rpch << 8) | _rpcl) + 1) & 0xFFFFu);",
             "    uint32 _rpc24 = ((uint32)_rpb << 16) | _rpc;",
             "#if SNESRECOMP_TRACE",
@@ -612,7 +612,7 @@ def emit_function(rom: bytes, bank: int, start: int,
             "        cpu_trace_mark_nlr_exit(BD_EXIT_KIND_TRAMPOLINE);",
             "        RecompStackPop();",
             "        return (RecompReturn)_anc_skip;  /* HLE RTS return-to-ancestor */ }",
-            "      if (interp_bridge_return_targets_owner(_ret_s, cpu->S)) {",
+            "      if (interp_bridge_return_targets_owner(_ret_s, cpu_S())) {",
             "        cpu_trace_mark_nlr_exit(BD_EXIT_KIND_TRAMPOLINE);",
             "        RecompStackPopYield();",
             "        return interp_bridge_lle_yield_unwind(cpu, _rpc24);  /* HLE RTS return-to-interpreter-owner */ }",
@@ -1680,7 +1680,7 @@ def emit_function(rom: bytes, bank: int, start: int,
                                     # asm did) — that caller's JSL
                                     # wrapper restores PB itself.
                                     lines.append(
-                                        f"cpu->PB = 0x{tgt_bank:02X}; /* JML "
+                                        f"cpu_set_PB(0x{tgt_bank:02X}); /* JML "
                                         f"into bank ${tgt_bank:02X} */"
                                     )
                                     if exact_aot:
@@ -1764,7 +1764,7 @@ def emit_function(rom: bytes, bank: int, start: int,
                                         f"bank_{tgt_bank:02X}_{tgt16:04X}"
                                     )
                                     lines.append(
-                                        f"cpu->PB = 0x{tgt_bank:02X}; /* JML "
+                                        f"cpu_set_PB(0x{tgt_bank:02X}); /* JML "
                                         f"into bank ${tgt_bank:02X} */"
                                     )
                                     if exact_aot:
@@ -1859,7 +1859,7 @@ def emit_function(rom: bytes, bank: int, start: int,
                                             f"  uint8 _disp_bank = cpu_read8(cpu, 0x00, 0x{(ptr + 2) & 0xFFFF:04x});")
                                         target_expr = "((uint32)_disp_bank << 16) | _disp_lo"
                                     else:
-                                        target_expr = "((uint32)cpu->PB << 16) | _disp_lo"
+                                        target_expr = "((uint32)cpu_PB() << 16) | _disp_lo"
                                     lines.append(
                                         f"  uint32 _disp_ret = 0x{((bank << 16) | ret_pc):06x}u;")
                                     lines.append(
@@ -2039,7 +2039,7 @@ def emit_function(rom: bytes, bank: int, start: int,
             elif (len(succs) > 1 and pairs
                   and (pairs[-1][0].mnem in ('JSR', 'JSL')
                        or getattr(pairs[-1][0], 'dispatch_call', False))):
-                lines.append("switch (((cpu->m_flag & 1) << 1) | (cpu->x_flag & 1)) {")
+                lines.append("switch (((cpu_m_flag() & 1) << 1) | (cpu_x_flag() & 1)) {")
                 seen_mx = set()
                 fallback_stmt = None
                 for succ in succs:
@@ -2185,10 +2185,10 @@ def emit_function(rom: bytes, bank: int, start: int,
     elif entry_s_offset:
         sign = '+' if entry_s_offset > 0 else '-'
         src.append(
-            f'  uint16 _entry_s = (uint16)(cpu->S {sign} {abs(entry_s_offset)}u);'
+            f'  uint16 _entry_s = (uint16)(cpu_S() {sign} {abs(entry_s_offset)}u);'
             f'  /* entry_s_offset:{entry_s_offset} — caller left stack imbalanced */')
     else:
-        src.append(f'  uint16 _entry_s = cpu->S;')
+        src.append(f'  uint16 _entry_s = cpu_S();')
     # Option-1 cpu->S return-frame ABI (see docs/MULTI_TIER.md): capture whether
     # a paired host-C caller exists at entry. RTS/RTL may host-return NORMAL
     # only when _hrv==1 AND the stack is balanced (cpu->S == _entry_s);
@@ -2221,7 +2221,7 @@ def emit_function(rom: bytes, bank: int, start: int,
         src.append(f'  if (_hrv == 2 || _hrv == 3) {{')
         src.append(f'    uint16 _host_rpcl = cpu_read8(cpu, 0x00, (uint16)(_entry_s + 1u));')
         src.append(f'    uint16 _host_rpch = cpu_read8(cpu, 0x00, (uint16)(_entry_s + 2u));')
-        src.append(f'    uint8 _host_rpb = (_hrv == 3) ? cpu_read8(cpu, 0x00, (uint16)(_entry_s + 3u)) : cpu->PB;')
+        src.append(f'    uint8 _host_rpb = (_hrv == 3) ? cpu_read8(cpu, 0x00, (uint16)(_entry_s + 3u)) : cpu_PB();')
         # A callee that consumes N inline argument bytes rewrites its own return
         # frame (`LDA 3,S; ADC #N; STA 3,S`) and returns N bytes past the call.
         # Its callers already continue there (the analyzer's inline-argument
@@ -2270,7 +2270,7 @@ def emit_function(rom: bytes, bank: int, start: int,
         # and the static charge below are one call (cpu_lean_access.h), in
         # that order; a yield skips the store and the charge, as here.
         merged = (lean and not sa1 and block_pc24 not in hook_by_pc24 and
-                  (_spd_const is not None or _spd_expr == '(uint32)g_code_speed[cpu->PB >> 7]'))
+                  (_spd_const is not None or _spd_expr == '(uint32)g_code_speed[cpu_PB() >> 7]'))
         if merged:
             pc16 = f'0x{block_pc24 & 0xFFFF:04x}u'
             if _spd_const is not None:
@@ -2357,7 +2357,7 @@ def emit_function(rom: bytes, bank: int, start: int,
         src.append("  if (0) {")
         src.append("  _lle_yield:")
         src.append("    RecompStackPopYield();")
-        src.append("    return interp_bridge_lle_yield_unwind(cpu, ((uint32)cpu->PB << 16) | _yield_pc);")
+        src.append("    return interp_bridge_lle_yield_unwind(cpu, ((uint32)cpu_PB() << 16) | _yield_pc);")
         src.append("  }")
     # Defensive trailing return so a missing terminator doesn't fall off
     # the end of the function in the C compiler's view.

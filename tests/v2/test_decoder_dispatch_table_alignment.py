@@ -129,9 +129,9 @@ def test_codegen_subtracts_the_bias_from_the_index_register():
         dispatch_kind='short', dispatch_idx_reg='X', dispatch_table_bases=(),
         dispatch_index_bias=1, dispatch_call=True)
     body = '\n'.join(_emit_indirect_dispatch(insn))
-    assert '(uint16)(cpu->X - 1)' in body, body
-    assert 'cpu->X & 0xFFFF) / 2' not in body, body
+    assert '(uint16)(cpu_X() - 1)' in body, body
+    assert 'cpu_X() & 0xFFFF) / 2' not in body, body
 
     insn.dispatch_index_bias = 0
     body = '\n'.join(_emit_indirect_dispatch(insn))
-    assert '(cpu->X & 0xFFFF) / 2' in body, body
+    assert '(cpu_X() & 0xFFFF) / 2' in body, body

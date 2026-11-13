@@ -163,15 +163,15 @@ static void run_one(const OpTest *op, const St *st, Interp816 *ip) {
 
     /* recomp side */
     memset(&g_cpu, 0, sizeof g_cpu);
-    g_cpu.ram = RAM; g_cpu.A = st->a; g_cpu.X = xv; g_cpu.Y = yv;
-    g_cpu.S = st->s; g_cpu.D = st->d; g_cpu.DB = st->db; g_cpu.PB = 0;
-    g_cpu.m_flag = op->m; g_cpu.x_flag = op->x; g_cpu.emulation = 0;
+    g_cpu.ram = RAM; cpu_set_A(st->a); cpu_set_X(xv); cpu_set_Y(yv);
+    cpu_set_S(st->s); cpu_set_D(st->d); cpu_set_DB(st->db); cpu_set_PB(0);
+    cpu_set_m_flag(op->m); cpu_set_x_flag(op->x); cpu_set_emulation(0);
     g_cpu._flag_C = st->C; g_cpu._flag_Z = st->Z; g_cpu._flag_V = st->V;
     g_cpu._flag_N = st->N; g_cpu._flag_D = st->D; g_cpu._flag_I = st->I;
     g_cpu.host_return_valid = 0;
     cpu_mirrors_to_p(&g_cpu);
     op->fn(&g_cpu);
-    g_cpu.S = (uint16)(g_cpu.S - 2);  /* undo the RTS frame pop */
+    cpu_set_S((uint16)(cpu_S() - 2));  /* undo the RTS frame pop */
 
     /* interp816 side: same state, one opcode */
     ip->a = st->a; ip->x = xv; ip->y = yv; ip->sp = st->s; ip->dp = st->d;
@@ -186,12 +186,12 @@ static void run_one(const OpTest *op, const St *st, Interp816 *ip) {
     char msg[256] = {0};
 #define CK(field, rv, iv) do { if ((rv) != (iv)) { bad = 1; \
     snprintf(msg + strlen(msg), sizeof msg - strlen(msg), " " field "=%X/%X", (unsigned)(rv), (unsigned)(iv)); } } while (0)
-    CK("A", g_cpu.A, ip->a); CK("X", g_cpu.X, ip->x); CK("Y", g_cpu.Y, ip->y);
-    CK("S", g_cpu.S, ip->sp); CK("D", g_cpu.D, ip->dp); CK("DB", g_cpu.DB, ip->db);
+    CK("A", cpu_A(), ip->a); CK("X", cpu_X(), ip->x); CK("Y", cpu_Y(), ip->y);
+    CK("S", cpu_S(), ip->sp); CK("D", cpu_D(), ip->dp); CK("DB", cpu_DB(), ip->db);
     CK("C", g_cpu._flag_C, ip->c); CK("Z", g_cpu._flag_Z, ip->z);
     CK("V", g_cpu._flag_V, ip->v); CK("N", g_cpu._flag_N, ip->n);
-    CK("Df", g_cpu._flag_D, ip->d); CK("M", g_cpu.m_flag, ip->mf);
-    CK("Xf", g_cpu.x_flag, ip->xf);
+    CK("Df", g_cpu._flag_D, ip->d); CK("M", cpu_m_flag(), ip->mf);
+    CK("Xf", cpu_x_flag(), ip->xf);
     /* diff the memory window for store/RMW ops (skip $8000-2: the opcode bytes) */
     if (op->wmem) {
         uint32_t base = op->far ? FAR : WRAM, sz = op->far ? FSZ : WSZ;

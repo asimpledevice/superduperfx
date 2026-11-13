@@ -86,9 +86,9 @@ void debug_on_wram_write_word(uint32 addr, uint16 old_value, uint16 new_value) {
 
 static RecompReturn fake_aot(CpuState *cpu) {
     g_aot_calls++;
-    g_aot_pb = cpu->PB;
+    g_aot_pb = cpu_PB();
     g_aot_hrv = cpu->host_return_valid;
-    cpu->A++;
+    cpu_set_A(cpu_A() + 1);
     return g_aot_return;
 }
 
@@ -101,13 +101,13 @@ const unsigned g_dispatch_table_count =
 
 RecompReturn interp_tier_dispatch_popped_return(
     CpuState *cpu, uint32 target_pc24, uint32 site_pc24,
-    uint16 miss_restore_s) {
+    uint16 miss_restore_s) { (void)cpu;
     g_lle_calls++;
     g_lle_target = target_pc24;
     g_lle_site = site_pc24;
     g_lle_restore_s = miss_restore_s;
-    cpu->A += 0x100;
-    cpu->S += 2;  /* model the interpreted target consuming its RTS frame */
+    cpu_set_A(cpu_A() + (0x100));
+    cpu_set_S(cpu_S() + (2));  /* model the interpreted target consuming its RTS frame */
     return RECOMP_RETURN_NORMAL;
 }
 
@@ -130,7 +130,7 @@ static int check(int cond, const char *what) {
 }
 
 int main(void) {
-    CpuState cpu;
+    /* The runtime's one CPU state: the register accessors read g_cpu. */
     Snes snes;
     Cart cart;
     uint8 ram[0x20000];
@@ -149,7 +149,7 @@ int main(void) {
     g_snes = &snes;
     g_sram = sram;
     g_sram_size = (int)sizeof sram;
-    cpu_state_init(&cpu, ram);
+    cpu_state_init(&g_cpu, ram);
 
     cart.type = CART_SA1;
     cart.sa1 = sa1_create(g_test_rom, sizeof g_test_rom, sram, sizeof sram);
@@ -169,16 +169,16 @@ int main(void) {
 
     /* SMK indexes $7F:5000 by $FA78, carrying into unmapped $80:4A78.
      * Its final operand byte leaves $7F on the data bus. */
-    cpu.open_bus = 0x7f;
-    fails += check(cpu_read16(&cpu, 0x80, 0x4a78) == 0x7f7f,
+    g_cpu.open_bus = 0x7f;
+    fails += check(cpu_read16(&g_cpu, 0x80, 0x4a78) == 0x7f7f,
                    "unmapped word read retains the CPU data bus");
-    fails += check(cpu.open_bus == 0x7f,
+    fails += check(g_cpu.open_bus == 0x7f,
                    "unmapped word read leaves its high byte on the bus");
-    cpu_write8(&cpu, 0x7e, 0x1234, 0xa5);
-    fails += check(cpu.open_bus == 0xa5,
+    cpu_write8(&g_cpu, 0x7e, 0x1234, 0xa5);
+    fails += check(g_cpu.open_bus == 0xa5,
                    "byte write drives the CPU data bus");
-    cpu_write16(&cpu, 0x7e, 0x1234, 0x5aa5);
-    fails += check(cpu.open_bus == 0x5a,
+    cpu_write16(&g_cpu, 0x7e, 0x1234, 0x5aa5);
+    fails += check(g_cpu.open_bus == 0x5a,
                    "word write leaves its high byte on the CPU data bus");
 
     /* $F0:0000-$7FFF is LoROM SRAM but full-address HiROM ROM. The runtime
@@ -188,10 +188,10 @@ int main(void) {
     sram[0x09fe] = 0x34;
     sram[0x09ff] = 0x12;
     cart.type = CART_HIROM;
-    fails += check(cpu_read16(&cpu, 0xf0, 0x09fe) == 0x001c,
+    fails += check(cpu_read16(&g_cpu, 0xf0, 0x09fe) == 0x001c,
                    "HiROM low address reads ROM, not LoROM SRAM");
     cart.type = CART_LOROM;
-    fails += check(cpu_read16(&cpu, 0xf0, 0x09fe) == 0x1234,
+    fails += check(cpu_read16(&g_cpu, 0xf0, 0x09fe) == 0x1234,
                    "LoROM low address still reads SRAM");
     fails += check(cart_getRomPtr(&cart, 0xf0, 0x09fe) == NULL,
                    "LoROM direct ROM pointer rejects active SRAM window");
@@ -211,9 +211,9 @@ int main(void) {
     g_sram_size = 0x800;
     sram[0x0123] = 0x78;
     sram[0x0124] = 0x56;
-    fails += check(cpu_read16(&cpu, 0x20, 0x6123) == 0x5678,
+    fails += check(cpu_read16(&g_cpu, 0x20, 0x6123) == 0x5678,
                    "SHVC-1K1X SRAM uses the $20-$3F:$6000 window");
-    fails += check(cpu_read16(&cpu, 0xa0, 0x6923) == 0x5678,
+    fails += check(cpu_read16(&g_cpu, 0xa0, 0x6923) == 0x5678,
                    "SHVC-1K1X SRAM mirrors by address and bank");
     cart_write(&cart, 0x3f, 0x67ff, 0xa5);
     fails += check(cart_read(&cart, 0xbf, 0x6fff) == 0xa5,
@@ -247,73 +247,73 @@ int main(void) {
     fails += check(cart_getRomPtr(&cart, 0x20, 0x6000) == NULL,
                    "converted SMK keeps the DSP-1 SRAM window");
 
-    cpu_state_init(&cpu, ram);
-    cpu.S = 0x01f0;
-    cpu.emulation = false;
-    cpu.P = 0x34;
-    cpu_p_to_mirrors(&cpu);
-    cpu_push_interrupt_frame_at(&cpu, 0xabcdef);
-    fails += check(cpu.S == 0x01ec, "native interrupt frame consumes four bytes");
+    cpu_state_init(&g_cpu, ram);
+    cpu_set_S(0x01f0);
+    cpu_set_emulation(false);
+    cpu_set_P(0x34);
+    cpu_p_to_mirrors(&g_cpu);
+    cpu_push_interrupt_frame_at(&g_cpu, 0xabcdef);
+    fails += check(cpu_S() == 0x01ec, "native interrupt frame consumes four bytes");
     fails += check(ram[0x01f0] == 0xab && ram[0x01ef] == 0xcd &&
                        ram[0x01ee] == 0xef,
                    "interrupt frame preserves supplied 24-bit return PC");
     fails += check(ram[0x01ed] == 0x34,
                    "interrupt frame materializes processor status");
 
-    memset(&cpu, 0, sizeof cpu);
-    cpu.S = 0x1F0;
-    fails += check(cpu_dispatch_pc_from(&cpu, 0x008100u, 0x1F2, 0x008000u)
+    memset(&g_cpu, 0, sizeof g_cpu);
+    cpu_set_S(0x1F0);
+    fails += check(cpu_dispatch_pc_from(&g_cpu, 0x008100u, 0x1F2, 0x008000u)
                    == RECOMP_RETURN_NORMAL, "AOT return");
     fails += check(g_aot_calls == 1 && g_lle_calls == 0, "exact AOT selected");
-    fails += check(cpu.PB == 0x00 && cpu.A == 1, "AOT architectural state");
+    fails += check(cpu_PB() == 0x00 && cpu_A() == 1, "AOT architectural state");
 
-    memset(&cpu, 0, sizeof cpu);
-    cpu.S = 0x1E0;
-    fails += check(cpu_dispatch_pc_from(&cpu, 0x008200u, 0x1E5, 0x008010u)
+    memset(&g_cpu, 0, sizeof g_cpu);
+    cpu_set_S(0x1E0);
+    fails += check(cpu_dispatch_pc_from(&g_cpu, 0x008200u, 0x1E5, 0x008010u)
                    == RECOMP_RETURN_NORMAL, "LLE return");
     fails += check(g_lle_calls == 1, "known NULL row selected LLE");
     fails += check(g_lle_target == 0x008200u && g_lle_site == 0x008010u,
                    "LLE target and source");
     fails += check(g_lle_restore_s == 0x1E5, "LLE receives safe bail restore");
-    fails += check(cpu.S == 0x1E2 && cpu.A == 0x100, "LLE effects preserved");
+    fails += check(cpu_S() == 0x1E2 && cpu_A() == 0x100, "LLE effects preserved");
 
-    memset(&cpu, 0, sizeof cpu);
-    cpu.S = 0x1D0;
-    fails += check(cpu_dispatch_pc_from(&cpu, 0x008300u, 0x1D7, 0x008020u)
+    memset(&g_cpu, 0, sizeof g_cpu);
+    cpu_set_S(0x1D0);
+    fails += check(cpu_dispatch_pc_from(&g_cpu, 0x008300u, 0x1D7, 0x008020u)
                    == RECOMP_RETURN_NORMAL, "unknown return");
     fails += check(g_lle_calls == 1, "unknown continuation does not run LLE");
-    fails += check(cpu.S == 0x1D7, "unknown continuation restores stack");
+    fails += check(cpu_S() == 0x1D7, "unknown continuation restores stack");
 
-    memset(&cpu, 0, sizeof cpu);
-    cpu.S = 0x1C0;
-    fails += check(cpu_dispatch_pc_from(&cpu, 0x808100u, 0x1C2, 0x808000u)
+    memset(&g_cpu, 0, sizeof g_cpu);
+    cpu_set_S(0x1C0);
+    fails += check(cpu_dispatch_pc_from(&g_cpu, 0x808100u, 0x1C2, 0x808000u)
                    == RECOMP_RETURN_NORMAL, "mirror return");
     fails += check(g_aot_calls == 2, "LoROM mirror finds exact AOT");
-    fails += check(cpu.PB == 0x80, "requested mirror bank remains architectural PB");
+    fails += check(cpu_PB() == 0x80, "requested mirror bank remains architectural PB");
 
     /* Phantoon's PHK/PEA/JML crosses A0 -> A7. Its handler has a JMP
      * ($0012), so a stale caller PB executes unrelated ROM and crashes. */
     const DispatchEntry pushed[] = {{0x27808au, {fake_aot, NULL, NULL, NULL}, 0}};
     cpu_select_program(pushed, 1, NULL, 0);
-    cpu.PB = 0xa0;
+    cpu_set_PB(0xa0);
     uint32 continuation = 0xa0c284u;
-    fails += check(cpu_dispatch_call_pc_pushed(&cpu, 0xa7808au, 0xa0c292u,
+    fails += check(cpu_dispatch_call_pc_pushed(&g_cpu, 0xa7808au, 0xa0c292u,
                                                3, &continuation) == RECOMP_RETURN_NORMAL,
                    "pushed long call returns normally");
-    fails += check(g_aot_pb == 0xa7 && g_aot_hrv == 3 && cpu.PB == 0xa0,
+    fails += check(g_aot_pb == 0xa7 && g_aot_hrv == 3 && cpu_PB() == 0xa0,
                    "long call uses requested mirror PB and restores caller");
     fails += check(continuation == 0xa0c284u,
                    "normal AOT return keeps compiled continuation");
     g_aot_return = (RecompReturn)RECOMP_RETURN_LLE_UNWIND_BASE;
-    fails += check(cpu_dispatch_call_pc_pushed(&cpu, 0x27808au, 0xa0c292u,
+    fails += check(cpu_dispatch_call_pc_pushed(&g_cpu, 0x27808au, 0xa0c292u,
                                                3, &continuation) == g_aot_return,
                    "long call propagates LLE yield");
-    fails += check(g_aot_pb == 0x27 && cpu.PB == 0xa0,
+    fails += check(g_aot_pb == 0x27 && cpu_PB() == 0xa0,
                    "yield uses requested low bank and restores host caller");
     g_aot_return = RECOMP_RETURN_NORMAL;
-    cpu.PB = 0xa7;
-    cpu_dispatch_call_pc_pushed(&cpu, 0xa7808au, 0xa78000u, 2, &continuation);
-    fails += check(g_aot_pb == 0xa7 && g_aot_hrv == 2 && cpu.PB == 0xa7,
+    cpu_set_PB(0xa7);
+    cpu_dispatch_call_pc_pushed(&g_cpu, 0xa7808au, 0xa78000u, 2, &continuation);
+    fails += check(g_aot_pb == 0xa7 && g_aot_hrv == 2 && cpu_PB() == 0xa7,
                    "pushed near call retains caller PB");
     /* Full HiROM pairs share the entire ROM bank. Low/full aliases only
      * share bytes: a short jump below $8000 has different meaning. */
@@ -325,19 +325,19 @@ int main(void) {
     int previous_cart_type = cart.type;
     cart.type = CART_HIROM;
     cpu_select_program(hirom_entries, 3, NULL, 0);
-    fails += check(cpu_dispatch_has_entry(&cpu, 0x401000u),
+    fails += check(cpu_dispatch_has_entry(&g_cpu, 0x401000u),
                    "full HiROM lower-half mirror finds compiled entry");
-    fails += check(cpu_dispatch_has_entry(&cpu, 0x409000u),
+    fails += check(cpu_dispatch_has_entry(&g_cpu, 0x409000u),
                    "full HiROM upper-half mirror finds compiled entry");
-    fails += check(!cpu_dispatch_has_entry(&cpu, 0x009000u) &&
-                       !cpu_dispatch_has_entry(&cpu, 0x809000u),
+    fails += check(!cpu_dispatch_has_entry(&g_cpu, 0x009000u) &&
+                       !cpu_dispatch_has_entry(&g_cpu, 0x809000u),
                    "low HiROM banks cannot reuse a full-bank compiled body");
-    fails += check(!cpu_dispatch_has_entry(&cpu, 0x7E9000u),
+    fails += check(!cpu_dispatch_has_entry(&g_cpu, 0x7E9000u),
                    "WRAM never aliases bank FE code");
-    memset(&cpu, 0, sizeof cpu);
-    cpu.S = 0x1C0;
-    fails += check(cpu_dispatch_pc_from(&cpu, 0x401000u, 0x1C2, 0x409000u)
-                   == RECOMP_RETURN_NORMAL && cpu.PB == 0x40 && cpu.A == 1,
+    memset(&g_cpu, 0, sizeof g_cpu);
+    cpu_set_S(0x1C0);
+    fails += check(cpu_dispatch_pc_from(&g_cpu, 0x401000u, 0x1C2, 0x409000u)
+                   == RECOMP_RETURN_NORMAL && cpu_PB() == 0x40 && cpu_A() == 1,
                    "full HiROM mirror executes with requested architectural PB");
     --g_aot_calls;
     cart.type = previous_cart_type;
@@ -345,31 +345,31 @@ int main(void) {
 
     const DispatchEntry alternate[] = {{0x008300u, {NULL, NULL, NULL, NULL}, 3}};
     cpu_select_program(alternate, 1, NULL, 0);
-    fails += check(!cpu_dispatch_has_entry(&cpu, 0x008100u),
+    fails += check(!cpu_dispatch_has_entry(&g_cpu, 0x008100u),
                    "alternate program cannot reach stock AOT table");
     fails += check(cpu_dispatch_inline_arg_bytes(0x008300u) == 3,
                    "inline arguments use active program metadata");
     cpu_select_interpreted_program();
-    fails += check(!cpu_dispatch_has_entry(&cpu, 0x008100u) &&
-                   !cpu_dispatch_has_entry(&cpu, 0x008300u),
+    fails += check(!cpu_dispatch_has_entry(&g_cpu, 0x008100u) &&
+                   !cpu_dispatch_has_entry(&g_cpu, 0x008300u),
                    "uncompiled content reaches neither stock nor alternate AOT");
     fails += check(cpu_dispatch_inline_arg_bytes(0x008300u) == 0,
                    "uncompiled content inherits no native inline metadata");
     cpu_select_program(NULL, 0, NULL, 0);
-    fails += check(cpu_dispatch_has_entry(&cpu, 0x008100u),
+    fails += check(cpu_dispatch_has_entry(&g_cpu, 0x008100u),
                    "default program restores stock dispatch");
 
-    cpu_state_init(&cpu, ram);
+    cpu_state_init(&g_cpu, ram);
     cart.type = CART_LOROM;
-    cpu.open_bus = 0xa5;
-    fails += check(cpu_read8(&cpu, 0x1e, 0x7f99) == 0xa5,
+    g_cpu.open_bus = 0xa5;
+    fails += check(cpu_read8(&g_cpu, 0x1e, 0x7f99) == 0xa5,
                    "unmapped LoROM byte preserves open bus");
-    fails += check(cpu_read16(&cpu, 0x9e, 0x7f99) == 0xa5a5,
+    fails += check(cpu_read16(&g_cpu, 0x9e, 0x7f99) == 0xa5a5,
                    "unmapped mirrored LoROM word preserves latch");
     g_test_rom[0xf0000] = 0x3c;
-    fails += check(cpu_read16(&cpu, 0x1e, 0x7fff) == 0x3ca5,
+    fails += check(cpu_read16(&g_cpu, 0x1e, 0x7fff) == 0x3ca5,
                    "LoROM open bus to ROM word crosses mapping boundary");
-    fails += check(cpu.open_bus == 0x3c, "word high byte updates latch");
+    fails += check(g_cpu.open_bus == 0x3c, "word high byte updates latch");
 
     if (fails) return 1;
     puts("known_lle_entry_test: PASS");

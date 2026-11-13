@@ -24,7 +24,7 @@ Fix: when a JML targets a registered dispatch helper (which the
 classifier already detects), the codegen now:
   - skips emit for the immediately-preceding PHK/PEA/PER (trampoline
     setup that the runtime dispatcher would have consumed);
-  - synthesizes a switch over `cpu->A & 0xFF` calling each handler
+  - synthesizes a switch over `cpu_A() & 0xFF` calling each handler
     by name — a tail-call dispatch, terminator returning NORMAL.
 """
 from _helpers import make_lorom_bank0  # noqa: E402
@@ -115,12 +115,12 @@ def test_phk_per_jml_dispatcher_synthesizes_switch_and_skips_trampoline():
     )
     # The switch indexes `cpu->A & 0xFF` (the 8-bit selector left in A
     # after SEP+LDA+DEC).
-    assert '(uint16)(cpu->A & 0xFF)' in src or 'cpu->A & 0xFF' in src
+    assert '(uint16)(cpu_A() & 0xFF)' in src or 'cpu_A() & 0xFF' in src
 
     # Pre-fix gen ended with a literal PHK push: cpu_write8(cpu, 0x00,
     # cpu->S, (uint8)(cpu->PB)). After the fix the dispatcher's body
     # must not contain that raw PHK write, since PHK is skipped.
-    assert 'cpu_write8(cpu, 0x00, cpu->S, (uint8)(cpu->PB))' not in src, (
+    assert 'cpu_write8(cpu, 0x00, cpu_S(), (uint8)(cpu_PB()))' not in src, (
         f'raw PHK write should have been skipped; src=\n{src[:4000]}'
     )
 
@@ -140,7 +140,7 @@ def test_phk_per_jml_dispatcher_decrements_S_zero_times():
     # Count S-decrement statements outside the call_with_pb_save
     # block (which has its own bracketed scope per case body but does
     # NOT touch cpu->S — only cpu->PB).
-    decrements = src.count('cpu->S = (uint16)(cpu->S - 1)')
+    decrements = src.count('cpu_set_S((uint16)(cpu_S() - 1))')
     assert decrements == 0, (
         f'dispatcher must not push to simulated S after fix; '
         f'found {decrements} decrement(s)\n{src[:6000]}'
@@ -197,7 +197,7 @@ def test_phk_per_jml_dispatcher_tiers_manifest_lle_target_down():
     assert 'bank_00_C000_M1X1(cpu)' in src
     assert 'bank_00_C100_M1X1(cpu)' not in src
     assert (
-        'interp_tier_dispatch_tail(cpu, (((uint32)cpu->PB << 16) | 0xc100u), 0x00bfc5u, '
+        'interp_tier_dispatch_tail(cpu, (((uint32)cpu_PB() << 16) | 0xc100u), 0x00bfc5u, '
         '_entry_s, _hrv)' in src
     ), src
     assert 'authoritative LLE M1X1' in src

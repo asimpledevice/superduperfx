@@ -31,19 +31,19 @@ def test_direct_bounce_preserves_synthetic_call_continuation(tmp_path, far):
 int main(void) {
   const uint16 entries[] = {0x01fd, 0x0001};
   for (unsigned i = 0; i < 2; ++i) {
-    CpuState cpu = {0};
+    memset(&g_cpu, 0, sizeof g_cpu);
     memset(g_ram, 0, sizeof g_ram);
-    cpu.ram = g_ram; cpu.S = entries[i]; cpu.X = 1;
-    cpu.host_return_valid = 2; cpu.x_flag = 1; cpu.P = 0x10;
-    cpu_write16(&cpu, 0, (uint16)(cpu.S + 1), 0x8123);
+    g_cpu.ram = g_ram; cpu_set_S(entries[i]); cpu_set_X(1);
+    g_cpu.host_return_valid = 2; cpu_set_x_flag(1); cpu_set_P(0x10);
+    cpu_write16(&g_cpu, 0, (uint16)(cpu_S() + 1), 0x8123);
     other_exits = 0; ancestor_skip = -1;
-    ComputedCall_M0X1(&cpu);
+    ComputedCall_M0X1(&g_cpu);
     if (other_exits != 1 || other_target != TARGET ||
-        cpu.S != (uint16)(entries[i] - LOCALS) || g_recomp_stack_top != 0)
+        cpu_S() != (uint16)(entries[i] - LOCALS) || g_recomp_stack_top != 0)
       return 1;
-    if (cpu_read16(&cpu, 0, (uint16)(cpu.S + 1)) != 0x807f)
+    if (cpu_read16(&g_cpu, 0, (uint16)(cpu_S() + 1)) != 0x807f)
       return 2; /* continuation must still be on the guest stack */
-    if (cpu_read16(&cpu, 0, (uint16)(entries[i] + 1)) != 0x8123)
+    if (cpu_read16(&g_cpu, 0, (uint16)(entries[i] + 1)) != 0x8123)
       return 3; /* original interpreted caller is still above the continuation */
   }
   return 0;

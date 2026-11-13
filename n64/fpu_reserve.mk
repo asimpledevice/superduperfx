@@ -15,6 +15,13 @@ SDFX_FPU_FIXED := $(foreach r,$(SDFX_FPU_RESERVED),-ffixed-f$(r))
 SDFX_FPU_OWNERS := save_fpu_regs end_interrupt finalize_exception_frame end_exception_restore_all \
 	thread_park_swap thread_park_init
 
+# The 65816 registers' slots in CPUFPU=1 builds (runner/src/cpu_regs.h,
+# runner/src/fpu_slots.h): GCC global register variables, which any function
+# that includes cpu_regs.h may read and write. Code compiled without that
+# header cannot name them (-ffixed), so the check lets every function use
+# them in those builds only.
+SDFX_FPU_SHARED := 17 18 19 20 21 22 23 24
+
 # For scripts: make -s -f n64/fpu_reserve.mk print-fixed
 .PHONY: print-fixed print-reserved
 print-fixed: ; @echo '$(SDFX_FPU_FIXED)'

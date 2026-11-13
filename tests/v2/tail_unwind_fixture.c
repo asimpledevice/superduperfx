@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "cpu_state.h"
+CpuState g_cpu;
 #include "common_cpu_infra.h"
 
 #define RECOMP_STACK_DEPTH 64
@@ -32,7 +33,7 @@ static RecompReturn tail_owner(CpuState *cpu) {
 }
 
 RecompReturn TailTarget_M1X1(CpuState *cpu) {
-    uint16_t entry_s = cpu->S;
+    uint16_t entry_s = cpu_S();
     uint8_t hrv = cpu->host_return_valid;
     enter_frame(entry_s, hrv);
     if (!cpu_take_tailcall_return_context(&entry_s, &hrv)) abort();
@@ -40,14 +41,14 @@ RecompReturn TailTarget_M1X1(CpuState *cpu) {
     if (--remaining_tails > 0) return tail_owner(cpu);
     RecompReturn result = RECOMP_RETURN_NORMAL;
     switch (return_kind) {
-    case 0: cpu->S = 0x0197; break; /* RTS of inherited frame. */
+    case 0: cpu_set_S(0x0197); break; /* RTS of inherited frame. */
     case 1: /* PLA; RTS skips caller: resolve before RTS. */
-        cpu->S = 0x0199;
+        cpu_set_S(0x0199);
         result = (RecompReturn)cpu_resolve_ancestor_skip(0x0197);
         break;
     case 2: /* Interpreter already consumed the same RTS. */
-        cpu->S = 0x0199;
-        result = (RecompReturn)cpu_resolve_post_return_skip(cpu->S);
+        cpu_set_S(0x0199);
+        result = (RecompReturn)cpu_resolve_post_return_skip(cpu_S());
         break;
     case 3: result = (RecompReturn)sentinel; break;
     }
@@ -59,13 +60,13 @@ int main(void) {
     int failures = 0;
     for (int tails = 1; tails <= 3; ++tails) {
         for (return_kind = 0; return_kind <= 3; ++return_kind) {
-            CpuState cpu = {0}; cpu.S = 0x0195;
+            memset(&g_cpu, 0, sizeof g_cpu); cpu_set_S(0x0195);
             g_recomp_stack_top = 0;
             enter_frame(0x0199, 3); /* Root: JSL. */
             enter_frame(0x0197, 2); /* Caller: JSR. */
             enter_frame(0x0195, 2); /* Tail owner: JSR. */
             remaining_tails = tails;
-            RecompReturn result = tail_owner(&cpu);
+            RecompReturn result = tail_owner(&g_cpu);
             int expected = return_kind == 0 ? 0 : return_kind == 3 ? sentinel : 1;
             if ((int)result != expected || g_recomp_stack_top != 2) {
                 fprintf(stderr, "tails=%d kind=%d result=%d expected=%d depth=%d\n",
@@ -75,12 +76,12 @@ int main(void) {
             if (return_kind == 3) continue;
             /* An ordinary JSR caller consumes one SKIP; a tail must not. */
             if (result) result = (RecompReturn)((int)result - 1);
-            else cpu.S += 2;
+            else cpu_set_S(cpu_S() + (2));
             RecompStackPop();
             if (result != RECOMP_RETURN_NORMAL) ++failures;
-            else cpu.S += 3; /* Root continuation executes RTL exactly once. */
+            else cpu_set_S(cpu_S() + (3)); /* Root continuation executes RTL exactly once. */
             RecompStackPop();
-            if (cpu.S != 0x019C || g_recomp_stack_top != 0) ++failures;
+            if (cpu_S() != 0x019C || g_recomp_stack_top != 0) ++failures;
         }
     }
     /* A swallowed context must not turn an HLE attribution frame into an

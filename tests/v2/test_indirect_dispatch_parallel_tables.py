@@ -48,8 +48,8 @@ def test_parallel_byte_table_dispatch_uses_logical_index_register():
     )
 
     assert 'parallel byte tables: register already holds logical index' in src
-    assert 'uint16 _idx = (uint16)(cpu->Y & 0xFFFF)' in src
-    assert 'cpu->Y & 0xFFFF) / 3' not in src
+    assert 'uint16 _idx = (uint16)(cpu_Y() & 0xFFFF)' in src
+    assert 'cpu_Y() & 0xFFFF) / 3' not in src
     assert 'case 7:' in src
     assert 'bank_00_9700_M1X1(cpu)' in src
 
@@ -89,7 +89,7 @@ def test_plain_indirect_dispatch_switches_on_runtime_mx():
     )
 
     assert 'indirect dispatch terminator: cfg-resolved target list' in src
-    assert 'switch (((cpu->m_flag & 1) << 1) | (cpu->x_flag & 1))' in src
+    assert 'switch (((cpu_m_flag() & 1) << 1) | (cpu_x_flag() & 1))' in src
     for sfx in ("_M0X0", "_M0X1", "_M1X0", "_M1X1"):
         assert f'bank_00_9000{sfx}(cpu)' in src
 
@@ -140,11 +140,11 @@ def test_absolute_indirect_dispatch_switches_on_loaded_pointer():
     )
 
     assert 'absolute indirect dispatch: switch on the loaded pointer' in src
-    assert 'uint16 _target = cpu_read16(cpu, cpu->PB, (uint16)0x000e)' in src
+    assert 'uint16 _target = cpu_read16(cpu, cpu_PB(), (uint16)0x000e)' in src
     assert 'switch (_target)' in src
     assert 'case 0x9000:' in src
     assert 'case 0x9100:' in src
-    assert 'cpu->X & 0xFFFF) / 2' not in src
+    assert 'cpu_X() & 0xFFFF) / 2' not in src
 
 
 def test_absolute_indirect_long_dispatch_reads_24bit_pointer():
@@ -178,4 +178,4 @@ def test_absolute_indirect_long_dispatch_reads_24bit_pointer():
     assert 'uint8 _target_bank = cpu_read8(cpu, 0x00, (uint16)(0x0012 + 2));' in src
     assert 'uint32 _target = ((uint32)_target_bank << 16) | (uint32)_target_lo;' in src
     assert 'case 0x019000:' in src
-    assert 'uint16 _target = cpu_read16(cpu, cpu->PB, (uint16)0x0012)' not in src
+    assert 'uint16 _target = cpu_read16(cpu, cpu_PB(), (uint16)0x0012)' not in src

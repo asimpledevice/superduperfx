@@ -19,6 +19,7 @@ _RUNTIME = r'''
 #include "common_cpu_infra.h"
 
 uint8 g_ram[0x20000], g_memsel;
+CpuState g_cpu;
 const char *g_last_recomp_func;
 int g_recomp_stack_top;
 uint16_t g_cpu_entry_s[64];
@@ -77,32 +78,32 @@ RecompReturn interp_tier_dispatch_rewritten_return(CpuState *cpu,
 }
 RecompReturn interp_tier_dispatch_popped_return(CpuState *cpu,
     uint32 pc, uint32 site, uint16 restore) {
-  (void)site; other_exits++; other_target = pc; cpu->S = restore; return 0;
+  (void)site; other_exits++; other_target = pc; cpu_set_S(restore); return 0;
 }
 RecompReturn cpu_dispatch_pc_from(CpuState *cpu, uint32 pc,
     uint16 restore, uint32 site) {
-  (void)site; other_exits++; other_target = pc; cpu->S = restore; return 0;
+  (void)site; other_exits++; other_target = pc; cpu_set_S(restore); return 0;
 }
 
 GENERATED
 
 static int check(RecompReturn (*fn)(CpuState *), unsigned frame,
                  unsigned cleanup, uint16 entry, int skip, int rewrite) {
-  CpuState cpu = {0};
+  memset(&g_cpu, 0, sizeof g_cpu);
   memset(g_ram, 0, sizeof g_ram);
-  cpu.ram = g_ram; cpu.S = entry; cpu.host_return_valid = frame;
-  cpu_write16(&cpu, 0, (uint16)(entry + 1), 0x1234);
-  cpu_write16(&cpu, 0, (uint16)(entry + frame + 1), 0xabcd);
+  g_cpu.ram = g_ram; cpu_set_S(entry); g_cpu.host_return_valid = frame;
+  cpu_write16(&g_cpu, 0, (uint16)(entry + 1), 0x1234);
+  cpu_write16(&g_cpu, 0, (uint16)(entry + frame + 1), 0xabcd);
   other_exits = 0; ancestor_skip = skip;
-  RecompReturn result = fn(&cpu);
+  RecompReturn result = fn(&g_cpu);
   if (skip >= 0) {
     if (result != skip || other_exits) return 1;
   } else if (rewrite) {
     if (other_exits != 1 || other_target != 0x001236) return 2;
   } else {
-    if (result || other_exits || cpu.S != (uint16)(entry + frame + cleanup)) {
+    if (result || other_exits || cpu_S() != (uint16)(entry + frame + cleanup)) {
       fprintf(stderr, "frame=%u S=%04X expected=%04X exits=%d\n", frame,
-              cpu.S, (uint16)(entry + frame + cleanup), other_exits);
+              cpu_S(), (uint16)(entry + frame + cleanup), other_exits);
       return 3;
     }
   }

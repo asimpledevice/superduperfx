@@ -14,22 +14,25 @@ import re
 
 _K = r'(0x[0-9a-fA-F]+)'
 _CALL = re.compile(r'[A-Za-z_]\w*\s*\(')   # an identifier applied: a call
+# A register read (runner/src/cpu_regs.h) is a call in form only: it has no
+# side effects, so it does not order against anything.
+_REG_READ = re.compile(r'\bcpu_(A|X|Y|S|D|DB|PB|P|m_flag|x_flag|emulation)\(\)')
 
 
 def _value_ok(v: str) -> bool:
-    return _CALL.search(v) is None
+    return _CALL.search(_REG_READ.sub('r', v)) is None
 
 
 def _address_forms():
-    dbx = (r'\(uint8\)\(\(\(\(\(uint32\)cpu->DB << 16\) \+ \(uint32\)' + _K +
-           r' \+ \(uint32\)cpu->([XY])\)\) >> 16\), \(uint16\)\(\(\(\(uint32\)cpu->DB << 16\)'
-           r' \+ \(uint32\)\3 \+ \(uint32\)cpu->\4\)\)')
-    longx = (r'\(uint8\)\(\(\(\(uint32\)' + _K + r' \+ \(uint32\)cpu->X\)\) >> 16\), '
-             r'\(uint16\)\(\(\(uint32\)\3 \+ \(uint32\)cpu->X\)\)')
+    dbx = (r'\(uint8\)\(\(\(\(\(uint32\)cpu_DB\(\) << 16\) \+ \(uint32\)' + _K +
+           r' \+ \(uint32\)cpu_([XY])\(\)\)\) >> 16\), \(uint16\)\(\(\(\(uint32\)cpu_DB\(\) << 16\)'
+           r' \+ \(uint32\)\3 \+ \(uint32\)cpu_\4\(\)\)\)')
+    longx = (r'\(uint8\)\(\(\(\(uint32\)' + _K + r' \+ \(uint32\)cpu_X\(\)\)\) >> 16\), '
+             r'\(uint16\)\(\(\(uint32\)\3 \+ \(uint32\)cpu_X\(\)\)\)')
     return [
         # (address text after "cpu_<rw><w>(cpu, ", helper suffix)
-        (r'0x00, \(uint16\)\(cpu->D \+ ' + _K + r'\)', lambda m: 'dp'),
-        (r'0x00, \(uint16\)\(cpu->D \+ ' + _K + r' \+ cpu->X\)', lambda m: 'dpx'),
+        (r'0x00, \(uint16\)\(cpu_D\(\) \+ ' + _K + r'\)', lambda m: 'dp'),
+        (r'0x00, \(uint16\)\(cpu_D\(\) \+ ' + _K + r' \+ cpu_X\(\)\)', lambda m: 'dpx'),
         (dbx, lambda m: 'abs' + m.group(4)),
         (longx, lambda m: 'longx'),
     ]
@@ -37,9 +40,11 @@ def _address_forms():
 
 _FORMS = [(re.compile(r'cpu_(read|write)(8|16)\(cpu, ' + a + r'(\)|, )'), name)
           for a, name in _address_forms()]
-_PUSH = re.compile(r'cpu_write8\(cpu, 0x00, cpu->S, ([^;\n]*?)\);\s*cpu->S = \(uint16\)\(cpu->S - 1\);')
-_PULL = re.compile(r'cpu->S = \(uint16\)\(cpu->S \+ 1\);(\s*)([^;\n=]*?) = (\(uint\d+\))?'
-                   r'cpu_read8\(cpu, 0x00, cpu->S\);')
+_PUSH = re.compile(r'cpu_write8\(cpu, 0x00, cpu_S\(\), ([^;\n]*?)\);\s*cpu_set_S\(\(uint16\)\(cpu_S\(\) - 1\)\);')
+# A pull into a variable (`v = (cast)cpu_read8(...)`) or a register (`cpu_set_R(...)`).
+_PULL = re.compile(r'cpu_set_S\(\(uint16\)\(cpu_S\(\) \+ 1\)\);(\s*)(?:([^;\n=()]*?) = (\(uint\d+\))?'
+                   r'cpu_read8\(cpu, 0x00, cpu_S\(\)\);|cpu_set_(\w+)\((\(uint\d+\))?'
+                   r'cpu_read8\(cpu, 0x00, cpu_S\(\)\)\);)')
 
 
 def _call_end(s: str, start: int) -> int:
@@ -57,16 +62,16 @@ def _call_end(s: str, start: int) -> int:
     return i
 
 
-_SPD = r'\(uint32\)g_code_speed\[cpu->PB >> 7\]'
+_SPD = r'\(uint32\)g_code_speed\[cpu_PB\(\) >> 7\]'
 # A charge of N CPU cycles at the code-region speed, on one line (dynamic
 # charges) or two (a block's static charge when it is not merged).
 _CHARGE1 = re.compile(r'cpu->cycles \+= 1; cpu->master_cycles \+= ' + _SPD + ';')
 _CHARGEN = re.compile(r'cpu->cycles \+= (\d+);(\s*)cpu->master_cycles \+= (\d+) \* ' + _SPD + ';')
-_CHARGE_DL = re.compile(r'if \(cpu->D & 0xFF\) \{ cpu_charge\(cpu, 1u\); \}')
-_CHARGE_PAGE = re.compile(r'if \(\((0x[0-9a-fA-F]+) & 0x[fF]{2}00\) != \(\(\1 \+ cpu->([XY])\) & 0x[fF]{2}00\)\) '
+_CHARGE_DL = re.compile(r'if \(cpu_D\(\) & 0xFF\) \{ cpu_charge\(cpu, 1u\); \}')
+_CHARGE_PAGE = re.compile(r'if \(\((0x[0-9a-fA-F]+) & 0x[fF]{2}00\) != \(\(\1 \+ cpu_([XY])\(\)\) & 0x[fF]{2}00\)\) '
                           r'\{ cpu_charge\(cpu, 1u\); \}')
-_SYNC_P_NZ = ('cpu->P = (uint8)((cpu->P & ~0x82) | (cpu->_flag_Z ? 0x02 : 0) | '
-              '(cpu->_flag_N ? 0x80 : 0));')
+_SYNC_P_NZ = ('cpu_set_P((uint8)((cpu_P() & ~0x82) | (cpu->_flag_Z ? 0x02 : 0) | '
+              '(cpu->_flag_N ? 0x80 : 0)));')
 
 
 def _charges(src: str) -> str:
@@ -74,7 +79,7 @@ def _charges(src: str) -> str:
     src = _CHARGEN.sub(lambda m: (f'cpu_charge(cpu, {m.group(1)}u);' if m.group(1) == m.group(3)
                                   else m.group(0)), src)
     src = _CHARGE_DL.sub('cpu_charge_dl(cpu);', src)
-    src = _CHARGE_PAGE.sub(lambda m: f'cpu_charge_page(cpu, {m.group(1)}u, cpu->{m.group(2)});', src)
+    src = _CHARGE_PAGE.sub(lambda m: f'cpu_charge_page(cpu, {m.group(1)}u, cpu_{m.group(2)}());', src)
     return src.replace(_SYNC_P_NZ, 'cpu_sync_p_nz(cpu);')
 
 
@@ -107,5 +112,7 @@ def lean_rewrite(src: str) -> str:
         src = ''.join(out)
     src = _PUSH.sub(lambda m: (f'cpu_push8(cpu, {m.group(1)});' if _value_ok(m.group(1))
                                else m.group(0)), src)
-    src = _PULL.sub(lambda m: f'{m.group(1)}{m.group(2)} = {m.group(3) or ""}cpu_pull8(cpu);', src)
+    src = _PULL.sub(lambda m: (f'{m.group(1)}{m.group(2)} = {m.group(3) or ""}cpu_pull8(cpu);'
+                               if m.group(2) is not None else
+                               f'{m.group(1)}cpu_set_{m.group(4)}({m.group(5) or ""}cpu_pull8(cpu));'), src)
     return src

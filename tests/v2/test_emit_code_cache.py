@@ -92,15 +92,15 @@ RecompReturn cpu_unresolved_abandon_balanced(CpuState *cpu, uint32 site_pc24,
 static uint32_t size_of(const char *name) { (void)name; return 1000; }
 #define CalleeB_M1X1__rt bank_00_8010_M1X1__rt
 static int run(void) {
-  CpuState cpu;
-  memset(&cpu, 0, sizeof cpu);
+  
+  memset(&g_cpu, 0, sizeof g_cpu);
   memset(g_ram, 0, sizeof g_ram);
-  cpu.ram = g_ram;
-  cpu.S = 0x01FF; cpu.m_flag = 1; cpu.x_flag = 1; cpu.P = 0x30;
+  g_cpu.ram = g_ram;
+  cpu_set_S(0x01FF); cpu_set_m_flag(1); cpu_set_x_flag(1); cpu_set_P(0x30);
   g_tc_valid = 0; g_recomp_stack_top = 0;
-  cpu_push_jsr_return_frame(&cpu);
-  CallerA_M1X1(&cpu);
-  return g_ram[0x40] == 0x33 && cpu.S == 0x01FF;
+  cpu_push_jsr_return_frame(&g_cpu);
+  CallerA_M1X1(&g_cpu);
+  return g_ram[0x40] == 0x33 && cpu_S() == 0x01FF;
 }
 int main(void) {
   recomp_cache_set_size_hook(size_of);
@@ -116,12 +116,12 @@ int main(void) {
   /* Both idle now: a third routine needs the room, so the idle ones go,
    * least recently used (the caller) first. */
   {
-    CpuState cpu;
-    memset(&cpu, 0, sizeof cpu);
-    cpu.ram = g_ram; cpu.S = 0x01FF; cpu.m_flag = 1; cpu.x_flag = 0; cpu.P = 0x20;
+    
+    memset(&g_cpu, 0, sizeof g_cpu);
+    g_cpu.ram = g_ram; cpu_set_S(0x01FF); cpu_set_m_flag(1); cpu_set_x_flag(0); cpu_set_P(0x20);
     g_tc_valid = 0; g_recomp_stack_top = 0;
-    cpu_push_jsr_return_frame(&cpu);
-    bank_00_8010_M1X0(&cpu);
+    cpu_push_jsr_return_frame(&g_cpu);
+    bank_00_8010_M1X0(&g_cpu);
   }
   recomp_cache_stats(&st);
   if (st.loads != 3 || st.evictions != 2 || CallerA_M1X1__rt.fn || CalleeB_M1X1__rt.fn ||

@@ -188,6 +188,10 @@ N64_CFLAGS += -O2
 # BLUE=1: the 65816 runs on the Blue thread (runner/src/blue_thread.c), paused
 # at deadlines instead of unwound. Off by default for now.
 BLUE ?= 0
+# CPUFPU=1: the 65816 registers A..P live in reserved FPU registers
+# (runner/src/cpu_regs.h) instead of g_cpu. Off by default until measured.
+CPUFPU ?= 0
+N64_CFLAGS += -DSNESRECOMP_CPU_REGS_FPU=$(CPUFPU)
 N64_CFLAGS += -DSNESRECOMP_FAST_READ_MAP=1 -DSNESRECOMP_QUIESCENT_BACKEDGE=1 \
 	-DSNESRECOMP_LAZY_BEAM=1 -DSNESRECOMP_REVERSE_DEBUG=0 -DSNESRECOMP_INTERP_EDGE_TRACE=0 \
 	-DSNESRECOMP_WRAM_POLL_QUIESCENT=1 -DSNESRECOMP_PARK_TO_VBLANK=1 \
@@ -302,7 +306,8 @@ snesrecomp_interp.z64: $(BUILD_DIR)/fpu_reserved.check
 $(BUILD_DIR)/fpu_reserved.check: $(BUILD_DIR)/snesrecomp_interp.elf $(CC_MODOBJS) fpu_reserve.mk \
 		../tools/n64/check_fpu_reserved.py
 	@echo "    [FPUCHECK] $<"
-	@python3 ../tools/n64/check_fpu_reserved.py --objdump $(N64_OBJDUMP) $< $(CC_MODOBJS)
+	@python3 ../tools/n64/check_fpu_reserved.py --objdump $(N64_OBJDUMP) $(if $(filter 1,$(CPUFPU)),--shared) \
+		$< $(CC_MODOBJS)
 	@touch $@
 
 clean:

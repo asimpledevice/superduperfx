@@ -31,9 +31,11 @@ def test_x_flag_set_clears_index_high_bytes(tmp_path):
 #include "cpu_state.h"
 #include "cpu_trace.h"
 
+CpuState g_cpu;
+
 static int check(CpuState *cpu, unsigned x, unsigned y, const char *what) {{
-    if (cpu->X != x || cpu->Y != y) {{
-        printf("%s: X=%04X Y=%04X exp %04X/%04X\\n", what, cpu->X, cpu->Y, x, y);
+    if (cpu_X() != x || cpu_Y() != y) {{
+        printf("%s: X=%04X Y=%04X exp %04X/%04X\\n", what, cpu_X(), cpu_Y(), x, y);
         return 1;
     }}
     return 0;
@@ -44,20 +46,20 @@ static void xce(CpuState *cpu) {{
 }}
 
 int main(void) {{
-    CpuState c = {{0}};
+    memset(&g_cpu, 0, sizeof g_cpu);
     int fails = 0;
     /* SEP #$10 / PLP / RTI all end in cpu_p_to_mirrors. */
-    c.X = 0xF000; c.Y = 0x1234; c.P = 0x30;
-    cpu_p_to_mirrors(&c);
-    fails += check(&c, 0x0000, 0x0034, "x set");
+    cpu_set_X(0xF000); cpu_set_Y(0x1234); cpu_set_P(0x30);
+    cpu_p_to_mirrors(&g_cpu);
+    fails += check(&g_cpu, 0x0000, 0x0034, "x set");
     /* x clear keeps the 16-bit values. */
-    c.X = 0xF000; c.Y = 0x1234; c.P = 0x20;
-    cpu_p_to_mirrors(&c);
-    fails += check(&c, 0xF000, 0x1234, "x clear");
+    cpu_set_X(0xF000); cpu_set_Y(0x1234); cpu_set_P(0x20);
+    cpu_p_to_mirrors(&g_cpu);
+    fails += check(&g_cpu, 0xF000, 0x1234, "x clear");
     /* XCE into emulation forces x = 1. */
-    c.X = 0xABCD; c.Y = 0x5678; c.emulation = 0; c._flag_C = 1; c.x_flag = 0;
-    xce(&c);
-    fails += check(&c, 0x00CD, 0x0078, "xce");
+    cpu_set_X(0xABCD); cpu_set_Y(0x5678); cpu_set_emulation(0); g_cpu._flag_C = 1; cpu_set_x_flag(0);
+    xce(&g_cpu);
+    fails += check(&g_cpu, 0x00CD, 0x0078, "xce");
     return fails;
 }}
 '''

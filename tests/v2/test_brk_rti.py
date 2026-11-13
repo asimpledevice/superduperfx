@@ -62,20 +62,20 @@ def test_round_trip_is_compiled_and_falls_through():
     assert 'cpu_write8(cpu, 0x00, (uint16)(_s - 1), 0x80);' in src
     assert 'cpu_write8(cpu, 0x00, (uint16)(_s - 2), 0x04);' in src
     # ... and the code after it is compiled
-    assert 'cpu->D + 0x0010' in src
-    assert src.index('BRK to a bare RTI') < src.index('cpu->D + 0x0010')
+    assert 'cpu_D() + 0x0010' in src
+    assert src.index('BRK to a bare RTI') < src.index('cpu_D() + 0x0010')
     # The only exit to the interpreter is emulation mode, whose BRK goes
     # through $FFFE, a vector the directive did not validate.
-    guard = src.index('if (cpu->emulation) {', src.index('BRK to a bare RTI'))
+    guard = src.index('if (cpu_emulation()) {', src.index('BRK to a bare RTI'))
     assert src.count('interp_tier_dispatch_tail') == 1
-    assert guard < src.index('interp_tier_dispatch_tail') < src.index('uint16 _s = cpu->S;')
+    assert guard < src.index('interp_tier_dispatch_tail') < src.index('uint16 _s = cpu_S();')
 
 
 def test_without_the_directive_brk_still_ends_the_function():
     src = emit_function(_rom(0x40), bank=0, start=0x8000, entry_m=1, entry_x=1,
                         end=0x8007, func_name='Fill')
     assert 'BRK to a bare RTI' not in src
-    assert 'cpu->D + 0x0010' not in src
+    assert 'cpu_D() + 0x0010' not in src
 
 
 def test_a_vector_that_is_not_a_bare_rti_is_rejected():
@@ -172,21 +172,21 @@ typedef struct {
 } Outcome;
 
 static void compiled(RecompReturn (*fn)(CpuState *), uint8 p, Outcome *o) {
-  CpuState cpu;
-  memset(&cpu, 0, sizeof cpu);
+  
+  memset(&g_cpu, 0, sizeof g_cpu);
   memset(g_ram, 0, sizeof g_ram);
   g_ram[0x40] = g_ram[0x41] = 0xFF;
-  cpu.ram = g_ram;
-  cpu.S = 0x01FF; cpu.P = p; cpu_p_to_mirrors(&cpu);
+  g_cpu.ram = g_ram;
+  cpu_set_S(0x01FF); cpu_set_P(p); cpu_p_to_mirrors(&g_cpu);
   g_tc_valid = 0; g_recomp_stack_top = 0; g_other_exits = 0;
-  cpu_push_jsr_return_frame(&cpu);            /* S = $01FD at the BRK */
-  fn(&cpu);
-  cpu_mirrors_to_p(&cpu);
-  o->p = cpu.P; o->pb = cpu.PB; o->s = cpu.S;
+  cpu_push_jsr_return_frame(&g_cpu);            /* S = $01FD at the BRK */
+  fn(&g_cpu);
+  cpu_mirrors_to_p(&g_cpu);
+  o->p = cpu_P(); o->pb = cpu_PB(); o->s = cpu_S();
   memcpy(o->stack, &g_ram[0x01FA], 4);
   memcpy(o->zp, &g_ram[0x40], 2);
-  o->cycles = cpu.cycles;
-  CHECK(cpu.master_cycles == cpu.cycles * 8);  /* all of it in bank $00 */
+  o->cycles = g_cpu.cycles;
+  CHECK(g_cpu.master_cycles == g_cpu.cycles * 8);  /* all of it in bank $00 */
   CHECK(g_other_exits == 0);
 }
 
@@ -250,14 +250,14 @@ int main(void) {
    * nothing pushed yet, to the interpreter. */
   scenario = "emulation mode";
   {
-    CpuState cpu;
-    memset(&cpu, 0, sizeof cpu);
+    
+    memset(&g_cpu, 0, sizeof g_cpu);
     memset(g_ram, 0, sizeof g_ram);
-    cpu.ram = g_ram;
-    cpu.S = 0x01FF; cpu.P = 0x30; cpu_p_to_mirrors(&cpu); cpu.emulation = 1;
+    g_cpu.ram = g_ram;
+    cpu_set_S(0x01FF); cpu_set_P(0x30); cpu_p_to_mirrors(&g_cpu); cpu_set_emulation(1);
     g_tc_valid = 0; g_recomp_stack_top = 0; g_other_exits = 0;
-    cpu_push_jsr_return_frame(&cpu);
-    Trip_M1X1(&cpu);
+    cpu_push_jsr_return_frame(&g_cpu);
+    Trip_M1X1(&g_cpu);
     CHECK(g_other_exits == 1 && g_other_target == 0x008000u);
     CHECK(g_ram[0x01FA] == 0 && g_ram[0x01FB] == 0 && g_ram[0x01FC] == 0 &&
           g_ram[0x01FD] == 0);

@@ -46,6 +46,11 @@ typedef uint32_t uint32;
 typedef uint16_t uint16;
 typedef int RecompReturn;
 typedef struct { uint8_t PB; uint16_t S; uint64_t master_cycles; } CpuState;
+/* Accessors over this mock state (runner/src/cpu_regs.h shape). */
+#define cpu_PB() (cpu->PB)
+#define cpu_set_PB(v) ((void)(cpu->PB = (uint8_t)(v)))
+#define cpu_S() (cpu->S)
+#define cpu_set_S(v) ((void)(cpu->S = (uint16_t)(v)))
 const char *g_last_recomp_func;
 static unsigned g_memsel, deadline, depth;
 uint8_t g_code_speed[2] = {8, 8};   /* lean emission (SNESRECOMP_EMIT_LEAN) */

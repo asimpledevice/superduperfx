@@ -120,7 +120,7 @@ def test_generic_hle_consumes_inherited_tail_context():
 
 def test_jsr_emits_function_call():
     """JSR $8010 -> emits a runtime (m, x) dispatch switch that calls
-    one of bank_00_8010_M{m}X{x}(cpu) per cpu->m_flag/x_flag, with the
+    one of bank_00_8010_M{m}X{x}(cpu) per cpu_m_flag()/x_flag, with the
     skip-propagation block after the switch (RecompReturn ABI
     2026-05-02; runtime dispatch 2026-05-23)."""
     rom = make_lorom_bank0({
@@ -137,7 +137,7 @@ def test_jsr_emits_function_call():
             f"variant bank_00_8010{sfx} missing from emit\n{src}"
         )
     assert "RecompReturn _r;" in src
-    assert "cpu->m_flag" in src and "cpu->x_flag" in src
+    assert "cpu_m_flag()" in src and "cpu_x_flag()" in src
     assert "RECOMP_RETURN_NORMAL" in src
 
 
@@ -156,7 +156,7 @@ def test_rep_sep_emits_p_updates_with_mirrors():
         0x8000: bytes([0xC2, 0x30, 0xE2, 0x30, 0x60]),  # REP, SEP, RTS
     })
     src = emit_function(rom, bank=0, start=0x8000, entry_m=1, entry_x=1)
-    assert "cpu->P" in src
+    assert "cpu_P()" in src
     assert "cpu_p_to_mirrors" in src
     assert "0x30" in src
 
@@ -166,7 +166,7 @@ def test_wai_bounce_unwind_pops_generated_diagnostic_frame():
     rom = make_lorom_bank0({0x8000: bytes([0xCB])})
     src = emit_function(rom, bank=0, start=0x8000,
                         entry_m=1, entry_x=1)
-    needle = "return interp_bridge_lle_yield_unwind(cpu, (((uint32)cpu->PB << 16) | 0x8001u));"
+    needle = "return interp_bridge_lle_yield_unwind(cpu, (((uint32)cpu_PB() << 16) | 0x8001u));"
     assert needle in src, src
     before = src[:src.index(needle)]
     assert before.rstrip().endswith("RecompStackPopYield();"), src
@@ -177,8 +177,8 @@ def test_function_entry_yields_when_lle_frame_deadline_is_reached():
     rom = make_lorom_bank0({0x8000: bytes([0x60])})
     src = emit_function(rom, bank=0, start=0x8000,
                         entry_m=1, entry_x=1)
-    check = "if (interp_bridge_lle_deadline_pause(cpu, (((uint32)cpu->PB << 16) | 0x8000u))) {"
-    unwind = "return interp_bridge_lle_yield_unwind(cpu, (((uint32)cpu->PB << 16) | 0x8000u));"
+    check = "if (interp_bridge_lle_deadline_pause(cpu, (((uint32)cpu_PB() << 16) | 0x8000u))) {"
+    unwind = "return interp_bridge_lle_yield_unwind(cpu, (((uint32)cpu_PB() << 16) | 0x8000u));"
     assert check in src, src
     assert unwind in src, src
     before = src[:src.index(unwind)]
@@ -198,7 +198,7 @@ def test_cfg_block_yields_at_an_architectural_resume_pc():
     })
     src = emit_function(rom, bank=0, start=0x8000,
                         entry_m=1, entry_x=1)
-    unwind = "return interp_bridge_lle_yield_unwind(cpu, (((uint32)cpu->PB << 16) | 0x8004u));"
+    unwind = "return interp_bridge_lle_yield_unwind(cpu, (((uint32)cpu_PB() << 16) | 0x8004u));"
     assert unwind in src, src
     before = src[:src.index(unwind)]
     assert before.rstrip().endswith("RecompStackPopYield();"), src

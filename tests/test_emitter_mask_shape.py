@@ -104,11 +104,11 @@ def test_bit_8bit_masks_a_register():
     # DRY layer routes through widths.masked so cpu->A is now masked
     # to width=1.
     assert "& 0xFF" in out, f"missing 8-bit mask on BIT operand:\n{out}"
-    assert "cpu->A" in out
+    assert "cpu_A()" in out
     # The cpu->A reference must be inside a width-masked expression,
     # not a bare reference for the AND.
-    assert "cpu->A & " not in out.replace("cpu->A & 0xFF", ""), (
-        f"BIT must mask cpu->A through widths.masked, not bare AND:\n{out}")
+    assert "cpu_A() & " not in out.replace("cpu_A() & 0xFF", ""), (
+        f"BIT must mask cpu_A() through widths.masked, not bare AND:\n{out}")
 
 
 def test_bit_16bit_uses_overflow_4000():
@@ -124,17 +124,16 @@ def test_setnz_8bit_masks_src():
 
 
 def test_setnz_emits_p_update():
-    """The DRY layer routes set_nz through cpu->P update, fixing the
+    """The DRY layer routes set_nz through cpu_P() update, fixing the
     asymmetry where some emitters skipped P sync."""
     out = _join(_emit_setnz(SetNZ(src=_v(1), width=1)))
-    assert "cpu->P" in out, f"SetNZ must update cpu->P:\n{out}"
+    assert "cpu_P()" in out, f"SetNZ must update cpu_P():\n{out}"
 
 
 def test_writereg_a_m1_preserves_high_via_helper():
     """A writes route through cpu_write_a_m, which encapsulates the
     M-flag-driven dispatch (preserve high in m=1, full replace in m=0).
-    The shape was previously open-coded as `if (cpu->m_flag) { cpu->A
-    = (cpu->A & 0xFF00) | (src & 0xFF); } else ...`; commit 1162626
+    The shape was previously open-coded as `if (cpu_m_flag()) { cpu_set_A((cpu_A() & 0xFF00) | (src & 0xFF)); } else ...`; commit 1162626
     moved that into the helper. Now the contract is the helper name."""
     out = _join(_emit_writereg(WriteReg(reg=Reg.A, src=_v(1))))
     assert "cpu_write_a_m" in out, (
@@ -154,7 +153,7 @@ def test_increg_x_8bit_zero_extends():
     """INX/DEX in x=1 mode: result must be zero-extended."""
     out = _join(_emit_increg(IncReg(reg=Reg.X, delta=1)))
     if "x_flag" in out:
-        x_branch = out.split("if (cpu->x_flag)")[1].split("} else")[0]
+        x_branch = out.split("if (cpu_x_flag())")[1].split("} else")[0]
         # x=1 branch should NOT preserve high byte.
         assert "& 0xFF00" not in x_branch, (
             f"INX x=1 must not preserve high — hw zeros it:\n{out}")
@@ -163,7 +162,7 @@ def test_increg_x_8bit_zero_extends():
 def test_pullreg_a_m1_preserves_high():
     out = _join(_emit_pullreg(PullReg(reg=Reg.A)))
     if "m_flag" in out:
-        m_branch = out.split("if (cpu->m_flag)")[1].split("} else")[0]
+        m_branch = out.split("if (cpu_m_flag())")[1].split("} else")[0]
         assert "& 0xFF00" in m_branch, (
             f"PLA m=1 must preserve A high (B):\n{out}")
 
@@ -171,7 +170,7 @@ def test_pullreg_a_m1_preserves_high():
 def test_pullreg_x_x1_zero_extends():
     out = _join(_emit_pullreg(PullReg(reg=Reg.X)))
     if "x_flag" in out:
-        x_branch = out.split("if (cpu->x_flag)")[1].split("} else")[0]
+        x_branch = out.split("if (cpu_x_flag())")[1].split("} else")[0]
         assert "& 0xFF00" not in x_branch, (
             f"PLX x=1 must zero-extend high:\n{out}")
 
@@ -179,7 +178,7 @@ def test_pullreg_x_x1_zero_extends():
 def test_transfer_to_x_x1_zero_extends():
     out = _join(_emit_transfer(Transfer(src=Reg.A, dst=Reg.X)))
     if "x_flag" in out:
-        x_branch = out.split("if (cpu->x_flag)")[1].split("} else")[0]
+        x_branch = out.split("if (cpu_x_flag())")[1].split("} else")[0]
         assert "& 0xFF00" not in x_branch, (
             f"TAX x=1 must zero-extend X.high:\n{out}")
 
@@ -187,7 +186,7 @@ def test_transfer_to_x_x1_zero_extends():
 def test_pushreg_a_m1_pushes_low_byte_only():
     out = _join(_emit_pushreg(PushReg(reg=Reg.A)))
     if "m_flag" in out:
-        m_branch = out.split("if (cpu->m_flag)")[1].split("} else")[0]
+        m_branch = out.split("if (cpu_m_flag())")[1].split("} else")[0]
         # m=1 branch must use cpu_write8 + low-byte mask.
         assert "cpu_write8" in m_branch, f"PHA m=1 must push 1 byte:\n{out}"
         assert "& 0xFF" in m_branch, f"PHA m=1 must mask low byte:\n{out}"
@@ -260,36 +259,36 @@ def test_bitclearmem_8bit_dispatch():
 
 def test_push_byte_writes_then_decrements():
     from v2.emitter_helpers import push_byte
-    env = push_byte("(uint8)cpu->A")
+    env = push_byte("(uint8)cpu_A()")
     assert len(env) == 2
-    assert "cpu_write8" in env[0] and "cpu->S" in env[0]
-    assert "cpu->S - 1" in env[1]
+    assert "cpu_write8" in env[0] and "cpu_S()" in env[0]
+    assert "cpu_S() - 1" in env[1]
 
 
 def test_push_word_decrements_writes_decrements():
     from v2.emitter_helpers import push_word
-    env = push_word("cpu->A")
+    env = push_word("cpu_A()")
     assert len(env) == 3
-    assert "cpu->S - 1" in env[0]
+    assert "cpu_S() - 1" in env[0]
     assert "cpu_write16" in env[1]
-    assert "cpu->S - 1" in env[2]
+    assert "cpu_S() - 1" in env[2]
 
 
 def test_pop_byte_increments_then_reads():
     from v2.emitter_helpers import pop_byte_assign
     env = pop_byte_assign("uint8 _v")
     assert len(env) == 2
-    assert "cpu->S + 1" in env[0]
+    assert "cpu_S() + 1" in env[0]
     assert "cpu_read8" in env[1] and "uint8 _v =" in env[1]
 
 
 def test_pop_word_increments_reads_increments():
     from v2.emitter_helpers import pop_word_assign
-    env = pop_word_assign("cpu->A")
+    env = pop_word_assign("cpu_A()")
     assert len(env) == 3
-    assert "cpu->S + 1" in env[0]
+    assert "cpu_S() + 1" in env[0]
     assert "cpu_read16" in env[1]
-    assert "cpu->S + 1" in env[2]
+    assert "cpu_S() + 1" in env[2]
 
 
 # ── REP/SEP P-mirror sync (Follow-up D) ─────────────────────────────────
@@ -299,7 +298,7 @@ def test_rep_modify_p_via_mirrors_clears_bits():
     env = modify_p_via_mirrors(0x30, "rep")
     assert len(env) == 5
     text = "\n".join(env)
-    assert "_old_p = cpu->P" in env[0]
+    assert "_old_p = cpu_P()" in env[0]
     assert "cpu_mirrors_to_p" in env[1]
     assert "& ~0x30" in env[2]                   # AND-NOT mask
     assert "cpu_p_to_mirrors" in env[3]

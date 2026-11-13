@@ -95,15 +95,15 @@ typedef struct CpuState {
      * (Layer-3 stripe corruption — see TROUBLESHOOTING.md). Reads of
      * "B" route through the cpu_read_b() helper below or `(A >> 8)`
      * inline; nothing ever writes B as separate state. */
-    uint16 A;
-    uint16 X;
-    uint16 Y;
+    uint16 reg_A;
+    uint16 reg_X;
+    uint16 reg_Y;
 
     /* Stack and direct-page pointers, bank registers. */
-    uint16 S;
-    uint16 D;
-    uint8  DB;
-    uint8  PB;
+    uint16 reg_S;
+    uint16 reg_D;
+    uint8  reg_DB;
+    uint8  reg_PB;
 
     /* Option-1 cpu->S return-frame ABI (see docs/MULTI_TIER.md). NON-ZERO
      * when the current function was entered via a direct generated JSR/JSL
@@ -127,12 +127,12 @@ typedef struct CpuState {
     /* Status register P (full byte). Individual bit mirrors below for
      * codegen efficiency — they MUST be kept in sync via the helpers
      * declared below (or RepFlags / SepFlags / SetFlag IR ops). */
-    uint8  P;
+    uint8  reg_P;
 
     /* Mirrors of P bits 5 and 4 plus the E flag. 1 = 8-bit width. */
-    uint8  m_flag;
-    uint8  x_flag;
-    uint8  emulation;
+    uint8  reg_m_flag;
+    uint8  reg_x_flag;
+    uint8  reg_emulation;
 
     /* Per-flag bit mirrors. v2 codegen reads/writes `cpu->_flag_C`
      * etc. directly (rather than masking P each access). They MUST be
@@ -183,6 +183,14 @@ typedef struct CpuState {
     uint64_t coprocessor_master_cycles;
 } CpuState;
 
+/* The 65816 registers (A..PB, P and its m/x/E bits) are reached only through
+ * these accessors (cpu_regs.h), never as fields: there is one CPU state,
+ * g_cpu, and the accessors decide where its registers live. The fields are
+ * named reg_* so that a direct access fails to compile; a saved copy of the
+ * state (rollback) is the one place they are named. */
+extern struct CpuState g_cpu;
+#include "cpu_regs.h"
+
 /* NB: NLR pending-skip state is intentionally NOT a CpuState field.
  * It's declared as a function-local `RecompReturn _pending_skip` at
  * the top of every emitted v2 function — see emit_function.py. NLR
@@ -201,8 +209,8 @@ typedef struct CpuState {
  * than reaching into A bits directly. There is no `cpu_write_b` — the
  * way to "write B" on real hardware is XBA (or TCD/TDC), and those
  * route through full-A arithmetic. */
-static inline uint8 cpu_read_b(const CpuState *cpu) {
-    return (uint8)((cpu->A >> 8) & 0xFF);
+static inline uint8 cpu_read_b(const CpuState *cpu) { (void)cpu;
+    return (uint8)((cpu_A() >> 8) & 0xFF);
 }
 
 /* ── Non-local return signaling ────────────────────────────────────────
@@ -273,45 +281,45 @@ typedef enum RecompReturn {
 
 /* ── A-register typed access ── */
 
-static inline uint8  cpu_read_a8(const CpuState *cpu) {
-    return (uint8)(cpu->A & 0xFF);
+static inline uint8  cpu_read_a8(const CpuState *cpu) { (void)cpu;
+    return (uint8)(cpu_A() & 0xFF);
 }
-static inline uint16 cpu_read_a16(const CpuState *cpu) {
-    return cpu->A;
+static inline uint16 cpu_read_a16(const CpuState *cpu) { (void)cpu;
+    return cpu_A();
 }
 /* M-flag-driven read. Returns A.low zero-extended in m=1, full A in m=0.
  * Matches what `LDA` would observe when reading the accumulator at the
  * current width. */
 static inline uint16 cpu_read_a_m(const CpuState *cpu) {
-    return cpu->m_flag ? (uint16)cpu_read_a8(cpu) : cpu_read_a16(cpu);
+    return cpu_m_flag() ? (uint16)cpu_read_a8(cpu) : cpu_read_a16(cpu);
 }
 
 /* 8-bit A write — preserve high byte (= B). 65816 hw contract: in M=1
  * mode, ops on A leave the high half untouched (XBA / TDC observe the
  * preserved value). Distinct from cpu_write_x8 which ZEROS the high. */
-static inline void cpu_write_a8(CpuState *cpu, uint8 v) {
-    cpu->A = (uint16)((cpu->A & 0xFF00) | (uint16)v);
+static inline void cpu_write_a8(CpuState *cpu, uint8 v) { (void)cpu;
+    cpu_set_A((uint16)((cpu_A() & 0xFF00) | (uint16)v));
 }
-static inline void cpu_write_a16(CpuState *cpu, uint16 v) {
-    cpu->A = v;
+static inline void cpu_write_a16(CpuState *cpu, uint16 v) { (void)cpu;
+    cpu_set_A(v);
 }
 /* M-flag-driven write. 8-bit semantics in m=1 (preserve high), full
  * 16-bit in m=0. Caller passes a 16-bit value; we mask in m=1. */
 static inline void cpu_write_a_m(CpuState *cpu, uint16 v) {
-    if (cpu->m_flag) cpu_write_a8(cpu, (uint8)(v & 0xFF));
+    if (cpu_m_flag()) cpu_write_a8(cpu, (uint8)(v & 0xFF));
     else             cpu_write_a16(cpu, v);
 }
 
 /* ── X-register typed access ── */
 
-static inline uint8  cpu_read_x8(const CpuState *cpu) {
-    return (uint8)(cpu->X & 0xFF);
+static inline uint8  cpu_read_x8(const CpuState *cpu) { (void)cpu;
+    return (uint8)(cpu_X() & 0xFF);
 }
-static inline uint16 cpu_read_x16(const CpuState *cpu) {
-    return cpu->X;
+static inline uint16 cpu_read_x16(const CpuState *cpu) { (void)cpu;
+    return cpu_X();
 }
 static inline uint16 cpu_read_x_x(const CpuState *cpu) {
-    return cpu->x_flag ? (uint16)cpu_read_x8(cpu) : cpu_read_x16(cpu);
+    return cpu_x_flag() ? (uint16)cpu_read_x8(cpu) : cpu_read_x16(cpu);
 }
 
 /* 8-bit X write — ZEROS high byte (65816 hw contract for x=1). This is
@@ -319,36 +327,36 @@ static inline uint16 cpu_read_x_x(const CpuState *cpu) {
  * historical "8-bit X/Y zero-extend" bug class (snesrecomp 6o, b39e99b)
  * happened because emitters treated X/Y like A and let stale high bytes
  * leak through indexed reads. */
-static inline void cpu_write_x8(CpuState *cpu, uint8 v) {
-    cpu->X = (uint16)v;
+static inline void cpu_write_x8(CpuState *cpu, uint8 v) { (void)cpu;
+    cpu_set_X((uint16)v);
 }
-static inline void cpu_write_x16(CpuState *cpu, uint16 v) {
-    cpu->X = v;
+static inline void cpu_write_x16(CpuState *cpu, uint16 v) { (void)cpu;
+    cpu_set_X(v);
 }
 static inline void cpu_write_x_x(CpuState *cpu, uint16 v) {
-    if (cpu->x_flag) cpu_write_x8(cpu, (uint8)(v & 0xFF));
+    if (cpu_x_flag()) cpu_write_x8(cpu, (uint8)(v & 0xFF));
     else             cpu_write_x16(cpu, v);
 }
 
 /* ── Y-register typed access (mirrors X) ── */
 
-static inline uint8  cpu_read_y8(const CpuState *cpu) {
-    return (uint8)(cpu->Y & 0xFF);
+static inline uint8  cpu_read_y8(const CpuState *cpu) { (void)cpu;
+    return (uint8)(cpu_Y() & 0xFF);
 }
-static inline uint16 cpu_read_y16(const CpuState *cpu) {
-    return cpu->Y;
+static inline uint16 cpu_read_y16(const CpuState *cpu) { (void)cpu;
+    return cpu_Y();
 }
 static inline uint16 cpu_read_y_x(const CpuState *cpu) {
-    return cpu->x_flag ? (uint16)cpu_read_y8(cpu) : cpu_read_y16(cpu);
+    return cpu_x_flag() ? (uint16)cpu_read_y8(cpu) : cpu_read_y16(cpu);
 }
-static inline void cpu_write_y8(CpuState *cpu, uint8 v) {
-    cpu->Y = (uint16)v;  /* x=1 zeros high */
+static inline void cpu_write_y8(CpuState *cpu, uint8 v) { (void)cpu;
+    cpu_set_Y((uint16)v);  /* x=1 zeros high */
 }
-static inline void cpu_write_y16(CpuState *cpu, uint16 v) {
-    cpu->Y = v;
+static inline void cpu_write_y16(CpuState *cpu, uint16 v) { (void)cpu;
+    cpu_set_Y(v);
 }
 static inline void cpu_write_y_x(CpuState *cpu, uint16 v) {
-    if (cpu->x_flag) cpu_write_y8(cpu, (uint8)(v & 0xFF));
+    if (cpu_x_flag()) cpu_write_y8(cpu, (uint8)(v & 0xFF));
     else             cpu_write_y16(cpu, v);
 }
 
@@ -365,32 +373,32 @@ static inline void cpu_write_y_x(CpuState *cpu, uint16 v) {
 /* Sync P <-> mirrors. Codegen calls these whenever P is touched in a
  * way that updates the bit mirrors (REP, SEP, PLP, RTI). */
 static inline void cpu_p_to_mirrors(CpuState *cpu) {
-    cpu->m_flag  = (cpu->P & CPU_P_M) ? 1 : 0;
-    cpu->x_flag  = (cpu->P & CPU_P_X) ? 1 : 0;
-    cpu->_flag_C = (cpu->P & CPU_P_C) ? 1 : 0;
-    cpu->_flag_Z = (cpu->P & CPU_P_Z) ? 1 : 0;
-    cpu->_flag_I = (cpu->P & CPU_P_I) ? 1 : 0;
-    cpu->_flag_D = (cpu->P & CPU_P_D) ? 1 : 0;
-    cpu->_flag_V = (cpu->P & CPU_P_V) ? 1 : 0;
-    cpu->_flag_N = (cpu->P & CPU_P_N) ? 1 : 0;
+    cpu_set_m_flag((cpu_P() & CPU_P_M) ? 1 : 0);
+    cpu_set_x_flag((cpu_P() & CPU_P_X) ? 1 : 0);
+    cpu->_flag_C = (cpu_P() & CPU_P_C) ? 1 : 0;
+    cpu->_flag_Z = (cpu_P() & CPU_P_Z) ? 1 : 0;
+    cpu->_flag_I = (cpu_P() & CPU_P_I) ? 1 : 0;
+    cpu->_flag_D = (cpu_P() & CPU_P_D) ? 1 : 0;
+    cpu->_flag_V = (cpu_P() & CPU_P_V) ? 1 : 0;
+    cpu->_flag_N = (cpu_P() & CPU_P_N) ? 1 : 0;
     /* 65816: with X set the index registers are 8-bit and their high bytes
      * read as zero (SEP #$10, PLP, RTI). 8-bit X/Y writes zero-extend, but a
      * register kept across the switch would otherwise carry its old high byte
      * into the next 16-bit use (e.g. an IRQ handler's REP #$30; PHX). */
-    if (cpu->x_flag) { cpu->X &= 0xFFu; cpu->Y &= 0xFFu; }
+    if (cpu_x_flag()) { cpu_set_X(cpu_X() & (0xFFu)); cpu_set_Y(cpu_Y() & (0xFFu)); }
 }
 
 static inline void cpu_mirrors_to_p(CpuState *cpu) {
-    cpu->P = (uint8)(
-        (cpu->m_flag  ? CPU_P_M : 0) |
-        (cpu->x_flag  ? CPU_P_X : 0) |
+    cpu_set_P((uint8)(
+        (cpu_m_flag()  ? CPU_P_M : 0) |
+        (cpu_x_flag()  ? CPU_P_X : 0) |
         (cpu->_flag_C ? CPU_P_C : 0) |
         (cpu->_flag_Z ? CPU_P_Z : 0) |
         (cpu->_flag_I ? CPU_P_I : 0) |
         (cpu->_flag_D ? CPU_P_D : 0) |
         (cpu->_flag_V ? CPU_P_V : 0) |
         (cpu->_flag_N ? CPU_P_N : 0)
-    );
+    ));
 }
 
 /* ── Memory access ──────────────────────────────────────────────────────── */
@@ -466,24 +474,24 @@ static inline void cpu_push_interrupt_frame_at(CpuState *cpu, uint32 pc24) {
      * RTI resumes the suspended instruction stream. Materialize P from the
      * generated flag mirrors before placing the real frame on the stack. */
     cpu_mirrors_to_p(cpu);
-    if (!cpu->emulation) {
-        cpu_write8(cpu, 0x00, cpu->S, (uint8)(pc24 >> 16)); cpu->S = (uint16)(cpu->S - 1);
+    if (!cpu_emulation()) {
+        cpu_write8(cpu, 0x00, cpu_S(), (uint8)(pc24 >> 16)); cpu_set_S((uint16)(cpu_S() - 1));
     }
-    cpu_write8(cpu, 0x00, cpu->S, (uint8)(pc24 >> 8)); cpu->S = (uint16)(cpu->S - 1);  /* PCH */
-    cpu_write8(cpu, 0x00, cpu->S, (uint8)pc24); cpu->S = (uint16)(cpu->S - 1);  /* PCL */
-    cpu_write8(cpu, 0x00, cpu->S, cpu->P); cpu->S = (uint16)(cpu->S - 1);
+    cpu_write8(cpu, 0x00, cpu_S(), (uint8)(pc24 >> 8)); cpu_set_S((uint16)(cpu_S() - 1));  /* PCH */
+    cpu_write8(cpu, 0x00, cpu_S(), (uint8)pc24); cpu_set_S((uint16)(cpu_S() - 1));  /* PCL */
+    cpu_write8(cpu, 0x00, cpu_S(), cpu_P()); cpu_set_S((uint16)(cpu_S() - 1));
     /* Preserve the interrupted flags in the frame, then enter the handler
      * with IRQ masked and binary arithmetic. RTI restores the saved P. */
     cpu->_flag_I = 1;
     cpu->_flag_D = 0;
-    cpu->P = (uint8)((cpu->P | 0x04u) & ~0x08u);
+    cpu_set_P((uint8)((cpu_P() | 0x04u) & ~0x08u));
 }
 
 /* Generated host-C control flow has no runtime PC offset. Its generated RTI
  * pops this frame and returns through C, so the bank value and live P are the
  * only meaningful fields in this wrapper. */
 static inline void cpu_push_interrupt_frame(CpuState *cpu) {
-    cpu_push_interrupt_frame_at(cpu, (uint32)cpu->PB << 16);
+    cpu_push_interrupt_frame_at(cpu, (uint32)cpu_PB() << 16);
 }
 
 /* Model a 65816 hardware JSR's 2-byte return-frame push. Used by game glue
@@ -496,8 +504,8 @@ static inline void cpu_push_interrupt_frame(CpuState *cpu) {
  * PC bytes are placeholders — the trampoline-RTS dispatch-misses on them and
  * miss-restores S to entry_s + 2. Symmetric to cpu_push_interrupt_frame. */
 static inline void cpu_push_jsr_return_frame(CpuState *cpu) {
-    cpu_write8(cpu, 0x00, cpu->S, 0x00); cpu->S = (uint16)(cpu->S - 1);  /* PCH */
-    cpu_write8(cpu, 0x00, cpu->S, 0x00); cpu->S = (uint16)(cpu->S - 1);  /* PCL */
+    cpu_write8(cpu, 0x00, cpu_S(), 0x00); cpu_set_S((uint16)(cpu_S() - 1));  /* PCH */
+    cpu_write8(cpu, 0x00, cpu_S(), 0x00); cpu_set_S((uint16)(cpu_S() - 1));  /* PCL */
     cpu->host_return_valid = 2;  /* JSR-paired: 2-byte frame */
 }
 
@@ -506,9 +514,9 @@ static inline void cpu_push_jsr_return_frame(CpuState *cpu) {
  * only observed on a trampoline miss; a balanced RTL host-returns before
  * dispatching on it. */
 static inline void cpu_push_jsl_return_frame(CpuState *cpu) {
-    cpu_write8(cpu, 0x00, cpu->S, 0xFF); cpu->S = (uint16)(cpu->S - 1);  /* PB */
-    cpu_write8(cpu, 0x00, cpu->S, 0xFF); cpu->S = (uint16)(cpu->S - 1);  /* PCH */
-    cpu_write8(cpu, 0x00, cpu->S, 0xFF); cpu->S = (uint16)(cpu->S - 1);  /* PCL */
+    cpu_write8(cpu, 0x00, cpu_S(), 0xFF); cpu_set_S((uint16)(cpu_S() - 1));  /* PB */
+    cpu_write8(cpu, 0x00, cpu_S(), 0xFF); cpu_set_S((uint16)(cpu_S() - 1));  /* PCH */
+    cpu_write8(cpu, 0x00, cpu_S(), 0xFF); cpu_set_S((uint16)(cpu_S() - 1));  /* PCL */
     cpu->host_return_valid = 3;  /* JSL-paired: 3-byte frame */
 }
 

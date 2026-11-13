@@ -27,6 +27,20 @@
 #define FPU_PARK_S8 "$f15"
 #define FPU_PARK_SP_RA "$f16"
 
-/* Free: $f17-$f19, $f20-$f31. */
+/* The 65816 registers (runner/src/cpu_regs.h, CPUFPU=1 builds): one each,
+ * held zero-extended. Compiled code reaches them through GCC global register
+ * variables, so these slots are not limited to SDFX_FPU_OWNERS
+ * (n64/fpu_reserve.mk, SDFX_FPU_SHARED); code compiled without cpu_regs.h,
+ * libdragon and newlib included, cannot name them (-ffixed). */
+#define FPU_CPU_A "$f17"
+#define FPU_CPU_X "$f18"
+#define FPU_CPU_Y "$f19"
+#define FPU_CPU_S "$f20"
+#define FPU_CPU_D "$f21"
+#define FPU_CPU_DB "$f22"
+#define FPU_CPU_PB "$f23"
+#define FPU_CPU_P "$f24"
+
+/* Free: $f25-$f31. */
 
 #endif

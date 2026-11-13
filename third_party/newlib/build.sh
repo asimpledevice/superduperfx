@@ -29,7 +29,8 @@ if [ ! -f "$TARBALL" ] || ! echo "$SHA512  $TARBALL" | sha512sum -c --quiet - 2>
   mv "$TARBALL.tmp" "$TARBALL"
 fi
 
-# A fresh work directory per run: nothing is deleted or reused.
+# A fresh work directory per run, removed after a successful install (kept on
+# failure, for its logs).
 WORK="$(mktemp -d "$ROOT/build/newlib-work.XXXXXX")"
 SRC="$WORK/newlib-$VERSION"
 tar -xzf "$TARBALL" -C "$WORK"
@@ -52,4 +53,5 @@ CFLAGS_FOR_TARGET="-DHAVE_ASSERT_FUNC -O2 -fpermissive $FIXED" \
     --enable-newlib-retargetable-locking >"$WORK/configure.log" 2>&1
 PATH="$TOOLCHAIN/bin:$PATH" make MAKEINFO=true -j "$JOBS" >"$WORK/make.log" 2>&1 || { tail -30 "$WORK/make.log"; exit 1; }
 PATH="$TOOLCHAIN/bin:$PATH" make MAKEINFO=true install >"$WORK/install.log" 2>&1 || { tail -30 "$WORK/install.log"; exit 1; }
+rm -rf -- "$WORK"
 echo "newlib $VERSION installed in $PREFIX"

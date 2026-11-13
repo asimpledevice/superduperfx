@@ -134,8 +134,8 @@ static uint8 g_hook_counter[kMaxHooks];
 void HostSaw(const CpuState *cpu, uint32 pc24) {
   if (g_hooks < kMaxHooks) {
     g_hook_pc[g_hooks] = pc24;
-    g_hook_a[g_hooks] = cpu->A;
-    g_hook_s[g_hooks] = cpu->S;
+    g_hook_a[g_hooks] = cpu_A();
+    g_hook_s[g_hooks] = cpu_S();
     g_hook_counter[g_hooks] = cpu->ram[pc24 == 0x008000u ? 0x40 :
                                        pc24 == 0x008100u ? 0x41 : 0x42];
   }
@@ -164,8 +164,8 @@ static void prepare(CpuState *cpu, int deadline_at) {
   memset(cpu, 0, sizeof *cpu);
   memset(g_ram, 0, sizeof g_ram);
   cpu->ram = g_ram;
-  cpu->S = 0x01FF; cpu->m_flag = 1; cpu->x_flag = 1; cpu->P = 0x30;
-  cpu->A = 0x77;
+  cpu_set_S(0x01FF); cpu_set_m_flag(1); cpu_set_x_flag(1); cpu_set_P(0x30);
+  cpu_set_A(0x77);
   g_tc_valid = 0; g_recomp_stack_top = 0;
   g_other_exits = 0; g_other_target = 0;
   g_hooks = 0; g_deadline_n = 0; g_deadline_at = deadline_at;
@@ -173,11 +173,11 @@ static void prepare(CpuState *cpu, int deadline_at) {
 }
 
 int main(void) {
-  CpuState cpu;
+  
 
   scenario = "loop back to the hooked entry";
-  prepare(&cpu, 0);
-  bank_00_8000_M1X1(&cpu);
+  prepare(&g_cpu, 0);
+  bank_00_8000_M1X1(&g_cpu);
   CHECK(g_hooks == 4);                  /* $8000 executed four times */
   for (int i = 0; i < 4; i++) {
     CHECK(g_hook_pc[i] == 0x008000u);
@@ -190,29 +190,29 @@ int main(void) {
   CHECK(g_other_exits == 0);
 
   scenario = "deadline in the prologue";
-  prepare(&cpu, 1);
-  bank_00_8000_M1X1(&cpu);
+  prepare(&g_cpu, 1);
+  bank_00_8000_M1X1(&g_cpu);
   CHECK(g_hooks == 0);                  /* nothing executed compiled */
   CHECK(g_other_exits == 1 && g_other_target == 0x008000u);
   CHECK(g_ram[0x40] == 0);
 
   scenario = "deadline at the hooked block";
-  prepare(&cpu, 2);
-  bank_00_8000_M1X1(&cpu);
+  prepare(&g_cpu, 2);
+  bank_00_8000_M1X1(&g_cpu);
   CHECK(g_hooks == 0);
   CHECK(g_other_exits == 1 && g_other_target == 0x008000u);
   CHECK(g_ram[0x40] == 0);
 
   scenario = "deadline on the back-edge to the hooked block";
-  prepare(&cpu, 3);
-  bank_00_8000_M1X1(&cpu);
+  prepare(&g_cpu, 3);
+  bank_00_8000_M1X1(&g_cpu);
   CHECK(g_hooks == 1);                  /* the one execution done compiled */
   CHECK(g_ram[0x40] == 1);
   CHECK(g_other_exits == 1 && g_other_target == 0x008000u);
 
   scenario = "two calls";
-  prepare(&cpu, 0);
-  Twice_M1X1(&cpu);
+  prepare(&g_cpu, 0);
+  Twice_M1X1(&g_cpu);
   CHECK(g_hooks == 8);
   for (int i = 0; i < 8 && i < kMaxHooks; i++) {
     CHECK(g_hook_pc[i] == 0x008000u);
@@ -222,20 +222,20 @@ int main(void) {
   CHECK(g_other_exits == 0);
 
   scenario = "recursion";
-  prepare(&cpu, 0);
+  prepare(&g_cpu, 0);
   g_ram[0x41] = 2;
-  bank_00_8100_M1X1(&cpu);
+  bank_00_8100_M1X1(&g_cpu);
   CHECK(g_hooks == 3);
   CHECK(g_hook_s[0] == 0x01FD && g_hook_s[1] == 0x01FB && g_hook_s[2] == 0x01F9);
   CHECK(g_hook_counter[0] == 2 && g_hook_counter[1] == 1 &&
         g_hook_counter[2] == 0);
   CHECK(g_ram[0x41] == 0);
   CHECK(g_other_exits == 0);
-  CHECK(cpu.S == 0x01FF);
+  CHECK(cpu_S() == 0x01FF);
 
   scenario = "fall-through into a hooked instruction";
-  prepare(&cpu, 0);
-  Fall_M1X1(&cpu);
+  prepare(&g_cpu, 0);
+  Fall_M1X1(&g_cpu);
   CHECK(g_hooks == 1);
   CHECK(g_hook_pc[0] == 0x008304u);
   CHECK(g_hook_counter[0] == 5);        /* STA done, INC not yet */

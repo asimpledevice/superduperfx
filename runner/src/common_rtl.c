@@ -1241,6 +1241,7 @@ static void rtl_rb_residue_capture(RtlRollbackResidue *r) {
   r->magic = RTL_RB_RESIDUE_MAGIC;
   r->version = RTL_RB_RESIDUE_VERSION;
   r->cpu = g_cpu;
+  cpu_regs_store(&r->cpu);   /* registers held outside g_cpu */
   apu_port_sched_save(g_snes->apu, &r->apu_port);
   r->beam_master_last = g_snes->beamMasterLast;
   r->frame_counter = snes_frame_counter;
@@ -1263,6 +1264,7 @@ static void rtl_rb_residue_apply(const RtlRollbackResidue *r) {
   uint8 *ram_ptr = g_cpu.ram;
   g_cpu = r->cpu;
   g_cpu.ram = ram_ptr; /* host pointer, not simulation state */
+  cpu_regs_load(&r->cpu);
   apu_port_sched_restore(g_snes->apu, &r->apu_port);
   g_snes->beamMasterLast = r->beam_master_last;
   snes_frame_counter = r->frame_counter;
@@ -1361,8 +1363,8 @@ bool RtlExecutionStateValid(const void *data, size_t size) {
   const uint8 *raw = (const uint8 *)&r.apu_port;
   if (raw[offsetof(ApuPortSched, timeValid)] > 1 ||
       r.magic != RTL_RB_RESIDUE_MAGIC || r.version != RTL_RB_RESIDUE_VERSION ||
-      r.cpu.ram != NULL || r.cpu.m_flag > 1 || r.cpu.x_flag > 1 ||
-      r.cpu.emulation > 1 || r.cpu._flag_N > 1 || r.cpu._flag_V > 1 ||
+      r.cpu.ram != NULL || r.cpu.reg_m_flag > 1 || r.cpu.reg_x_flag > 1 ||
+      r.cpu.reg_emulation > 1 || r.cpu._flag_N > 1 || r.cpu._flag_V > 1 ||
       r.cpu._flag_Z > 1 || r.cpu._flag_C > 1 || r.cpu._flag_I > 1 ||
       r.cpu._flag_D > 1 || (r.cpu.host_return_valid != 0 &&
       r.cpu.host_return_valid != 2 && r.cpu.host_return_valid != 3) ||
@@ -1626,7 +1628,7 @@ uint8 *RomPtr(uint32_t addr) {
         fprintf(stderr,
                 "[off-rails-romptr] addr=$%06X PB=$%02X DB=$%02X "
                 "S=$%04X func=%s interp=$%06X\n",
-                (unsigned)(addr & 0xFFFFFFu), g_cpu.PB, g_cpu.DB, g_cpu.S,
+                (unsigned)(addr & 0xFFFFFFu), cpu_PB(), cpu_DB(), cpu_S(),
                 g_last_recomp_func ? g_last_recomp_func : "<none>",
                 (unsigned)g_interp_wlog_pc24);
       }
@@ -2054,7 +2056,7 @@ void rtl_sync_apu_to_cpu_locked(void) {
 static bool RtlUploadSpcImageFromDpInternal(CpuState *cpu,
                                             bool update_cpu_result,
                                             bool live_transfer) {
-  uint16_t dp = cpu->D;
+  uint16_t dp = cpu_D();
   uint16_t data_lo = (uint16_t)g_ram[(dp + 0) & 0xffff]
                    | ((uint16_t)g_ram[(dp + 1) & 0xffff] << 8);
   uint8_t data_bank = g_ram[(dp + 2) & 0xffff];
@@ -2174,12 +2176,12 @@ static bool RtlUploadSpcImageFromDpInternal(CpuState *cpu,
   RtlApuUnlock();
 
   if (update_cpu_result) {
-    cpu->A = (uint16_t)(cpu->A & 0xff00);
-    cpu->X = 0;
-    cpu->Y = 0;
+    cpu_set_A((uint16_t)(cpu_A() & 0xff00));
+    cpu_set_X(0);
+    cpu_set_Y(0);
     cpu->_flag_Z = 1;
     cpu->_flag_N = 0;
-    cpu->P = (uint8_t)((cpu->P & ~0x82) | 0x02);
+    cpu_set_P((uint8_t)((cpu_P() & ~0x82) | 0x02));
   }
   return true;
 }

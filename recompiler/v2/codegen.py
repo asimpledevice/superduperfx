@@ -1,7 +1,7 @@
 """snesrecomp.recompiler.v2.codegen
 
 Emit C code from v2 IR. Generated functions take a single
-`CpuState *cpu` parameter and mutate `cpu->A`, `cpu->X`, etc., directly
+`CpuState *cpu` parameter and mutate `cpu_A()`, `cpu_X()`, etc., directly
 — no return values, no per-function locals masquerading as registers.
 
 Replaces v1 EmitCtx C-expression-string-based codegen
@@ -517,12 +517,12 @@ def _ctype(width: int) -> str:
 # Layer-3 stripe corruption, fixed in commit 6c04c94, then removed
 # entirely in this commit).
 _REG_FIELD = {
-    Reg.A: "cpu->A", Reg.B: "((uint8)((cpu->A >> 8) & 0xFF))",
-    Reg.X: "cpu->X", Reg.Y: "cpu->Y",
-    Reg.S: "cpu->S", Reg.D: "cpu->D",
-    Reg.DB: "cpu->DB", Reg.PB: "cpu->PB",
-    Reg.P: "cpu->P",
-    Reg.M: "cpu->m_flag", Reg.XF: "cpu->x_flag", Reg.E: "cpu->emulation",
+    Reg.A: "cpu_A()", Reg.B: "((uint8)((cpu_A() >> 8) & 0xFF))",
+    Reg.X: "cpu_X()", Reg.Y: "cpu_Y()",
+    Reg.S: "cpu_S()", Reg.D: "cpu_D()",
+    Reg.DB: "cpu_DB()", Reg.PB: "cpu_PB()",
+    Reg.P: "cpu_P()",
+    Reg.M: "cpu_m_flag()", Reg.XF: "cpu_x_flag()", Reg.E: "cpu_emulation()",
     Reg.N: "cpu->_flag_N", Reg.V: "cpu->_flag_V",
     Reg.ZF: "cpu->_flag_Z", Reg.C: "cpu->_flag_C",
     Reg.I: "cpu->_flag_I", Reg.DF: "cpu->_flag_D",
@@ -543,9 +543,9 @@ def _segref_addr_expr(seg: SegRef, pointer_expr: Optional[str] = None) -> tuple:
     """
     idx = ""
     if seg.index == Reg.X:
-        idx = " + cpu->X"
+        idx = " + cpu_X()"
     elif seg.index == Reg.Y:
-        idx = " + cpu->Y"
+        idx = " + cpu_Y()"
 
     k = seg.kind
     if k == SegKind.DIRECT:
@@ -559,10 +559,10 @@ def _segref_addr_expr(seg: SegRef, pointer_expr: Optional[str] = None) -> tuple:
         # every PPU register write into WRAM, so the PPU config never applied →
         # forced-blank stall. The (uint16) addr_expr already models the bank-0
         # 16-bit wrap; only the bank was wrong.
-        return ("0x00", f"(uint16)(cpu->D + {seg.offset:#06x}{idx})")
+        return ("0x00", f"(uint16)(cpu_D() + {seg.offset:#06x}{idx})")
     if k == SegKind.ABS_BANK:
         if seg.index is None:
-            return ("cpu->DB", f"(uint16)({seg.offset:#06x})")
+            return ("cpu_DB()", f"(uint16)({seg.offset:#06x})")
         # Indexed Absolute (ABS_X / ABS_Y): hardware computes a 24-bit
         # effective address `DB:offset + index`, with the carry from
         # `offset + index` propagating INTO THE BANK. Truncating to
@@ -573,8 +573,8 @@ def _segref_addr_expr(seg: SegRef, pointer_expr: Optional[str] = None) -> tuple:
         # holds submodule_index. Compute the 24-bit effective inline
         # and let the C compiler CSE the duplicate sub-expression
         # between bank_expr and addr_expr.
-        idx_reg = "cpu->X" if seg.index == Reg.X else "cpu->Y"
-        eff24 = (f"(((uint32)cpu->DB << 16) + (uint32){seg.offset:#06x}"
+        idx_reg = "cpu_X()" if seg.index == Reg.X else "cpu_Y()"
+        eff24 = (f"(((uint32)cpu_DB() << 16) + (uint32){seg.offset:#06x}"
                  f" + (uint32){idx_reg})")
         return (f"(uint8)(({eff24}) >> 16)", f"(uint16)({eff24})")
     if k == SegKind.LONG:
@@ -583,20 +583,20 @@ def _segref_addr_expr(seg: SegRef, pointer_expr: Optional[str] = None) -> tuple:
             return (f"{bank:#04x}", f"(uint16)({seg.offset:#06x})")
         # Indexed Absolute Long (LONG_X / LONG_Y): same bank-carry rule.
         base24 = (bank << 16) | (seg.offset & 0xFFFF)
-        idx_reg = "cpu->X" if seg.index == Reg.X else "cpu->Y"
+        idx_reg = "cpu_X()" if seg.index == Reg.X else "cpu_Y()"
         eff24 = f"((uint32){base24:#08x} + (uint32){idx_reg})"
         return (f"(uint8)(({eff24}) >> 16)", f"(uint16)({eff24})")
     if k == SegKind.STACK:
-        return ("0x00", f"(uint16)(cpu->S + {seg.offset:#06x})")
+        return ("0x00", f"(uint16)(cpu_S() + {seg.offset:#06x})")
     if k == SegKind.DP_INDIRECT:
-        ptr_addr = f"(uint16)(cpu->D + {seg.offset:#06x})"
+        ptr_addr = f"(uint16)(cpu_D() + {seg.offset:#06x})"
         pointer = pointer_expr or f"cpu_read16(cpu, 0x00, {ptr_addr})"
         if seg.index is None:
-            return ("cpu->DB", pointer)
+            return ("cpu_DB()", pointer)
         # Index the full DB:pointer address, not just its low word. The
         # access emitter supplies a cached pointer so the bank and low-word
         # expressions cannot repeat a guest bus read.
-        eff24 = f"(((uint32)cpu->DB << 16) + (uint32){pointer}{idx})"
+        eff24 = f"(((uint32)cpu_DB() << 16) + (uint32){pointer}{idx})"
         return (f"(uint8)({eff24} >> 16)", f"(uint16){eff24}")
     if k == SegKind.DP_INDIRECT_LONG:
         # ((D + dp) long) (+ Y).  The indexed form adds Y to the full
@@ -604,32 +604,32 @@ def _segref_addr_expr(seg: SegRef, pointer_expr: Optional[str] = None) -> tuple:
         # bank byte while truncating only (word + Y) misreads every exact bank
         # crossing.  DKC2's decompressor exposed this with [$34],Y where
         # $DF:D537 + $2AC9 must read $E0:0000, not $DF:0000.
-        ptr_addr = f"(uint16)(cpu->D + {seg.offset:#06x})"
+        ptr_addr = f"(uint16)(cpu_D() + {seg.offset:#06x})"
         bank_expr = f"cpu_read8(cpu, 0x00, (uint16)({ptr_addr} + 2))"
         if seg.index is None:
             return (bank_expr, f"cpu_read16(cpu, 0x00, {ptr_addr})")
-        idx_reg = "cpu->X" if seg.index == Reg.X else "cpu->Y"
+        idx_reg = "cpu_X()" if seg.index == Reg.X else "cpu_Y()"
         base24 = (f"(((uint32){bank_expr} << 16) | "
                   f"(uint32)cpu_read16(cpu, 0x00, {ptr_addr}))")
         eff24 = f"({base24} + (uint32){idx_reg})"
         return (f"(uint8)(({eff24}) >> 16)", f"(uint16)({eff24})")
     if k == SegKind.ABS_INDIRECT:
-        return ("cpu->PB",
-                f"cpu_read16(cpu, cpu->PB, (uint16){seg.offset:#06x})")
+        return ("cpu_PB()",
+                f"cpu_read16(cpu, cpu_PB(), (uint16){seg.offset:#06x})")
     if k == SegKind.ABS_INDIRECT_X:
-        return ("cpu->PB",
-                f"cpu_read16(cpu, cpu->PB, (uint16)({seg.offset:#06x} + cpu->X))")
+        return ("cpu_PB()",
+                f"cpu_read16(cpu, cpu_PB(), (uint16)({seg.offset:#06x} + cpu_X()))")
     if k == SegKind.ABS_INDIRECT_LONG:
         addr = f"(uint16){seg.offset:#06x}"
         return (f"cpu_read8(cpu, 0x00, (uint16)({addr} + 2))",
                 f"cpu_read16(cpu, 0x00, {addr})")
     if k == SegKind.DP_INDIRECT_X:
-        ptr_addr = f"(uint16)(cpu->D + {seg.offset:#06x} + cpu->X)"
-        return ("cpu->DB", f"cpu_read16(cpu, 0x00, {ptr_addr})")
+        ptr_addr = f"(uint16)(cpu_D() + {seg.offset:#06x} + cpu_X())"
+        return ("cpu_DB()", f"cpu_read16(cpu, 0x00, {ptr_addr})")
     if k == SegKind.STACK_REL_INDIRECT_Y:
-        ptr_addr = f"(uint16)(cpu->S + {seg.offset:#06x})"
+        ptr_addr = f"(uint16)(cpu_S() + {seg.offset:#06x})"
         pointer = pointer_expr or f"cpu_read16(cpu, 0x00, {ptr_addr})"
-        eff24 = f"(((uint32)cpu->DB << 16) + (uint32){pointer} + cpu->Y)"
+        eff24 = f"(((uint32)cpu_DB() << 16) + (uint32){pointer} + cpu_Y())"
         return (f"(uint8)({eff24} >> 16)", f"(uint16){eff24}")
     raise ValueError(f"unsupported SegKind {k}")
 
@@ -640,7 +640,7 @@ def _cached_segref_addr(seg: SegRef, name: str) -> tuple:
     """Materialize indexed indirect pointers once before splitting bank/word."""
     if ((seg.kind == SegKind.DP_INDIRECT and seg.index is not None)
             or seg.kind == SegKind.STACK_REL_INDIRECT_Y):
-        base = "cpu->D" if seg.kind == SegKind.DP_INDIRECT else "cpu->S"
+        base = "cpu_D()" if seg.kind == SegKind.DP_INDIRECT else "cpu_S()"
         prefix = [f"uint16 {name} = cpu_read16(cpu, 0x00, "
                   f"(uint16)({base} + {seg.offset:#06x}));"]
         return prefix, *_segref_addr_expr(seg, name)
@@ -679,7 +679,7 @@ def _emit_readreg(op: ReadReg) -> List[str]:
     """Emit a 16-bit read of A/X/Y/etc. For A, X, Y we route through
     cpu_read_{a,x,y}16 helpers — same value, but the helper name carries
     the hardware contract and the lint can spot bypass attempts. For
-    Reg.B the _REG_FIELD mapping returns the derived `(cpu->A >> 8)`
+    Reg.B the _REG_FIELD mapping returns the derived `(cpu_A() >> 8)`
     expression directly.
 
     NOTE: This always emits a 16-bit uint. Callers that want 8-bit must
@@ -723,7 +723,7 @@ def _emit_writereg(op: WriteReg) -> List[str]:
         return [f"cpu_write_x_x(cpu, (uint16)({src}));"]
     if op.reg == Reg.Y:
         return [f"cpu_write_y_x(cpu, (uint16)({src}));"]
-    return [f"{_reg(op.reg)} = {src};"]
+    return [emitter_helpers.assign(_reg(op.reg), src)]
 
 
 def _emit_consti(op: ConstI) -> List[str]:
@@ -817,7 +817,7 @@ def _emit_alu(op: Alu) -> List[str]:
     same C function don't conflict on `_t`.
 
     Width contract — see `widths.py` (canonical width-literal home):
-    ReadReg always emits a uint16 read of cpu->A/X/Y, so width=1 ALU
+    ReadReg always emits a uint16 read of cpu_A()/X/Y, so width=1 ALU
     ops MUST mask both operands via `widths.masked` before computing
     carry/borrow/sign. Otherwise the high byte (B-register for A, or
     stale hw-zero for X/Y) leaks into the result.
@@ -919,29 +919,29 @@ def _emit_increg(op: IncReg) -> List[str]:
     # data. Fixed 2026-04-30.
     if op.reg == Reg.A:
         # m=1: 8-bit INC, preserve B (high byte). m=0: 16-bit INC.
-        lines = [f"if (cpu->m_flag) {{",
+        lines = [f"if (cpu_m_flag()) {{",
                  f"  uint8 _lo8 = ({widths.low_byte(field)}) + ({delta});",
-                 f"  {field} = {widths.preserve_high(field, '_lo8')};"]
+                 "  " + emitter_helpers.assign(field, widths.preserve_high(field, '_lo8'))]
         lines.extend(f"  {s}" for s in widths.set_nz_no_p("_lo8", 1))
         lines.append("} else {")
-        lines.append(f"  {field} = (uint16)(({field}) + ({delta}));")
+        lines.append("  " + emitter_helpers.assign(field, f"(uint16)(({field}) + ({delta}))"))
         lines.extend(f"  {s}" for s in widths.set_nz_no_p(field, 2))
         lines.append("}")
         return lines
     if op.reg in (Reg.X, Reg.Y):
         # x=1: 8-bit INC, ZERO high (hw contract). x=0: 16-bit INC.
-        lines = [f"if (cpu->x_flag) {{",
+        lines = [f"if (cpu_x_flag()) {{",
                  f"  uint8 _lo8 = ({widths.low_byte(field)}) + ({delta});",
-                 f"  {field} = {widths.zero_extend_lo('_lo8')};"
-                 f"  /* x=1 zeros high byte (hw contract) */"]
+                 "  " + emitter_helpers.assign(field, widths.zero_extend_lo('_lo8'))
+                 + "  /* x=1 zeros high byte (hw contract) */"]
         lines.extend(f"  {s}" for s in widths.set_nz_no_p("_lo8", 1))
         lines.append("} else {")
-        lines.append(f"  {field} = (uint16)(({field}) + ({delta}));")
+        lines.append("  " + emitter_helpers.assign(field, f"(uint16)(({field}) + ({delta}))"))
         lines.extend(f"  {s}" for s in widths.set_nz_no_p(field, 2))
         lines.append("}")
         return lines
     # Other registers (D, S) — always 16-bit native.
-    return [f"{field} = ({field}) + ({delta});"] + widths.set_nz_no_p(field, 2)
+    return [emitter_helpers.assign(field, f"({field}) + ({delta})")] + widths.set_nz_no_p(field, 2)
 
 
 def _emit_incmem(op: IncMem) -> List[str]:
@@ -969,7 +969,7 @@ def _emit_bittest(op: BitTest) -> List[str]:
     sign = widths.sign_bit(op.width)
     overflow = widths.overflow_bit(op.width)
     ctype = widths.ctype(op.width)
-    a_m = widths.masked("cpu->A", op.width)
+    a_m = widths.masked("cpu_A()", op.width)
     operand_m = widths.masked(_v(op.operand), op.width)
     if getattr(op, "imm", False):
         # BIT #imm ($89): immediate form sets ONLY Z (N/V unchanged).
@@ -995,8 +995,8 @@ def _emit_bitsetmem(op: BitSetMem) -> List[str]:
     return [
         "{",
         f"  {ctype} _m = {widths.read_fn(op.width)}(cpu, {bank}, {addr});",
-        f"  cpu->_flag_Z = ((_m & cpu->A) == 0) ? 1 : 0;",
-        f"  {widths.write_fn(op.width)}(cpu, {bank}, {addr}, ({ctype})(_m | cpu->A));",
+        f"  cpu->_flag_Z = ((_m & cpu_A()) == 0) ? 1 : 0;",
+        f"  {widths.write_fn(op.width)}(cpu, {bank}, {addr}, ({ctype})(_m | cpu_A()));",
         "}",
     ]
 
@@ -1007,8 +1007,8 @@ def _emit_bitclearmem(op: BitClearMem) -> List[str]:
     return [
         "{",
         f"  {ctype} _m = {widths.read_fn(op.width)}(cpu, {bank}, {addr});",
-        f"  cpu->_flag_Z = ((_m & cpu->A) == 0) ? 1 : 0;",
-        f"  {widths.write_fn(op.width)}(cpu, {bank}, {addr}, ({ctype})(_m & ~cpu->A));",
+        f"  cpu->_flag_Z = ((_m & cpu_A()) == 0) ? 1 : 0;",
+        f"  {widths.write_fn(op.width)}(cpu, {bank}, {addr}, ({ctype})(_m & ~cpu_A()));",
         "}",
     ]
 
@@ -1021,17 +1021,17 @@ def _emit_setflag(op: SetFlag) -> List[str]:
         Reg.XF: "0x10", Reg.M: "0x20", Reg.V: "0x40", Reg.N: "0x80",
     }
     mask = flag_to_p_mask.get(op.flag)
-    lines = [f"{_reg(op.flag)} = {op.value};"]
+    lines = [emitter_helpers.assign(_reg(op.flag), str(op.value))]
     if mask is not None:
         if op.value:
-            lines.append(f"cpu->P = (uint8)(cpu->P | {mask});")
+            lines.append(f"cpu_set_P((uint8)(cpu_P() | {mask}));")
         else:
-            lines.append(f"cpu->P = (uint8)(cpu->P & ~{mask});")
+            lines.append(f"cpu_set_P((uint8)(cpu_P() & ~{mask}));")
     return lines
 
 
 def _emit_setnz(op) -> List[str]:
-    """Update N/Z mirrors and cpu->P bits based on op.src's bits."""
+    """Update N/Z mirrors and cpu_P() bits based on op.src's bits."""
     return widths.set_nz(widths.masked(_v(op.src), op.width), op.width)
 
 
@@ -1049,13 +1049,13 @@ def _emit_sepflags(op: SepFlags) -> List[str]:
 def _emit_xce(op: XCE) -> List[str]:
     return [
         "{",
-        "  uint8 _old_p = cpu->P;",
-        "  uint8 _t = cpu->emulation;",
-        "  cpu->emulation = cpu->_flag_C;",
+        "  uint8 _old_p = cpu_P();",
+        "  uint8 _t = cpu_emulation();",
+        "  cpu_set_emulation(cpu->_flag_C);",
         "  cpu->_flag_C = _t;",
-        "  if (cpu->emulation) { cpu->m_flag = 1; cpu->x_flag = 1; cpu->X &= 0xFFu; cpu->Y &= 0xFFu;",
+        "  if (cpu_emulation()) { cpu_set_m_flag(1); cpu_set_x_flag(1); cpu_set_X(cpu_X() & (0xFFu)); cpu_set_Y(cpu_Y() & (0xFFu));",
         "                        cpu_mirrors_to_p(cpu); }",
-        "  cpu_trace_px_record(cpu, 0, 7 /*XCE*/, _old_p, cpu->P);",
+        "  cpu_trace_px_record(cpu, 0, 7 /*XCE*/, _old_p, cpu_P());",
         "}",
     ]
 
@@ -1064,7 +1064,7 @@ def _emit_xba(op: XBA) -> List[str]:
     """XBA: exchange the high and low bytes of the 16-bit accumulator.
     Always 8-bit byte swap regardless of m_flag.
 
-    Operates ENTIRELY on cpu->A — there is no separate B shadow field
+    Operates ENTIRELY on cpu_A() — there is no separate B shadow field
     to keep in sync. The byte the 65816 calls "B" is just the high byte
     of A; it changes whenever any operation mutates A's high half (LDA
     in m=0, TCD/TDC pair manipulation, etc.). A separate `cpu->B` shadow
@@ -1079,10 +1079,10 @@ def _emit_xba(op: XBA) -> List[str]:
     """
     return [
         "{",
-        "  uint16 _old = cpu->A;",
-        "  cpu->A = (uint16)(((_old & 0xFF) << 8) | ((_old >> 8) & 0xFF));",
-        "  cpu->_flag_Z = ((cpu->A & 0xFF) == 0) ? 1 : 0;",
-        "  cpu->_flag_N = ((cpu->A & 0x80) != 0) ? 1 : 0;",
+        "  uint16 _old = cpu_A();",
+        "  cpu_set_A((uint16)(((_old & 0xFF) << 8) | ((_old >> 8) & 0xFF)));",
+        "  cpu->_flag_Z = ((cpu_A() & 0xFF) == 0) ? 1 : 0;",
+        "  cpu->_flag_N = ((cpu_A() & 0x80) != 0) ? 1 : 0;",
         "}",
     ]
 
@@ -1098,15 +1098,15 @@ def _emit_pushreg(op: PushReg) -> List[str]:
             *emitter_helpers.stack_op_traced(
                 "CPU_STACK_OP_PHP", -1,
                 emitter_helpers.push_byte(f"(uint8)({field})")),
-            "cpu_trace_event(cpu, 0, CPU_TR_PHP, cpu->P, 0);",
-            "cpu_trace_px_record(cpu, 0, 4 /*PHP*/, cpu->P, cpu->P);",
+            "cpu_trace_event(cpu, 0, CPU_TR_PHP, cpu_P(), 0);",
+            "cpu_trace_px_record(cpu, 0, 4 /*PHP*/, cpu_P(), cpu_P());",
         ]
     if op.reg == Reg.DB:
         return emitter_helpers.stack_op_traced(
             "CPU_STACK_OP_PHB", -1,
             emitter_helpers.push_byte(f"(uint8)({field})")
         ) + [
-            "cpu_trace_event(cpu, 0, CPU_TR_PHB, cpu->DB, cpu->DB);",
+            "cpu_trace_event(cpu, 0, CPU_TR_PHB, cpu_DB(), cpu_DB());",
         ]
     if op.reg == Reg.PB:
         # PHK pushes the program-bank K. Stale PB here is the suspected
@@ -1115,7 +1115,7 @@ def _emit_pushreg(op: PushReg) -> List[str]:
             "CPU_STACK_OP_PHK", -1,
             emitter_helpers.push_byte(f"(uint8)({field})")
         ) + [
-            "cpu_trace_event(cpu, 0, CPU_TR_PHK, cpu->PB, cpu->PB);",
+            "cpu_trace_event(cpu, 0, CPU_TR_PHK, cpu_PB(), cpu_PB());",
         ]
     if op.reg == Reg.D:
         return emitter_helpers.stack_op_traced(
@@ -1133,19 +1133,19 @@ def _emit_pushreg(op: PushReg) -> List[str]:
     if op.reg == Reg.A:
         if op.static_m == 1:
             return [
-                "{ uint16 _old_s = cpu->S;",
+                "{ uint16 _old_s = cpu_S();",
                 *(f"  {s}" for s in emitter_helpers.push_byte(widths.low_byte(field))),
                 "  cpu_trace_stack_op(cpu, 0, CPU_STACK_OP_PHA, _old_s, -1); }",
             ]
         if op.static_m == 0:
             return [
-                "{ uint16 _old_s = cpu->S;",
+                "{ uint16 _old_s = cpu_S();",
                 *(f"  {s}" for s in emitter_helpers.push_word(field)),
                 "  cpu_trace_stack_op(cpu, 0, CPU_STACK_OP_PHA, _old_s, -2); }",
             ]
         return [
-            "{ uint16 _old_s = cpu->S;",
-            "  if (cpu->m_flag) {",
+            "{ uint16 _old_s = cpu_S();",
+            "  if (cpu_m_flag()) {",
             *(f"    {s}" for s in emitter_helpers.push_byte(widths.low_byte(field))),
             "    cpu_trace_stack_op(cpu, 0, CPU_STACK_OP_PHA, _old_s, -1);",
             "  } else {",
@@ -1157,19 +1157,19 @@ def _emit_pushreg(op: PushReg) -> List[str]:
         op_id = "CPU_STACK_OP_PHX" if op.reg == Reg.X else "CPU_STACK_OP_PHY"
         if op.static_x == 1:
             return [
-                "{ uint16 _old_s = cpu->S;",
+                "{ uint16 _old_s = cpu_S();",
                 *(f"  {s}" for s in emitter_helpers.push_byte(widths.low_byte(field))),
                 f"  cpu_trace_stack_op(cpu, 0, {op_id}, _old_s, -1); }}",
             ]
         if op.static_x == 0:
             return [
-                "{ uint16 _old_s = cpu->S;",
+                "{ uint16 _old_s = cpu_S();",
                 *(f"  {s}" for s in emitter_helpers.push_word(field)),
                 f"  cpu_trace_stack_op(cpu, 0, {op_id}, _old_s, -2); }}",
             ]
         return [
-            "{ uint16 _old_s = cpu->S;",
-            "  if (cpu->x_flag) {",
+            "{ uint16 _old_s = cpu_S();",
+            "  if (cpu_x_flag()) {",
             *(f"    {s}" for s in emitter_helpers.push_byte(widths.low_byte(field))),
             f"    cpu_trace_stack_op(cpu, 0, {op_id}, _old_s, -1);",
             "  } else {",
@@ -1183,36 +1183,36 @@ def _emit_pushreg(op: PushReg) -> List[str]:
 def _emit_pullreg(op: PullReg) -> List[str]:
     field = _reg(op.reg)
     if op.reg == Reg.P:
-        return ["{ uint8 _old_p = cpu->P; uint16 _old_s = cpu->S;",
+        return ["{ uint8 _old_p = cpu_P(); uint16 _old_s = cpu_S();",
                 *(f"  {s}" for s in emitter_helpers.pop_byte_assign(field)),
                 "  cpu_p_to_mirrors(cpu);",
                 "  cpu_trace_stack_op(cpu, 0, CPU_STACK_OP_PLP, _old_s, +1);",
-                "  cpu_trace_event(cpu, 0, CPU_TR_PLP, _old_p, cpu->P);",
-                "  cpu_trace_px_record(cpu, 0, 2 /*PLP*/, _old_p, cpu->P); }"]
+                "  cpu_trace_event(cpu, 0, CPU_TR_PLP, _old_p, cpu_P());",
+                "  cpu_trace_px_record(cpu, 0, 2 /*PLP*/, _old_p, cpu_P()); }"]
     if op.reg == Reg.DB:
         # PLB sets N/Z from popped value.
         trace_pc = _trace_pc_arg()
-        return ["{ uint8 _old_db = cpu->DB; uint16 _old_s = cpu->S;",
+        return ["{ uint8 _old_db = cpu_DB(); uint16 _old_s = cpu_S();",
                 *(f"  {s}" for s in emitter_helpers.pop_byte_assign(field)),
                 *(f"  {s}" for s in widths.set_nz(field, 1)),
                 "  cpu_trace_stack_op(cpu, 0, CPU_STACK_OP_PLB, _old_s, +1);",
-                f"  cpu_trace_db_change(cpu, {trace_pc}, _old_db, cpu->DB, CPU_TR_PLB); }}"]
+                f"  cpu_trace_db_change(cpu, {trace_pc}, _old_db, cpu_DB(), CPU_TR_PLB); }}"]
     if op.reg == Reg.PB:
         # PLK doesn't exist on the 65816 but IR routes any PullReg(PB) here.
         trace_pc = _trace_pc_arg()
-        return ["{ uint8 _old_pb = cpu->PB; uint16 _old_s = cpu->S;",
+        return ["{ uint8 _old_pb = cpu_PB(); uint16 _old_s = cpu_S();",
                 *(f"  {s}" for s in emitter_helpers.pop_byte_assign(field)),
                 *(f"  {s}" for s in widths.set_nz(field, 1)),
                 "  cpu_trace_stack_op(cpu, 0, CPU_STACK_OP_PLB, _old_s, +1);",
-                f"  cpu_trace_pb_change(cpu, {trace_pc}, _old_pb, cpu->PB, CPU_TR_PB_WRITE); }}"]
+                f"  cpu_trace_pb_change(cpu, {trace_pc}, _old_pb, cpu_PB(), CPU_TR_PB_WRITE); }}"]
     if op.reg == Reg.D:
         # PLD: 16-bit, sets N/Z from popped 16-bit value.
         return emitter_helpers.stack_op_traced(
             "CPU_STACK_OP_PLD", +2,
             emitter_helpers.pop_word_assign(field) + widths.set_nz(field, 2))
     # Final cpu->P sync line — both A and X/Y end with the same packed-flag update.
-    p_sync = ("cpu->P = (uint8)((cpu->P & ~0x82) | "
-              "(cpu->_flag_Z ? 0x02 : 0) | (cpu->_flag_N ? 0x80 : 0));")
+    p_sync = ("cpu_set_P((uint8)((cpu_P() & ~0x82) | "
+              "(cpu->_flag_Z ? 0x02 : 0) | (cpu->_flag_N ? 0x80 : 0)));")
     if op.reg == Reg.A:
         # PLA: width follows M. Preserve B (high byte) in m=1.
         # Prefer decoder static `op.static_m` over runtime cpu->m_flag
@@ -1220,25 +1220,25 @@ def _emit_pullreg(op: PullReg) -> List[str]:
         # balanced against caller-side flag drift.
         if op.static_m == 1:
             return [
-                "{ uint16 _old_s = cpu->S;",
+                "{ uint16 _old_s = cpu_S();",
                 *(f"  {s}" for s in emitter_helpers.pop_byte_assign("uint8 _v")),
-                f"  {field} = {widths.preserve_high(field, '_v')};",
+                "  " + emitter_helpers.assign(field, widths.preserve_high(field, '_v')),
                 *(f"  {s}" for s in widths.set_nz_no_p("_v", 1)),
                 "  cpu_trace_stack_op(cpu, 0, CPU_STACK_OP_PLA, _old_s, +1);",
                 f"  {p_sync} }}",
             ]
         if op.static_m == 0:
             return [
-                "{ uint16 _old_s = cpu->S;",
+                "{ uint16 _old_s = cpu_S();",
                 *(f"  {s}" for s in emitter_helpers.pop_word_assign(field)),
                 *(f"  {s}" for s in widths.set_nz_no_p(field, 2)),
                 "  cpu_trace_stack_op(cpu, 0, CPU_STACK_OP_PLA, _old_s, +2);",
                 f"  {p_sync} }}",
             ]
-        lines = ["{ uint16 _old_s = cpu->S;",
-                 "  if (cpu->m_flag) {",
+        lines = ["{ uint16 _old_s = cpu_S();",
+                 "  if (cpu_m_flag()) {",
                  *(f"    {s}" for s in emitter_helpers.pop_byte_assign("uint8 _v")),
-                 f"    {field} = {widths.preserve_high(field, '_v')};",
+                 "    " + emitter_helpers.assign(field, widths.preserve_high(field, '_v')),
                  *(f"    {s}" for s in widths.set_nz_no_p("_v", 1)),
                  "    cpu_trace_stack_op(cpu, 0, CPU_STACK_OP_PLA, _old_s, +1);",
                  "  } else {",
@@ -1256,27 +1256,27 @@ def _emit_pullreg(op: PullReg) -> List[str]:
         # bracket them with internal REP/SEP idioms.
         if op.static_x == 1:
             return [
-                "{ uint16 _old_s = cpu->S;",
+                "{ uint16 _old_s = cpu_S();",
                 *(f"  {s}" for s in emitter_helpers.pop_byte_assign("uint8 _v")),
-                f"  {field} = {widths.zero_extend_lo('_v')};"
-                f"  /* x=1 zeros high byte (hw contract) */",
+                "  " + emitter_helpers.assign(field, widths.zero_extend_lo('_v'))
+                + "  /* x=1 zeros high byte (hw contract) */",
                 *(f"  {s}" for s in widths.set_nz_no_p("_v", 1)),
                 f"  cpu_trace_stack_op(cpu, 0, {op_id}, _old_s, +1);",
                 f"  {p_sync} }}",
             ]
         if op.static_x == 0:
             return [
-                "{ uint16 _old_s = cpu->S;",
+                "{ uint16 _old_s = cpu_S();",
                 *(f"  {s}" for s in emitter_helpers.pop_word_assign(field)),
                 *(f"  {s}" for s in widths.set_nz_no_p(field, 2)),
                 f"  cpu_trace_stack_op(cpu, 0, {op_id}, _old_s, +2);",
                 f"  {p_sync} }}",
             ]
-        lines = ["{ uint16 _old_s = cpu->S;",
-                 "  if (cpu->x_flag) {",
+        lines = ["{ uint16 _old_s = cpu_S();",
+                 "  if (cpu_x_flag()) {",
                  *(f"    {s}" for s in emitter_helpers.pop_byte_assign("uint8 _v")),
-                 f"    {field} = {widths.zero_extend_lo('_v')};"
-                 f"  /* x=1 zeros high byte (hw contract) */",
+                 "    " + emitter_helpers.assign(field, widths.zero_extend_lo('_v'))
+                 + "  /* x=1 zeros high byte (hw contract) */",
                  *(f"    {s}" for s in widths.set_nz_no_p("_v", 1)),
                  f"    cpu_trace_stack_op(cpu, 0, {op_id}, _old_s, +1);",
                  "  } else {",
@@ -1301,47 +1301,47 @@ def _emit_transfer(op: Transfer) -> List[str]:
     # bits. v1 emit didn't distinguish. Trace S changes for hunt-the-bug.
     if op.dst == Reg.S:
         return [
-            "{ uint16 _old_s = cpu->S;",
-            f"  {dst} = {src};",
+            "{ uint16 _old_s = cpu_S();",
+            "  " + emitter_helpers.assign(dst, src),
             "  /* trace_event uses extra0/extra1 for old/new S high bytes */",
             "  cpu_trace_event(cpu, 0, CPU_TR_DB_WRITE,",
-            "                  (uint8)(_old_s >> 8), cpu->S); }",
+            "                  (uint8)(_old_s >> 8), cpu_S()); }",
         ]
     # TDC (D->A) / TSC (S->A): the C-register transfers are ALWAYS 16-bit,
     # independent of the M flag (unlike TXA/TYA). Both set N/Z on the 16-bit
     # value. (TCD/TCS, the A->D/S direction, already go 16-bit via dst==D/S.)
     if op.dst == Reg.A and op.src in (Reg.D, Reg.S):
-        return [f"{dst} = (uint16)({src});"] + widths.set_nz(dst, 2)
+        return [emitter_helpers.assign(dst, f"(uint16)({src})")] + widths.set_nz(dst, 2)
     # Determine destination width from controlling flag.
     if op.dst == Reg.A:
-        flag = "cpu->m_flag"
+        flag = "cpu_m_flag()"
     elif op.dst in (Reg.X, Reg.Y):
-        flag = "cpu->x_flag"
+        flag = "cpu_x_flag()"
     elif op.dst == Reg.D or op.dst == Reg.S:
         flag = None  # always 16-bit
     else:
         flag = None
     if flag is None:
         # Full-width transfer (D, etc.)
-        return [f"{dst} = {src};"] + widths.set_nz(dst, 2)
+        return [emitter_helpers.assign(dst, src)] + widths.set_nz(dst, 2)
     # X/Y dest in x=1 zero-extends (high byte hardware-zero); A dest in
     # m=1 preserves high byte (= B register). See _emit_writereg comment
     # for the LoadStripeImage failure that motivated this. 2026-04-30.
     if op.dst in (Reg.X, Reg.Y):
-        dst_8bit = f"{dst} = {widths.zero_extend_lo('_v')};  /* x=1 zeros high byte (hw contract) */"
+        dst_8bit = emitter_helpers.assign(dst, widths.zero_extend_lo('_v')) + "  /* x=1 zeros high byte (hw contract) */"
     else:
-        dst_8bit = f"{dst} = {widths.preserve_high(dst, '_v')};"
+        dst_8bit = emitter_helpers.assign(dst, widths.preserve_high(dst, '_v'))
     lines = [f"if ({flag}) {{",
              f"  uint8 _v = {widths.low_byte(src)};",
              f"  {dst_8bit}"]
     lines.extend(f"  {s}" for s in widths.set_nz_no_p("_v", 1))
     lines.append("} else {")
-    lines.append(f"  {dst} = (uint16)({src});")
+    lines.append("  " + emitter_helpers.assign(dst, f"(uint16)({src})"))
     lines.extend(f"  {s}" for s in widths.set_nz_no_p(dst, 2))
     lines.append("}")
     # Final cpu->P sync after both branches.
-    lines.append("cpu->P = (uint8)((cpu->P & ~0x82) | "
-                 "(cpu->_flag_Z ? 0x02 : 0) | (cpu->_flag_N ? 0x80 : 0));")
+    lines.append("cpu_set_P((uint8)((cpu_P() & ~0x82) | "
+                 "(cpu->_flag_Z ? 0x02 : 0) | (cpu->_flag_N ? 0x80 : 0)));")
     return lines
 
 
@@ -1408,23 +1408,23 @@ def _live_dispatch_target_expr(insn) -> Optional[str]:
         if is_long:
             return (f"(((uint32)cpu_read8(cpu, 0x00, (uint16)0x{(ptr + 2) & 0xFFFF:04x}) << 16) "
                     f"| (uint32)cpu_read16(cpu, 0x00, (uint16)0x{ptr:04x}))")
-        return (f"(((uint32)cpu->PB << 16) "
+        return (f"(((uint32)cpu_PB() << 16) "
                 f"| (uint32)cpu_read16(cpu, 0x00, (uint16)0x{ptr:04x}))")
     idx_reg = getattr(insn, 'dispatch_idx_reg', 'X')
     idx_field = 'Y' if idx_reg == 'Y' else 'X'
-    offset = f"(uint16)(0x{ptr:04x} + (cpu->{idx_field} & 0xFFFF))"
+    offset = f"(uint16)(0x{ptr:04x} + (cpu_{idx_field}() & 0xFFFF))"
     if is_long:
-        return (f"(((uint32)cpu_read8(cpu, cpu->PB, (uint16)({offset} + 2)) << 16) "
-                f"| (uint32)cpu_read16(cpu, cpu->PB, {offset}))")
-    return (f"(((uint32)cpu->PB << 16) "
-            f"| (uint32)cpu_read16(cpu, cpu->PB, {offset}))")
+        return (f"(((uint32)cpu_read8(cpu, cpu_PB(), (uint16)({offset} + 2)) << 16) "
+                f"| (uint32)cpu_read16(cpu, cpu_PB(), {offset}))")
+    return (f"(((uint32)cpu_PB() << 16) "
+            f"| (uint32)cpu_read16(cpu, cpu_PB(), {offset}))")
 
 
 def _transfer_target_expr(pc24: int, long: bool) -> str:
     """Short transfers keep PBR even when their C body belongs to a mirror."""
     if long:
         return f"0x{pc24 & 0xFFFFFF:06x}u"
-    return f"(((uint32)cpu->PB << 16) | 0x{pc24 & 0xFFFF:04x}u)"
+    return f"(((uint32)cpu_PB() << 16) | 0x{pc24 & 0xFFFF:04x}u)"
 
 
 def _emit_indirect_dispatch(insn) -> List[str]:
@@ -1526,8 +1526,8 @@ def _emit_indirect_dispatch(insn) -> List[str]:
     # tail transfer.
     if is_jsr:
         _iret16 = (site_pc24 + 2) & 0xFFFF  # JSR (abs,X) is 3 bytes; push return-1
-        lines.append(f"  cpu_write8(cpu, 0x00, cpu->S, 0x{(_iret16 >> 8) & 0xFF:02x}); cpu->S = (uint16)(cpu->S - 1);")
-        lines.append(f"  cpu_write8(cpu, 0x00, cpu->S, 0x{_iret16 & 0xFF:02x}); cpu->S = (uint16)(cpu->S - 1);")
+        lines.append(f"  cpu_write8(cpu, 0x00, cpu_S(), 0x{(_iret16 >> 8) & 0xFF:02x}); cpu_set_S((uint16)(cpu_S() - 1));")
+        lines.append(f"  cpu_write8(cpu, 0x00, cpu_S(), 0x{_iret16 & 0xFF:02x}); cpu_set_S((uint16)(cpu_S() - 1));")
         lines.append("  cpu->host_return_valid = 2;  /* indirect JSR call, 2-byte frame */")
     elif is_call:
         # PEA already pushed the return frame; enter the handler as a paired
@@ -1566,11 +1566,11 @@ def _emit_indirect_dispatch(insn) -> List[str]:
         if getattr(insn, 'dispatch_stack_pointer', False):
             lines.append(
                 f"  uint16 _target = (uint16)(cpu_read16(cpu, 0x00, "
-                f"(uint16)(cpu->D + 0x{ptr:04x})) + 1u);"
+                f"(uint16)(cpu_D() + 0x{ptr:04x})) + 1u);"
                 "  /* PEI(dp); RTS consumes target-1 as an internal goto */")
         else:
             lines.append(
-                f"  uint16 _target = cpu_read16(cpu, cpu->PB, (uint16)0x{ptr:04x});"
+                f"  uint16 _target = cpu_read16(cpu, cpu_PB(), (uint16)0x{ptr:04x});"
                 "  /* absolute indirect dispatch: switch on the loaded pointer */")
         lines.append("  switch (_target) {")
         seen_cases = set()
@@ -1600,7 +1600,7 @@ def _emit_indirect_dispatch(insn) -> List[str]:
                 lines.append("      cpu->host_return_valid = _hrv;")
                 lines.append("      RecompReturn _r;")
                 lines.append(
-                    "      switch (((cpu->m_flag & 1) << 1) | (cpu->x_flag & 1)) {")
+                    "      switch (((cpu_m_flag() & 1) << 1) | (cpu_x_flag() & 1)) {")
                 lines += variant_dispatch_case_lines(
                     tgt_addr, base_name, indent="        ",
                     pre_call=["cpu_tailcall_inherit_return_context(_entry_s, _hrv);"],
@@ -1622,7 +1622,7 @@ def _emit_indirect_dispatch(insn) -> List[str]:
         # fallback, never worse than the drop). See docs/MULTI_TIER.md.
         lines.append(
             f"      return interp_tier_dispatch_tail(cpu, "
-            f"((uint32)cpu->PB << 16) | _target, "
+            f"((uint32)cpu_PB() << 16) | _target, "
             f"0x{site_pc24:06x}u, _entry_s, _hrv);")
         lines.append("  }")
         lines.append("}")
@@ -1641,7 +1641,7 @@ def _emit_indirect_dispatch(insn) -> List[str]:
         ptr = insn.operand & 0xFFFF
         if kind == 'long' and pointer_is_indexed:
             lines.append(
-                f"  uint16 _ptr = (uint16)(0x{ptr:04x} + (cpu->{idx_field} & 0xFFFF));"
+                f"  uint16 _ptr = (uint16)(0x{ptr:04x} + (cpu_{idx_field}() & 0xFFFF));"
                 "  /* long pointer descriptor selected at runtime */")
             lines.append(
                 "  uint16 _target_lo = cpu_read16(cpu, 0x00, _ptr);")
@@ -1661,14 +1661,14 @@ def _emit_indirect_dispatch(insn) -> List[str]:
             )
         elif pointer_is_indexed:
             lines.append(
-                f"  uint16 _ptr = (uint16)(0x{ptr:04x} + (cpu->{idx_field} & 0xFFFF));"
+                f"  uint16 _ptr = (uint16)(0x{ptr:04x} + (cpu_{idx_field}() & 0xFFFF));"
                 "  /* JSR (abs,X): X selects a runtime pointer descriptor */")
             lines.append(
-                "  uint16 _target = cpu_read16(cpu, cpu->PB, _ptr);"
+                "  uint16 _target = cpu_read16(cpu, cpu_PB(), _ptr);"
                 "  /* switch on the loaded pointer */")
         else:
             lines.append(
-                f"  uint16 _target = cpu_read16(cpu, cpu->PB, (uint16)0x{ptr:04x});"
+                f"  uint16 _target = cpu_read16(cpu, cpu_PB(), (uint16)0x{ptr:04x});"
                 "  /* absolute indirect dispatch: switch on the loaded pointer */"
             )
         if is_rts_stack_dispatch:
@@ -1723,7 +1723,7 @@ def _emit_indirect_dispatch(insn) -> List[str]:
                     _UNRESOLVED_CALL_TARGETS.add((tgt_addr, em_v, ex_v))
                 body = [
                     "RecompReturn _r;",
-                    "switch (((cpu->m_flag & 1) << 1) | (cpu->x_flag & 1)) {",
+                    "switch (((cpu_m_flag() & 1) << 1) | (cpu_x_flag() & 1)) {",
                 ]
                 # A pointer-matched JMP/JML is still a true tail transfer.
                 # Its selected handler inherits the dispatcher's architectural
@@ -1777,7 +1777,7 @@ def _emit_indirect_dispatch(insn) -> List[str]:
                     # changes it to the selected target bank.
                     if kind == 'long':
                         lines.append(
-                            f"      cpu->PB = 0x{target_bank:02x};  "
+                            f"      cpu_set_PB(0x{target_bank:02x});  "
                             "/* long indirect tail transfer */")
                     for stmt in body:
                         lines.append(f"      {stmt}")
@@ -1797,7 +1797,7 @@ def _emit_indirect_dispatch(insn) -> List[str]:
             lines.append(
                 f"      (void)cpu_trace_dispatch_oob(cpu, 0x{site_pc24:06x}, _target);")
             lines.append(
-                f"      cpu->S = (uint16)(cpu->S + {miss_cleanup_size});  /* unpop unconsumed call frame */")
+                f"      cpu_set_S((uint16)(cpu_S() + {miss_cleanup_size}));  /* unpop unconsumed call frame */")
             lines.append("      break;")
         else:
             lines.append("    default: break;")
@@ -1817,7 +1817,7 @@ def _emit_indirect_dispatch(insn) -> List[str]:
             # dropping it; bail -> abandon-balanced fallback. docs/MULTI_TIER.md.
             fallback_target = (
                 "_target" if kind == 'long'
-                else "((uint32)cpu->PB << 16) | _target")
+                else "((uint32)cpu_PB() << 16) | _target")
             lines.append(
                 f"  return interp_tier_dispatch_tail(cpu, "
                 f"{fallback_target}, "
@@ -1826,7 +1826,7 @@ def _emit_indirect_dispatch(insn) -> List[str]:
         return lines
     if len(table_bases) >= 2:
         lines.append(
-            f"  uint16 _idx = (uint16)(cpu->{idx_field} & 0xFFFF);"
+            f"  uint16 _idx = (uint16)(cpu_{idx_field}() & 0xFFFF);"
             "  /* parallel byte tables: register already holds logical index */"
         )
     elif index_bias:
@@ -1839,7 +1839,7 @@ def _emit_indirect_dispatch(insn) -> List[str]:
         # interpreter path — which is what the hardware would have done with
         # whatever those bytes are.
         biased = widths.masked(
-            f"(uint16)(cpu->{idx_field} - {index_bias})", 2)
+            f"(uint16)(cpu_{idx_field}() - {index_bias})", 2)
         lines.append(
             f"  uint16 _idx = (uint16)({biased} / {entry_size});"
             f"  /* entry_size={entry_size} ({kind}); table starts {index_bias} "
@@ -1847,7 +1847,7 @@ def _emit_indirect_dispatch(insn) -> List[str]:
         )
     else:
         lines.append(
-            f"  uint16 _idx = (uint16)((cpu->{idx_field} & 0xFFFF) / {entry_size});"
+            f"  uint16 _idx = (uint16)((cpu_{idx_field}() & 0xFFFF) / {entry_size});"
             f"  /* entry_size={entry_size} ({kind}); ASL[*N] + TAX in asm => "
             f"{idx_field} is byte offset, divide back to logical index */"
         )
@@ -1872,7 +1872,7 @@ def _emit_indirect_dispatch(insn) -> List[str]:
                     f"  /* {reason}: run the live pointer on the interpreter tier */")
             else:
                 out.append(
-                    f"{indent}cpu->S = (uint16)(cpu->S + {miss_cleanup_size});"
+                    f"{indent}cpu_set_S((uint16)(cpu_S() + {miss_cleanup_size}));"
                     "  /* unpop unconsumed call frame */")
         else:
             if live_target:
@@ -1953,7 +1953,7 @@ def _emit_indirect_dispatch(insn) -> List[str]:
                 _UNRESOLVED_CALL_TARGETS.add((tgt_addr, em_v, ex_v))
             body = [
                 "RecompReturn _r;",
-                "switch (((cpu->m_flag & 1) << 1) | (cpu->x_flag & 1)) {",
+                "switch (((cpu_m_flag() & 1) << 1) | (cpu_x_flag() & 1)) {",
             ]
             # Tail-context inherit is for TRUE tail transfers only. A JSR
             # dispatch and a PEA+JMP ptr-call both enter the handler as a
@@ -1987,7 +1987,7 @@ def _emit_indirect_dispatch(insn) -> List[str]:
                 # architectural return frame.
                 if kind == 'long':
                     lines.append(
-                        f"      cpu->PB = 0x{target_bank:02x};  "
+                        f"      cpu_set_PB(0x{target_bank:02x});  "
                         "/* long indirect tail transfer */")
                 for stmt in body:
                     lines.append(f"      {stmt}")
@@ -2042,10 +2042,10 @@ def _emit_runtime_dispatch(insn) -> List[str]:
     return [
         f"{{ /* runtime indirect dispatch JSR (${base:04X},{idx_field}): "
         f"per-object WRAM function pointer, resolved + dispatched at run time */",
-        f"  uint16 _disp_ptr = cpu_read16(cpu, cpu->PB, "
-        f"(uint16)(0x{base:04x}u + (uint16)(cpu->{idx_field} & 0xFFFFu)));",
+        f"  uint16 _disp_ptr = cpu_read16(cpu, cpu_PB(), "
+        f"(uint16)(0x{base:04x}u + (uint16)(cpu_{idx_field}() & 0xFFFFu)));",
         f"  RecompReturn _disp_r = cpu_dispatch_call_pc(cpu, "
-        f"((uint32)cpu->PB << 16) | (uint32)_disp_ptr, 0x{site_pc24:06x}u);",
+        f"((uint32)cpu_PB() << 16) | (uint32)_disp_ptr, 0x{site_pc24:06x}u);",
         "  if (_disp_r != RECOMP_RETURN_NORMAL) {",
         "    cpu_trace_event(cpu, 0, CPU_TR_NLR_PROPAGATE, (uint8)_disp_r, 0);",
         "    cpu_trace_mark_nlr_exit(BD_EXIT_KIND_SKIP_PROPAGATION);",
@@ -2105,7 +2105,7 @@ def _emit_dispatch(insn) -> List[str]:
     if is_short_call_helper:
         lines[0] = lines[0].replace("JSL dispatch", "JSR dispatch")
     lines.append(f"  static const uint16 _disp_n = {n};")
-    lines.append(f"  uint16 _idx = (uint16){widths.masked('cpu->A', 1)};")
+    lines.append(f"  uint16 _idx = (uint16){widths.masked('cpu_A()', 1)};")
     # OOB index: account the miss (previously a SILENT bare `return
     # NORMAL`), then abandon this invocation balanced. The dispatch is a
     # terminator — the matched handler's RTS pops the containing
@@ -2122,11 +2122,11 @@ def _emit_dispatch(insn) -> List[str]:
         # Trampoline contract: dispatched handler observes (m=1, x=1).
         # Mirror the SEP #$30 the long-call helper performs.
         lines.append("  {")
-        lines.append("    uint8 _old_p = cpu->P;")
+        lines.append("    uint8 _old_p = cpu_P();")
         lines.append("    cpu_mirrors_to_p(cpu);")
-        lines.append("    cpu->P = (uint8)(cpu->P | 0x30);")
+        lines.append("    cpu_set_P((uint8)(cpu_P() | 0x30));")
         lines.append("    cpu_p_to_mirrors(cpu);")
-        lines.append("    cpu_trace_px_record(cpu, 0, 1 /*SEP*/, _old_p, cpu->P);")
+        lines.append("    cpu_trace_px_record(cpu, 0, 1 /*SEP*/, _old_p, cpu_P());")
         lines.append("  }")
     # Option-1 cpu->S ABI: the ExecutePtr trampoline's own return frame is
     # discarded by the PLA*N IR ops preceding this dispatch (now emitted as
@@ -2198,7 +2198,7 @@ def _emit_dispatch(insn) -> List[str]:
 
 
 def _emit_return_frame_push(op: 'Call') -> List[str]:
-    """Option-1 cpu->S model: push the JSR/JSL return frame onto cpu->S
+    """Option-1 cpu_S() model: push the JSR/JSL return frame onto cpu_S()
     (matching hardware) so the callee's RTS/RTL pops a real frame and
     trampoline / NLR returns resolve through cpu_dispatch_pc_from. Pushed
     value = (return_addr - 1); RTS/RTL add 1 on pop (matches the pop
@@ -2210,7 +2210,7 @@ def _emit_return_frame_push(op: 'Call') -> List[str]:
 
     MUST be paired with the always-pop _emit_return; and every OTHER
     invoke path (_emit_dispatch, indirect/tail emitters) must agree on
-    push-vs-no-push or cpu->S leaks. See docs/MULTI_TIER.md "Generated call/return contract".
+    push-vs-no-push or cpu_S() leaks. See docs/MULTI_TIER.md "Generated call/return contract".
     """
     site = (op.source_pc24 & 0xFFFFFF) if op.source_pc24 is not None else None
     # A direct generated JSR/JSL call always has a paired host-C caller +
@@ -2220,19 +2220,19 @@ def _emit_return_frame_push(op: 'Call') -> List[str]:
         ret16 = ((site + 3) & 0xFFFF) if site is not None else 0xFFFF
         # A body may execute through a ROM mirror. JSL pushes the live PBR,
         # not the bank used to name/decode that body (W65C816S table 5-7, 4c).
-        pbr = "cpu->PB" if site is not None else "0xff"
+        pbr = "cpu_PB()" if site is not None else "0xff"
         return [
             "  /* JSL return frame -> cpu->S (Option-1) */",
-            f"  cpu_write8(cpu, 0x00, cpu->S, {pbr}); cpu->S = (uint16)(cpu->S - 1);",
-            f"  cpu_write8(cpu, 0x00, cpu->S, 0x{(ret16 >> 8) & 0xFF:02x}); cpu->S = (uint16)(cpu->S - 1);",
-            f"  cpu_write8(cpu, 0x00, cpu->S, 0x{ret16 & 0xFF:02x}); cpu->S = (uint16)(cpu->S - 1);",
+            f"  cpu_write8(cpu, 0x00, cpu_S(), {pbr}); cpu_set_S((uint16)(cpu_S() - 1));",
+            f"  cpu_write8(cpu, 0x00, cpu_S(), 0x{(ret16 >> 8) & 0xFF:02x}); cpu_set_S((uint16)(cpu_S() - 1));",
+            f"  cpu_write8(cpu, 0x00, cpu_S(), 0x{ret16 & 0xFF:02x}); cpu_set_S((uint16)(cpu_S() - 1));",
             "  cpu->host_return_valid = 3;  /* paired host caller, JSL frame */",
         ]
     ret16 = ((site + 2) & 0xFFFF) if site is not None else 0xFFFF
     return [
         "  /* JSR return frame -> cpu->S (Option-1) */",
-        f"  cpu_write8(cpu, 0x00, cpu->S, 0x{(ret16 >> 8) & 0xFF:02x}); cpu->S = (uint16)(cpu->S - 1);",
-        f"  cpu_write8(cpu, 0x00, cpu->S, 0x{ret16 & 0xFF:02x}); cpu->S = (uint16)(cpu->S - 1);",
+        f"  cpu_write8(cpu, 0x00, cpu_S(), 0x{(ret16 >> 8) & 0xFF:02x}); cpu_set_S((uint16)(cpu_S() - 1));",
+        f"  cpu_write8(cpu, 0x00, cpu_S(), 0x{ret16 & 0xFF:02x}); cpu_set_S((uint16)(cpu_S() - 1));",
         "  cpu->host_return_valid = 2;  /* paired host caller, JSR frame */",
     ]
 
@@ -2330,7 +2330,7 @@ def _emit_call(op: Call) -> List[str]:
         lines += [
             "  cpu->host_return_valid = _hrv;",
             "  RecompReturn _r;",
-            "  switch (((cpu->m_flag & 1) << 1) | (cpu->x_flag & 1)) {",
+            "  switch (((cpu_m_flag() & 1) << 1) | (cpu_x_flag() & 1)) {",
         ]
         lines += variant_dispatch_case_lines(
             addr, base_name,
@@ -2391,7 +2391,7 @@ def _emit_call(op: Call) -> List[str]:
         lines += _emit_return_frame_push(op)
         body = [
             "RecompReturn _r;",
-            "switch (((cpu->m_flag & 1) << 1) | (cpu->x_flag & 1)) {",
+            "switch (((cpu_m_flag() & 1) << 1) | (cpu_x_flag() & 1)) {",
         ]
         body += variant_dispatch_case_lines(
             addr, base_name, indent="  ",
@@ -2412,7 +2412,7 @@ def _emit_call(op: Call) -> List[str]:
     lines += _emit_return_frame_push(op)
     lines += [
         "  RecompReturn _r;",
-        "  switch (((cpu->m_flag & 1) << 1) | (cpu->x_flag & 1)) {",
+        "  switch (((cpu_m_flag() & 1) << 1) | (cpu_x_flag() & 1)) {",
     ]
     lines += variant_dispatch_case_lines(
         addr, base_name,
@@ -2458,10 +2458,10 @@ def _emit_return(op: Return) -> List[str]:
 
     PEI-trampoline dispatch (2026-05-24, narrow variant). The post-
     lowering stack-delta analyser flags Return sites that are
-    reachable with non-zero cpu->S delta from function entry (e.g.,
+    reachable with non-zero cpu_S() delta from function entry (e.g.,
     the bank_04_9A02 PEI-trampoline in MMX). For those sites, codegen
     emits an extra branch: when `_pending_skip == NORMAL` AND the
-    delta is non-zero at runtime, pop `frame_size` bytes from cpu->S,
+    delta is non-zero at runtime, pop `frame_size` bytes from cpu_S(),
     construct (PB:PC+1), tail-call cpu_dispatch_pc. The runtime check
     against `_entry_s` keeps the standard `return _ps;` path on the
     balanced subset of the function's paths (a single Return op may
@@ -2486,10 +2486,10 @@ def _emit_return(op: Return) -> List[str]:
         # I_NMI/I_IRQ invocation; without that push this over-pops cpu->S.
         return [
             "cpu_trace_event(cpu, 0, CPU_TR_RTI, 0, 0);",
-            "{ cpu->S = (uint16)(cpu->S + 1); cpu->P = cpu_read8(cpu, 0x00, cpu->S); cpu_p_to_mirrors(cpu);",
-            "  cpu->S = (uint16)(cpu->S + 2);  /* pull + discard PC */",
-            "  if (!cpu->emulation) cpu->S = (uint16)(cpu->S + 1);  /* native: pull + discard PB */",
-            "  cpu_trace_px_record(cpu, 0, 3 /*RTI*/, cpu->P, cpu->P);",
+            "{ cpu_set_S((uint16)(cpu_S() + 1)); cpu_set_P(cpu_read8(cpu, 0x00, cpu_S())); cpu_p_to_mirrors(cpu);",
+            "  cpu_set_S((uint16)(cpu_S() + 2));  /* pull + discard PC */",
+            "  if (!cpu_emulation()) cpu_set_S((uint16)(cpu_S() + 1));  /* native: pull + discard PB */",
+            "  cpu_trace_px_record(cpu, 0, 3 /*RTI*/, cpu_P(), cpu_P());",
             "  return RECOMP_RETURN_NORMAL; /* RTI: popped interrupt frame */ }",
         ]
     # ── Option-1 cpu->S return-frame ABI (RTS / RTL) ──────────────────
@@ -2515,17 +2515,17 @@ def _emit_return(op: Return) -> List[str]:
     label_inner = "RTL" if op.long else "RTS"
     src24 = (op.source_pc24 or 0) & 0xFFFFFF
     lines = [
-        f"{{ uint16 _ret_s = cpu->S;  /* {label_inner} pop hardware return frame */",
-        "  cpu->S = (uint16)(cpu->S + 1);",
-        "  uint16 _rpcl = (uint16)cpu_read8(cpu, 0x00, cpu->S);",
-        "  cpu->S = (uint16)(cpu->S + 1);",
-        "  uint16 _rpch = (uint16)cpu_read8(cpu, 0x00, cpu->S);",
+        f"{{ uint16 _ret_s = cpu_S();  /* {label_inner} pop hardware return frame */",
+        "  cpu_set_S((uint16)(cpu_S() + 1));",
+        "  uint16 _rpcl = (uint16)cpu_read8(cpu, 0x00, cpu_S());",
+        "  cpu_set_S((uint16)(cpu_S() + 1));",
+        "  uint16 _rpch = (uint16)cpu_read8(cpu, 0x00, cpu_S());",
     ]
     if op.long:
-        lines.append("  cpu->S = (uint16)(cpu->S + 1);")
-        lines.append("  uint8 _rpb = cpu_read8(cpu, 0x00, cpu->S);")
+        lines.append("  cpu_set_S((uint16)(cpu_S() + 1));")
+        lines.append("  uint8 _rpb = cpu_read8(cpu, 0x00, cpu_S());")
     else:
-        lines.append("  uint8 _rpb = cpu->PB;")
+        lines.append("  uint8 _rpb = cpu_PB();")
     # Frame size this RTS/RTL pops (RTS = 2 bytes, RTL = 3). The dispatch
     # miss-restore below must reflect that this function popped its OWN return
     # frame, i.e. restore S to entry_s + frame_size — NOT bare entry_s.
@@ -2593,7 +2593,7 @@ def _emit_return(op: Return) -> List[str]:
         # the active interpreter rather than another generated function. Hand
         # the popped continuation back to that owner through the existing
         # arbitrary-depth LLE unwind sentinel.
-        "    if (interp_bridge_return_targets_owner(_ret_s, cpu->S)) {",
+        "    if (interp_bridge_return_targets_owner(_ret_s, cpu_S())) {",
         "      cpu_trace_mark_nlr_exit(BD_EXIT_KIND_TRAMPOLINE);",
         f"      return interp_bridge_lle_yield_unwind(cpu, _rpc24);  /* {label_inner} return-to-interpreter-owner */ }}",
         # A skipped ancestor may be part of the active interpreter rather than
@@ -2634,8 +2634,8 @@ def _emit_return(op: Return) -> List[str]:
         # execute guest code that the hardware return already crossed.
         "  if (_ret_s != _entry_s &&",
         "      (uint16)(_entry_s - _ret_s) < 0x8000u &&",
-        "      cpu->S != _entry_s &&",
-        "      (uint16)(cpu->S - _entry_s) < 0x8000u) {",
+        "      cpu_S() != _entry_s &&",
+        "      (uint16)(cpu_S() - _entry_s) < 0x8000u) {",
         f"    return interp_tier_dispatch_rewritten_return(cpu, _rpc24, 0x{src24:06x}u);",
         "  }",
         # The stack grows downward. If pre-RTS S is deeper than the routine's
@@ -2703,16 +2703,16 @@ def _emit_break(op: Break) -> List[str]:
         ret = (site + 2) & 0xFFFF
         return [
             "/* BRK to a bare RTI (brk_rti): the round trip, then on */",
-            "if (cpu->emulation) {",
+            "if (cpu_emulation()) {",
             f"  return interp_tier_dispatch_tail(cpu, "
             f"{_transfer_target_expr(site, False)}, 0x{site:06x}u, _entry_s, _hrv);",
             "}",
-            "{ uint16 _s = cpu->S;",
+            "{ uint16 _s = cpu_S();",
             "  cpu_mirrors_to_p(cpu);",
-            "  cpu_write8(cpu, 0x00, _s, cpu->PB);",
+            "  cpu_write8(cpu, 0x00, _s, cpu_PB());",
             f"  cpu_write8(cpu, 0x00, (uint16)(_s - 1), 0x{ret >> 8:02x});",
             f"  cpu_write8(cpu, 0x00, (uint16)(_s - 2), 0x{ret & 0xFF:02x});",
-            "  cpu_write8(cpu, 0x00, (uint16)(_s - 3), (uint8)cpu->P);",
+            "  cpu_write8(cpu, 0x00, (uint16)(_s - 3), (uint8)cpu_P());",
             "  cpu->cycles += 7;",
             "  cpu->master_cycles += 7 * 8; }",
         ]
@@ -2739,19 +2739,19 @@ def _emit_pea_per_pei(op: PushEffectiveAddress) -> List[str]:
     # discrimination doesn't matter for stack-delta accounting).
     if op.seg.kind == SegKind.ABS_BANK:
         return [
-            "{ uint16 _old_s = cpu->S;",
-            "  cpu->S = (uint16)(cpu->S - 1);",
-            f"  cpu_write16(cpu, 0x00, cpu->S, (uint16){op.seg.offset:#06x});",
-            "  cpu->S = (uint16)(cpu->S - 1);",
+            "{ uint16 _old_s = cpu_S();",
+            "  cpu_set_S((uint16)(cpu_S() - 1));",
+            f"  cpu_write16(cpu, 0x00, cpu_S(), (uint16){op.seg.offset:#06x});",
+            "  cpu_set_S((uint16)(cpu_S() - 1));",
             "  cpu_trace_stack_op(cpu, 0, CPU_STACK_OP_PEA, _old_s, -2); }",
         ]
     if op.seg.kind == SegKind.DP_INDIRECT:
         return [
-            "{ uint16 _old_s = cpu->S;",
-            f"  uint16 _peival = cpu_read16(cpu, 0x00, (uint16)(cpu->D + {op.seg.offset:#06x}));",
-            "  cpu->S = (uint16)(cpu->S - 1);",
-            "  cpu_write16(cpu, 0x00, cpu->S, _peival);",
-            "  cpu->S = (uint16)(cpu->S - 1);",
+            "{ uint16 _old_s = cpu_S();",
+            f"  uint16 _peival = cpu_read16(cpu, 0x00, (uint16)(cpu_D() + {op.seg.offset:#06x}));",
+            "  cpu_set_S((uint16)(cpu_S() - 1));",
+            "  cpu_write16(cpu, 0x00, cpu_S(), _peival);",
+            "  cpu_set_S((uint16)(cpu_S() - 1));",
             "  cpu_trace_stack_op(cpu, 0, CPU_STACK_OP_PEI, _old_s, -2); }",
         ]
     return ["/* TODO PushEffectiveAddress unsupported kind */"]
@@ -2766,29 +2766,29 @@ def _emit_blockmove(op: BlockMove) -> List[str]:
         "{",
         f"  uint8 _src_b = {op.src_bank:#04x};",
         f"  uint8 _dst_b = {op.dst_bank:#04x};",
-        "  uint8 _old_db = cpu->DB;",
+        "  uint8 _old_db = cpu_DB();",
         f"  cpu_trace_event(cpu, 0, {et}, _src_b, _dst_b);",
-        "  cpu->DB = _dst_b;",
+        "  cpu_set_DB(_dst_b);",
         f"  cpu_trace_db_change(cpu, {trace_pc}, _old_db, _dst_b, {et});",
         "  /* MVN/MVP always transfer at least one byte. A is count-minus-one,",
         "   * and an interrupt resumes at this same opcode with the updated",
         "   * A/X/Y/DB state. The block's static charge covers the first byte;",
         "   * each repeated byte costs another seven CPU cycles. */",
         "  do {",
-        "    uint8 _b = cpu_read8(cpu, _src_b, cpu->X);",
-        "    cpu_write8(cpu, _dst_b, cpu->Y, _b);",
-        f"    cpu->X = (uint16)(cpu->X {delta});",
-        f"    cpu->Y = (uint16)(cpu->Y {delta});",
-        "    if (cpu->x_flag) { cpu->X &= 0x00FFu; cpu->Y &= 0x00FFu; }",
-        "    cpu->A = (uint16)(cpu->A - 1);",
-        "    if (cpu->A != 0xFFFF) {",
+        "    uint8 _b = cpu_read8(cpu, _src_b, cpu_X());",
+        "    cpu_write8(cpu, _dst_b, cpu_Y(), _b);",
+        f"    cpu_set_X((uint16)(cpu_X() {delta}));",
+        f"    cpu_set_Y((uint16)(cpu_Y() {delta}));",
+        "    if (cpu_x_flag()) { cpu_set_X(cpu_X() & (0x00FFu)); cpu_set_Y(cpu_Y() & (0x00FFu)); }",
+        "    cpu_set_A((uint16)(cpu_A() - 1));",
+        "    if (cpu_A() != 0xFFFF) {",
         f"      if (interp_bridge_lle_deadline_pause(cpu, {_transfer_target_expr(_CURRENT_SOURCE_PC24, False)})) {{",
         f"        return interp_bridge_lle_yield_unwind(cpu, {_transfer_target_expr(_CURRENT_SOURCE_PC24, False)});",
         "      }",
         "      cpu->cycles += 7;",
         f"      cpu->master_cycles += 7 * {speed_expr};",
         "    }",
-        "  } while (cpu->A != 0xFFFF);",
+        "  } while (cpu_A() != 0xFFFF);",
         "}",
     ]
 

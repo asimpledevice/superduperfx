@@ -158,7 +158,7 @@ int blue_pause(uint32_t resume_pc24, uint16_t resume_s) {
 int blue_run_until_quiescent(CpuState *cpu, uint32_t entry_pc24) {
   ensure_ready();
   if (s_state == GF_PAUSED) {
-    s_resume = (entry_pc24 & 0xFFFFFFu) == s_paused_pc24 && cpu == s_cpu && cpu->S == s_paused_s;
+    s_resume = (entry_pc24 & 0xFFFFFFu) == s_paused_pc24 && cpu == s_cpu && cpu_S() == s_paused_s;
     interp_bridge_nest_load(s_paused_bridge);
     recomp_nest_state_load(s_paused_recomp);
     if (s_resume) {

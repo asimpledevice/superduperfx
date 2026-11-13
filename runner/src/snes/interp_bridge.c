@@ -637,18 +637,18 @@ void interp_bridge_test_apu_port_diag_probe(CpuState *cpu, int apu_port) {
  * PC has no CpuState home (control flow is host-C calls) — it is interp-only
  * and set explicitly by the run loop, never synced. */
 static void sync_cpu_to_interp(const CpuState *c, Interp816 *in) {
-    in->a  = c->A;  in->x = c->X;  in->y = c->Y;
-    in->sp = c->S;  in->dp = c->D; in->db = c->DB; in->k = c->PB;
+    in->a  = cpu_A();  in->x = cpu_X();  in->y = cpu_Y();
+    in->sp = cpu_S();  in->dp = cpu_D(); in->db = cpu_DB(); in->k = cpu_PB();
     in->c  = c->_flag_C; in->z = c->_flag_Z; in->v = c->_flag_V;
     in->n  = c->_flag_N; in->i = c->_flag_I; in->d = c->_flag_D;
-    in->mf = c->m_flag;  in->xf = c->x_flag; in->e = c->emulation;
+    in->mf = cpu_m_flag();  in->xf = cpu_x_flag(); in->e = cpu_emulation();
 }
 static void sync_interp_to_cpu(const Interp816 *in, CpuState *c) {
-    c->A = in->a;  c->X = in->x;  c->Y = in->y;
-    c->S = in->sp; c->D = in->dp; c->DB = in->db; c->PB = in->k;
+    cpu_set_A(in->a);  cpu_set_X(in->x);  cpu_set_Y(in->y);
+    cpu_set_S(in->sp); cpu_set_D(in->dp); cpu_set_DB(in->db); cpu_set_PB(in->k);
     c->_flag_C = in->c; c->_flag_Z = in->z; c->_flag_V = in->v;
     c->_flag_N = in->n; c->_flag_I = in->i; c->_flag_D = in->d;
-    c->m_flag  = in->mf; c->x_flag = in->xf; c->emulation = in->e;
+    cpu_set_m_flag(in->mf); cpu_set_x_flag(in->xf); cpu_set_emulation(in->e);
     cpu_mirrors_to_p(c);   /* keep packed P consistent for PHP/PLP/stack ops */
 }
 
@@ -1205,9 +1205,9 @@ int interp_bridge_lle_master_deadline_reached(const CpuState *cpu) {
                     (unsigned long long)cpu->master_cycles,
                     (unsigned long long)s_lle_master_deadline,
                     s_lle_sched_depth, s_interp_bounce_owner_depth,
-                    (unsigned)cpu->S, (unsigned)cpu->X, (unsigned)cpu->Y,
-                    (unsigned)cpu->DB, (unsigned)cpu->D, (unsigned)cpu->PB,
-                    (unsigned)cpu->m_flag, (unsigned)cpu->x_flag);
+                    (unsigned)cpu_S(), (unsigned)cpu_X(), (unsigned)cpu_Y(),
+                    (unsigned)cpu_DB(), (unsigned)cpu_D(), (unsigned)cpu_PB(),
+                    (unsigned)cpu_m_flag(), (unsigned)cpu_x_flag());
         }
     }
     return reached;
@@ -1287,10 +1287,10 @@ int interp_bridge_lle_deadline_pause(CpuState *cpu, uint32_t resume_pc24) {
 #if SNESRECOMP_BLUE_THREAD
     if (blue_is_current()) {
         s_lle_next_unwind_is_deadline = 0;
-        lle_resume_set(resume_pc24 & 0xFFFFFFu, INTERP_RESUME_SITE_DEADLINE_UNWIND, cpu->S);
+        lle_resume_set(resume_pc24 & 0xFFFFFFu, INTERP_RESUME_SITE_DEADLINE_UNWIND, cpu_S());
         bridge_apu_flush(cpu);
         bridge_beam_catchup(cpu);
-        if (blue_pause(resume_pc24 & 0xFFFFFFu, cpu->S)) {
+        if (blue_pause(resume_pc24 & 0xFFFFFFu, cpu_S())) {
             /* As a fresh run would: the driver moved the beam and may have
              * changed the cartridge mapping. */
 #if SNESRECOMP_LAZY_BEAM
@@ -1330,7 +1330,7 @@ RecompReturn interp_bridge_lle_yield_unwind(CpuState *cpu, uint32 resume_pc24) {
             fprintf(stderr,
                 "[trap-yield] f%d resume=$%06X S=$%04X func=%s deadline=%d depth=%d\n",
                 snes_frame_counter, (unsigned)(resume_pc24 & 0xFFFFFFu),
-                (unsigned)cpu->S,
+                (unsigned)cpu_S(),
                 g_last_recomp_func ? g_last_recomp_func : "?",
                 (int)s_lle_next_unwind_is_deadline,
                 (int)s_interp_bounce_owner_depth);
@@ -1346,7 +1346,7 @@ RecompReturn interp_bridge_lle_yield_unwind(CpuState *cpu, uint32 resume_pc24) {
     cpu_take_tailcall_return_context(NULL, NULL);
     lle_unwind_arm(resume_pc24, s_interp_bounce_owner_depth,
                    s_lle_next_unwind_is_deadline,
-                   INTERP_RESUME_SITE_YIELD_PRIMITIVE, cpu ? cpu->S : 0);
+                   INTERP_RESUME_SITE_YIELD_PRIMITIVE, cpu ? cpu_S() : 0);
     s_lle_next_unwind_is_deadline = 0;
     return (RecompReturn)RECOMP_RETURN_LLE_UNWIND_BASE;
 }
@@ -2540,7 +2540,7 @@ static BRIDGE_COLD int bridge_ibrwatch_enter(CpuState *cpu, uint32_t entry_pc24,
         fprintf(stderr,
                 "[ibr] ENTER frame=%d pc=$%06X s_exit=$%04X cpu->S=$%04X\n",
                 snes_frame_counter, (unsigned)entry_pc24,
-                (unsigned)s_exit, (unsigned)cpu->S);
+                (unsigned)s_exit, (unsigned)cpu_S());
     }
     return ibrw;
 }
@@ -2604,7 +2604,7 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
      * looks like a transfer in the frame that made it. */
     uint32_t edge_from = 0, edge_expect = entry_pc24 & 0xFFFFFFu;
     uint8_t edge_op = 0;
-    interp_edge_note(0, entry_pc24, INTERP_EDGE_ENTRY, 0, (uint16_t)cpu->S);
+    interp_edge_note(0, entry_pc24, INTERP_EDGE_ENTRY, 0, (uint16_t)cpu_S());
 
     /* Not cleared: a slot is read only through qbucket (set when the slot is
      * written), and the idle replay reads the slots of steps from `old` on,
@@ -3449,8 +3449,8 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
                 g_interp_bridge_bounces++;
                 if (g_interp_bridge_bounce_hook)
                     g_interp_bridge_bounce_hook(target & 0xFFFFFFu,
-                                                cpu->m_flag ? 1 : 0,
-                                                cpu->x_flag ? 1 : 0);
+                                                cpu_m_flag() ? 1 : 0,
+                                                cpu_x_flag() ? 1 : 0);
                 s_lle_next_unwind_is_deadline = 0;
                 interp_edge_note(pc_before, target, INTERP_EDGE_AOT_CALL, op,
                                  (uint16_t)_sp_pre);
@@ -3513,7 +3513,7 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
                             resume_ring_note(INTERP_RESUME_SITE_YIELD_UNWIND,
                                              INTERP_RESUME_KIND_UNWIND_CONSUME,
                                              pc_before, s_lle_unwind_pc24,
-                                             cpu->S);
+                                             cpu_S());
                             s_lle_unwind_active = 0;
                             s_lle_unwind_owner_depth = 0;
                             s_lle_unwind_is_deadline = 0;
@@ -3786,7 +3786,7 @@ static int interp_bridge_run_ex2(CpuState *cpu, uint32_t entry_pc24,
 /* Public entry: exit watermark = the current stack depth (the routine is
  * entered balanced at cpu->S). */
 int interp_bridge_run(CpuState *cpu, uint32_t entry_pc24) {
-    return interp_bridge_run_ex2(cpu, entry_pc24, cpu->S, NULL, NULL,
+    return interp_bridge_run_ex2(cpu, entry_pc24, cpu_S(), NULL, NULL,
                                  0, 0, 0, 0, NULL, 0, 0);
 }
 
@@ -3818,7 +3818,7 @@ int interp_bridge_run_scheduler(CpuState *cpu, uint32_t entry_pc24,
 int interp_bridge_run_loop(CpuState *cpu, uint32_t entry_pc24,
                            uint32_t yield_pc, uint16_t flag_addr,
                            uint8_t flag_value) {
-    return interp_bridge_run_ex2(cpu, entry_pc24, cpu->S, NULL, NULL, yield_pc,
+    return interp_bridge_run_ex2(cpu, entry_pc24, cpu_S(), NULL, NULL, yield_pc,
                                  flag_addr, flag_value, 0, NULL, 0, 0);
 }
 
@@ -3830,12 +3830,12 @@ int interp_bridge_run_until_quiescent(CpuState *cpu, uint32_t entry_pc24) {
 #ifdef SNESRECOMP_INTERP_PROFILE
     { clock_t _t0 = clock();
       bridgeq_prof_calls++;
-      int _r = interp_bridge_run_ex2(cpu, entry_pc24, cpu->S, NULL, NULL,
+      int _r = interp_bridge_run_ex2(cpu, entry_pc24, cpu_S(), NULL, NULL,
                                      0xFFFFFFFEu, 0, 0, 0, NULL, 0, 0);
       bridgeq_prof_ms += 1000.0 * ((double)(clock() - _t0)) / CLOCKS_PER_SEC;
       return _r; }
 #endif
-    return interp_bridge_run_ex2(cpu, entry_pc24, cpu->S, NULL, NULL,
+    return interp_bridge_run_ex2(cpu, entry_pc24, cpu_S(), NULL, NULL,
                                  0xFFFFFFFEu, 0, 0, 0, NULL, 0, 0);
 }
 
@@ -3844,7 +3844,7 @@ int interp_bridge_run_interrupt(CpuState *cpu, uint32_t entry_pc24) {
      * runs an architectural interrupt handler through, so counting here
      * cannot miss a delivery the way a per-host hook would. */
     ppudma_note_interrupt(g_snes && g_snes->inNmi);
-    return interp_bridge_run_ex2(cpu, entry_pc24, cpu->S, NULL, NULL,
+    return interp_bridge_run_ex2(cpu, entry_pc24, cpu_S(), NULL, NULL,
                                  0, 0, 0, 0, NULL, 0, 1);
 }
 
@@ -4098,7 +4098,7 @@ void Tier2CoverageTestRecord(uint32_t site, uint32_t target, uint8_t mx,
 #endif
 
 static uint8_t tier2_entry_mx(const CpuState *cpu) {
-    return (uint8_t)(((cpu->emulation & 1) << 2) | ((cpu->m_flag & 1) << 1) | (cpu->x_flag & 1));
+    return (uint8_t)(((cpu_emulation() & 1) << 2) | ((cpu_m_flag() & 1) << 1) | (cpu_x_flag() & 1));
 }
 
 static int interp_run_propagated_return(int result, RecompReturn *out) {
@@ -4138,7 +4138,7 @@ RecompReturn interp_tier_dispatch_interrupt(CpuState *cpu,
     tier2_discover(target_pc24 & 0xFFFFFF, target_pc24 & 0xFFFFFF, mx,
                    TIER2_KIND_DISPATCH, -1);
     int ok = interp_bridge_run_ex2(
-        cpu, target_pc24 & 0xFFFFFF, cpu->S, NULL, NULL,
+        cpu, target_pc24 & 0xFFFFFF, cpu_S(), NULL, NULL,
         0, 0, 0, 0, NULL, 0, 1);
     tier2_record(target_pc24 & 0xFFFFFF, target_pc24 & 0xFFFFFF, mx,
                  TIER2_KIND_DISPATCH, tier2_outcome(ok));
@@ -4247,10 +4247,10 @@ static RecompReturn dispatch_balanced_core(CpuState *cpu, uint32_t target_pc24,
          * normal tail return cannot match an ancestor's post-return S and
          * remains NORMAL. */
         const uint16_t expected_post_s = (uint16_t)(entry_s + hrv);
-        if (cpu->S != expected_post_s) {
+        if (cpu_S() != expected_post_s) {
             int skip = callee_tail < 0
-                ? cpu_resolve_post_return_skip(cpu->S)
-                : cpu_resolve_callee_post_return_skip(cpu->S, callee_tail);
+                ? cpu_resolve_post_return_skip(cpu_S())
+                : cpu_resolve_callee_post_return_skip(cpu_S(), callee_tail);
             if (skip > 0)
                 return (RecompReturn)skip;
         }
@@ -4287,7 +4287,7 @@ RecompReturn interp_tier_dispatch_popped_return(CpuState *cpu,
      * stopping when its RTS/RTL moves above it exactly matches an hrv=0 AOT
      * tail dispatch; using the enclosing routine's entry_s would conflate two
      * distinct stack frames. */
-    const uint16_t target_entry_s = cpu->S;
+    const uint16_t target_entry_s = cpu_S();
     uint32_t landing = target_pc24;
     int ok = interp_bridge_run_ex2(cpu, target_pc24, target_entry_s, &landing,
                                    NULL, 0, 0, 0, 0, NULL, 0, 0);
@@ -4298,7 +4298,7 @@ RecompReturn interp_tier_dispatch_popped_return(CpuState *cpu,
     if (interp_run_propagated_return(ok, &propagated))
         return propagated;
     if (!ok)
-        cpu->S = miss_restore_s;
+        cpu_set_S(miss_restore_s);
     return RECOMP_RETURN_NORMAL;
 }
 
@@ -4328,7 +4328,7 @@ RecompReturn interp_tier_dispatch_rewritten_return(CpuState *cpu,
          * that ancestor continuation and return the matching SKIP_N. */
         const int crossed_into_compiled_ancestor =
             s_interp_bounce_recomp_base > 0 &&
-            interp_owner_crossed(cpu->S);
+            interp_owner_crossed(cpu_S());
         if (!crossed_into_compiled_ancestor)
             return interp_bridge_lle_yield_unwind(cpu, target_pc24);
     }
@@ -4336,7 +4336,7 @@ RecompReturn interp_tier_dispatch_rewritten_return(CpuState *cpu,
     interp_tier_note(target_pc24);
     const uint8_t mx = tier2_entry_mx(cpu);
     tier2_discover(site_pc24, target_pc24, mx, TIER2_KIND_DISPATCH, -1);
-    const uint16_t post_pop_s = cpu->S;
+    const uint16_t post_pop_s = cpu_S();
     uint32_t landing = target_pc24;
     int ok = interp_bridge_run_ex2(cpu, target_pc24, post_pop_s, &landing,
                                    NULL, 0, 0, 0, 0, NULL, 0, 0);
@@ -4347,7 +4347,7 @@ RecompReturn interp_tier_dispatch_rewritten_return(CpuState *cpu,
     if (interp_run_propagated_return(ok, &propagated))
         return propagated;
     if (!ok) {
-        cpu->S = post_pop_s;
+        cpu_set_S(post_pop_s);
         return RECOMP_RETURN_NORMAL;
     }
 
@@ -4358,7 +4358,7 @@ RecompReturn interp_tier_dispatch_rewritten_return(CpuState *cpu,
      * and executing the epilogue twice.  The stack model normally identifies
      * the exact (possibly deeper) ancestor; SKIP_1 is the conservative minimum
      * for this dedicated rewritten-return path. */
-    int skip = cpu_resolve_post_return_skip(cpu->S);
+    int skip = cpu_resolve_post_return_skip(cpu_S());
     if (skip < 1) skip = 1;
     return (RecompReturn)skip;
 }
@@ -4385,8 +4385,8 @@ RecompReturn interp_tier_run_call_frame(CpuState *cpu, uint32_t target_pc24,
     interp_tier_note(target_pc24);
     const uint8_t mx = tier2_entry_mx(cpu);
     tier2_discover(source_pc24, target_pc24, mx, TIER2_KIND_DISPATCH, -1);
-    const uint16_t watermark = cpu->S;
-    const uint16_t post_call = (uint16_t)(cpu->S + frame_size);
+    const uint16_t watermark = cpu_S();
+    const uint16_t post_call = (uint16_t)(cpu_S() + frame_size);
     uint32_t landing = target_pc24;
     int ok = interp_bridge_run_ex2(cpu, target_pc24, watermark, &landing,
                                    return_pc24, 0, 0, 0, 0, NULL, 0, 0);
@@ -4397,11 +4397,11 @@ RecompReturn interp_tier_run_call_frame(CpuState *cpu, uint32_t target_pc24,
     if (interp_run_propagated_return(ok, &propagated))
         return propagated;
     if (!ok) {
-        cpu->S = post_call;  /* bail: discard the unconsumed JSR frame */
+        cpu_set_S(post_call);  /* bail: discard the unconsumed JSR frame */
         return RECOMP_RETURN_NORMAL;
     }
-    if (cpu->S != post_call) {
-        int skip = cpu_resolve_post_return_skip(cpu->S);
+    if (cpu_S() != post_call) {
+        int skip = cpu_resolve_post_return_skip(cpu_S());
         if (skip < 1) skip = 1;
         return (RecompReturn)skip;
     }

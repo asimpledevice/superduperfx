@@ -23,6 +23,6 @@ RecompReturn recomp_cache_interp_fallback(RecompRoutine *rt, CpuState *cpu) {
   const int tail = cpu_top_frame_tail_entered();
   RecompStackPop();
   /* A short entry keeps the live PB, as the body's transfers do. */
-  const uint32 target = ((uint32)cpu->PB << 16) | (fb->pc24 & 0xFFFFu);
+  const uint32 target = ((uint32)cpu_PB() << 16) | (fb->pc24 & 0xFFFFu);
   return interp_tier_dispatch_routine(cpu, target, fb->pc24, entry_s, hrv, tail);
 }

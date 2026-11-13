@@ -45,11 +45,11 @@ static uint8_t rd(void *p,uint32_t a) { return cpu_read8(p,a>>16,(uint16)a); }
 static void wr(void *p,uint32_t a,uint8_t v) { cpu_write8(p,a>>16,(uint16)a,v); }
 static void prepare(CpuState *c,int opcode,int stack,int m,int x,int db,int ptr,int y) {
  memset(c,0,sizeof *c); memset(g_ram,0,sizeof g_ram);
- c->ram=g_ram;c->A=0x1234;c->S=0x1ff;c->D=0x100;c->DB=db;c->Y=y;
- c->P=(m?0x20:0)|(x?0x10:0);cpu_p_to_mirrors(c);
+ c->ram=g_ram;cpu_set_A(0x1234);cpu_set_S(0x1ff);cpu_set_D(0x100);cpu_set_DB(db);cpu_set_Y(y);
+ cpu_set_P((m?0x20:0)|(x?0x10:0));cpu_p_to_mirrors(c);
  cpu_push_jsr_return_frame(c);
  g_ram[0x8000]=opcode;g_ram[0x8001]=stack?0x10:0;g_ram[0x8002]=0x60;
- ptr_at=stack?(uint16)(c->S+0x10):c->D;
+ ptr_at=stack?(uint16)(cpu_S()+0x10):cpu_D();
  g_ram[ptr_at]=ptr;g_ram[(uint16)(ptr_at+1)]=ptr>>8;
  uint32 wrong=((uint32)db<<16)|(uint16)(ptr+y);
  uint32 correct=(((uint32)db<<16)+ptr+y)&0xffffff;
@@ -64,20 +64,21 @@ static int check(RecompReturn(*fn)(CpuState*),int opcode,int stack,int store,int
   int db=dbi?0xff:0x7e,ptr=pointers[pi],y=x?2:0x102;
   uint32 address=(((uint32)db<<16)+ptr+y)&0xffffff;
   uint32 wrong=((uint32)db<<16)|(uint16)(ptr+y);
-  CpuState native,memory;prepare(&native,opcode,stack,m,x,db,ptr,y);
-  fn(&native);cpu_mirrors_to_p(&native);
+  /* One CPU state (g_cpu): run, keep a copy, prepare again for the reference. */
+  CpuState native,memory;prepare(&g_cpu,opcode,stack,m,x,db,ptr,y);
+  fn(&g_cpu);cpu_mirrors_to_p(&g_cpu);native=g_cpu;cpu_regs_store(&native);
   unsigned reads=ptr_reads,exits=g_other_exits;
   uint8 data[]={g_ram[address],g_ram[(address+1)&0xffffff],g_ram[wrong]};
-  prepare(&memory,opcode,stack,m,x,db,ptr,y);
+  prepare(&g_cpu,opcode,stack,m,x,db,ptr,y);memory=g_cpu;cpu_regs_store(&memory);
   Interp816 ref;memset(&ref,0,sizeof ref);ref.mem=&memory;ref.read=rd;ref.write=wr;
-  ref.a=memory.A;ref.x=memory.X;ref.y=memory.Y;ref.sp=memory.S;ref.dp=memory.D;ref.db=db;ref.pc=0x8000;
-  interp816_setFlags(&ref,memory.P);ref.e=false;
+  ref.a=memory.reg_A;ref.x=memory.reg_X;ref.y=memory.reg_Y;ref.sp=memory.reg_S;ref.dp=memory.reg_D;ref.db=db;ref.pc=0x8000;
+  interp816_setFlags(&ref,memory.reg_P);ref.e=false;
   unsigned steps=0;while(ref.pc!=1 && steps++<8)interp816_runOpcode(&ref);
-  if(native.A!=ref.a || native.P!=interp816_getFlags(&ref) || native.S!=ref.sp ||
+  if(native.reg_A!=ref.a || native.reg_P!=interp816_getFlags(&ref) || native.reg_S!=ref.sp ||
      ref.pc!=1 || exits || reads!=2 || ptr_reads!=2 ||
      data[0]!=g_ram[address] || data[1]!=g_ram[(address+1)&0xffffff] || data[2]!=g_ram[wrong]) {
    fprintf(stderr,"op=%02x m=%d x=%d db=%02x ptr=%04x: A=%04x/%04x P=%02x/%02x reads=%u/%u data=%02x/%02x\n",
-      opcode,m,x,db,ptr,native.A,ref.a,native.P,interp816_getFlags(&ref),reads,ptr_reads,data[0],g_ram[address]);fails++;
+      opcode,m,x,db,ptr,native.reg_A,ref.a,native.reg_P,interp816_getFlags(&ref),reads,ptr_reads,data[0],g_ram[address]);fails++;
   }
  }
  return fails;

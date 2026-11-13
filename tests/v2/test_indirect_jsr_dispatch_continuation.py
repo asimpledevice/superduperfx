@@ -61,7 +61,7 @@ def test_indirect_jsr_dispatch_falls_through_after_selected_handler():
     assert 'break;' in case0
     assert 'return RECOMP_RETURN_NORMAL;' not in case0
     assert src.count('cpu_trace_dispatch_oob') == 1
-    assert 'cpu->D + 0x0020' in src, src
+    assert 'cpu_D() + 0x0020' in src, src
 
 
 def test_indirect_jsr_ptrcall_switches_on_loaded_pointer_value():
@@ -95,11 +95,11 @@ def test_indirect_jsr_ptrcall_switches_on_loaded_pointer_value():
     )
 
     assert 'indirect dispatch pointer-call (JSR (abs,X))' in src
-    assert 'uint16 _ptr = (uint16)(0x0000 + (cpu->X & 0xFFFF));' in src
+    assert 'uint16 _ptr = (uint16)(0x0000 + (cpu_X() & 0xFFFF));' in src
     assert 'switch (_target)' in src
     assert 'case 0x9000:' in src
-    assert 'cpu->X & 0xFFFF) / 2' not in src
-    assert 'cpu->D + 0x0020' in src, src
+    assert 'cpu_X() & 0xFFFF) / 2' not in src
+    assert 'cpu_D() + 0x0020' in src, src
 
 
 def test_pea_jmp_ptrcall_resumes_at_pea_return_address():
@@ -205,7 +205,7 @@ def test_long_ptrcall_can_override_handler_frame_size():
     )
     assert 'host_return_valid = 2' in src
     assert '2-byte frame' in src
-    assert 'cpu->S = (uint16)(cpu->S + 2);  /* unpop unconsumed call frame */' in src
+    assert 'cpu_set_S((uint16)(cpu_S() + 2));  /* unpop unconsumed call frame */' in src
     assert 'goto L_8100_M1X1' in src
 
 
@@ -252,10 +252,10 @@ def test_pea_jmp_long_ptrcall_switches_on_loaded_long_pointer():
     # No frame: option means legacy behavior, including the historical
     # two-byte cleanup on an unresolved target. The cfg extension must be
     # inert for existing projects.
-    assert 'cpu->S = (uint16)(cpu->S + 2);  /* unpop unconsumed call frame */' in src
-    assert 'cpu->S = (uint16)(cpu->S + 3);  /* unpop unconsumed call frame */' not in src
+    assert 'cpu_set_S((uint16)(cpu_S() + 2));  /* unpop unconsumed call frame */' in src
+    assert 'cpu_set_S((uint16)(cpu_S() + 3));  /* unpop unconsumed call frame */' not in src
     assert 'fall through to post-dispatch block' in src
-    assert 'cpu->D + 0x0020' in src, src
+    assert 'cpu_D() + 0x0020' in src, src
 
 
 def test_pea_jmp_finish_handler_resolves_ancestor_before_dispatch_hit():

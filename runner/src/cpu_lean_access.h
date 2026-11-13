@@ -36,14 +36,14 @@
 #define CPU_LEAN_ACCESS_H
 
 #define CPU_LEAN_ACCESS_FORMS(FORM) \
-  FORM(dp,    0x00, (uint16)(cpu->D + k)) \
-  FORM(dpx,   0x00, (uint16)(cpu->D + k + cpu->X)) \
-  FORM(absX,  (uint8)((((uint32)cpu->DB << 16) + (uint32)k + (uint32)cpu->X) >> 16), \
-                   (uint16)(((uint32)cpu->DB << 16) + (uint32)k + (uint32)cpu->X)) \
-  FORM(absY,  (uint8)((((uint32)cpu->DB << 16) + (uint32)k + (uint32)cpu->Y) >> 16), \
-                   (uint16)(((uint32)cpu->DB << 16) + (uint32)k + (uint32)cpu->Y)) \
-  FORM(longx, (uint8)(((uint32)k + (uint32)cpu->X) >> 16), \
-                   (uint16)((uint32)k + (uint32)cpu->X))
+  FORM(dp,    0x00, (uint16)(cpu_D() + k)) \
+  FORM(dpx,   0x00, (uint16)(cpu_D() + k + cpu_X())) \
+  FORM(absX,  (uint8)((((uint32)cpu_DB() << 16) + (uint32)k + (uint32)cpu_X()) >> 16), \
+                   (uint16)(((uint32)cpu_DB() << 16) + (uint32)k + (uint32)cpu_X())) \
+  FORM(absY,  (uint8)((((uint32)cpu_DB() << 16) + (uint32)k + (uint32)cpu_Y()) >> 16), \
+                   (uint16)(((uint32)cpu_DB() << 16) + (uint32)k + (uint32)cpu_Y())) \
+  FORM(longx, (uint8)(((uint32)k + (uint32)cpu_X()) >> 16), \
+                   (uint16)((uint32)k + (uint32)cpu_X()))
 
 #define CPU_LEAN_ACCESS_DECLARE(name, bank, addr) \
   uint8  cpu_read_##name##8(CpuState *cpu, uint32 k); \
@@ -85,12 +85,12 @@ RecompReturn recomp_return_slow(CpuState *cpu, uint32 rpc24, uint16 ret_s, uint1
     cpu_write16(cpu, bank, addr, v); }
 CPU_LEAN_ACCESS_FORMS(CPU_LEAN_ACCESS_DEFINE_FORM)
 void cpu_push8(CpuState *cpu, uint8 v) {
-  cpu_write8(cpu, 0x00, cpu->S, v);
-  cpu->S = (uint16)(cpu->S - 1);
+  cpu_write8(cpu, 0x00, cpu_S(), v);
+  cpu_set_S((uint16)(cpu_S() - 1));
 }
 uint8 cpu_pull8(CpuState *cpu) {
-  cpu->S = (uint16)(cpu->S + 1);
-  return cpu_read8(cpu, 0x00, cpu->S);
+  cpu_set_S((uint16)(cpu_S() + 1));
+  return cpu_read8(cpu, 0x00, cpu_S());
 }
 /* The return address a paired host caller left on the stack (hrv 2: JSR
  * frame, 3: JSL frame), plus 1 and the inline argument bytes the function
@@ -99,7 +99,7 @@ uint32 cpu_host_return_pc24(CpuState *cpu, uint16 entry_s, uint8 hrv, uint32 ski
   if (hrv != 2 && hrv != 3) return 0xFFFFFFFFu;
   uint16 rpcl = cpu_read8(cpu, 0x00, (uint16)(entry_s + 1u));
   uint16 rpch = cpu_read8(cpu, 0x00, (uint16)(entry_s + 2u));
-  uint8 rpb = (hrv == 3) ? cpu_read8(cpu, 0x00, (uint16)(entry_s + 3u)) : cpu->PB;
+  uint8 rpb = (hrv == 3) ? cpu_read8(cpu, 0x00, (uint16)(entry_s + 3u)) : cpu_PB();
   return ((uint32)rpb << 16) | (uint16)((((rpch << 8) | rpcl) + 1u + skip) & 0xFFFFu);
 }
 
@@ -116,20 +116,20 @@ extern const char *g_last_recomp_func;
 
 void cpu_charge(CpuState *cpu, uint32 n) {
   cpu->cycles += n;
-  cpu->master_cycles += n * (uint32)g_code_speed[cpu->PB >> 7];
+  cpu->master_cycles += n * (uint32)g_code_speed[cpu_PB() >> 7];
 }
 void cpu_charge_dl(CpuState *cpu) {
-  if (cpu->D & 0xFF) cpu_charge(cpu, 1u);
+  if (cpu_D() & 0xFF) cpu_charge(cpu, 1u);
 }
 void cpu_charge_page(CpuState *cpu, uint32 k, uint32 i) {
   if ((k & 0xFF00) != ((k + i) & 0xFF00)) cpu_charge(cpu, 1u);
 }
 void cpu_sync_p_nz(CpuState *cpu) {
-  cpu->P = (uint8)((cpu->P & ~0x82) | (cpu->_flag_Z ? 0x02 : 0) | (cpu->_flag_N ? 0x80 : 0));
+  cpu_set_P((uint8)((cpu_P() & ~0x82) | (cpu->_flag_Z ? 0x02 : 0) | (cpu->_flag_N ? 0x80 : 0)));
 }
 int recomp_block_enter(CpuState *cpu, uint32 pc16) {
   WatchdogCheck();
-  return interp_bridge_lle_deadline_pause(cpu, ((uint32)cpu->PB << 16) | pc16);
+  return interp_bridge_lle_deadline_pause(cpu, ((uint32)cpu_PB() << 16) | pc16);
 }
 int recomp_block_enter_charge(CpuState *cpu, uint32 pc16, uint32 n) {
   if (recomp_block_enter(cpu, pc16)) return 1;
@@ -151,7 +151,7 @@ void recomp_enter(const char *name) {
   cpu_dbg_funcname(name);
 }
 uint32 recomp_frame(CpuState *cpu, int s_offset, uint32 skip, uint16 *entry_s, uint8 *hrv) {
-  uint16 s = (uint16)(cpu->S + s_offset);
+  uint16 s = (uint16)(cpu_S() + s_offset);
   uint8 h = cpu->host_return_valid;
   if (cpu_take_tailcall_return_context(&s, &h)) cpu->host_return_valid = h;
   uint32 host_return_pc24 = cpu_host_return_pc24(cpu, s, h, skip);
@@ -190,7 +190,7 @@ RecompReturn recomp_return_slow(CpuState *cpu, uint32 rpc24, uint16 ret_s, uint1
       return RECOMP_RETURN_NORMAL;
     }
     /* The skipped caller runs in the interpreter. */
-    if (interp_bridge_return_targets_owner(ret_s, cpu->S)) {
+    if (interp_bridge_return_targets_owner(ret_s, cpu_S())) {
       cpu_trace_mark_nlr_exit(BD_EXIT_KIND_TRAMPOLINE);
       RecompStackPopYield();
       return interp_bridge_lle_yield_unwind(cpu, rpc24);
@@ -210,8 +210,8 @@ RecompReturn recomp_return_slow(CpuState *cpu, uint32 rpc24, uint16 ret_s, uint1
   }
   if (ret_s != entry_s &&
       (uint16)(entry_s - ret_s) < 0x8000u &&
-      cpu->S != entry_s &&
-      (uint16)(cpu->S - entry_s) < 0x8000u) {
+      cpu_S() != entry_s &&
+      (uint16)(cpu_S() - entry_s) < 0x8000u) {
     RecompStackPop();
     return interp_tier_dispatch_rewritten_return(cpu, rpc24, site);
   }

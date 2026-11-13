@@ -94,7 +94,7 @@ def test_partial_frame_return_uses_rewritten_return_bridge():
     src = emit_function(rom=rom, bank=0, start=0x8000,
                         entry_m=0, entry_x=0,
                         func_name='PartialFrameReturn')
-    partial = src.index('cpu->S - _entry_s')
+    partial = src.index('cpu_S() - _entry_s')
     rewritten = src.index('interp_tier_dispatch_rewritten_return(cpu, _rpc24',
                           partial)
     popped = src.index('interp_tier_dispatch_popped_return(cpu, _rpc24')

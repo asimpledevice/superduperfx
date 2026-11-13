@@ -14,6 +14,7 @@ class — a future emitter forgets one of the trace calls or the
 restore, and PB drifts. Centralizing here keeps the call-site
 shape in one place.
 """
+import re
 from typing import List
 from snes_cycles import region_speed
 
@@ -36,8 +37,8 @@ def runtime_code_speed(pc24: int):
     if lean_emit() and (slow, high_fast) == (8, 6):
         # g_code_speed[PB >> 7]: 8, then 6 or 8 by MEMSEL ($420D), kept by
         # the runtime wherever g_memsel changes. Same value, less code.
-        return "(uint32)g_code_speed[cpu->PB >> 7]", None
-    return f"((g_memsel && (cpu->PB & 0x80)) ? {high_fast} : {slow})", None
+        return "(uint32)g_code_speed[cpu_PB() >> 7]", None
+    return f"((g_memsel && (cpu_PB() & 0x80)) ? {high_fast} : {slow})", None
 
 
 # ── Stack push/pop micro-pattern helpers (DRY_REFACTOR follow-up C) ────
@@ -53,11 +54,28 @@ def runtime_code_speed(pc24: int):
 # push) and the stack frame ends up shifted by one byte. Symptom would
 # be an apparent off-by-one in subsequent PLA/PLB pulls.
 
+# ── Assignment to a register or a variable ──────────────────────────────
+#
+# The 65816 registers are written through runner/src/cpu_regs.h's setters;
+# reads are the accessor calls `cpu_A()` etc. Code that holds a register's
+# read text as a "field" assigns through here, so the same text works for a
+# register and for a plain variable.
+_ACCESSOR = re.compile(r"cpu_(A|X|Y|S|D|DB|PB|P|m_flag|x_flag|emulation)\(\)")
+
+
+def assign(target: str, value: str) -> str:
+    """The C statement storing `value` into `target` (with its `;`)."""
+    m = _ACCESSOR.fullmatch(target.strip())
+    if m:
+        return f"cpu_set_{m.group(1)}({value});"
+    return f"{target} = {value};"
+
+
 def push_byte(val_expr: str) -> List[str]:
     """8-bit stack push: write at S, then decrement S."""
     return [
-        f"cpu_write8(cpu, 0x00, cpu->S, {val_expr});",
-        "cpu->S = (uint16)(cpu->S - 1);",
+        f"cpu_write8(cpu, 0x00, cpu_S(), {val_expr});",
+        "cpu_set_S((uint16)(cpu_S() - 1));",
     ]
 
 
@@ -65,9 +83,9 @@ def push_word(val_expr: str) -> List[str]:
     """16-bit stack push: pre-decrement S, write 2 bytes at S, post-decrement.
     After the push, the pushed word occupies S+1 (low) and S+2 (high)."""
     return [
-        "cpu->S = (uint16)(cpu->S - 1);",
-        f"cpu_write16(cpu, 0x00, cpu->S, {val_expr});",
-        "cpu->S = (uint16)(cpu->S - 1);",
+        "cpu_set_S((uint16)(cpu_S() - 1));",
+        f"cpu_write16(cpu, 0x00, cpu_S(), {val_expr});",
+        "cpu_set_S((uint16)(cpu_S() - 1));",
     ]
 
 
@@ -75,11 +93,11 @@ def pop_byte_assign(target_decl: str) -> List[str]:
     """8-bit stack pop: increment S, read at S into target_decl.
 
     target_decl is the full LHS — e.g. `uint8 _v` (a fresh decl) or
-    `cpu->A` (mutating an existing field). Caller chooses.
+    `cpu_A()` (a register, written through its setter). Caller chooses.
     """
     return [
-        "cpu->S = (uint16)(cpu->S + 1);",
-        f"{target_decl} = cpu_read8(cpu, 0x00, cpu->S);",
+        "cpu_set_S((uint16)(cpu_S() + 1));",
+        assign(target_decl, "cpu_read8(cpu, 0x00, cpu_S())"),
     ]
 
 
@@ -87,9 +105,9 @@ def pop_word_assign(target_decl: str) -> List[str]:
     """16-bit stack pop: increment S, read 2 bytes at S into target_decl,
     increment S again."""
     return [
-        "cpu->S = (uint16)(cpu->S + 1);",
-        f"{target_decl} = cpu_read16(cpu, 0x00, cpu->S);",
-        "cpu->S = (uint16)(cpu->S + 1);",
+        "cpu_set_S((uint16)(cpu_S() + 1));",
+        assign(target_decl, "cpu_read16(cpu, 0x00, cpu_S())"),
+        "cpu_set_S((uint16)(cpu_S() + 1));",
     ]
 
 
@@ -106,7 +124,7 @@ def stack_op_traced(op_id: str, delta: int, body: List[str]) -> List[str]:
     """Wrap `body` (push/pull lines) with old-S capture + post-trace call."""
     return [
         "{",
-        "  uint16 _old_s = cpu->S;",
+        "  uint16 _old_s = cpu_S();",
         *(f"  {ln}" for ln in body),
         f"  cpu_trace_stack_op(cpu, 0, {op_id}, _old_s, {delta});",
         "}",
@@ -137,21 +155,21 @@ def modify_p_via_mirrors(mask: int, kind: str) -> List[str]:
     kind: "rep" → AND ~mask (clear bits); "sep" → OR mask (set bits).
     """
     if kind == "rep":
-        modify = f"cpu->P = (uint8)(cpu->P & ~{mask:#04x});"
+        modify = f"cpu_set_P((uint8)(cpu_P() & ~{mask:#04x}));"
         px_kind = PX_REP
         px_label = "REP"
     elif kind == "sep":
-        modify = f"cpu->P = (uint8)(cpu->P | {mask:#04x});"
+        modify = f"cpu_set_P((uint8)(cpu_P() | {mask:#04x}));"
         px_kind = PX_SEP
         px_label = "SEP"
     else:
         raise ValueError(f"kind must be 'rep' or 'sep', got {kind!r}")
     return [
-        "uint8 _old_p = cpu->P;",
+        "uint8 _old_p = cpu_P();",
         "cpu_mirrors_to_p(cpu);",
         modify,
         "cpu_p_to_mirrors(cpu);",
-        f"cpu_trace_px_record(cpu, 0, {px_kind} /*{px_label}*/, _old_p, cpu->P);",
+        f"cpu_trace_px_record(cpu, 0, {px_kind} /*{px_label}*/, _old_p, cpu_P());",
     ]
 
 
@@ -188,14 +206,14 @@ def pb_save_restore_envelope(
     """
     trace_pc = f"0x{trace_pc24 & 0xFFFFFF:06x}u"
     bank_enter = [] if target_bank is None else [
-        "uint8 _saved_pb = cpu->PB;",
+        "uint8 _saved_pb = cpu_PB();",
         f"cpu_trace_pb_change(cpu, {trace_pc}, _saved_pb, {target_bank:#04x}, CPU_TR_JSL);",
-        f"cpu->PB = {target_bank:#04x};",
+        f"cpu_set_PB({target_bank:#04x});",
     ]
     bank_leave = [] if target_bank is None else [
         "if (!interp_bridge_lle_unwind_pending()) {",
-        f"  cpu_trace_pb_change(cpu, {trace_pc}, cpu->PB, _saved_pb, CPU_TR_RTL);",
-        "  cpu->PB = _saved_pb;",
+        f"  cpu_trace_pb_change(cpu, {trace_pc}, cpu_PB(), _saved_pb, CPU_TR_RTL);",
+        "  cpu_set_PB(_saved_pb);",
         "}",
     ]
     return [

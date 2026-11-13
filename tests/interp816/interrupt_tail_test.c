@@ -27,18 +27,18 @@ RecompReturn cpu_dispatch_pc_paired(CpuState *cpu, uint32 pc24,
     cpu->host_return_valid = frame_size;
     /* Model a generated subroutine's unresolved tail into an RTS/RTL suffix. */
     bounce_result = interp_tier_dispatch_tail(cpu, 0x008200, 0x008100,
-                                              cpu->S, frame_size);
+                                              cpu_S(), frame_size);
     return bounce_result;
 }
 
 static void prepare_interrupt(void) {
     memset(RAM, 0, MEMSZ);
     init_cpu();
-    g_c.emulation = 0;
-    g_c.S = 0x01FB;
-    cpu_mirrors_to_p(&g_c);
+    cpu_set_emulation(0);
+    cpu_set_S(0x01FB);
+    cpu_mirrors_to_p(&g_cpu);
     /* Native NMI frame: P, PC.lo, PC.hi, PB; RTI resumes at $00:9000. */
-    RAM[0x01FC] = g_c.P;
+    RAM[0x01FC] = cpu_P();
     RAM[0x01FD] = 0x00;
     RAM[0x01FE] = 0x90;
     RAM[0x01FF] = 0x00;
@@ -59,15 +59,15 @@ int main(void) {
         prepare_interrupt();
         load(0x8200, suffix, sizeof suffix);
         load(0x8300, continuation, sizeof continuation);
-        if (frame_size == 3) RAM[g_c.S--] = 0x00;
-        RAM[g_c.S--] = 0x82;
-        RAM[g_c.S--] = 0xFF;  /* RTS/RTL -> $8300 */
+        if (frame_size == 3) RAM[cpu_S()] = 0x00, cpu_set_S(cpu_S() - 1);
+        RAM[cpu_S()] = 0x82, cpu_set_S(cpu_S() - 1);
+        RAM[cpu_S()] = 0xFF, cpu_set_S(cpu_S() - 1);  /* RTS/RTL -> $8300 */
         cpu_interrupt_context_enter();
         RecompReturn result = interp_tier_dispatch_tail(
-            &g_c, 0x008200, 0x008100, g_c.S, (uint8)frame_size);
+            &g_cpu, 0x008200, 0x008100, cpu_S(), (uint8)frame_size);
         printf("direct AOT NMI subroutine, frame=%d\n", frame_size);
         CHECK(result == RECOMP_RETURN_NORMAL, "return=%d", result);
-        CHECK(g_c.S == 0x01FB, "subroutine S=%04X expected 01FB", g_c.S);
+        CHECK(cpu_S() == 0x01FB, "subroutine S=%04X expected 01FB", cpu_S());
         CHECK(RAM[0x10] == 1, "suffix did not run once");
         CHECK(RAM[0x11] == 0, "subroutine consumed NMI continuation");
         CHECK(interrupt_depth == 1, "interrupt scope was not preserved");
@@ -82,7 +82,7 @@ int main(void) {
         const uint8_t far_handler[] = {0x22, 0x00, 0x81, 0x00, 0xE6, 0x11, 0x40};
         if (frame_size == 2) load(0x8000, near_handler, sizeof near_handler);
         else load(0x8000, far_handler, sizeof far_handler);
-        result = interp_tier_dispatch_interrupt(&g_c, 0x008000);
+        result = interp_tier_dispatch_interrupt(&g_cpu, 0x008000);
         printf("interpreter-owned NMI bounce, frame=%d\n", frame_size);
         CHECK(result == RECOMP_RETURN_NORMAL, "return=%d", result);
         CHECK(bounce_result == RECOMP_RETURN_LLE_UNWIND_BASE,
@@ -90,7 +90,7 @@ int main(void) {
         CHECK(g_aot_called == 1, "AOT calls=%d expected 1", g_aot_called);
         CHECK(RAM[0x10] == 1 && RAM[0x11] == 1,
               "suffix/continuation counts=%d/%d expected 1/1", RAM[0x10], RAM[0x11]);
-        CHECK(g_c.S == 0x01FF, "NMI S=%04X expected 01FF", g_c.S);
+        CHECK(cpu_S() == 0x01FF, "NMI S=%04X expected 01FF", cpu_S());
         CHECK(interrupt_depth == 0, "interrupt scope leaked");
     }
 
@@ -99,9 +99,9 @@ int main(void) {
     RAM[0x8200] = 0x40;
     cpu_interrupt_context_enter();
     RecompReturn result = interp_tier_dispatch_tail(
-        &g_c, 0x008200, 0x008100, g_c.S, 0);
+        &g_cpu, 0x008200, 0x008100, cpu_S(), 0);
     CHECK(result == RECOMP_RETURN_NORMAL, "interrupt root return=%d", result);
-    CHECK(g_c.S == 0x01FF, "interrupt root S=%04X expected 01FF", g_c.S);
+    CHECK(cpu_S() == 0x01FF, "interrupt root S=%04X expected 01FF", cpu_S());
     CHECK(interrupt_depth == 1, "interrupt root changed enclosing scope");
     cpu_interrupt_context_leave();
     free(RAM);

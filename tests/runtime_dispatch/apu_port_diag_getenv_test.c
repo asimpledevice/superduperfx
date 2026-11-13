@@ -111,7 +111,7 @@ int cpu_dispatch_has_entry(CpuState *cpu, uint32 pc24) {
 RecompReturn cpu_dispatch_pc_paired(CpuState *cpu, uint32 pc24,
                                     uint8 frame_size) {
     (void)pc24;
-    cpu->S = (uint16)(cpu->S + frame_size);
+    cpu_set_S((uint16)(cpu_S() + frame_size));
     return RECOMP_RETURN_NORMAL;
 }
 uint8 cpu_dispatch_inline_arg_bytes(uint32 pc24) {
@@ -134,7 +134,7 @@ int cpu_resolve_callee_post_return_skip(uint16_t post_s, int callee_tail) {
 RecompReturn cpu_unresolved_abandon_balanced(CpuState *cpu, uint32 site_pc24,
                                              uint16 entry_s, uint8 hrv) {
     (void)site_pc24;
-    cpu->S = (uint16)(entry_s + hrv);
+    cpu_set_S((uint16)(entry_s + hrv));
     return RECOMP_RETURN_NORMAL;
 }
 int tier2_capture_enabled(void) { return 0; }

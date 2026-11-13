@@ -22,6 +22,11 @@ def test_jsl_frame_preserves_live_program_bank_through_rom_mirrors(tmp_path):
 #include <stdint.h>
 typedef uint16_t uint16;
 typedef struct { uint16 S; uint8_t PB, host_return_valid; } CpuState;
+/* Accessors over this mock state (runner/src/cpu_regs.h shape). */
+#define cpu_S() (cpu->S)
+#define cpu_set_S(v) ((void)(cpu->S = (uint16)(v)))
+#define cpu_PB() (cpu->PB)
+#define cpu_set_PB(v) ((void)(cpu->PB = (uint8_t)(v)))
 static uint8_t ram[65536];
 static void cpu_write8(CpuState *cpu, unsigned bank, uint16 address, uint8_t value) {
   (void)cpu; assert(bank == 0); ram[address] = value;
@@ -66,6 +71,11 @@ def test_nested_jsl_unwind_preserves_live_resume_bank(tmp_path):
 typedef uint8_t uint8;
 typedef int RecompReturn;
 typedef struct { uint8 PB; uint16_t S; } CpuState;
+/* Accessors over this mock state (runner/src/cpu_regs.h shape). */
+#define cpu_PB() (cpu->PB)
+#define cpu_set_PB(v) ((void)(cpu->PB = (uint8)(v)))
+#define cpu_S() (cpu->S)
+#define cpu_set_S(v) ((void)(cpu->S = (uint16_t)(v)))
 enum { RECOMP_RETURN_NORMAL=0, RECOMP_RETURN_LLE_UNWIND_BASE=0x40000000 };
 #define cpu_trace_pb_change(...) ((void)0)
 #define cpu_trace_event(...) ((void)0)
@@ -73,8 +83,8 @@ enum { RECOMP_RETURN_NORMAL=0, RECOMP_RETURN_LLE_UNWIND_BASE=0x40000000 };
 static int pending, mode;
 int interp_bridge_lle_unwind_pending(void) { return pending; }
 static RecompReturn leaf(CpuState *cpu) {
-  if (cpu->PB != 0x82) return -100;
-  if (mode >= 2) { if (mode == 3) cpu->PB = 0x91; pending=1; return RECOMP_RETURN_LLE_UNWIND_BASE; }
+  if (cpu_PB() != 0x82) return -100;
+  if (mode >= 2) { if (mode == 3) cpu_set_PB(0x91); pending=1; return RECOMP_RETURN_LLE_UNWIND_BASE; }
   return mode == 1 ? 2 : RECOMP_RETURN_NORMAL;
 }
 static RecompReturn inner(CpuState *cpu) {

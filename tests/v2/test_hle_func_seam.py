@@ -173,7 +173,7 @@ def test_every_generated_transfer_reaches_the_hle_stub(tmp_path, declare_func):
             for x in (0, 1):
                 body = _function_body(source, f"{base}_M{m}X{x}")
                 assert f"RecompReturn _r = {helper}(cpu);" in body
-                assert "cpu->S" not in body          # no frame pop
+                assert "cpu_S()" not in body          # no frame pop
                 assert "cycles" not in body          # no cycle charge
                 assert "cpu_take_tailcall_return_context(NULL, NULL);" in body
         slots = ", ".join(f"{base}_M{m}X{x}" for m in (0, 1) for x in (0, 1))
@@ -226,6 +226,7 @@ uint8 g_memsel;
 const char *g_last_recomp_func = "";
 int g_recomp_stack_top;
 uint16_t g_cpu_entry_s[64];
+CpuState g_cpu;   /* the one CPU state (cpu_regs.h accessors) */
 
 uint8 cpu_read8(CpuState *cpu, uint8 bank, uint16 addr) {
   (void)cpu; (void)bank; return g_ram[addr];
@@ -295,12 +296,12 @@ RecompReturn interp_tier_dispatch_rewritten_return(CpuState *cpu,
 }
 RecompReturn interp_tier_dispatch_popped_return(CpuState *cpu, uint32 pc24,
     uint32 site, uint16 restore) {
-  (void)site; g_other_exits++; g_other_target = pc24; cpu->S = restore;
+  (void)site; g_other_exits++; g_other_target = pc24; cpu_set_S(restore);
   return 0;
 }
 RecompReturn cpu_dispatch_pc_from(CpuState *cpu, uint32 pc24, uint16 restore,
     uint32 site) {
-  (void)site; g_other_exits++; g_other_target = pc24; cpu->S = restore;
+  (void)site; g_other_exits++; g_other_target = pc24; cpu_set_S(restore);
   return 0;
 }
 RecompReturn interp_tier_run_call_frame(CpuState *cpu, uint32 pc24,
@@ -320,14 +321,14 @@ static int g_mode, g_helper_calls;
 static uint16 g_helper_entry_s; static uint8 g_helper_entry_hrv;
 static RecompReturn helper(CpuState *cpu, unsigned frame) {
   g_helper_calls++;
-  g_helper_entry_s = cpu->S;
+  g_helper_entry_s = cpu_S();
   g_helper_entry_hrv = cpu->host_return_valid;
   if (g_mode == 1) return RECOMP_RETURN_NORMAL;
   if (g_mode == 2) {                    /* PLA;PLA;RTS-style exit */
-    cpu->S = (uint16)(cpu->S + frame + 2);
+    cpu_set_S((uint16)(cpu_S() + frame + 2));
     return RECOMP_RETURN_SKIP_1;
   }
-  cpu->S = (uint16)(cpu->S + frame);
+  cpu_set_S((uint16)(cpu_S() + frame));
   return RECOMP_RETURN_NORMAL;
 }
 RecompReturn HleShort(CpuState *cpu) { return helper(cpu, 2); }
@@ -344,7 +345,7 @@ static RecompReturn run(CpuState *cpu, RecompReturn (*fn)(CpuState *),
   memset(cpu, 0, sizeof *cpu);
   memset(g_ram, 0, sizeof g_ram);
   cpu->ram = g_ram;
-  cpu->S = 0x01FF; cpu->m_flag = 1; cpu->x_flag = 1; cpu->P = 0x30;
+  cpu_set_S(0x01FF); cpu_set_m_flag(1); cpu_set_x_flag(1); cpu_set_P(0x30);
   g_mode = mode; g_helper_calls = 0; g_other_exits = 0; g_other_target = 0;
   g_tc_valid = 0; g_recomp_stack_top = 0;
   cpu_push_jsr_return_frame(cpu);       /* host calls the caller like a JSR */
@@ -352,49 +353,49 @@ static RecompReturn run(CpuState *cpu, RecompReturn (*fn)(CpuState *),
 }
 
 int main(void) {
-  CpuState cpu; RecompReturn r; const char *scenario;
+   RecompReturn r; const char *scenario;
 
   scenario = "JSR, helper pops 2";
-  r = run(&cpu, CallerJsr_M1X1, 0);
+  r = run(&g_cpu, CallerJsr_M1X1, 0);
   CHECK(r == RECOMP_RETURN_NORMAL);
   CHECK(g_helper_calls == 1);
   CHECK(g_helper_entry_hrv == 2);
   CHECK(g_helper_entry_s == 0x01FB);     /* host frame + JSR frame */
   CHECK(g_ram[0x40] == 0x55);            /* continuation after the JSR ran */
   CHECK(g_other_exits == 0);             /* caller's RTS host-returned */
-  CHECK(cpu.S == 0x01FF);
+  CHECK(cpu_S() == 0x01FF);
   CHECK(g_recomp_stack_top == 0);
 
   scenario = "JSL, helper pops 3";
-  r = run(&cpu, CallerJsl_M1X1, 0);
+  r = run(&g_cpu, CallerJsl_M1X1, 0);
   CHECK(r == RECOMP_RETURN_NORMAL);
   CHECK(g_helper_calls == 1);
   CHECK(g_helper_entry_hrv == 3);
   CHECK(g_helper_entry_s == 0x01FA);
   CHECK(g_ram[0x41] == 0x66);
   CHECK(g_other_exits == 0);
-  CHECK(cpu.S == 0x01FF);
-  CHECK(cpu.PB == 0x00);
+  CHECK(cpu_S() == 0x01FF);
+  CHECK(cpu_PB() == 0x00);
 
   scenario = "JMP tail, helper pops the inherited frame";
-  r = run(&cpu, CallerJmp_M1X1, 0);
+  r = run(&g_cpu, CallerJmp_M1X1, 0);
   CHECK(r == RECOMP_RETURN_NORMAL);
   CHECK(g_helper_calls == 1);
   CHECK(g_helper_entry_hrv == 2);        /* the jumper's own hrv */
   CHECK(g_helper_entry_s == 0x01FD);     /* no frame pushed by a JMP */
   CHECK(g_other_exits == 0);
-  CHECK(cpu.S == 0x01FF);
+  CHECK(cpu_S() == 0x01FF);
   CHECK(!g_tc_valid);                    /* stub consumed the tail context */
 
   scenario = "SKIP_1 return to the caller's caller";
-  r = run(&cpu, CallerJsr_M1X1, 2);
+  r = run(&g_cpu, CallerJsr_M1X1, 2);
   CHECK(r == RECOMP_RETURN_NORMAL);      /* caller decremented SKIP_1 */
   CHECK(g_ram[0x40] == 0x00);            /* continuation skipped */
   CHECK(g_other_exits == 0);
-  CHECK(cpu.S == 0x01FF);
+  CHECK(cpu_S() == 0x01FF);
 
   scenario = "contract violated: helper leaves the JSR frame";
-  r = run(&cpu, CallerJsr_M1X1, 1);
+  r = run(&g_cpu, CallerJsr_M1X1, 1);
   CHECK(g_helper_calls == 1);
   /* The caller's RTS now pops its own stale JSR frame instead of the host
    * frame: it is treated as a computed jump back to $8003 and leaves the

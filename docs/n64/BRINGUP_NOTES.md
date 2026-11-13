@@ -2021,8 +2021,9 @@ callee-saved: a function that uses one restores it before returning.
   the allow-listed owners.
 - newlib is rebuilt with the same flags (`third_party/newlib`); its
   `setjmp`/`longjmp` save no FPU registers. libgcc needs no rebuild.
-- Budget (revised 2026-11-12): parked context 10, 65816 registers 8, run
-  flags 1, `master_cycles` 1, spare 5. Only the thread not running is
+- Budget (revised 2026-11-12): parked context 10, 65816 registers 8, flags
+  3 (last N/Z result, C, V), `master_cycles` 1, `coprocessor_master_cycles`
+  1, run flags 1, spare 1. Only the thread not running is
   parked, so one set of 10 slots serves both: the switch swaps each
   callee-saved GPR with its slot (s0-s7, s8, and sp and ra packed into one;
   gp is the same for both threads). No GPR-FPR swap instruction exists, so
@@ -2040,9 +2041,20 @@ callee-saved: a function that uses one restores it before returning.
   3. The `m_flag`/`x_flag` mirrors go (testing P's bit costs the same).
   4. `host_return_valid` becomes a call argument: it is the generated
      calling convention's return-frame size, not CPU state.
-  5. The per-flag mirrors are the lazy N/Z question (separate).
-  6. The `g_cpu`/main-stack D-cache conflict is fixed through the layout
-     tool regardless.
+  5. The per-flag mirrors (186k accesses in SMW's generated code, the most
+     used fields): lazy N/Z keeps the last result, N and Z are derived from
+     it; C and V get a register each; D and I fold into P.
+  6. The rest leaves `g_cpu` too: `master_cycles` and
+     `coprocessor_master_cycles` to FPU registers, `cycles` deleted if
+     nothing reads it, `ram` becomes a fixed address (WRAM never moves),
+     `open_bus` moves to the bus code's state.
+  With `g_cpu` gone, its D-cache conflict with the main stack (81% of its
+  misses, SMW) goes with it, so no placement pass is planned for it.
+
+**To discuss later:** I-cache/D-cache layering, e.g. code and data
+alternating through RDRAM in 16 KB / 8 KB blocks. First thought: the caches
+are separate, so code never evicts data; what such a layout changes is how
+placement is organised, not which hot items share a line.
 - Interrupts: libdragon's lazy save covers `$f0-$f19` and restores them on
   exit, so a reserved register there keeps its value as long as the handler
   (compiled with the flags) does not write it. `$f20-$f31` are not saved;
@@ -2194,6 +2206,37 @@ the CPU becomes integer.
   of the main-loop stack (`s_host_stack` +232 KB, same cache index). The
   line with `cycles` and `master_cycles` misses most (10,441); the 65816
   registers' line 4,754. Moving only some fields leaves each line in use.
+
+### 65816 register accessors and CPUFPU (2026-11-13)
+
+- **Accessors.** A, X, Y, S, D, DB, PB, P, m_flag, x_flag and emulation are
+  reached only through `cpu_A()` / `cpu_set_A(v)` etc. (`runner/src/cpu_regs.h`);
+  the `CpuState` fields are `reg_*` so a direct access fails to compile. The
+  v2 emitter writes the accessors itself (`emitter_helpers.assign` for code
+  that holds a register as an assignable "field"); `lean_rewrite.py` matches
+  the accessor forms. Regenerated SMW/Pitfall/JM2 output is byte-identical
+  to a post-pass rewrite of the old output, and N64 state hashes are
+  identical to step 3a (SMW 51, Pitfall 12, JM2 24 frames). One CPU state:
+  tests that built their own `CpuState` now run on `g_cpu`; the rollback
+  residue copies `g_cpu` and calls `cpu_regs_store`/`cpu_regs_load`.
+- **CPUFPU=1** (opt-in): A..P live in `$f17-$f24` as GCC global register
+  variables. Reads pass through an empty `asm("" : "+r")`, because GCC 16
+  otherwise folds the FPU register into an address and fails (internal
+  compiler error in `mips_load_store_insns`). State hashes identical to
+  step 3a in all three games.
+- **Measured, not adopted.** Generated code grows 8% (JM2 bank $80, -Os):
+  a byte of a 16-bit register is one `lbu` from memory but `mfc1` + `andi`
+  from an FPU register, a narrow write is one `sb`/`sh` but `andi` + `mtc1`,
+  and GCC zero-extends an 8-bit register passed as a `uint8` argument even
+  with the range known. I-cache misses in the code cache (ares icprof,
+  60-frame windows): SMW 381,789 -> 407,233 (+6.7%), Pitfall 480 -> 540,
+  JM2 13,893 -> 16,928. Whole-program totals moved by up to +21.6%
+  (Pitfall) and -1.6% (JM2), dominated by runtime functions changing cache
+  collisions (`snes_master_clocks_until_irq` 58k -> 1.19M, `RtlApuLock`
+  428k -> 0.2k), i.e. layout noise. The D-cache side it would save is at
+  most `g_cpu`'s ~440 misses per frame, 81% of them one stack conflict.
+  What would change the balance: runtime helpers taking 32-bit arguments
+  (no zero-extension), and emitter forms that avoid byte extraction.
 
 ## Next steps
 

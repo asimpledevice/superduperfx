@@ -141,13 +141,13 @@ void cpu_trace_mark_nlr_exit(uint8_t kind) {
             fprintf(stderr,
                 "[trap-nlr] f%d func=%s kind=%u S=$%04X entry_s=$%04X delta=%d\n",
                 snes_frame_counter, g_last_recomp_func, (unsigned)kind,
-                (unsigned)g_cpu.S, (unsigned)es,
-                (int)(int16_t)((uint16_t)g_cpu.S - es));
+                (unsigned)cpu_S(), (unsigned)es,
+                (int)(int16_t)((uint16_t)cpu_S() - es));
             /* The exit kind alone does not say whether the unwind depth is
              * right — that depends on which live frame the return is aimed
              * at. Dump the real frame array, marking any slot whose entry S
              * matches the guest S this exit leaves behind. */
-            recomp_dump_frame_array(stderr, (uint16_t)g_cpu.S);
+            recomp_dump_frame_array(stderr, (uint16_t)cpu_S());
             fflush(stderr);
         }
     }
@@ -179,10 +179,10 @@ uint64_t boundary_audit_init(void) {
 /* Capture register state from g_cpu into a BoundaryEvent. */
 static void boundary_fill_state(BoundaryEvent *be) {
     extern CpuState g_cpu;  /* defined in common_rtl.c */
-    be->A = g_cpu.A; be->X = g_cpu.X; be->Y = g_cpu.Y;
-    be->S = g_cpu.S; be->D = g_cpu.D;
-    be->DB = g_cpu.DB; be->PB = g_cpu.PB; be->P = g_cpu.P;
-    be->m_flag = g_cpu.m_flag; be->x_flag = g_cpu.x_flag;
+    be->A = cpu_A(); be->X = cpu_X(); be->Y = cpu_Y();
+    be->S = cpu_S(); be->D = cpu_D();
+    be->DB = cpu_DB(); be->PB = cpu_PB(); be->P = cpu_P();
+    be->m_flag = cpu_m_flag(); be->x_flag = cpu_x_flag();
 }
 
 void boundary_audit_record_entry(const char *name) {
@@ -433,11 +433,11 @@ void cpu_trace_db_tripwire_check(CpuState *cpu, uint32_t pc24,
     t->trip_trace_idx = g_cpu_trace_idx;
 
     if (cpu) {
-        t->A = cpu->A; t->X = cpu->X; t->Y = cpu->Y;
-        t->S = cpu->S; t->D = cpu->D;
-        t->DB = cpu->DB; t->PB = cpu->PB; t->P = cpu->P;
-        t->m_flag = cpu->m_flag; t->x_flag = cpu->x_flag;
-        t->e_flag = cpu->emulation;
+        t->A = cpu_A(); t->X = cpu_X(); t->Y = cpu_Y();
+        t->S = cpu_S(); t->D = cpu_D();
+        t->DB = cpu_DB(); t->PB = cpu_PB(); t->P = cpu_P();
+        t->m_flag = cpu_m_flag(); t->x_flag = cpu_x_flag();
+        t->e_flag = cpu_emulation();
     }
 
     if (g_last_recomp_func) {
@@ -532,11 +532,11 @@ void cpu_trace_stack_drift_check(uint16_t entry_S, uint16_t exit_S,
     }
 
     extern CpuState g_cpu;
-    t->A = g_cpu.A; t->X = g_cpu.X; t->Y = g_cpu.Y;
-    t->S = g_cpu.S; t->D = g_cpu.D;
-    t->DB = g_cpu.DB; t->PB = g_cpu.PB; t->P = g_cpu.P;
-    t->m_flag = g_cpu.m_flag; t->x_flag = g_cpu.x_flag;
-    t->e_flag = g_cpu.emulation;
+    t->A = cpu_A(); t->X = cpu_X(); t->Y = cpu_Y();
+    t->S = cpu_S(); t->D = cpu_D();
+    t->DB = cpu_DB(); t->PB = cpu_PB(); t->P = cpu_P();
+    t->m_flag = cpu_m_flag(); t->x_flag = cpu_x_flag();
+    t->e_flag = cpu_emulation();
 
     int depth = g_recomp_stack_top;
     if (depth > STACK_DRIFT_TRIP_STACK_DEPTH) depth = STACK_DRIFT_TRIP_STACK_DEPTH;
@@ -662,8 +662,8 @@ int cpu_trace_mx_claim_check(CpuState *cpu, uint32_t pc24, const char *name) {
         return 1;
     }
 
-    uint8_t runtime_m = (uint8_t)(cpu->m_flag & 1);
-    uint8_t runtime_x = (uint8_t)(cpu->x_flag & 1);
+    uint8_t runtime_m = (uint8_t)(cpu_m_flag() & 1);
+    uint8_t runtime_x = (uint8_t)(cpu_x_flag() & 1);
     if (runtime_m == claimed_m && runtime_x == claimed_x) {
         return 1;  /* claim matches reality */
     }
@@ -684,10 +684,10 @@ int cpu_trace_mx_claim_check(CpuState *cpu, uint32_t pc24, const char *name) {
         r->claimed_m = claimed_m;
         r->claimed_x = claimed_x;
 
-        r->A = cpu->A; r->X = cpu->X; r->Y = cpu->Y;
-        r->S = cpu->S; r->D = cpu->D;
-        r->DB = cpu->DB; r->PB = cpu->PB; r->P = cpu->P;
-        r->e_flag = cpu->emulation;
+        r->A = cpu_A(); r->X = cpu_X(); r->Y = cpu_Y();
+        r->S = cpu_S(); r->D = cpu_D();
+        r->DB = cpu_DB(); r->PB = cpu_PB(); r->P = cpu_P();
+        r->e_flag = cpu_emulation();
 
         int depth = g_recomp_stack_top;
         if (depth > MX_CLAIM_TRIP_STACK_DEPTH) depth = MX_CLAIM_TRIP_STACK_DEPTH;
@@ -772,8 +772,8 @@ int cpu_trace_mx_async_check(CpuState *cpu, uint32_t pc24) {
     MxAsyncTrip *t = &g_mx_async_trip;
     if (!t->armed || t->triggered) return 1;
 
-    uint8_t  cur_m     = (uint8_t)(cpu->m_flag & 1);
-    uint8_t  cur_x     = (uint8_t)(cpu->x_flag & 1);
+    uint8_t  cur_m     = (uint8_t)(cpu_m_flag() & 1);
+    uint8_t  cur_x     = (uint8_t)(cpu_x_flag() & 1);
     uint64_t cur_count = g_px_mutation_count;
 
     if (!t->initialized) {
@@ -858,7 +858,7 @@ void cpu_trace_px_record(CpuState *cpu, uint32_t pc24, uint8_t source_kind,
         e->new_p = new_p;
         e->old_x_flag = (old_p & 0x10) ? 1 : 0;
         e->new_x_flag = (new_p & 0x10) ? 1 : 0;
-        e->S = cpu ? cpu->S : 0;
+        e->S = cpu ? cpu_S() : 0;
         g_px_tripwire.pmut_write_idx++;
         if (g_px_tripwire.pmut_count < PX_TRIPWIRE_PMUT_RING) {
             g_px_tripwire.pmut_count++;
@@ -878,21 +878,21 @@ void cpu_trace_px_record(CpuState *cpu, uint32_t pc24, uint8_t source_kind,
     g_px_tripwire.trip_event.new_p = new_p;
     g_px_tripwire.trip_event.old_x_flag = old_x;
     g_px_tripwire.trip_event.new_x_flag = new_x;
-    g_px_tripwire.trip_event.S = cpu ? cpu->S : 0;
+    g_px_tripwire.trip_event.S = cpu ? cpu_S() : 0;
     g_px_tripwire.trip_trace_idx = (uint32_t)g_cpu_trace_idx;
 
     if (cpu) {
-        g_px_tripwire.A = cpu->A;
-        g_px_tripwire.X = cpu->X;
-        g_px_tripwire.Y = cpu->Y;
-        g_px_tripwire.S = cpu->S;
-        g_px_tripwire.D = cpu->D;
-        g_px_tripwire.DB = cpu->DB;
-        g_px_tripwire.PB = cpu->PB;
-        g_px_tripwire.P = cpu->P;
-        g_px_tripwire.m_flag = cpu->m_flag;
-        g_px_tripwire.x_flag = cpu->x_flag;
-        g_px_tripwire.e_flag = cpu->emulation;
+        g_px_tripwire.A = cpu_A();
+        g_px_tripwire.X = cpu_X();
+        g_px_tripwire.Y = cpu_Y();
+        g_px_tripwire.S = cpu_S();
+        g_px_tripwire.D = cpu_D();
+        g_px_tripwire.DB = cpu_DB();
+        g_px_tripwire.PB = cpu_PB();
+        g_px_tripwire.P = cpu_P();
+        g_px_tripwire.m_flag = cpu_m_flag();
+        g_px_tripwire.x_flag = cpu_x_flag();
+        g_px_tripwire.e_flag = cpu_emulation();
     }
 
     if (g_last_recomp_func) {
@@ -921,13 +921,13 @@ void cpu_trace_px_breadcrumb(CpuState *cpu, uint32_t marker, const char *label) 
     PxBreadcrumb *bc = &g_px_tripwire.breadcrumbs[g_px_tripwire.breadcrumb_count++];
     bc->marker = marker;
     if (cpu) {
-        bc->P = cpu->P;
-        bc->m_flag = cpu->m_flag;
-        bc->x_flag = cpu->x_flag;
-        bc->e_flag = cpu->emulation;
-        bc->A = cpu->A; bc->X = cpu->X; bc->Y = cpu->Y;
-        bc->S = cpu->S; bc->D = cpu->D;
-        bc->DB = cpu->DB; bc->PB = cpu->PB;
+        bc->P = cpu_P();
+        bc->m_flag = cpu_m_flag();
+        bc->x_flag = cpu_x_flag();
+        bc->e_flag = cpu_emulation();
+        bc->A = cpu_A(); bc->X = cpu_X(); bc->Y = cpu_Y();
+        bc->S = cpu_S(); bc->D = cpu_D();
+        bc->DB = cpu_DB(); bc->PB = cpu_PB();
     }
     if (label) {
         strncpy(bc->label, label, PX_TRIPWIRE_FUNC_LEN - 1);
@@ -1045,11 +1045,11 @@ static int scoped_tripwire_maybe_fire(CpuState *cpu, uint8_t bank,
     t->hit_val = hit_val;
     t->hit_byte_in_word = hit_byte_in_word;
     t->width_seen = (uint8_t)width;
-    t->A = cpu->A; t->X = cpu->X; t->Y = cpu->Y;
-    t->S = cpu->S; t->D = cpu->D;
-    t->DB = cpu->DB; t->PB = cpu->PB; t->P = cpu->P;
-    t->m_flag = cpu->m_flag; t->x_flag = cpu->x_flag;
-    t->e_flag = cpu->emulation;
+    t->A = cpu_A(); t->X = cpu_X(); t->Y = cpu_Y();
+    t->S = cpu_S(); t->D = cpu_D();
+    t->DB = cpu_DB(); t->PB = cpu_PB(); t->P = cpu_P();
+    t->m_flag = cpu_m_flag(); t->x_flag = cpu_x_flag();
+    t->e_flag = cpu_emulation();
 
     scoped_tripwire_collect_recent_context(t->trace_idx);
 
@@ -1107,16 +1107,16 @@ static void capture(CpuState *cpu, uint32_t pc24, uint8_t event_type,
     e->pc24 = pc24;
     e->frame = snes_frame_counter;
     e->native_func_id_or_hash = 0;  /* set separately by func_entry */
-    e->A = cpu->A;
-    e->X = cpu->X;
-    e->Y = cpu->Y;
-    e->S = cpu->S;
-    e->D = cpu->D;
-    e->DB = cpu->DB;
-    e->PB = cpu->PB;
-    e->P = cpu->P;
-    e->M = cpu->m_flag;
-    e->XF = cpu->x_flag;
+    e->A = cpu_A();
+    e->X = cpu_X();
+    e->Y = cpu_Y();
+    e->S = cpu_S();
+    e->D = cpu_D();
+    e->DB = cpu_DB();
+    e->PB = cpu_PB();
+    e->P = cpu_P();
+    e->M = cpu_m_flag();
+    e->XF = cpu_x_flag();
     e->event_type = event_type;
     e->extra0 = extra0;
     e->extra1 = extra1;
@@ -1205,10 +1205,10 @@ void cpu_trace_block_watch_check(CpuState *cpu, uint32_t pc24) {
         if (w->hit_count >= w->max_hits) continue;
         BlockWatchHit *h = &w->hits[w->hit_count];
         h->frame = snes_frame_counter;
-        h->A = cpu->A; h->X = cpu->X; h->Y = cpu->Y;
-        h->S = cpu->S; h->D = cpu->D;
-        h->DB = cpu->DB; h->PB = cpu->PB; h->P = cpu->P;
-        h->m_flag = cpu->m_flag; h->x_flag = cpu->x_flag; h->e_flag = cpu->emulation;
+        h->A = cpu_A(); h->X = cpu_X(); h->Y = cpu_Y();
+        h->S = cpu_S(); h->D = cpu_D();
+        h->DB = cpu_DB(); h->PB = cpu_PB(); h->P = cpu_P();
+        h->m_flag = cpu_m_flag(); h->x_flag = cpu_x_flag(); h->e_flag = cpu_emulation();
         for (int j = 0; j < w->n_addrs; j++) {
             int32_t off = w->ram_offsets[j];
             h->vals[j] = (off >= 0 && off < 0x20000) ? g_ram[off] : 0;
@@ -1263,14 +1263,14 @@ void cpu_trace_block(CpuState *cpu, uint32_t pc24) {
             const char *_e = getenv("SNESRECOMP_DBTRACE");
             if (_e) sscanf(_e, "%d-%d", &dbs_lo, &dbs_hi);
         }
-        if (dbs_lo >= 0 && cpu->DB != dbs_last &&
+        if (dbs_lo >= 0 && cpu_DB() != dbs_last &&
             snes_frame_counter >= dbs_lo && snes_frame_counter <= dbs_hi) {
             fprintf(stderr, "[dbs] f=%d DB $%02X->$%02X in block $%06X "
                     "(prev block $%06X) S=%04X\n",
-                    snes_frame_counter, dbs_last, cpu->DB, dbs_prev_pc, pc24,
-                    cpu->S);
+                    snes_frame_counter, dbs_last, cpu_DB(), dbs_prev_pc, pc24,
+                    cpu_S());
         }
-        dbs_last = cpu->DB;
+        dbs_last = cpu_DB();
         dbs_prev_pc = pc24;
     }
     /* S-boundary probe (reusable): log cpu->S + DB at every block whose PC is
@@ -1289,7 +1289,7 @@ void cpu_trace_block(CpuState *cpu, uint32_t pc24) {
         if (sb_lo >= 0 && (long)pc24 >= sb_lo && (long)pc24 <= sb_hi)
             fprintf(stderr, "[sbound] f=%d pc=$%06X S=$%04X DB=$%02X\n",
                     snes_frame_counter, (unsigned)pc24,
-                    (unsigned)cpu->S, (unsigned)cpu->DB);
+                    (unsigned)cpu_S(), (unsigned)cpu_DB());
     }
     /* Inspection-freeze trigger (reusable). Armed once from the
      * environment so it covers the very first frames with no
@@ -1327,7 +1327,7 @@ void cpu_trace_block(CpuState *cpu, uint32_t pc24) {
     /* v2 emits cpu_trace_block() at every block boundary. Feed that existing
      * hook into the bounded Tier-2 TCP ring so reverse-debug builds actually
      * expose the block history they allocate and advertise. */
-    debug_on_block_enter(pc24, cpu->A, cpu->X, cpu->Y);
+    debug_on_block_enter(pc24, cpu_A(), cpu_X(), cpu_Y());
 #endif
     debug_server_on_trace_block(cpu, pc24);
     cpu_trace_mx_async_check(cpu, pc24);
@@ -1336,12 +1336,12 @@ void cpu_trace_block(CpuState *cpu, uint32_t pc24) {
     extern uint8_t  g_s_watch_set;
     extern uint16_t g_s_watch_lo;
     extern uint16_t g_s_watch_hi;
-    if (g_s_watch_set && (cpu->S < g_s_watch_lo || cpu->S > g_s_watch_hi)) {
+    if (g_s_watch_set && (cpu_S() < g_s_watch_lo || cpu_S() > g_s_watch_hi)) {
         g_s_watch_set = 0;  /* one-shot */
         char tag[96];
         snprintf(tag, sizeof(tag),
                  "S-WATCH HIT S=$%04X (range $%04X-$%04X) at PC $%06X",
-                 cpu->S, g_s_watch_lo, g_s_watch_hi, pc24);
+                 cpu_S(), g_s_watch_lo, g_s_watch_hi, pc24);
         cpu_trace_dump_dbpb(tag);
         cpu_trace_dump_recent(tag, 128);
     }
@@ -1354,11 +1354,11 @@ void cpu_trace_block(CpuState *cpu, uint32_t pc24) {
     if (g_db_tripwire.armed && !g_db_tripwire.triggered) {
         static uint8_t s_last_seen_db = 0;
         static uint8_t s_last_init = 0;
-        if (!s_last_init) { s_last_seen_db = cpu->DB; s_last_init = 1; }
-        if (cpu->DB != s_last_seen_db) {
-            cpu_trace_db_tripwire_check(cpu, pc24, s_last_seen_db, cpu->DB,
+        if (!s_last_init) { s_last_seen_db = cpu_DB(); s_last_init = 1; }
+        if (cpu_DB() != s_last_seen_db) {
+            cpu_trace_db_tripwire_check(cpu, pc24, s_last_seen_db, cpu_DB(),
                                         CPU_TR_BLOCK);
-            s_last_seen_db = cpu->DB;
+            s_last_seen_db = cpu_DB();
         }
     }
 }
@@ -1389,7 +1389,7 @@ void cpu_trace_func_entry(CpuState *cpu, uint32_t pc24, const char *name) {
         if (dbt_lo >= 0 && snes_frame_counter >= dbt_lo &&
             snes_frame_counter <= dbt_hi)
             fprintf(stderr, "[dbt] f=%d DB=%02X PB=%02X S=%04X %s\n",
-                    snes_frame_counter, cpu->DB, cpu->PB, cpu->S,
+                    snes_frame_counter, cpu_DB(), cpu_PB(), cpu_S(),
                     name ? name : "?");
     }
     /* Soundness check (one-shot, gated by armed flag). Compares the
@@ -1409,16 +1409,16 @@ void cpu_trace_func_entry(CpuState *cpu, uint32_t pc24, const char *name) {
     }
     uint32_t h = name ? fnv1a(name) : 0;
     e->native_func_id_or_hash = h;
-    e->A = cpu->A;
-    e->X = cpu->X;
-    e->Y = cpu->Y;
-    e->S = cpu->S;
-    e->D = cpu->D;
-    e->DB = cpu->DB;
-    e->PB = cpu->PB;
-    e->P = cpu->P;
-    e->M = cpu->m_flag;
-    e->XF = cpu->x_flag;
+    e->A = cpu_A();
+    e->X = cpu_X();
+    e->Y = cpu_Y();
+    e->S = cpu_S();
+    e->D = cpu_D();
+    e->DB = cpu_DB();
+    e->PB = cpu_PB();
+    e->P = cpu_P();
+    e->M = cpu_m_flag();
+    e->XF = cpu_x_flag();
     e->event_type = CPU_TR_FUNC_ENTRY;
     e->extra0 = 0;
     e->extra1 = 0;
@@ -1445,11 +1445,11 @@ void cpu_trace_func_entry(CpuState *cpu, uint32_t pc24, const char *name) {
         fwh->frame = snes_frame_counter;
         fwh->pc24 = pc24;
         if (cpu) {
-            fwh->A = cpu->A; fwh->X = cpu->X; fwh->Y = cpu->Y;
-            fwh->S = cpu->S; fwh->D = cpu->D;
-            fwh->DB = cpu->DB; fwh->PB = cpu->PB; fwh->P = cpu->P;
-            fwh->m_flag = cpu->m_flag; fwh->x_flag = cpu->x_flag;
-            fwh->e_flag = cpu->emulation;
+            fwh->A = cpu_A(); fwh->X = cpu_X(); fwh->Y = cpu_Y();
+            fwh->S = cpu_S(); fwh->D = cpu_D();
+            fwh->DB = cpu_DB(); fwh->PB = cpu_PB(); fwh->P = cpu_P();
+            fwh->m_flag = cpu_m_flag(); fwh->x_flag = cpu_x_flag();
+            fwh->e_flag = cpu_emulation();
         }
         if (g_func_watch_name) {
             strncpy(fwh->name, g_func_watch_name, sizeof(fwh->name) - 1);
@@ -1587,11 +1587,11 @@ static void phantom_capture_hit(int armed_idx, CpuState *cpu, uint32_t pc24) {
     h->first_block_idx = g_cpu_trace_idx;
     h->repeat_count = 1;
     if (cpu) {
-        h->A = cpu->A; h->X = cpu->X; h->Y = cpu->Y;
-        h->S = cpu->S; h->D = cpu->D;
-        h->DB = cpu->DB; h->PB = cpu->PB; h->P = cpu->P;
-        h->m_flag = cpu->m_flag; h->x_flag = cpu->x_flag;
-        h->e_flag = cpu->emulation;
+        h->A = cpu_A(); h->X = cpu_X(); h->Y = cpu_Y();
+        h->S = cpu_S(); h->D = cpu_D();
+        h->DB = cpu_DB(); h->PB = cpu_PB(); h->P = cpu_P();
+        h->m_flag = cpu_m_flag(); h->x_flag = cpu_x_flag();
+        h->e_flag = cpu_emulation();
     }
     int depth = g_recomp_stack_top;
     if (depth > 16) depth = 16;
@@ -1710,11 +1710,11 @@ RecompReturn cpu_trace_unresolved_goto_trap(
     h->first_frame = snes_frame_counter;
     h->first_block_idx = g_cpu_trace_idx;
     if (cpu) {
-        h->A = cpu->A; h->X = cpu->X; h->Y = cpu->Y;
-        h->S = cpu->S; h->D = cpu->D;
-        h->DB = cpu->DB; h->PB = cpu->PB; h->P = cpu->P;
-        h->m_flag = cpu->m_flag; h->x_flag = cpu->x_flag;
-        h->e_flag = cpu->emulation;
+        h->A = cpu_A(); h->X = cpu_X(); h->Y = cpu_Y();
+        h->S = cpu_S(); h->D = cpu_D();
+        h->DB = cpu_DB(); h->PB = cpu_PB(); h->P = cpu_P();
+        h->m_flag = cpu_m_flag(); h->x_flag = cpu_x_flag();
+        h->e_flag = cpu_emulation();
     }
     int depth = g_recomp_stack_top;
     if (depth > 16) depth = 16;
@@ -1787,11 +1787,11 @@ RecompReturn cpu_trace_unresolved_stub_trap(
     h->first_frame = snes_frame_counter;
     h->first_block_idx = g_cpu_trace_idx;
     if (cpu) {
-        h->A = cpu->A; h->X = cpu->X; h->Y = cpu->Y;
-        h->S = cpu->S; h->D = cpu->D;
-        h->DB = cpu->DB; h->PB = cpu->PB; h->P = cpu->P;
-        h->m_flag = cpu->m_flag; h->x_flag = cpu->x_flag;
-        h->e_flag = cpu->emulation;
+        h->A = cpu_A(); h->X = cpu_X(); h->Y = cpu_Y();
+        h->S = cpu_S(); h->D = cpu_D();
+        h->DB = cpu_DB(); h->PB = cpu_PB(); h->P = cpu_P();
+        h->m_flag = cpu_m_flag(); h->x_flag = cpu_x_flag();
+        h->e_flag = cpu_emulation();
     }
     int depth = g_recomp_stack_top;
     if (depth > 16) depth = 16;
@@ -1885,7 +1885,7 @@ void cpu_trace_stack_op(CpuState *cpu, uint32_t pc24, uint8_t op_id,
     uint64_t just_idx = g_cpu_trace_idx - 1;
     CpuTraceEvent *just = &g_cpu_trace_ring[just_idx & (g_cpu_trace_capacity - 1)];
     just->addr16 = old_S;
-    just->new_value = cpu->S;
+    just->new_value = cpu_S();
     just->old_value = old_S;
     just->width = 0;
     just->bank = 0;
@@ -1911,7 +1911,7 @@ void cpu_trace_db_change(CpuState *cpu, uint32_t pc24, uint8_t old_db,
         if (dbw_lo >= 0 && new_db != old_db &&
             snes_frame_counter >= dbw_lo && snes_frame_counter <= dbw_hi)
             fprintf(stderr, "[dbw] f=%d PC=$%06X DB $%02X->$%02X S=%04X\n",
-                    snes_frame_counter, pc24, old_db, new_db, cpu->S);
+                    snes_frame_counter, pc24, old_db, new_db, cpu_S());
     }
     capture(cpu, pc24, event_type, old_db, (uint16_t)new_db);
     int slot = (int)(g_cpu_dbpb_idx++ & (CPU_DBPB_RING_LEN - 1));
@@ -1921,7 +1921,7 @@ void cpu_trace_db_change(CpuState *cpu, uint32_t pc24, uint8_t old_db,
     d->reg_id = 0; /* DB */
     d->old_val = old_db;
     d->new_val = new_db;
-    d->S = cpu->S;
+    d->S = cpu_S();
     d->pad = 0;
     if (g_db_watch_set && db_watch_hit(new_db) && new_db != old_db) {
         char tag[64];
@@ -1949,7 +1949,7 @@ void cpu_trace_pb_change(CpuState *cpu, uint32_t pc24, uint8_t old_pb,
     d->reg_id = 1; /* PB */
     d->old_val = old_pb;
     d->new_val = new_pb;
-    d->S = cpu->S;
+    d->S = cpu_S();
     d->pad = 0;
 }
 
@@ -2034,7 +2034,7 @@ uint8_t   g_wram_watch_any = 0;
 extern uint32_t g_interp_wlog_pc24;
 static uint32_t wram_write_site_pc24(const CpuState *cpu) {
     return g_interp_wlog_pc24 ? (g_interp_wlog_pc24 & 0xFFFFFFu)
-                              : ((uint32_t)cpu->PB << 16);
+                              : ((uint32_t)cpu_PB() << 16);
 }
 
 void cpu_trace_set_wram_watch(uint8_t bank, uint16_t addr, int width,

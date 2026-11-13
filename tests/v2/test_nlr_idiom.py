@@ -32,7 +32,7 @@ def test_single_block_pla_pla_rts_uses_hardware_stack_unwind():
 
     assert src.count("CPU_STACK_OP_PLA") == 2
     assert "cpu_resolve_ancestor_skip" in src
-    assert "interp_bridge_return_targets_owner(_ret_s, cpu->S)" in src
+    assert "interp_bridge_return_targets_owner(_ret_s, cpu_S())" in src
     assert "interp_bridge_lle_yield_unwind(cpu, _rpc24)" in src
     assert "return-to-interpreter-owner" in src
     assert "RTS return-to-ancestor" in src
@@ -140,7 +140,7 @@ def test_single_pla_before_rts_keeps_literal_hardware_semantics():
     assert "RECOMP_RETURN_SKIP_1" not in src, (
         f"single PLA should not use a synthetic SKIP constant; src=\n{src}"
     )
-    assert "cpu_read8(cpu, 0x00, cpu->S);" in src, (
+    assert "cpu_read8(cpu, 0x00, cpu_S());" in src, (
         f"literal PLA pop missing for non-NLR shape; src=\n{src}"
     )
 

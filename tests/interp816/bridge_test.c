@@ -111,13 +111,14 @@ static int g_pop_underflow = 0;
  * s_interp_bounce_recomp_base = g_recomp_stack_top at bounce time; with a
  * stub that never advanced the top, that whole branch was untestable and
  * S8d below could not fail. */
-static CpuState g_c;
+/* The test's CPU state is the runtime's one CpuState (g_cpu, above): the
+ * register accessors (cpu_regs.h) read it. */
 /* DRAM refresh tax (common_cpu_infra.c in the real runner). The model is
  * the clocks a compiled block charged without settling before it handed
  * over: the first charge call pays them, later calls are no-ops. */
 static uint64_t g_refresh_owed;
 void snes_refresh_charge(void) {
-    g_c.master_cycles += g_refresh_owed;
+    g_cpu.master_cycles += g_refresh_owed;
     g_refresh_owed = 0;
 }
 static void redirect_to_return(CpuState *cpu, uint32_t pc) {
@@ -129,7 +130,7 @@ void RecompStackPush(const char *name) {
     g_push_count++;
     g_push_depth++;
     if (g_recomp_stack_top < 64) {
-        g_cpu_entry_s[g_recomp_stack_top] = g_c.S;
+        g_cpu_entry_s[g_recomp_stack_top] = cpu_S();
         g_recomp_stack_top++;
     }
 }
@@ -220,18 +221,18 @@ int cpu_resolve_callee_post_return_skip(uint16_t post_s, int callee_tail) {
 RecompReturn cpu_unresolved_abandon_balanced(CpuState *cpu, uint32 site_pc24,
                                              uint16 entry_s, uint8 hrv) {
     (void)site_pc24; g_abandon_called++;
-    cpu->S = (uint16)(entry_s + hrv);
+    cpu_set_S((uint16)(entry_s + hrv));
     return RECOMP_RETURN_NORMAL;
 }
 RecompReturn cpu_dispatch_pc(CpuState *cpu, uint32 pc24, uint16 miss_restore) {
     if ((pc24 & 0xFFFFFF) == FAKE_AOT) {
         g_aot_called++;
         g_aot_saw_site_pc24 = g_interp_wlog_pc24;
-        cpu->A = (uint16)(cpu->A + 0x0100);     /* observable "compiled" work */
-        cpu->S = (uint16)(cpu->S + 2);          /* models RTS popping its frame */
+        cpu_set_A((uint16)(cpu_A() + 0x0100));     /* observable "compiled" work */
+        cpu_set_S((uint16)(cpu_S() + 2));          /* models RTS popping its frame */
         return RECOMP_RETURN_NORMAL;
     }
-    cpu->S = miss_restore;
+    cpu_set_S(miss_restore);
     return RECOMP_RETURN_NORMAL;
 }
 RecompReturn cpu_dispatch_pc_paired(CpuState *cpu, uint32 pc24,
@@ -239,11 +240,11 @@ RecompReturn cpu_dispatch_pc_paired(CpuState *cpu, uint32 pc24,
     cpu->host_return_valid = frame_size;
     if (g_aot_nested_deadline && pc24 == FAKE_AOT) {
         RecompReturn result = interp_tier_dispatch_balanced(
-            cpu, 0x008300, FAKE_AOT, cpu->S, frame_size, false);
+            cpu, 0x008300, FAKE_AOT, cpu_S(), frame_size, false);
         if (result != RECOMP_RETURN_NORMAL) return result;
         /* This continuation must never run after the inner deadline. */
         ++g_after_nested_deadline;
-        cpu->A = 0xdead;
+        cpu_set_A(0xdead);
         if (interp_bridge_lle_master_deadline_reached(cpu))
             return interp_bridge_lle_yield_unwind(cpu, 0x008104);
         return result;
@@ -262,13 +263,13 @@ RecompReturn cpu_dispatch_pc_paired(CpuState *cpu, uint32 pc24,
         g_aot_called++;
         const int base = g_recomp_stack_top;
         g_recomp_stack_top += 2;
-        g_cpu_entry_s[base] = cpu->S;
-        cpu->S = (uint16)(cpu->S - 2);       /* root JSRs compiled child */
-        g_cpu_entry_s[base + 1] = cpu->S;
-        const uint16 ret_s = (uint16)(cpu->S + 4); /* expose inner's frame */
-        cpu->S = (uint16)(ret_s + 2);        /* final RTS pops inner frame */
+        g_cpu_entry_s[base] = cpu_S();
+        cpu_set_S((uint16)(cpu_S() - 2));       /* root JSRs compiled child */
+        g_cpu_entry_s[base + 1] = cpu_S();
+        const uint16 ret_s = (uint16)(cpu_S() + 4); /* expose inner's frame */
+        cpu_set_S((uint16)(ret_s + 2));        /* final RTS pops inner frame */
         g_owner_target_result =
-            interp_bridge_return_targets_owner(ret_s, cpu->S);
+            interp_bridge_return_targets_owner(ret_s, cpu_S());
         g_recomp_stack_top = base;
         if (g_owner_target_result)
             return interp_bridge_lle_yield_unwind(cpu, 0x008003);
@@ -280,15 +281,15 @@ RecompReturn cpu_dispatch_pc_paired(CpuState *cpu, uint32 pc24,
          * into the program's cooperative wait primitive. */
         g_aot_called++;
         return interp_tier_dispatch_balanced(cpu, 0x008300, 0x008000,
-                                             cpu->S, frame_size, false);
+                                             cpu_S(), frame_size, false);
     }
     if (g_aot_deadline_unwind && (pc24 & 0xFFFFFF) == FAKE_AOT) {
         g_aot_called++;
         cpu->master_cycles = 200;
         if (interp_bridge_lle_master_deadline_reached(cpu))
             return interp_bridge_lle_yield_unwind(cpu, 0x008100);
-        cpu->A = 0x0100;
-        cpu->S = (uint16)(cpu->S + frame_size);
+        cpu_set_A(0x0100);
+        cpu_set_S((uint16)(cpu_S() + frame_size));
         return RECOMP_RETURN_NORMAL;
     }
     if (g_aot_skips_root && (pc24 & 0xFFFFFF) == FAKE_AOT) {
@@ -296,7 +297,7 @@ RecompReturn cpu_dispatch_pc_paired(CpuState *cpu, uint32 pc24,
          * JSL frame and returns SKIP_1 through the root host frame. The owning
          * interpreter must consume that one skip and continue after its JSL. */
         g_aot_called++;
-        cpu->S = (uint16)(cpu->S + frame_size);
+        cpu_set_S((uint16)(cpu_S() + frame_size));
         return RECOMP_RETURN_SKIP_1;
     }
     if (g_aot_double_rewrite && (pc24 & 0xFFFFFF) == FAKE_AOT) {
@@ -312,7 +313,7 @@ RecompReturn cpu_dispatch_pc_paired(CpuState *cpu, uint32 pc24,
          * PLA; PLA; RTS: consume its own JSR frame plus the dispatcher's
          * preserved caller frame, then resume the interpreted grandparent. */
         g_aot_called++;
-        cpu->S = (uint16)(cpu->S + 4);
+        cpu_set_S((uint16)(cpu_S() + 4));
         return interp_tier_dispatch_rewritten_return(cpu, 0x008003, 0x0082FE);
     }
     if (g_aot_tail_chain_probe && (pc24 & 0xFFFFFF) == FAKE_AOT) {
@@ -325,7 +326,7 @@ RecompReturn cpu_dispatch_pc_paired(CpuState *cpu, uint32 pc24,
         g_cpu_entry_s[base + 1] = 0x01F8; /* materialized nested JSR */
         g_nested_chain_direct = interp_bridge_has_direct_paired_bounce();
         g_recomp_stack_top = base;
-        cpu->S = (uint16)(cpu->S + frame_size);
+        cpu_set_S((uint16)(cpu_S() + frame_size));
         return RECOMP_RETURN_NORMAL;
     }
     if (g_aot_interp_nlr && (pc24 & 0xFFFFFF) == FAKE_AOT) {
@@ -333,7 +334,7 @@ RecompReturn cpu_dispatch_pc_paired(CpuState *cpu, uint32 pc24,
          * frame plus its interpreted caller's JSR frame, then continue in
          * the interpreted grandparent at $8003. */
         g_aot_called++;
-        cpu->S = (uint16)(cpu->S + 4);
+        cpu_set_S((uint16)(cpu_S() + 4));
         return interp_tier_dispatch_rewritten_return(cpu, 0x008003, 0x0081FE);
     }
     if (g_aot_nested_rewrite && (pc24 & 0xFFFFFF) == FAKE_AOT) {
@@ -344,16 +345,16 @@ RecompReturn cpu_dispatch_pc_paired(CpuState *cpu, uint32 pc24,
          * eventually returning normally to the bridge. */
         g_aot_called++;
         g_recomp_stack_top++;                 /* paired AOT root */
-        g_cpu_entry_s[g_recomp_stack_top - 1] = cpu->S;
+        g_cpu_entry_s[g_recomp_stack_top - 1] = cpu_S();
 
-        cpu_write8(cpu, 0, cpu->S, 0x00); cpu->S--; /* parent JSL bank */
-        cpu_write8(cpu, 0, cpu->S, 0x81); cpu->S--; /* return high */
-        cpu_write8(cpu, 0, cpu->S, 0x7F); cpu->S--; /* return low ($8180) */
-        cpu_write8(cpu, 0, cpu->S, cpu->P); cpu->S--;  /* parent PHP */
-        cpu_write8(cpu, 0, cpu->S, cpu->DB); cpu->S--; /* parent PHB */
+        cpu_write8(cpu, 0, cpu_S(), 0x00); cpu_set_S(cpu_S() - 1); /* parent JSL bank */
+        cpu_write8(cpu, 0, cpu_S(), 0x81); cpu_set_S(cpu_S() - 1); /* return high */
+        cpu_write8(cpu, 0, cpu_S(), 0x7F); cpu_set_S(cpu_S() - 1); /* return low ($8180) */
+        cpu_write8(cpu, 0, cpu_S(), cpu_P()); cpu_set_S(cpu_S() - 1);  /* parent PHP */
+        cpu_write8(cpu, 0, cpu_S(), cpu_DB()); cpu_set_S(cpu_S() - 1); /* parent PHB */
         g_recomp_stack_top += 2;              /* parent + rewrite callee */
-        g_cpu_entry_s[g_recomp_stack_top - 2] = (uint16)(cpu->S + 2);
-        g_cpu_entry_s[g_recomp_stack_top - 1] = cpu->S;
+        g_cpu_entry_s[g_recomp_stack_top - 2] = (uint16)(cpu_S() + 2);
+        g_cpu_entry_s[g_recomp_stack_top - 1] = cpu_S();
 
         RecompReturn r = interp_tier_dispatch_rewritten_return(
             cpu, 0x008200, 0x0081FE);
@@ -363,8 +364,8 @@ RecompReturn cpu_dispatch_pc_paired(CpuState *cpu, uint32 pc24,
             return r;
         }
 
-        cpu->A = (uint16)(cpu->A + 0x0100);  /* root continued after parent */
-        cpu->S = (uint16)(cpu->S + frame_size); /* root returns to bridge */
+        cpu_set_A((uint16)(cpu_A() + 0x0100));  /* root continued after parent */
+        cpu_set_S((uint16)(cpu_S() + frame_size)); /* root returns to bridge */
         g_recomp_stack_top--;
         return RECOMP_RETURN_NORMAL;
     }
@@ -374,9 +375,9 @@ RecompReturn cpu_dispatch_pc_paired(CpuState *cpu, uint32 pc24,
          * interpreter below the root's live host frame. */
         g_aot_called++;
         g_recomp_stack_top++;
-        g_cpu_entry_s[g_recomp_stack_top - 1] = cpu->S;
-        cpu_write8(cpu, 0, cpu->S, 0x81); cpu->S--;
-        cpu_write8(cpu, 0, cpu->S, 0x7F); cpu->S--;
+        g_cpu_entry_s[g_recomp_stack_top - 1] = cpu_S();
+        cpu_write8(cpu, 0, cpu_S(), 0x81); cpu_set_S(cpu_S() - 1);
+        cpu_write8(cpu, 0, cpu_S(), 0x7F); cpu_set_S(cpu_S() - 1);
         RecompReturn r = interp_tier_run_call_frame(
             cpu, 0x008400, 0x0081F0, 2, NULL);
         g_recomp_stack_top--;
@@ -390,8 +391,8 @@ RecompReturn cpu_dispatch_pc_paired(CpuState *cpu, uint32 pc24,
          * leaving the rewritten continuation in the compiled root. */
         g_aot_called++;
         g_recomp_stack_top++;
-        g_cpu_entry_s[g_recomp_stack_top - 1] = cpu->S;
-        cpu->S = (uint16)(cpu->S + frame_size + 2);
+        g_cpu_entry_s[g_recomp_stack_top - 1] = cpu_S();
+        cpu_set_S((uint16)(cpu_S() + frame_size + 2));
         RecompReturn r = interp_tier_dispatch_rewritten_return(
             cpu, 0x008200, 0x0082FE);
         g_recomp_stack_top--;
@@ -400,13 +401,13 @@ RecompReturn cpu_dispatch_pc_paired(CpuState *cpu, uint32 pc24,
     if (g_aot_rewrites_return && (pc24 & 0xFFFFFF) == FAKE_AOT) {
         g_aot_called++;
         g_recomp_stack_top++;
-        cpu->S = (uint16)(cpu->S + frame_size); /* rewritten RTS/RTL popped it */
+        cpu_set_S((uint16)(cpu_S() + frame_size)); /* rewritten RTS/RTL popped it */
         RecompReturn r = interp_tier_dispatch_rewritten_return(
             cpu, 0x008200, 0x0081FE);
         g_recomp_stack_top--;
         return r;
     }
-    return cpu_dispatch_pc(cpu, pc24, cpu->S);
+    return cpu_dispatch_pc(cpu, pc24, cpu_S());
 }
 
 static int g_fail = 0, g_check = 0;
@@ -414,9 +415,9 @@ static int g_fail = 0, g_check = 0;
     g_fail++; printf("    FAIL: "); printf(__VA_ARGS__); printf("\n"); } } while (0)
 
 static void init_cpu(void) {
-    memset(&g_c, 0, sizeof g_c);
-    g_c.S = 0x01FF; g_c.emulation = 1; g_c.m_flag = 1; g_c.x_flag = 1;
-    g_c._flag_I = 1; g_c.ram = RAM; cpu_mirrors_to_p(&g_c);
+    memset(&g_cpu, 0, sizeof g_cpu);
+    cpu_set_S(0x01FF); cpu_set_emulation(1); cpu_set_m_flag(1); cpu_set_x_flag(1);
+    g_cpu._flag_I = 1; g_cpu.ram = RAM; cpu_mirrors_to_p(&g_cpu);
 }
 static void load(uint32 pc24, const uint8_t *code, int len) {
     memcpy(&RAM[pc24 & 0xFFFFFF], code, (size_t)len);
@@ -424,7 +425,7 @@ static void load(uint32 pc24, const uint8_t *code, int len) {
 
 static unsigned hook_order,hook_a,hook_b,hook_c,hook_dest;
 static void observe_a(CpuState *cpu,uint32_t pc) {
-    (void)pc;++hook_a;hook_order=hook_order*10+1;cpu->X=0x23;
+    (void)pc;++hook_a;hook_order=hook_order*10+1;cpu_set_X(0x23);
 }
 static void redirect_b(CpuState *cpu,uint32_t pc) {
     (void)cpu;(void)pc;++hook_b;hook_order=hook_order*10+2;
@@ -446,9 +447,9 @@ static int run_poll_task(const uint8_t *code, int len) {
     static const uint8_t scheduler_wait[] = {0xAD,0x20,0x00, 0xD0,0xFB};
     load(0x8000, code, len);
     load(0x8100, scheduler_wait, sizeof scheduler_wait);
-    cpu_write8(&g_c, 0, g_c.S, 0x80); g_c.S--;
-    cpu_write8(&g_c, 0, g_c.S, 0xFF); g_c.S--;
-    return interp_bridge_run_loop(&g_c, 0x008000, 0x008100, 0x0020, 0);
+    cpu_write8(&g_cpu, 0, cpu_S(), 0x80); cpu_set_S(cpu_S() - 1);
+    cpu_write8(&g_cpu, 0, cpu_S(), 0xFF); cpu_set_S(cpu_S() - 1);
+    return interp_bridge_run_loop(&g_cpu, 0x008000, 0x008100, 0x0020, 0);
 }
 static int resume_ring_has(uint64_t since, int site, int kind) {
     InterpResumeEvent e;
@@ -477,8 +478,8 @@ typedef struct {
 static S18Run s18_run(const uint8_t *code, int len, uint32_t declare, int i_flag) {
     S18Run r; memset(&r, 0, sizeof r);
     memset(RAM, 0, MEMSZ); init_cpu();
-    g_c.emulation = 0; g_c._flag_I = (uint8)(i_flag ? 1 : 0);
-    cpu_mirrors_to_p(&g_c);
+    cpu_set_emulation(0); g_cpu._flag_I = (uint8)(i_flag ? 1 : 0);
+    cpu_mirrors_to_p(&g_cpu);
     load(0x8900, code, len);
     RAM[0x2140] = 0xAA;                       /* an APU port that reads non-zero */
     interp_bridge_reset_dynamic_cache();
@@ -486,24 +487,24 @@ static S18Run s18_run(const uint8_t *code, int len, uint32_t declare, int i_flag
         interp_bridge_clear_idle_polls();
         if (declare) interp_bridge_set_idle_poll(declare);
     }
-    g_c.master_cycles = 1000;
+    g_cpu.master_cycles = 1000;
     interp_bridge_set_master_deadline(1000 + g_s18_span);
     const unsigned syncs0 = g_relative_syncs;
     const uint64_t ev0 = interp_bridge_resume_total();
     g_s18_steps = 0;
     g_interp_bridge_pc_hook = s18_count;
-    r.rc = interp_bridge_run_until_quiescent(&g_c, 0x008900);
+    r.rc = interp_bridge_run_until_quiescent(&g_cpu, 0x008900);
     g_interp_bridge_pc_hook = NULL;
     interp_bridge_set_master_deadline(0);
-    cpu_mirrors_to_p(&g_c);
-    r.master = g_c.master_cycles; r.cycles = g_c.cycles;
+    cpu_mirrors_to_p(&g_cpu);
+    r.master = g_cpu.master_cycles; r.cycles = g_cpu.cycles;
     r.resume = interp_bridge_lle_resume_pc();
     r.site = -1;
     { InterpResumeEvent e;
       const uint64_t n = interp_bridge_resume_total();
       if (n > ev0 && interp_bridge_resume_get(n - 1, &e)) r.site = e.site; }
-    r.a = g_c.A; r.x = g_c.X; r.y = g_c.Y; r.s = g_c.S; r.p = g_c.P;
-    r.open_bus = g_c.open_bus;
+    r.a = cpu_A(); r.x = cpu_X(); r.y = cpu_Y(); r.s = cpu_S(); r.p = cpu_P();
+    r.open_bus = g_cpu.open_bus;
     r.syncs = g_relative_syncs - syncs0; r.interpreted = g_s18_steps;
     for (uint32_t i = 0; i < 0x2000; i++) r.ram_sum = r.ram_sum * 31u + RAM[i];
     for (uint32_t i = 0; i < 0x20000; i++) r.ram_sum = r.ram_sum * 31u + RAM[0x7E0000 + i];
@@ -533,20 +534,20 @@ typedef struct { int rc, site; unsigned steps; uint32_t resume; uint16_t a; } S1
 static S19Run s19_run(const uint8_t *code, int len, int x16) {
     S19Run r; memset(&r, 0, sizeof r);
     memset(RAM, 0, MEMSZ); init_cpu();
-    g_c.emulation = 0; g_c.x_flag = x16 ? 0 : 1; cpu_mirrors_to_p(&g_c);
+    cpu_set_emulation(0); cpu_set_x_flag(x16 ? 0 : 1); cpu_mirrors_to_p(&g_cpu);
     load(0x8A00, code, len);
     interp_bridge_reset_dynamic_cache();
-    g_c.master_cycles = 1000;
+    g_cpu.master_cycles = 1000;
     interp_bridge_set_master_deadline(1000 + 400000);
     const uint64_t ev0 = interp_bridge_resume_total();
     g_s19_steps = 0;
     g_interp_bridge_pc_hook = s19_count;
-    r.rc = interp_bridge_run_until_quiescent(&g_c, 0x008A00);
+    r.rc = interp_bridge_run_until_quiescent(&g_cpu, 0x008A00);
     g_interp_bridge_pc_hook = NULL;
     interp_bridge_set_master_deadline(0);
     r.steps = g_s19_steps;
     r.resume = interp_bridge_lle_resume_pc();
-    r.a = g_c.A;
+    r.a = cpu_A();
     r.site = -1;
     { InterpResumeEvent e;
       const uint64_t n = interp_bridge_resume_total();
@@ -589,11 +590,11 @@ int main(void) {
         memset(RAM, 0, MEMSZ); init_cpu();
         uint8_t c[] = {0xA2,0xFF,0xCA,0xD0,0xFD,0x60};
         load(0x8000, c, sizeof c);
-        cpu_push_jsr_return_frame(&g_c);
+        cpu_push_jsr_return_frame(&g_cpu);
         g_extended_frames = mode != 0;
         apu.portTimeValid = mode == 2;
         g_absolute_syncs = g_relative_syncs = 0;
-        CHECK(interp_bridge_run(&g_c, 0x008000) == 1, "timed loop returns");
+        CHECK(interp_bridge_run(&g_cpu, 0x008000) == 1, "timed loop returns");
         if (mode == 2)
           CHECK(g_absolute_syncs > 1 && g_relative_syncs == 0,
                 "mapped work syncs repeatedly without double-driving SPC");
@@ -609,28 +610,28 @@ int main(void) {
     { memset(RAM, 0, MEMSZ); init_cpu(); g_aot_called = 0;
       uint8_t c[] = {0xA9,0x01, 0x20,0x00,0x81, 0x60};
       load(0x8000, c, sizeof c);
-      cpu_push_jsr_return_frame(&g_c);          /* sentinel return frame */
-      int rc = interp_bridge_run(&g_c, 0x008000);
+      cpu_push_jsr_return_frame(&g_cpu);          /* sentinel return frame */
+      int rc = interp_bridge_run(&g_cpu, 0x008000);
       printf("S1 JSR-into-compiled bounce\n");
       CHECK(rc == 1, "rc=%d exp 1", rc);
       CHECK(g_aot_called == 1, "aot_called=%d exp 1", g_aot_called);
-      CHECK(g_c.A == 0x0101, "A=%04X exp 0101 (01 from LDA + 0100 from AOT)", g_c.A);
-      CHECK(g_c.S == 0x01FF, "S=%04X exp 01FF (balanced)", g_c.S); }
+      CHECK(cpu_A() == 0x0101, "A=%04X exp 0101 (01 from LDA + 0100 from AOT)", cpu_A());
+      CHECK(cpu_S() == 0x01FF, "S=%04X exp 01FF (balanced)", cpu_S()); }
 
     /* S2: LDA #$09 ; RTS  (no call) */
     { memset(RAM, 0, MEMSZ); init_cpu(); g_aot_called = 0;
       uint8_t c[] = {0xA9,0x09, 0x60};
       load(0x8000, c, sizeof c);
-      cpu_push_jsr_return_frame(&g_c);
+      cpu_push_jsr_return_frame(&g_cpu);
       g_push_count = 0; g_push_depth = 0; g_pop_underflow = 0;
       g_interp_push_count = 0;
       const char *func_before = g_last_recomp_func;
-      int rc = interp_bridge_run(&g_c, 0x008000);
+      int rc = interp_bridge_run(&g_cpu, 0x008000);
       printf("S2 pure interp routine\n");
       CHECK(rc == 1, "rc=%d exp 1", rc);
       CHECK(g_aot_called == 0, "aot_called=%d exp 0", g_aot_called);
-      CHECK((g_c.A & 0xFF) == 0x09, "A.lo=%02X exp 09", g_c.A & 0xFF);
-      CHECK(g_c.S == 0x01FF, "S=%04X exp 01FF", g_c.S);
+      CHECK((cpu_A() & 0xFF) == 0x09, "A.lo=%02X exp 09", cpu_A() & 0xFF);
+      CHECK(cpu_S() == 0x01FF, "S=%04X exp 01FF", cpu_S());
       /* Attribution scope: the run pushed its interp@$ entry name, popped it
        * on exit, and restored g_last_recomp_func. */
       CHECK(g_push_count >= 1, "push_count=%d exp >=1 (interp scope pushed)",
@@ -652,13 +653,13 @@ int main(void) {
       uint8_t callee[] = {0xA9,0x33, 0x60};
       load(0x8000, caller, sizeof caller);
       load(0x8200, callee, sizeof callee);
-      cpu_push_jsr_return_frame(&g_c);
-      int rc = interp_bridge_run(&g_c, 0x008000);
+      cpu_push_jsr_return_frame(&g_cpu);
+      int rc = interp_bridge_run(&g_cpu, 0x008000);
       printf("S3 interpret-through non-compiled call\n");
       CHECK(rc == 1, "rc=%d exp 1", rc);
       CHECK(g_aot_called == 0, "aot_called=%d exp 0 (no compiled body)", g_aot_called);
-      CHECK((g_c.A & 0xFF) == 0x33, "A.lo=%02X exp 33", g_c.A & 0xFF);
-      CHECK(g_c.S == 0x01FF, "S=%04X exp 01FF (balanced through nested RTS)", g_c.S); }
+      CHECK((cpu_A() & 0xFF) == 0x33, "A.lo=%02X exp 33", cpu_A() & 0xFF);
+      CHECK(cpu_S() == 0x01FF, "S=%04X exp 01FF (balanced through nested RTS)", cpu_S()); }
 
     /* S4: interp_tier_dispatch (the production tier-down entry, tail-dispatch
      * shape): a caller frame is on the stack (as after a JSR into the
@@ -667,12 +668,12 @@ int main(void) {
       uint8_t c[] = {0xA9,0x07, 0x60};      /* $8000: LDA #$07 ; RTS */
       load(0x8000, c, sizeof c);
       long hits0 = interp_tier_hit_count();
-      cpu_push_jsr_return_frame(&g_c);       /* the (inherited) caller frame */
-      RecompReturn r = interp_tier_dispatch(&g_c, 0x008000);
+      cpu_push_jsr_return_frame(&g_cpu);       /* the (inherited) caller frame */
+      RecompReturn r = interp_tier_dispatch(&g_cpu, 0x008000);
       printf("S4 interp_tier_dispatch (tail-dispatch entry)\n");
       CHECK(r == RECOMP_RETURN_NORMAL, "r=%d exp NORMAL(0)", (int)r);
-      CHECK((g_c.A & 0xFF) == 0x07, "A.lo=%02X exp 07", g_c.A & 0xFF);
-      CHECK(g_c.S == 0x01FF, "S=%04X exp 01FF (caller frame consumed)", g_c.S);
+      CHECK((cpu_A() & 0xFF) == 0x07, "A.lo=%02X exp 07", cpu_A() & 0xFF);
+      CHECK(cpu_S() == 0x01FF, "S=%04X exp 01FF (caller frame consumed)", cpu_S());
       CHECK(interp_tier_hit_count() == hits0 + 1, "hit_count delta exp 1"); }
 
     /* S5: interp_tier_dispatch_balanced (SM abandon-site upgrade). A clean
@@ -683,15 +684,15 @@ int main(void) {
       g_post_return_skip = 1;
       uint8_t c[] = {0xA9,0x0C, 0x60};      /* $8000: LDA #$0C ; RTS */
       load(0x8000, c, sizeof c);
-      cpu_push_jsr_return_frame(&g_c);       /* inherited caller frame (hrv=2) */
-      uint16 entry_s = g_c.S;                /* function entry S = after caller's push */
-      RecompReturn r = interp_tier_dispatch_balanced(&g_c, 0x008000, 0x00C0DE,
+      cpu_push_jsr_return_frame(&g_cpu);       /* inherited caller frame (hrv=2) */
+      uint16 entry_s = cpu_S();                /* function entry S = after caller's push */
+      RecompReturn r = interp_tier_dispatch_balanced(&g_cpu, 0x008000, 0x00C0DE,
                                                      entry_s, 2, false);
       printf("S5 interp_tier_dispatch_balanced (clean -> interpret, no abandon)\n");
       CHECK(r == RECOMP_RETURN_NORMAL, "r=%d exp NORMAL", (int)r);
-      CHECK((g_c.A & 0xFF) == 0x0C, "A.lo=%02X exp 0C (interpreted)", g_c.A & 0xFF);
+      CHECK((cpu_A() & 0xFF) == 0x0C, "A.lo=%02X exp 0C (interpreted)", cpu_A() & 0xFF);
       CHECK(g_abandon_called == 0, "abandon_called=%d exp 0 (clean interp)", g_abandon_called);
-      CHECK(g_c.S == (uint16)(entry_s + 2), "S=%04X exp %04X (frame popped)", g_c.S, (uint16)(entry_s + 2)); }
+      CHECK(cpu_S() == (uint16)(entry_s + 2), "S=%04X exp %04X (frame popped)", cpu_S(), (uint16)(entry_s + 2)); }
 
     /* S5b: a shared suffix interpreted by the balanced tail tier performs a
      * guest non-local return (PLA; PLA; RTS).  It consumes the current return
@@ -701,15 +702,15 @@ int main(void) {
       g_post_return_skip = 1;
       uint8_t c[] = {0x68,0x68,0x60};        /* PLA ; PLA ; RTS */
       load(0x8000, c, sizeof c);
-      cpu_push_jsr_return_frame(&g_c);       /* ancestor's return frame */
-      cpu_push_jsr_return_frame(&g_c);       /* current function's frame */
-      uint16 entry_s = g_c.S;
-      RecompReturn r = interp_tier_dispatch_balanced(&g_c, 0x008000, 0x00C0DE,
+      cpu_push_jsr_return_frame(&g_cpu);       /* ancestor's return frame */
+      cpu_push_jsr_return_frame(&g_cpu);       /* current function's frame */
+      uint16 entry_s = cpu_S();
+      RecompReturn r = interp_tier_dispatch_balanced(&g_cpu, 0x008000, 0x00C0DE,
                                                      entry_s, 2, false);
       printf("S5b balanced tail propagates interpreted non-local return\n");
       CHECK(r == RECOMP_RETURN_SKIP_1, "r=%d exp SKIP_1", (int)r);
       CHECK(g_abandon_called == 0, "abandon_called=%d exp 0 (clean interp)", g_abandon_called);
-      CHECK(g_c.S == 0x01FF, "S=%04X exp 01FF (both frames consumed)", g_c.S); }
+      CHECK(cpu_S() == 0x01FF, "S=%04X exp 01FF (both frames consumed)", cpu_S()); }
 
     /* S6: rewritten return enters the caller internally. The interpreter
      * consumes that caller's frame, so the bridge must propagate SKIP_1
@@ -717,12 +718,12 @@ int main(void) {
     { memset(RAM, 0, MEMSZ); init_cpu(); g_post_return_skip = 1;
       uint8_t c[] = {0x60};                    /* internal caller PC: RTS */
       load(0x8000, c, sizeof c);
-      cpu_push_jsr_return_frame(&g_c);
+      cpu_push_jsr_return_frame(&g_cpu);
       RecompReturn r = interp_tier_dispatch_rewritten_return(
-          &g_c, 0x008000, 0x00C0DF);
+          &g_cpu, 0x008000, 0x00C0DF);
       printf("S6 rewritten return skips consumed host caller\n");
       CHECK(r == RECOMP_RETURN_SKIP_1, "r=%d exp SKIP_1", (int)r);
-      CHECK(g_c.S == 0x01FF, "S=%04X exp 01FF (caller frame consumed once)", g_c.S); }
+      CHECK(cpu_S() == 0x01FF, "S=%04X exp 01FF (caller frame consumed once)", cpu_S()); }
 
     /* S6b: a direct AOT bounce non-locally returns through an interpreted
      * caller. The owning ordinary (non-scheduler) interpreter must resume at
@@ -734,14 +735,14 @@ int main(void) {
       uint8_t inner[] = {0x20,0x00,0x81, 0xA9,0xEE, 0x60};
       load(0x8000, outer, sizeof outer);
       load(0x8200, inner, sizeof inner);
-      cpu_push_jsr_return_frame(&g_c);       /* outer host sentinel */
-      int rc = interp_bridge_run(&g_c, 0x008000);
+      cpu_push_jsr_return_frame(&g_cpu);       /* outer host sentinel */
+      int rc = interp_bridge_run(&g_cpu, 0x008000);
       printf("S6b AOT NLR resumes owning ordinary interpreter\n");
       CHECK(rc == 1, "rc=%d exp 1", rc);
       CHECK(g_aot_called == 1, "aot_called=%d exp 1", g_aot_called);
-      CHECK((g_c.A & 0xFF) == 0x5A,
-            "A.lo=%02X exp 5A (inner continuation skipped)", g_c.A & 0xFF);
-      CHECK(g_c.S == 0x01FF, "S=%04X exp 01FF (all frames balanced)", g_c.S);
+      CHECK((cpu_A() & 0xFF) == 0x5A,
+            "A.lo=%02X exp 5A (inner continuation skipped)", cpu_A() & 0xFF);
+      CHECK(cpu_S() == 0x01FF, "S=%04X exp 01FF (all frames balanced)", cpu_S());
       g_aot_interp_nlr = 0; }
 
     /* S6bb: an AOT child non-locally returns through its compiled parent and
@@ -755,17 +756,17 @@ int main(void) {
       uint8_t inner[] = {0x20,0x00,0x81, 0xA9,0xEE, 0x60};
       load(0x8000, outer, sizeof outer);
       load(0x8200, inner, sizeof inner);
-      cpu_push_jsr_return_frame(&g_c);
-      int rc = interp_bridge_run(&g_c, 0x008000);
+      cpu_push_jsr_return_frame(&g_cpu);
+      int rc = interp_bridge_run(&g_cpu, 0x008000);
       printf("S6bb nested AOT NLR resumes interpreted grandparent\n");
       CHECK(rc == 1, "rc=%d exp 1", rc);
       CHECK(g_aot_called == 1, "aot_called=%d exp 1", g_aot_called);
       CHECK(g_owner_target_result == 1,
             "owner_target=%d exp 1", g_owner_target_result);
-      CHECK((g_c.A & 0xFF) == 0x5A,
+      CHECK((cpu_A() & 0xFF) == 0x5A,
             "A.lo=%02X exp 5A (inner continuation skipped)",
-            g_c.A & 0xFF);
-      CHECK(g_c.S == 0x01FF, "S=%04X exp 01FF (all frames balanced)", g_c.S);
+            cpu_A() & 0xFF);
+      CHECK(cpu_S() == 0x01FF, "S=%04X exp 01FF (all frames balanced)", cpu_S());
       g_aot_skips_interp_owner = 0; }
 
     /* S6c: LttP's sprite dispatch shape performs two rewritten AOT returns in
@@ -780,14 +781,14 @@ int main(void) {
       uint8_t handler[] = {0x20,0x00,0x82, 0xA9,0xEE, 0x60};
       load(0x8000, outer, sizeof outer);
       load(0x8300, handler, sizeof handler);
-      cpu_push_jsr_return_frame(&g_c);
-      int rc = interp_bridge_run(&g_c, 0x008000);
+      cpu_push_jsr_return_frame(&g_cpu);
+      int rc = interp_bridge_run(&g_cpu, 0x008000);
       printf("S6c consecutive rewritten AOT returns stay in one interpreter\n");
       CHECK(rc == 1, "rc=%d exp 1", rc);
       CHECK(g_aot_called == 2, "aot_called=%d exp 2", g_aot_called);
-      CHECK((g_c.A & 0xFF) == 0x5A,
-            "A.lo=%02X exp 5A (handler continuation skipped)", g_c.A & 0xFF);
-      CHECK(g_c.S == 0x01FF, "S=%04X exp 01FF (all frames balanced)", g_c.S);
+      CHECK((cpu_A() & 0xFF) == 0x5A,
+            "A.lo=%02X exp 5A (handler continuation skipped)", cpu_A() & 0xFF);
+      CHECK(cpu_S() == 0x01FF, "S=%04X exp 01FF (all frames balanced)", cpu_S());
       g_aot_double_rewrite = 0; }
 
     /* S7: an interrupt-owned stable-value poll must cooperatively yield at
@@ -813,21 +814,21 @@ int main(void) {
       };
       load(0x8000, c, sizeof c); load(0x8010, caller, sizeof caller);
       RAM[0x10] = 0x34;
-      int rc1 = interp_bridge_run_loop(&g_c, 0x008010, 0x008003, 0x0030, 0xFF);
+      int rc1 = interp_bridge_run_loop(&g_cpu, 0x008010, 0x008003, 0x0030, 0xFF);
       printf("S7 interrupt-owned stable-value poll yields and resumes\n");
       CHECK(rc1 == 1, "first rc=%d exp 1 (clean cooperative yield)", rc1);
-      CHECK((g_c.A & 0xFF) == 0x34, "A.lo=%02X exp 34 (sample retained)", g_c.A & 0xFF);
-      CHECK(g_c.S == 0x01FD, "yield S=%04X exp 01FD (caller frame retained)", g_c.S);
+      CHECK((cpu_A() & 0xFF) == 0x34, "A.lo=%02X exp 34 (sample retained)", cpu_A() & 0xFF);
+      CHECK(cpu_S() == 0x01FD, "yield S=%04X exp 01FD (caller frame retained)", cpu_S());
       CHECK(interp_bridge_lle_resume_pc() == 0x008003,
             "resume=$%06X exp $008003 (CMP)",
             (unsigned)interp_bridge_lle_resume_pc());
       RAM[0x10] = 0x35;                      /* models the next frame's NMI */
-      int rc2 = interp_bridge_run_loop(&g_c, interp_bridge_lle_resume_pc(),
+      int rc2 = interp_bridge_run_loop(&g_cpu, interp_bridge_lle_resume_pc(),
                                        0x008003, 0x0030, 0xFF);
       CHECK(rc2 == 1, "second rc=%d exp 1 (yields on the next sample)", rc2);
       CHECK(RAM[0x20] == 0x34, "caller saw $%02X exp 34 (poll exited with its sample)", RAM[0x20]);
-      CHECK((g_c.A & 0xFF) == 0x35, "A.lo=%02X exp 35 (new sample)", g_c.A & 0xFF);
-      CHECK(g_c.S == 0x01FD, "S=%04X exp 01FD (one frame, balanced)", g_c.S);
+      CHECK((cpu_A() & 0xFF) == 0x35, "A.lo=%02X exp 35 (new sample)", cpu_A() & 0xFF);
+      CHECK(cpu_S() == 0x01FD, "S=%04X exp 01FD (one frame, balanced)", cpu_S());
       CHECK(interp_bridge_lle_resume_pc() == 0x008003,
             "resume=$%06X exp $008003", (unsigned)interp_bridge_lle_resume_pc()); }
 
@@ -839,14 +840,14 @@ int main(void) {
       g_tail_chain_direct = g_nested_chain_direct = -1;
       uint8_t caller[] = {0x20,0x00,0x81, 0x60}; /* JSR fake AOT; RTS */
       load(0x8000, caller, sizeof caller);
-      cpu_push_jsr_return_frame(&g_c);
-      int rc = interp_bridge_run(&g_c, 0x008000);
+      cpu_push_jsr_return_frame(&g_cpu);
+      int rc = interp_bridge_run(&g_cpu, 0x008000);
       CHECK(rc == 1, "rc=%d exp 1", rc);
       CHECK(g_tail_chain_direct == 1,
             "tail-chain direct=%d exp 1", g_tail_chain_direct);
       CHECK(g_nested_chain_direct == 0,
             "nested-chain direct=%d exp 0", g_nested_chain_direct);
-      CHECK(g_c.S == 0x01FF, "S=%04X exp 01FF", g_c.S);
+      CHECK(cpu_S() == 0x01FF, "S=%04X exp 01FF", cpu_S());
       g_aot_tail_chain_probe = 0; }
 
     /* S8: when an AOT callee bounced from an LLE interpreter frame rewrites
@@ -863,13 +864,13 @@ int main(void) {
       load(0x8000, caller, sizeof caller);
       load(0x8200, continuation, sizeof continuation);
       RAM[0x20] = 0;
-      int rc = interp_bridge_run_loop(&g_c, 0x008000, 0x008202, 0x0020, 0);
+      int rc = interp_bridge_run_loop(&g_cpu, 0x008000, 0x008202, 0x0020, 0);
       printf("S8 LLE bounce resumes a rewritten return in its interpreter\n");
       CHECK(rc == 1, "rc=%d exp 1", rc);
       CHECK(g_aot_called == 1, "aot_called=%d exp 1", g_aot_called);
-      CHECK((g_c.A & 0xFF) == 0x5A,
-            "A.lo=%02X exp 5A (rewritten continuation executed)", g_c.A & 0xFF);
-      CHECK(g_c.S == 0x01FF, "S=%04X exp 01FF (bounce frame consumed once)", g_c.S);
+      CHECK((cpu_A() & 0xFF) == 0x5A,
+            "A.lo=%02X exp 5A (rewritten continuation executed)", cpu_A() & 0xFF);
+      CHECK(cpu_S() == 0x01FF, "S=%04X exp 01FF (bounce frame consumed once)", cpu_S());
       g_aot_rewrites_return = 0; }
 
     /* S8d: the scheduler frame resumes DEEP -- inside a wait routine's
@@ -908,15 +909,15 @@ int main(void) {
       RAM[0x20] = 0;
       /* The previous frame yielded inside $8300's callee frame: JSR $8300's
        * return address ($8002) is on the stack and S is below the caller. */
-      RAM[0x1FF] = 0x80; RAM[0x1FE] = 0x02; g_c.S = 0x01FD;
-      int rc = interp_bridge_run_loop(&g_c, 0x008300, 0x008202, 0x0020, 0);
+      RAM[0x1FF] = 0x80; RAM[0x1FE] = 0x02; cpu_set_S(0x01FD);
+      int rc = interp_bridge_run_loop(&g_cpu, 0x008300, 0x008202, 0x0020, 0);
       printf("S8d scheduler frame resumed below its caller keeps a rewritten return\n");
       CHECK(rc == 1, "rc=%d exp 1 (frame yields, not bail)", rc);
       CHECK(g_aot_called == 1, "aot_called=%d exp 1", g_aot_called);
-      CHECK((g_c.A & 0xFF) == 0x5A,
+      CHECK((cpu_A() & 0xFF) == 0x5A,
             "A.lo=%02X exp 5A (rewritten continuation ran in its owner)",
-            g_c.A & 0xFF);
-      CHECK(g_c.S == 0x01FF, "S=%04X exp 01FF (JSL frame consumed once)", g_c.S);
+            cpu_A() & 0xFF);
+      CHECK(cpu_S() == 0x01FF, "S=%04X exp 01FF (JSL frame consumed once)", cpu_S());
       CHECK(interp_bridge_lle_resume_pc() == 0x008202,
             "resume=$%06X exp $008202 (yield loop)",
             (unsigned)interp_bridge_lle_resume_pc());
@@ -952,16 +953,16 @@ int main(void) {
       load(0x8000, scheduler, sizeof scheduler);
       load(0x8300, gap_routine, sizeof gap_routine);
       RAM[0x20] = 0;
-      int rc = interp_bridge_run_loop(&g_c, 0x008000, 0x008006, 0x0020, 0);
+      int rc = interp_bridge_run_loop(&g_cpu, 0x008000, 0x008006, 0x0020, 0);
       printf("S8e nested gap frame hands the scheduler's wait outward\n");
       CHECK(rc == 1, "rc=%d exp 1 (frame yields, not bail)", rc);
       CHECK(g_aot_called == 1, "aot_called=%d exp 1", g_aot_called);
       CHECK(g_abandon_called == 0,
             "abandon_called=%d exp 0 (a wait is not an unresolved site)",
             g_abandon_called);
-      CHECK((g_c.A & 0xFF) == 0x00,
+      CHECK((cpu_A() & 0xFF) == 0x00,
             "A.lo=%02X exp 00 (scheduler continuation not executed)",
-            g_c.A & 0xFF);
+            cpu_A() & 0xFF);
       CHECK(interp_bridge_lle_resume_pc() == 0x008006,
             "resume=$%06X exp $008006 (wait loop owns the block point)",
             (unsigned)interp_bridge_lle_resume_pc());
@@ -973,7 +974,7 @@ int main(void) {
      * counter update and prove the real epilogue and caller execute once. */
     for (int wide = 0; wide < 2; ++wide) {
       memset(RAM, 0, MEMSZ); init_cpu(); g_aot_called = 0; g_abandon_called = 0;
-      g_c.emulation = 0;
+      cpu_set_emulation(0);
       g_aot_gap_walks_into_wait = 1;
       uint8_t scheduler[] = {
           0x22,0x00,0x81,0x00,                 /* JSL fake compiled root */
@@ -990,21 +991,21 @@ int main(void) {
       load(0x8000, scheduler, sizeof scheduler);
       load(0x8300, gap, sizeof gap);
       RAM[0x10] = 0x34; RAM[0x11] = 0x12;
-      const uint8_t original_p = g_c.P;
-      int rc = interp_bridge_run_loop(&g_c, 0x008000, 0x008008, 0x20, 0);
+      const uint8_t original_p = cpu_P();
+      int rc = interp_bridge_run_loop(&g_cpu, 0x008000, 0x008008, 0x20, 0);
       printf("S8f nested %d-bit counter wait preserves guest continuation\n", wide ? 16 : 8);
       CHECK(rc == 1 && !g_abandon_called, "counter wait must yield without abandon");
       CHECK(interp_bridge_lle_resume_pc() == 0x008306,
             "resume=$%06X exp $008306", (unsigned)interp_bridge_lle_resume_pc());
-      CHECK(g_c.S == 0x01FB && RAM[0x21] == 0,
-            "guest JSL/PHP retained, caller not yet executed: S=%04X", g_c.S);
+      CHECK(cpu_S() == 0x01FB && RAM[0x21] == 0,
+            "guest JSL/PHP retained, caller not yet executed: S=%04X", cpu_S());
       CHECK(RAM[0x01FC] == original_p, "PHP must retain original status");
       RAM[wide ? 0x11 : 0x10]++;              /* asynchronous counter change */
-      rc = interp_bridge_run_loop(&g_c, interp_bridge_lle_resume_pc(),
+      rc = interp_bridge_run_loop(&g_cpu, interp_bridge_lle_resume_pc(),
                                    0x008008, 0x20, 0);
-      CHECK(rc == 1 && g_c.S == 0x01FF && RAM[0x21] == 0x5A,
-            "counter change must resume real PLP/RTL and caller: S=%04X", g_c.S);
-      CHECK((g_c.P & 0x30) == (original_p & 0x30), "PLP restores widths");
+      CHECK(rc == 1 && cpu_S() == 0x01FF && RAM[0x21] == 0x5A,
+            "counter change must resume real PLP/RTL and caller: S=%04X", cpu_S());
+      CHECK((cpu_P() & 0x30) == (original_p & 0x30), "PLP restores widths");
       CHECK(g_aot_called == 1 && g_abandon_called == 0,
             "nested AOT body must not be re-entered or abandoned");
       g_aot_gap_walks_into_wait = 0;
@@ -1024,13 +1025,13 @@ int main(void) {
       };
       load(0x8000, scheduler, sizeof scheduler);
       RAM[0x20] = 0;
-      int rc = interp_bridge_run_loop(&g_c, 0x008000, 0x008006, 0x0020, 0);
+      int rc = interp_bridge_run_loop(&g_cpu, 0x008000, 0x008006, 0x0020, 0);
       printf("S8b scheduler consumes AOT-root SKIP_1\n");
       CHECK(rc == 1, "rc=%d exp 1", rc);
       CHECK(g_aot_called == 1, "aot_called=%d exp 1", g_aot_called);
-      CHECK((g_c.A & 0xFF) == 0x5A,
-            "A.lo=%02X exp 5A (scheduler continuation executed)", g_c.A & 0xFF);
-      CHECK(g_c.S == 0x01FF, "S=%04X exp 01FF (JSL frame consumed once)", g_c.S);
+      CHECK((cpu_A() & 0xFF) == 0x5A,
+            "A.lo=%02X exp 5A (scheduler continuation executed)", cpu_A() & 0xFF);
+      CHECK(cpu_S() == 0x01FF, "S=%04X exp 01FF (JSL frame consumed once)", cpu_S());
       g_aot_skips_root = 0; }
 
     /* S8c: a compiled callee that reaches the host's master deadline while
@@ -1047,15 +1048,15 @@ int main(void) {
       };
       load(0x8000, scheduler, sizeof scheduler);
       RAM[0x20] = 0;
-      int rc = interp_bridge_run_loop(&g_c, 0x008000, 0x008006, 0x0020, 0);
+      int rc = interp_bridge_run_loop(&g_cpu, 0x008000, 0x008006, 0x0020, 0);
       printf("S8c scheduler deadline unwind returns to host\n");
       CHECK(rc == 1, "rc=%d exp 1", rc);
       CHECK(g_aot_called == 1, "aot_called=%d exp 1", g_aot_called);
-      CHECK((g_c.A & 0xFF) == 0x00,
+      CHECK((cpu_A() & 0xFF) == 0x00,
             "A.lo=%02X exp 00 (scheduler continuation not executed)",
-            g_c.A & 0xFF);
-      CHECK(g_c.S == 0x01FC,
-            "S=%04X exp 01FC (compiled JSL frame retained)", g_c.S);
+            cpu_A() & 0xFF);
+      CHECK(cpu_S() == 0x01FC,
+            "S=%04X exp 01FC (compiled JSL frame retained)", cpu_S());
       CHECK(interp_bridge_lle_resume_pc() == 0x008100,
             "resume=$%06X exp $008100 (compiled deadline resume)",
             (unsigned)interp_bridge_lle_resume_pc());
@@ -1072,16 +1073,16 @@ int main(void) {
       load(0x8000,scheduler,sizeof scheduler);load(0x8300,nested,sizeof nested);
       RAM[FAKE_AOT_2]=0x6b;
       interp_bridge_set_master_deadline(100);
-      int rc=interp_bridge_run_loop(&g_c,0x8000,0x8006,0x20,0);
+      int rc=interp_bridge_run_loop(&g_cpu,0x8000,0x8006,0x20,0);
       uint32_t resume=interp_bridge_lle_resume_pc();
       printf("S8g nested deadline preserves inner PC and guest stack\n");
       CHECK(rc==1 && resume==FAKE_AOT_2,"rc=%d resume=%06X exp 1/008200",rc,resume);
-      CHECK(g_after_nested_deadline==0 && g_c.A==0,"outer continuation ran after deadline");
-      CHECK(g_c.S==0x1f8,"S=%04X exp 01F8 (both JSLs and PHP retained)",g_c.S);
+      CHECK(g_after_nested_deadline==0 && cpu_A()==0,"outer continuation ran after deadline");
+      CHECK(cpu_S()==0x1f8,"S=%04X exp 01F8 (both JSLs and PHP retained)",cpu_S());
       interp_bridge_set_master_deadline(0);g_aot_nested_deadline=0;
       if(resume==FAKE_AOT_2) {
-        rc=interp_bridge_run_loop(&g_c,resume,0x8006,0x20,0);
-        CHECK(rc==1 && g_c.S==0x1ff && (g_c.A&255)==0x5a,
+        rc=interp_bridge_run_loop(&g_cpu,resume,0x8006,0x20,0);
+        CHECK(rc==1 && cpu_S()==0x1ff && (cpu_A()&255)==0x5a,
               "resumed RTL/PLP/RTL must restore stack and reach caller");
       }
     }
@@ -1100,13 +1101,13 @@ int main(void) {
       load(0x8000, caller, sizeof caller);
       load(0x8200, parent_epilogue, sizeof parent_epilogue);
       RAM[0x20] = 0;
-      int rc = interp_bridge_run_loop(&g_c, 0x008000, 0x008004, 0x0020, 0);
+      int rc = interp_bridge_run_loop(&g_cpu, 0x008000, 0x008004, 0x0020, 0);
       printf("S9 nested AOT rewritten return resumes compiled ancestor\n");
       CHECK(rc == 1, "rc=%d exp 1", rc);
       CHECK(g_aot_called == 1, "aot_called=%d exp 1", g_aot_called);
-      CHECK(g_c.A == 0x0100,
-            "A=%04X exp 0100 (compiled root resumed after parent)", g_c.A);
-      CHECK(g_c.S == 0x01FF, "S=%04X exp 01FF (all guest frames balanced)", g_c.S);
+      CHECK(cpu_A() == 0x0100,
+            "A=%04X exp 0100 (compiled root resumed after parent)", cpu_A());
+      CHECK(cpu_S() == 0x01FF, "S=%04X exp 01FF (all guest frames balanced)", cpu_S());
       CHECK(g_recomp_stack_top == 0, "recomp depth=%d exp 0", g_recomp_stack_top);
       g_aot_nested_rewrite = 0; }
 
@@ -1123,14 +1124,14 @@ int main(void) {
       load(0x8000, caller, sizeof caller);
       load(0x8200, ancestor_epilogue, sizeof ancestor_epilogue);
       load(0x8400, nested, sizeof nested);
-      cpu_push_jsr_return_frame(&g_c);
-      int rc = interp_bridge_run(&g_c, 0x008000);
+      cpu_push_jsr_return_frame(&g_cpu);
+      int rc = interp_bridge_run(&g_cpu, 0x008000);
       printf("S9b rewritten return crossing interpreter owner skips ancestor\n");
       CHECK(rc == 1, "rc=%d exp 1", rc);
       CHECK(g_aot_called == 2, "aot_called=%d exp 2", g_aot_called);
-      CHECK((g_c.A & 0xFF) == 0x5A,
-            "A.lo=%02X exp 5A (compiled root consumed once)", g_c.A & 0xFF);
-      CHECK(g_c.S == 0x01FF, "S=%04X exp 01FF (ancestor consumed once)", g_c.S);
+      CHECK((cpu_A() & 0xFF) == 0x5A,
+            "A.lo=%02X exp 5A (compiled root consumed once)", cpu_A() & 0xFF);
+      CHECK(cpu_S() == 0x01FF, "S=%04X exp 01FF (ancestor consumed once)", cpu_S());
       CHECK(g_recomp_stack_top == 0, "recomp depth=%d exp 0", g_recomp_stack_top);
       g_aot_crosses_interp_owner = 0; }
 
@@ -1156,21 +1157,21 @@ int main(void) {
       load(0x8100, scheduler_wait, sizeof scheduler_wait);
       RAM[0x4212] = 0; RAM[0x4218] = 0; RAM[0x4219] = 0;
       /* Real JSR frame returning to the scheduler wait at $8100. */
-      cpu_write8(&g_c, 0, g_c.S, 0x80); g_c.S--;
-      cpu_write8(&g_c, 0, g_c.S, 0xFF); g_c.S--;
-      int rc1 = interp_bridge_run_loop(&g_c, 0x008000,
+      cpu_write8(&g_cpu, 0, cpu_S(), 0x80); cpu_set_S(cpu_S() - 1);
+      cpu_write8(&g_cpu, 0, cpu_S(), 0xFF); cpu_set_S(cpu_S() - 1);
+      int rc1 = interp_bridge_run_loop(&g_cpu, 0x008000,
                                        0x008100, 0x0020, 0);
       printf("S10 automatic-joypad wait yields and resumes\n");
       CHECK(rc1 == 1, "first rc=%d exp 1 (input wait yielded)", rc1);
-      CHECK(g_c.S == 0x01FD, "yield S=%04X exp 01FD (caller retained)", g_c.S);
+      CHECK(cpu_S() == 0x01FD, "yield S=%04X exp 01FD (caller retained)", cpu_S());
       CHECK(interp_bridge_lle_resume_pc() == 0x008000,
             "resume=$%06X exp $008000 (re-read joypad)",
             (unsigned)interp_bridge_lle_resume_pc());
       RAM[0x4218] = 0x80;                    /* host supplies a button */
-      int rc2 = interp_bridge_run_loop(&g_c, interp_bridge_lle_resume_pc(),
+      int rc2 = interp_bridge_run_loop(&g_cpu, interp_bridge_lle_resume_pc(),
                                        0x008100, 0x0020, 0);
       CHECK(rc2 == 1, "second rc=%d exp 1 (input observed)", rc2);
-      CHECK(g_c.S == 0x01FF, "return S=%04X exp 01FF (balanced)", g_c.S); }
+      CHECK(cpu_S() == 0x01FF, "return S=%04X exp 01FF (balanced)", cpu_S()); }
 
     /* S11: a dispatch-table row with no exact AOT M/X body is a known LLE
      * entry, not a mid-caller continuation.  cpu_dispatch_pc_from invokes
@@ -1179,13 +1180,13 @@ int main(void) {
     { memset(RAM, 0, MEMSZ); init_cpu();
       uint8_t c[] = {0xA9,0x44, 0x60};       /* LDA #$44 ; RTS */
       load(0x8300, c, sizeof c);
-      cpu_push_jsr_return_frame(&g_c);       /* inherited target return frame */
+      cpu_push_jsr_return_frame(&g_cpu);       /* inherited target return frame */
       RecompReturn r = interp_tier_dispatch_popped_return(
-          &g_c, 0x008300, 0x0082FE, 0x01FF);
+          &g_cpu, 0x008300, 0x0082FE, 0x01FF);
       printf("S11 known non-AOT dispatch row executes exact LLE\n");
       CHECK(r == RECOMP_RETURN_NORMAL, "r=%d exp NORMAL", (int)r);
-      CHECK((g_c.A & 0xFF) == 0x44, "A.lo=%02X exp 44", g_c.A & 0xFF);
-      CHECK(g_c.S == 0x01FF, "S=%04X exp 01FF (inherited frame consumed)", g_c.S); }
+      CHECK((cpu_A() & 0xFF) == 0x44, "A.lo=%02X exp 44", cpu_A() & 0xFF);
+      CHECK(cpu_S() == 0x01FF, "S=%04X exp 01FF (inherited frame consumed)", cpu_S()); }
 
     /* S12: the production feedback set must grow beyond the historical 4096
      * ceiling without dropping tuples. Kind is part of the tuple key, too. */
@@ -1206,18 +1207,18 @@ int main(void) {
      * non-local return, not a balanced call return, so propagate at least
      * SKIP_1 even when the synthetic resolver has no matching ancestor. */
     { memset(RAM, 0, MEMSZ); init_cpu(); g_post_return_skip = 0;
-      g_c.emulation = 0; g_c.m_flag = 0; g_c.x_flag = 0;
-      cpu_mirrors_to_p(&g_c);
+      cpu_set_emulation(0); cpu_set_m_flag(0); cpu_set_x_flag(0);
+      cpu_mirrors_to_p(&g_cpu);
       uint8_t c[] = {0x68,0x6B};              /* PLA (16-bit) ; RTL */
       load(0x8400, c, sizeof c);
-      cpu_push_jsl_return_frame(&g_c);        /* compiled caller's outer frame */
-      cpu_push_jsr_return_frame(&g_c);        /* runtime dispatch's call frame */
+      cpu_push_jsl_return_frame(&g_cpu);        /* compiled caller's outer frame */
+      cpu_push_jsr_return_frame(&g_cpu);        /* runtime dispatch's call frame */
       RecompReturn r = interp_tier_run_call_frame(
-          &g_c, 0x008400, 0x0083FC, 2, NULL);
+          &g_cpu, 0x008400, 0x0083FC, 2, NULL);
       printf("S13 runtime call propagates interpreted PLA; RTL NLR\n");
       CHECK(r == RECOMP_RETURN_SKIP_1, "r=%d exp SKIP_1", (int)r);
-      CHECK(g_c.S == 0x01FF,
-            "S=%04X exp 01FF (inner JSR and outer JSL consumed)", g_c.S); }
+      CHECK(cpu_S() == 0x01FF,
+            "S=%04X exp 01FF (inner JSR and outer JSL consumed)", cpu_S()); }
 
     /* S14: redirecting an ordinary instruction or a call directly to RTS
      * must decode RTS anew and consume exactly the inherited return frame. */
@@ -1225,38 +1226,38 @@ int main(void) {
       memset(RAM, 0, MEMSZ); init_cpu(); g_aot_called = 0;
       uint8_t c[] = {i ? 0x20 : 0xA9, 0x00, 0x81, 0x60};
       load(0x8400, c, sizeof c); RAM[0x8500] = 0x60;
-      cpu_push_jsr_return_frame(&g_c);
+      cpu_push_jsr_return_frame(&g_cpu);
       interp_bridge_set_pre_opcode_hook(0x008400, redirect_to_return);
-      int rc = interp_bridge_run(&g_c, 0x008400);
+      int rc = interp_bridge_run(&g_cpu, 0x008400);
       interp_bridge_set_pre_opcode_hook(0, NULL);
       printf("S14 hook redirects %s to terminal RTS\n", i ? "JSR" : "LDA");
-      CHECK(rc == 1 && g_c.S == 0x01FF, "rc=%d S=%04X", rc, g_c.S);
+      CHECK(rc == 1 && cpu_S() == 0x01FF, "rc=%d S=%04X", rc, cpu_S());
       CHECK(g_aot_called == 0, "abandoned call dispatched %d times", g_aot_called);
     }
     /* Explicit capture semantics survive a generated low-bank mirror and
      * distinguish an ordinary continuation whose entry equals its site. */
     for (unsigned tail = 0; tail < 2; ++tail) {
       memset(RAM, 0, MEMSZ); init_cpu(); g_post_return_skip = 0;
-      g_c.emulation = 0; g_c.PB = 0xA6; cpu_mirrors_to_p(&g_c);
+      cpu_set_emulation(0); cpu_set_PB(0xA6); cpu_mirrors_to_p(&g_cpu);
       uint8_t jump[] = {0xDC,0x00,0x10}; /* JML [$1000] */
       uint8_t body[] = {0xA9,0x07,0x60}; /* LDA #7 ; RTS */
       load(0xA69000, jump, sizeof jump); load(0xA69100, body, sizeof body);
       RAM[0x1000] = 0x00; RAM[0x1001] = 0x91; RAM[0x1002] = 0xA6;
-      cpu_push_jsr_return_frame(&g_c);
+      cpu_push_jsr_return_frame(&g_cpu);
       RecompReturn r = tail
-          ? interp_tier_dispatch_tail_ex(&g_c, 0xA69000, 0x269000, g_c.S, 2, true)
-          : interp_tier_dispatch_balanced(&g_c, 0xA69000, 0x269000, g_c.S, 2, true);
-      CHECK(r == RECOMP_RETURN_NORMAL && g_c.S == 0x01FF && g_c.A == 7,
-            "mirrored indirect tail=%u r=%d S=%04X A=%04X", tail, r, g_c.S, g_c.A);
+          ? interp_tier_dispatch_tail_ex(&g_cpu, 0xA69000, 0x269000, cpu_S(), 2, true)
+          : interp_tier_dispatch_balanced(&g_cpu, 0xA69000, 0x269000, cpu_S(), 2, true);
+      CHECK(r == RECOMP_RETURN_NORMAL && cpu_S() == 0x01FF && cpu_A() == 7,
+            "mirrored indirect tail=%u r=%d S=%04X A=%04X", tail, r, cpu_S(), cpu_A());
     }
     { memset(RAM, 0, MEMSZ); init_cpu(); g_post_return_skip = 0;
-      g_c.emulation = 0; g_c.PB = 0xA6; cpu_mirrors_to_p(&g_c);
+      cpu_set_emulation(0); cpu_set_PB(0xA6); cpu_mirrors_to_p(&g_cpu);
       uint8_t body[] = {0xA9,0x07,0x60};
-      load(0xA69200, body, sizeof body); cpu_push_jsr_return_frame(&g_c);
+      load(0xA69200, body, sizeof body); cpu_push_jsr_return_frame(&g_cpu);
       RecompReturn r = interp_tier_dispatch_balanced(
-          &g_c, 0xA69200, 0xA69200, g_c.S, 2, false);
-      CHECK(r == RECOMP_RETURN_NORMAL && g_c.S == 0x01FF && g_c.A == 7,
-            "ordinary continuation r=%d S=%04X A=%04X", r, g_c.S, g_c.A);
+          &g_cpu, 0xA69200, 0xA69200, cpu_S(), 2, false);
+      CHECK(r == RECOMP_RETURN_NORMAL && cpu_S() == 0x01FF && cpu_A() == 7,
+            "ordinary continuation r=%d S=%04X A=%04X", r, cpu_S(), cpu_A());
     }
     tier2_capture_flush();
     { FILE *f = fopen(journal, "rb"); char line[8192];
@@ -1289,16 +1290,16 @@ int main(void) {
       CHECK(interp_bridge_add_pre_opcode_hook(0x008000,redirect_b),"second observer composed");
       CHECK(interp_bridge_add_pre_opcode_hook(0x008000,forbidden_c),"third observer registered");
       CHECK(interp_bridge_add_pre_opcode_hook(0x008010,observe_dest),"destination observer registered");
-      cpu_push_jsr_return_frame(&g_c);
-      int rc=interp_bridge_run(&g_c,0x008000);
-      CHECK(rc==1 && g_c.S==0x01ff,"redirected routine returns balanced");
+      cpu_push_jsr_return_frame(&g_cpu);
+      int rc=interp_bridge_run(&g_cpu,0x008000);
+      CHECK(rc==1 && cpu_S()==0x01ff,"redirected routine returns balanced");
       CHECK(hook_order==12 && hook_a==1 && hook_b==1 && hook_c==0,"ordered composition and terminal redirect");
       CHECK(hook_dest==1 && g_aot_called==1,"destination hooks and JSR classification run");
-      CHECK((g_c.A&0xff)==0x55 && g_c.X==0x23,"hook changes survive execution");
+      CHECK((cpu_A()&0xff)==0x55 && cpu_X()==0x23,"hook changes survive execution");
       init_cpu();RAM[0x8010]=0x60;          /* NOP -> RTS must recognize immediate return */
-      cpu_push_jsr_return_frame(&g_c);
-      rc=interp_bridge_run(&g_c,0x008000);
-      CHECK(rc==1 && g_c.S==0x01ff,"redirected RTS is classified as return");
+      cpu_push_jsr_return_frame(&g_cpu);
+      rc=interp_bridge_run(&g_cpu,0x008000);
+      CHECK(rc==1 && cpu_S()==0x01ff,"redirected RTS is classified as return");
       interp_bridge_set_pre_opcode_hook(0,NULL);
     }
     /* S15b: combined game mods exceed 192 observers. Execute every site,
@@ -1311,9 +1312,9 @@ int main(void) {
               "combined-mod observer %u registered",i);
       }
       RAM[0x8000+208]=0x60;
-      cpu_push_jsr_return_frame(&g_c);
-      int rc=interp_bridge_run(&g_c,0x008000);
-      CHECK(rc==1 && g_c.S==0x01ff,"combined-mod routine returns balanced");
+      cpu_push_jsr_return_frame(&g_cpu);
+      int rc=interp_bridge_run(&g_cpu,0x008000);
+      CHECK(rc==1 && cpu_S()==0x01ff,"combined-mod routine returns balanced");
       CHECK(hook_dest==208,"every observer executes, including the late sites");
       interp_bridge_set_pre_opcode_hook(0,NULL);
     }
@@ -1331,12 +1332,12 @@ int main(void) {
       uint8_t callee[] = {0xA9,0x33, 0x60};
       load(0x8400, c, sizeof c);
       load(0x8200, callee, sizeof callee);
-      cpu_push_jsr_return_frame(&g_c);
+      cpu_push_jsr_return_frame(&g_cpu);
       g_write_site_pc24 = g_aot_saw_site_pc24 = 0xFFFFFFFFu;
       const uint64_t e0 = interp_bridge_edge_total();
-      int rc = interp_bridge_run(&g_c, 0x008400);
+      int rc = interp_bridge_run(&g_cpu, 0x008400);
       printf("S16 edge ring folds a loop; write site and resume writes recorded\n");
-      CHECK(rc == 1 && g_c.S == 0x01FF, "rc=%d S=%04X exp balanced return", rc, g_c.S);
+      CHECK(rc == 1 && cpu_S() == 0x01FF, "rc=%d S=%04X exp balanced return", rc, cpu_S());
       const uint64_t e1 = interp_bridge_edge_total();
       CHECK(e1 - e0 == 5, "edges recorded=%llu exp 5",
             (unsigned long long)(e1 - e0));
@@ -1393,7 +1394,7 @@ int main(void) {
     for (int wide = 0; wide < 2; ++wide) {
       /* (a) nested frame, a shape no byte matcher knew: LDA/AND/BNE */
       memset(RAM, 0, MEMSZ); init_cpu(); g_aot_called = 0; g_abandon_called = 0;
-      g_c.emulation = 0;
+      cpu_set_emulation(0);
       g_aot_gap_walks_into_wait = 1;
       uint8_t scheduler[] = {
           0x22,0x00,0x81,0x00,                 /* JSL fake compiled root */
@@ -1417,7 +1418,7 @@ int main(void) {
       else load(0x8300, gap, sizeof gap);
       RAM[0x10] = 0x01;
       const uint64_t r0 = interp_bridge_resume_total();
-      int rc = interp_bridge_run_loop(&g_c, 0x008000, 0x008008, 0x20, 0);
+      int rc = interp_bridge_run_loop(&g_cpu, 0x008000, 0x008008, 0x20, 0);
       printf("S17a nested %d-bit LDA/AND/BNE wait hands outward\n", wide ? 16 : 8);
       CHECK(rc == 1 && !g_abandon_called, "nested wait must yield without abandon");
       CHECK(interp_bridge_lle_resume_pc() == 0x008303,
@@ -1426,12 +1427,12 @@ int main(void) {
       CHECK(resume_ring_has(r0, INTERP_RESUME_SITE_STABLE_POLL,
                             INTERP_RESUME_KIND_UNWIND_ARM),
             "nested frame must hand the wait outward (stable_poll unwind_arm)");
-      CHECK(g_c.S == 0x01FB && RAM[0x21] == 0, "frames retained, caller not run");
+      CHECK(cpu_S() == 0x01FB && RAM[0x21] == 0, "frames retained, caller not run");
       RAM[0x10] = 0x00;                        /* interrupt clears the flag */
-      rc = interp_bridge_run_loop(&g_c, interp_bridge_lle_resume_pc(),
+      rc = interp_bridge_run_loop(&g_cpu, interp_bridge_lle_resume_pc(),
                                   0x008008, 0x20, 0);
-      CHECK(rc == 1 && g_c.S == 0x01FF && RAM[0x21] == 0x5A,
-            "release resumes PLP/RTL and the caller once: S=%04X", g_c.S);
+      CHECK(rc == 1 && cpu_S() == 0x01FF && RAM[0x21] == 0x5A,
+            "release resumes PLP/RTL and the caller once: S=%04X", cpu_S());
       CHECK(g_aot_called == 1 && g_abandon_called == 0,
             "nested body not re-entered or abandoned");
       g_aot_gap_walks_into_wait = 0;
@@ -1446,7 +1447,7 @@ int main(void) {
             "rc=%d resume=$%06X exp $008002", rc,
             (unsigned)interp_bridge_lle_resume_pc());
       RAM[0x7E0010] = 0x00;
-      rc = interp_bridge_run_loop(&g_c, interp_bridge_lle_resume_pc(),
+      rc = interp_bridge_run_loop(&g_cpu, interp_bridge_lle_resume_pc(),
                                   0x008100, 0x0020, 0);
       CHECK(rc == 1 && interp_bridge_lle_resume_pc() == 0x008100,
             "released loop must RTS to the scheduler wait: resume=$%06X",
@@ -1676,14 +1677,14 @@ int main(void) {
       };
       for (unsigned k = 0; k < sizeof cases / sizeof cases[0]; k++) {
         memset(RAM, 0, MEMSZ); init_cpu();
-        g_c.emulation = 0; cpu_mirrors_to_p(&g_c);
+        cpu_set_emulation(0); cpu_mirrors_to_p(&g_cpu);
         load(0x8B00, code, sizeof code);
         interp_bridge_reset_dynamic_cache();
-        g_c.master_cycles = 1000;
+        g_cpu.master_cycles = 1000;
         interp_bridge_set_master_deadline(1001);
         g_refresh_owed = cases[k].owed;
         const uint64_t ev0 = interp_bridge_resume_total();
-        const int rc = interp_bridge_run_until_quiescent(&g_c, 0x008B00);
+        const int rc = interp_bridge_run_until_quiescent(&g_cpu, 0x008B00);
         interp_bridge_set_master_deadline(0);
         g_refresh_owed = 0;
         int site = -1;
@@ -1692,13 +1693,13 @@ int main(void) {
           if (n > ev0 && interp_bridge_resume_get(n - 1, &e)) site = e.site; }
         const uint32_t resume = interp_bridge_lle_resume_pc();
         printf("    %s: rc=%d site=%d master=%llu A=%04X resume=$%06X\n",
-               cases[k].what, rc, site, (unsigned long long)g_c.master_cycles,
-               g_c.A, (unsigned)resume);
+               cases[k].what, rc, site, (unsigned long long)g_cpu.master_cycles,
+               cpu_A(), (unsigned)resume);
         CHECK(site == INTERP_RESUME_SITE_DEADLINE, "%s: site=%d", cases[k].what, site);
-        CHECK(g_c.A == cases[k].a, "%s: A=%04X exp %04X", cases[k].what, g_c.A, cases[k].a);
+        CHECK(cpu_A() == cases[k].a, "%s: A=%04X exp %04X", cases[k].what, cpu_A(), cases[k].a);
         CHECK(resume == cases[k].resume, "%s: resume=$%06X exp $%06X",
               cases[k].what, (unsigned)resume, (unsigned)cases[k].resume);
-        CHECK(g_c.master_cycles >= 1000 + cases[k].owed, "%s: tax not settled", cases[k].what);
+        CHECK(g_cpu.master_cycles >= 1000 + cases[k].owed, "%s: tax not settled", cases[k].what);
       }
     }
     printf("\n==== interp_bridge Phase-1: %d/%d checks passed ====\n", g_check - g_fail, g_check);

@@ -7,7 +7,7 @@ effective address `$7E:2000 + 0xFF10` with carry propagation across
 the bank boundary — the store lands at `$7F:1F10`, NOT `$7E:1F10`.
 
 The pre-fix `_segref_addr_expr` emitted
-    cpu_write16(cpu, 0x7e, (uint16)(0x2000 + cpu->X), v);
+    cpu_write16(cpu, 0x7e, (uint16)(0x2000 + cpu_X()), v);
 which truncated the indexed address to 16 bits and left the bank
 hard-coded to `0x7e`, silently dropping the carry. That clobbered
 $7E:1F11 (submodule_index) during the Zelda intro's
@@ -50,7 +50,7 @@ def test_long_x_write_emits_24bit_effective_with_bank_carry():
     src = emit_function(rom, bank=0, start=0x8000, entry_m=1, entry_x=1)
 
     # Must NOT emit the broken hardcoded-bank form.
-    assert 'cpu_write16(cpu, 0x7e, (uint16)(0x2000 + cpu->X)' not in src, \
+    assert 'cpu_write16(cpu, 0x7e, (uint16)(0x2000 + cpu_X())' not in src, \
         f'pre-fix bank-loss form re-introduced:\n{src}'
     # Must emit a 24-bit effective with the bank carry.
     assert '(uint8)(' in src and ' >> 16' in src, src
@@ -77,15 +77,15 @@ def test_abs_x_write_emits_24bit_effective_with_bank_carry():
     src = emit_function(rom, bank=0, start=0x8000, entry_m=1, entry_x=1)
 
     # The broken DB-truncate form must be gone.
-    assert 'cpu_write16(cpu, cpu->DB, (uint16)(0xc800 + cpu->X)' not in src, src
+    assert 'cpu_write16(cpu, cpu_DB(), (uint16)(0xc800 + cpu_X())' not in src, src
     # 24-bit effective with carry-bearing bank.
-    assert 'cpu->DB' in src and '<< 16' in src, src
+    assert 'cpu_DB()' in src and '<< 16' in src, src
     assert 'cpu_write16(cpu, (uint8)' in src, src
 
 
 def test_non_indexed_abs_keeps_cheap_form():
     """`STA $C800` (no index) needs no bank carry — keep the cheap hardcoded
-    `cpu->DB` form so we don't regress codegen for the common case."""
+    `cpu_DB()` form so we don't regress codegen for the common case."""
     # $8000: A9 42            ; LDA #$42 (m=1)
     # $8002: 8D 00 C8         ; STA $C800
     # $8005: 60               ; RTS
@@ -97,9 +97,9 @@ def test_non_indexed_abs_keeps_cheap_form():
     src = emit_function(rom, bank=0, start=0x8000, entry_m=1, entry_x=1)
 
     # Non-indexed ABS uses the simple form.
-    assert 'cpu_write8(cpu, cpu->DB, (uint16)(0xc800)' in src, src
+    assert 'cpu_write8(cpu, cpu_DB(), (uint16)(0xc800)' in src, src
     # Should NOT carry a 24-bit shift here (no index = no carry possible).
-    assert 'cpu->DB << 16' not in src, src
+    assert 'cpu_DB() << 16' not in src, src
 
 
 def test_long_x_read_emits_24bit_effective_with_bank_carry():
@@ -117,7 +117,7 @@ def test_long_x_read_emits_24bit_effective_with_bank_carry():
     })
     src = emit_function(rom, bank=0, start=0x8000, entry_m=1, entry_x=1)
 
-    assert 'cpu_read16(cpu, 0x7e, (uint16)(0x2000 + cpu->X)' not in src, src
+    assert 'cpu_read16(cpu, 0x7e, (uint16)(0x2000 + cpu_X())' not in src, src
     assert 'cpu_read16(cpu, (uint8)' in src, src
 
 
@@ -142,4 +142,4 @@ def test_dp_indirect_long_y_read_carries_pointer_bank():
     # expression; a bare pointer-bank argument is the pre-fix form.
     assert 'cpu_read8(cpu, cpu_read8(cpu, 0x00' not in src, src
     assert 'cpu_read8(cpu, (uint8)' in src, src
-    assert 'cpu->Y' in src and '<< 16' in src and '| (uint32)cpu_read16' in src, src
+    assert 'cpu_Y()' in src and '<< 16' in src and '| (uint32)cpu_read16' in src, src

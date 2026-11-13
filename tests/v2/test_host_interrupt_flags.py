@@ -34,28 +34,28 @@ int main(void) {
  int fails=0;
  for(int e=0;e<2;e++)for(unsigned p=0;p<256;p++) {
   if(e && (p&0x30)!=0x30)continue;
-  CpuState c;memset(&c,0,sizeof c);memset(g_ram,0,sizeof g_ram);
-  c.ram=g_ram;c.S=0x1f0;c.P=p;c.PB=0xab;c.emulation=e;cpu_p_to_mirrors(&c);
+  memset(&g_cpu,0,sizeof g_cpu);memset(g_ram,0,sizeof g_ram);
+  g_cpu.ram=g_ram;cpu_set_S(0x1f0);cpu_set_P(p);cpu_set_PB(0xab);cpu_set_emulation(e);cpu_p_to_mirrors(&g_cpu);
   unsigned pc=(p&1)?0:0xcdef;
-  if(p&1)cpu_push_interrupt_frame(&c);else cpu_push_interrupt_frame_at(&c,0xabcdef);
+  if(p&1)cpu_push_interrupt_frame(&g_cpu);else cpu_push_interrupt_frame_at(&g_cpu,0xabcdef);
   uint8 frame[4];memcpy(frame,g_ram+0x1ed,4);
   if(e) {
-   if(c.S!=0x1ed || frame[1]!=p || frame[2]!=(uint8)pc || frame[3]!=(uint8)(pc>>8) ||
-      c.P!=((p|4)&~8) || !c._flag_I || c._flag_D) { fails++;continue; }
+   if(cpu_S()!=0x1ed || frame[1]!=p || frame[2]!=(uint8)pc || frame[3]!=(uint8)(pc>>8) ||
+      cpu_P()!=((p|4)&~8) || !g_cpu._flag_I || g_cpu._flag_D) { fails++;continue; }
   } else {
-  Interp816 ref;memset(&ref,0,sizeof ref);ref.mem=&c;ref.read=rd;ref.write=wr;
+  Interp816 ref;memset(&ref,0,sizeof ref);ref.mem=&g_cpu;ref.read=rd;ref.write=wr;
   ref.sp=0x1f0;ref.pc=pc;ref.k=0xab;ref.e=e;interp816_setFlags(&ref,p);
   g_ram[e?0xfffa:0xffea]=0;g_ram[e?0xfffb:0xffeb]=0x90;
   ref.nmiWanted=true;interp816_runOpcode(&ref);
-  if(c.S!=ref.sp || c.P!=interp816_getFlags(&ref) || !c._flag_I || c._flag_D ||
+  if(cpu_S()!=ref.sp || cpu_P()!=interp816_getFlags(&ref) || !g_cpu._flag_I || g_cpu._flag_D ||
      memcmp(frame,g_ram+0x1ed,4)) {
    fprintf(stderr,"entry e=%d p=%02x live=%02x/%02x I=%d D=%d stacked=%02x/%02x\n",
-      e,p,c.P,interp816_getFlags(&ref),c._flag_I,c._flag_D,frame[e?1:0],g_ram[e?0x1ee:0x1ed]);fails++;continue;
+      e,p,cpu_P(),interp816_getFlags(&ref),g_cpu._flag_I,g_cpu._flag_D,frame[e?1:0],g_ram[e?0x1ee:0x1ed]);fails++;continue;
   }
   }
-  handlers[((p>>5)&1)*2+((p>>4)&1)](&c);cpu_mirrors_to_p(&c);
-  if((g_ram[0x40]&0x0c)!=0x04 || c.S!=0x1f0 || c.P!=p || c._flag_I!=!!(p&4) || c._flag_D!=!!(p&8)) {
-   fprintf(stderr,"RTI e=%d p=%02x handler=%02x restored=%02x S=%04x\n",e,p,g_ram[0x40],c.P,c.S);fails++;
+  handlers[((p>>5)&1)*2+((p>>4)&1)](&g_cpu);cpu_mirrors_to_p(&g_cpu);
+  if((g_ram[0x40]&0x0c)!=0x04 || cpu_S()!=0x1f0 || cpu_P()!=p || g_cpu._flag_I!=!!(p&4) || g_cpu._flag_D!=!!(p&8)) {
+   fprintf(stderr,"RTI e=%d p=%02x handler=%02x restored=%02x S=%04x\n",e,p,g_ram[0x40],cpu_P(),cpu_S());fails++;
   }
  }
  return fails!=0;

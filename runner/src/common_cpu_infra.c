@@ -228,7 +228,7 @@ static uint64_t g_unresolved_abandon_total;
 static uint64_t g_unresolved_abandon_overflow;
 
 RecompReturn cpu_unresolved_abandon_balanced(CpuState *cpu, uint32_t site_pc24,
-                                             uint16_t entry_s, uint8_t hrv) {
+                                             uint16_t entry_s, uint8_t hrv) { (void)cpu;
   extern int snes_frame_counter;
   /* hrv carries the paired caller's pushed frame SIZE (0/2/3) under the
    * 2026-06-09 host_return_valid encoding. A literal 1 means a setter
@@ -243,7 +243,7 @@ RecompReturn cpu_unresolved_abandon_balanced(CpuState *cpu, uint32_t site_pc24,
               "[abandon_balanced] LEGACY hrv==1 seen at $%06X (S=$%04X "
               "entry_s=$%04X) — a host_return_valid setter still writes "
               "boolean 1; frame size unknown, restoring entry baseline only\n",
-              (unsigned)site_pc24, cpu->S, entry_s);
+              (unsigned)site_pc24, cpu_S(), entry_s);
     }
     hrv = 0;
   }
@@ -273,7 +273,7 @@ RecompReturn cpu_unresolved_abandon_balanced(CpuState *cpu, uint32_t site_pc24,
     g_unresolved_abandons[i].last_frame = snes_frame_counter;
     g_unresolved_abandons[i].last_hrv = hrv;
   }
-  cpu->S = (uint16_t)(entry_s + hrv);
+  cpu_set_S((uint16_t)(entry_s + hrv));
   return RECOMP_RETURN_NORMAL;
 }
 
@@ -671,7 +671,7 @@ void RecompStackPush(const char *name) {
      * HLE forwarding stubs explicitly invalidate this seed through
      * cpu_take_tailcall_return_context(NULL, NULL), before they can call a
      * helper that bounces into the interpreter. */
-    g_cpu_entry_s[slot] = g_cpu.S;
+    g_cpu_entry_s[slot] = cpu_S();
     g_cpu_entry_s_valid[slot] = 1;
     g_cpu_entry_tailcall[slot] = 0;  /* set only if this prologue adopts a
                                       * tailcall return context (below) */
@@ -840,7 +840,7 @@ static void recomp_stack_pop_common(int audit) {
 #if SNESRECOMP_STACK_BALANCE_DIAGNOSTICS
     int slot = g_recomp_stack_top - 1;
     if (audit) {
-      int delta = (int)(int16_t)(g_cpu.S - g_cpu_entry_s[slot]) -
+      int delta = (int)(int16_t)(cpu_S() - g_cpu_entry_s[slot]) -
                   (int)g_cpu_entry_return_frame[slot];
       StackBalEntry *e = stackbal_find(fn);
       if (e) {

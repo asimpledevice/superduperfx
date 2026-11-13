@@ -58,31 +58,34 @@ static void prepare(CpuState *cpu, const uint8 *code, unsigned length,
                     unsigned m, unsigned x) {
   memset(cpu, 0, sizeof *cpu); memset(g_ram, 0, sizeof g_ram);
   memcpy(g_ram + 0x8000, code, length);
-  cpu->ram = g_ram; cpu->S = 0x01ff;
-  cpu->P = (m << 5) | (x << 4); cpu_p_to_mirrors(cpu);
+  cpu->ram = g_ram; cpu_set_S(0x01ff);
+  cpu_set_P((m << 5) | (x << 4)); cpu_p_to_mirrors(cpu);
   cpu_push_jsr_return_frame(cpu);
   g_other_exits = 0; g_tc_valid = 0; g_recomp_stack_top = 0;
 }
 static int check(const char *name, RecompReturn (*fn)(CpuState *),
                  const uint8 *code, unsigned length, unsigned m, unsigned x) {
+  /* One CPU state (g_cpu): run, keep a copy, prepare again for the reference. */
   CpuState native, memory;
-  prepare(&native, code, length, m, x);
-  fn(&native); cpu_mirrors_to_p(&native);
+  prepare(&g_cpu, code, length, m, x);
+  fn(&g_cpu); cpu_mirrors_to_p(&g_cpu);
+  native = g_cpu; cpu_regs_store(&native);
   if (g_other_exits || g_recomp_stack_top) return 1;
-  prepare(&memory, code, length, m, x);
+  prepare(&g_cpu, code, length, m, x);
+  memory = g_cpu; cpu_regs_store(&memory);
   Interp816 reference = {0}; reference.mem = &memory;
   reference.read = read_reference; reference.write = write_reference;
-  reference.sp = memory.S; reference.pc = 0x8000;
-  interp816_setFlags(&reference, memory.P); reference.e = false;
+  reference.sp = memory.reg_S; reference.pc = 0x8000;
+  interp816_setFlags(&reference, memory.reg_P); reference.e = false;
   uint64 cycles = 0;
   for (unsigned n = 0; n < 32 && reference.pc != 1; ++n)
     cycles += interp816_runOpcode(&reference);
-  if (reference.pc != 1 || native.cycles != cycles || native.S != reference.sp ||
-      native.A != reference.a || native.X != reference.x || native.Y != reference.y ||
-      native.P != interp816_getFlags(&reference)) {
+  if (reference.pc != 1 || native.cycles != cycles || native.reg_S != reference.sp ||
+      native.reg_A != reference.a || native.reg_X != reference.x || native.reg_Y != reference.y ||
+      native.reg_P != interp816_getFlags(&reference)) {
     fprintf(stderr, "%s CPU cycles native=%llu interpreter=%llu S=%04x/%04x\n",
             name, (unsigned long long)native.cycles, (unsigned long long)cycles,
-            native.S, reference.sp);
+            native.reg_S, reference.sp);
     return 1;
   }
   return 0;

@@ -29,9 +29,13 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--objdump", required=True)
     ap.add_argument("--allow", action="append", default=[])
+    ap.add_argument("--shared", action="store_true",
+                    help="any function may use SDFX_FPU_SHARED (CPUFPU=1 builds)")
     ap.add_argument("files", nargs="+")
     a = ap.parse_args()
     reserved = {int(x) for x in mk_list("SDFX_FPU_RESERVED")}
+    if a.shared:
+        reserved -= {int(x) for x in mk_list("SDFX_FPU_SHARED")}
     allow = set(mk_list("SDFX_FPU_OWNERS")) | set(a.allow)
     bad = collections.defaultdict(set)
     for f in a.files:

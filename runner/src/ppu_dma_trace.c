@@ -174,7 +174,7 @@ void ppudma_frame_snapshot(int frame) {
   s->irq_count = s_irq_this_frame;
   s->irq_cpu = s_irq_cpu_this_frame;
   s->irq_raster = s_irq_raster_this_frame;
-  s->s_reg = g_cpu.S;
+  s->s_reg = cpu_S();
   s->game_state = g_ram[0x0998];   /* $7E:0998 */
   s->game_mode  = g_ram[0x0100];   /* $7E:0100 */
   if (s_wram_probe_n < 0) wram_probe_init();

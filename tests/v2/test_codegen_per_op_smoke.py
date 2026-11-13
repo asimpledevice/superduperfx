@@ -47,7 +47,7 @@ def test_write_emits_cpu_write_call():
 
 def test_readreg_emits_cpustate_field():
     """ReadReg of A should route through the typed helper cpu_read_a16
-    rather than reaching into cpu->A directly. Same value, but the
+    rather than reaching into cpu_A() directly. Same value, but the
     helper name carries the hardware contract and the lint can spot
     bypass attempts."""
     op = ReadReg(reg=Reg.A, out=Value(vid=3))
@@ -102,14 +102,14 @@ def test_shift_asl_updates_carry_and_z_n():
 def test_increg_x_emits_x_plus_1():
     op = IncReg(reg=Reg.X, delta=+1)
     s = _joined(emit_op(op))
-    assert "cpu->X" in s
+    assert "cpu_X()" in s
     assert "+ (1)" in s or "+ 1" in s
 
 
 def test_bittest_emits_a_and_operand():
     op = BitTest(operand=Value(vid=1), width=1)
     s = _joined(emit_op(op))
-    assert "cpu->A" in s and "_v1" in s
+    assert "cpu_A()" in s and "_v1" in s
     assert "_flag_V" in s
 
 
@@ -123,40 +123,40 @@ def test_setflag_c_1():
 def test_rep_emits_p_clear_with_mask():
     op = RepFlags(mask=0x30)
     s = _joined(emit_op(op))
-    assert "cpu->P" in s and "0x30" in s
+    assert "cpu_P()" in s and "0x30" in s
     assert "cpu_p_to_mirrors" in s
 
 
 def test_sep_emits_p_set_with_mask():
     op = SepFlags(mask=0x10)
     s = _joined(emit_op(op))
-    assert "cpu->P" in s and "0x10" in s
+    assert "cpu_P()" in s and "0x10" in s
 
 
 def test_xce_swaps_emulation_and_carry():
     op = XCE()
     s = _joined(emit_op(op))
-    assert "cpu->emulation" in s
+    assert "cpu_emulation()" in s
     assert "cpu->_flag_C" in s
 
 
 def test_xba_swaps_a_high_low():
-    """XBA must operate on cpu->A only — never read cpu->B (which doesn't
+    """XBA must operate on cpu_A() only — never read cpu->B (which doesn't
     exist as a separate field, see CpuState in cpu_state.h). A previous
     shadow-field implementation went stale every time a 16-bit LDA wrote
-    cpu->A without syncing the shadow; the regression caused SMW Layer-3
+    cpu_A() without syncing the shadow; the regression caused SMW Layer-3
     stripe-image header parses to mis-derive their byte counts (visible
     attract-demo border garbage). See docs/TROUBLESHOOTING.md.
 
     Invariants the emit must satisfy:
-      - References cpu->A.
+      - References cpu_A().
       - Does NOT read cpu->B (forbidden — field removed).
       - Sets _flag_Z and _flag_N from the new low byte.
-      - Computes a byte-swap of the prior cpu->A bits (text shape).
+      - Computes a byte-swap of the prior cpu_A() bits (text shape).
     """
     op = XBA()
     s = _joined(emit_op(op))
-    assert "cpu->A" in s, "XBA must reference cpu->A"
+    assert "cpu_A()" in s, "XBA must reference cpu_A()"
     assert "cpu->B" not in s, (
         "XBA must NOT read or write cpu->B — that field has been removed "
         "and B is now derived from (A >> 8). Reading a stale shadow was "
@@ -172,7 +172,7 @@ def test_xba_swaps_a_high_low():
     assert "<< 8" in s, "XBA must shift the old low byte up"
     assert ">> 8" in s, "XBA must shift the old high byte down"
     # And the swap result must land back in cpu->A.
-    assert "cpu->A =" in s
+    assert "cpu_set_A(" in s
 
 
 def test_xba_independent_of_b_shadow():
@@ -189,7 +189,7 @@ def test_xba_independent_of_b_shadow():
     s = _joined(emit_op(op))
     assert "cpu->B" not in s, (
         "ReadReg(Reg.B) must not emit a literal cpu->B read; the canonical "
-        "form is `(cpu->A >> 8) & 0xFF`."
+        "form is `(cpu_A() >> 8) & 0xFF`."
     )
     # Spot-check: ReadReg(Reg.A) routes through the typed helper, so the
     # test isn't silently passing because nothing has any A reference at
@@ -203,7 +203,7 @@ def test_xba_independent_of_b_shadow():
 def test_pushreg_a_uses_m_flag_path():
     op = PushReg(reg=Reg.A)
     s = _joined(emit_op(op))
-    assert "cpu->m_flag" in s
+    assert "cpu_m_flag()" in s
     assert "cpu_write8" in s
     assert "cpu_write16" in s
 
@@ -211,7 +211,7 @@ def test_pushreg_a_uses_m_flag_path():
 def test_pushreg_x_uses_x_flag_path():
     op = PushReg(reg=Reg.X)
     s = _joined(emit_op(op))
-    assert "cpu->x_flag" in s
+    assert "cpu_x_flag()" in s
 
 
 # Static-width PHA/PHX/PHY/PLA/PLX/PLY emit — decoder's per-instruction
@@ -223,7 +223,7 @@ def test_pushreg_x_uses_x_flag_path():
 def test_pushreg_x_static_x1_emits_unconditional_byte():
     op = PushReg(reg=Reg.X, static_x=1)
     s = _joined(emit_op(op))
-    assert "cpu->x_flag" not in s   # no runtime branch
+    assert "cpu_x_flag()" not in s   # no runtime branch
     assert "cpu_write8" in s        # fixed 1-byte push
     assert "cpu_write16" not in s
 
@@ -231,7 +231,7 @@ def test_pushreg_x_static_x1_emits_unconditional_byte():
 def test_pushreg_x_static_x0_emits_unconditional_word():
     op = PushReg(reg=Reg.X, static_x=0)
     s = _joined(emit_op(op))
-    assert "cpu->x_flag" not in s
+    assert "cpu_x_flag()" not in s
     assert "cpu_write16" in s
     assert "cpu_write8" not in s
 
@@ -239,7 +239,7 @@ def test_pushreg_x_static_x0_emits_unconditional_word():
 def test_pullreg_x_static_x1_emits_unconditional_byte():
     op = PullReg(reg=Reg.X, static_x=1)
     s = _joined(emit_op(op))
-    assert "cpu->x_flag" not in s
+    assert "cpu_x_flag()" not in s
     assert "cpu_read8" in s
     assert "cpu_read16" not in s
 
@@ -247,7 +247,7 @@ def test_pullreg_x_static_x1_emits_unconditional_byte():
 def test_pushreg_a_static_m0_emits_unconditional_word():
     op = PushReg(reg=Reg.A, static_m=0)
     s = _joined(emit_op(op))
-    assert "cpu->m_flag" not in s
+    assert "cpu_m_flag()" not in s
     assert "cpu_write16" in s
     assert "cpu_write8" not in s
 
@@ -255,7 +255,7 @@ def test_pushreg_a_static_m0_emits_unconditional_word():
 def test_pullreg_a_static_m1_emits_unconditional_byte():
     op = PullReg(reg=Reg.A, static_m=1)
     s = _joined(emit_op(op))
-    assert "cpu->m_flag" not in s
+    assert "cpu_m_flag()" not in s
     assert "cpu_read8" in s
     assert "cpu_read16" not in s
 
@@ -270,7 +270,7 @@ def test_transfer_a_to_x():
     op = Transfer(src=Reg.A, dst=Reg.X)
     s = _joined(emit_op(op))
     # v2 transfer is width-aware (X width follows x_flag) and updates N/Z.
-    assert "cpu->X" in s and "cpu->A" in s
+    assert "cpu_X()" in s and "cpu_A()" in s
     assert "x_flag" in s
     assert "_flag_Z" in s and "_flag_N" in s
 
@@ -373,31 +373,31 @@ def test_return_short_emits_return_stmt():
 def test_blockmove_mvn_increments():
     op = BlockMove(direction='mvn', src_bank=0x7E, dst_bank=0x7F)
     s = _joined(emit_op(op, source_pc24=0x808E7A))
-    assert "cpu->X = (uint16)(cpu->X +1)" in s
-    assert "cpu->Y = (uint16)(cpu->Y +1)" in s
+    assert "cpu_set_X((uint16)(cpu_X() +1))" in s
+    assert "cpu_set_Y((uint16)(cpu_Y() +1))" in s
     assert "do {" in s
-    assert "while (cpu->A != 0xFFFF)" in s
+    assert "while (cpu_A() != 0xFFFF)" in s
     assert "cpu->cycles += 7" in s
-    assert "cpu->master_cycles += 7 * ((g_memsel && (cpu->PB & 0x80)) ? 6 : 8)" in s
-    assert "interp_bridge_lle_deadline_pause(cpu, (((uint32)cpu->PB << 16) | 0x8e7au))" in s
-    assert "interp_bridge_lle_yield_unwind(cpu, (((uint32)cpu->PB << 16) | 0x8e7au))" in s
-    assert "cpu->X &= 0x00FFu" in s
+    assert "cpu->master_cycles += 7 * ((g_memsel && (cpu_PB() & 0x80)) ? 6 : 8)" in s
+    assert "interp_bridge_lle_deadline_pause(cpu, (((uint32)cpu_PB() << 16) | 0x8e7au))" in s
+    assert "interp_bridge_lle_yield_unwind(cpu, (((uint32)cpu_PB() << 16) | 0x8e7au))" in s
+    assert "cpu_set_X(cpu_X() & (0x00FFu))" in s
 
 
 def test_blockmove_mvp_decrements_and_can_move_65536_bytes():
     op = BlockMove(direction='mvp', src_bank=0x7F, dst_bank=0x7E)
     s = _joined(emit_op(op, source_pc24=0x008000))
-    assert "cpu->X = (uint16)(cpu->X -1)" in s
-    assert "cpu->Y = (uint16)(cpu->Y -1)" in s
+    assert "cpu_set_X((uint16)(cpu_X() -1))" in s
+    assert "cpu_set_Y((uint16)(cpu_Y() -1))" in s
     # A=$FFFF means 65,536 bytes, not zero bytes, so the first transfer must
     # occur before the continuation test.
-    assert s.index("do {") < s.index("while (cpu->A != 0xFFFF)")
+    assert s.index("do {") < s.index("while (cpu_A() != 0xFFFF)")
 
 
 def test_pea_pushes_immediate_onto_stack():
     op = PushEffectiveAddress(seg=SegRef(kind=SegKind.ABS_BANK, offset=0x1234))
     s = _joined(emit_op(op))
-    assert "cpu->S" in s
+    assert "cpu_S()" in s
     assert "0x1234" in s
     assert "cpu_write16" in s
 
@@ -406,7 +406,7 @@ def test_wai_unwinds_to_owning_lle_scheduler_at_architectural_pc():
     """A bounced compiled WAI is a scheduler boundary, not a guest return."""
     s = _joined(emit_op(Stop(wait=True), source_pc24=0x808652))
     assert "interp_bridge_in_lle_scheduler()" in s
-    assert "interp_bridge_lle_yield_unwind(cpu, (((uint32)cpu->PB << 16) | 0x8653u))" in s
+    assert "interp_bridge_lle_yield_unwind(cpu, (((uint32)cpu_PB() << 16) | 0x8653u))" in s
 
 
 def test_stp_does_not_arm_the_wai_scheduler_resume_contract():

@@ -17,7 +17,7 @@ def test_reserved_hle_dispatch_uses_balanced_interpreter_tier():
         hle_dispatch={0x8000: '__balanced_interp__'},
     )
 
-    assert 'interp_tier_dispatch_tail_ex(cpu, (((uint32)cpu->PB << 16) | 0x8000u), 0x008000u' in src
+    assert 'interp_tier_dispatch_tail_ex(cpu, (((uint32)cpu_PB() << 16) | 0x8000u), 0x008000u' in src
     assert '/* balanced_interp_dispatch */' in src
     assert 'RecompStackPop(); return _r;' in src
     assert 'extern RecompReturn __balanced_interp__' not in src
@@ -84,6 +84,6 @@ def test_reserved_dispatch_lowers_pea_jmp_as_pushed_near_call():
 
     assert '/* balanced pushed indirect near call */' in src
     assert 'cpu_read16(cpu, 0x00, 0x099c)' in src
-    assert '((uint32)cpu->PB << 16) | _disp_lo' in src
+    assert '((uint32)cpu_PB() << 16) | _disp_lo' in src
     assert '0x008003u, 2, &_disp_ret' in src
     assert 'case 0x8006u: goto L_8006_M0X0' in src
