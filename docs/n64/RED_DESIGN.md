@@ -43,9 +43,13 @@ free room. Sizes are to be set from the measurements below.
 ## Protocols
 
 - **Rings** (commands, ports): the producer writes the entry's words, then
-  bumps its head index (one word, written last); the consumer reads the head,
-  then the entries, then bumps its tail. One producer, one consumer, atomic
-  words: no lock. The CPU's DMEM stores are uncached and in order.
+  **publishes** them by writing its head index (one word, written last):
+  until the head moves past them the consumer ignores those slots, so it
+  never sees a half-written entry. The consumer reads the head, then the
+  entries, then writes its tail. One producer, one consumer, atomic words:
+  no lock. The CPU's DMEM stores are uncached and performed in program
+  order (only the compiler must be kept from reordering them). Several
+  entries can be published with one head write, like rspq's flush.
 - **One-word boxes:** a status word where the latest value wins needs no
   sequence bits; a message that must not be lost is one in flight, flagged by
   a SIG bit where one is spare or a toggle bit, acknowledged through the
@@ -68,9 +72,25 @@ free room. Sizes are to be set from the measurements below.
    and posts one jump instead of waiting.
 3. **Overlay loads,** as rspq does (implicit from the command's overlay id).
    With a view of the ring, Red may later group same-overlay work.
-4. **An idle task.** With the ring empty, Red runs the background task (the
-   SPC) in slices instead of halting; between slices it checks the ring head.
-   Commands pre-empt it at slice boundaries.
+4. **Background tasks.** With the ring empty, Red runs background work in
+   slices instead of halting; between slices it checks the ring head, and
+   commands pre-empt at slice boundaries. A small table lists the tasks: the
+   overlay, a cheap data-driven "has work?" test (e.g. horizon > progress,
+   both words in DMEM), a priority and the slice entry. Red runs the highest
+   priority task with work, preferring the overlay already loaded (each
+   switch costs an overlay load, so slices must amortise it). The SPC is the
+   first task; candidates later: S-DSP batches as soon as the SPC's log
+   allows, PPU lines as they become final, prefetch. Choice of task changes
+   only the order of work, never results (every limit is in emulated time).
+   With nothing to do, Red spins on the ring head in DMEM rather than
+   halting: no RDRAM traffic, and a new command starts within a few cycles
+   without SIG_MORE or an unhalt. Further idle-work candidates: loading and
+   relocating compiled-code modules for the CPU's code cache (the CPU keeps
+   only the I-cache invalidation), state hashing and checks in debug builds,
+   staging the next jobs' inputs (the BRR pages of the next S-DSP batch).
+8. **Plug-ins (in reserve).** Where switching overlays costs too much,
+   small code plug-ins paged into a slot of a base overlay (as the SPC
+   overlay pages its cold code) cut a switch to a few hundred bytes.
 5. **Borrowing as a service.** Red defines what is resident (the regions
    above, the return path) and what may be borrowed (its code and command
    handling, which run only between commands), owns the RDRAM save area, and
@@ -84,8 +104,8 @@ free room. Sizes are to be set from the measurements below.
 
 ## The APU on Red
 
-- **The SPC700 is Red's idle task.** It runs from where it stopped up to the
-  horizon, in slices. Its state (registers, the cycle count, the zero page,
+- **The SPC700 is Red's first background task.** It runs from where it
+  stopped up to the horizon, in slices. Its state (registers, the cycle count, the zero page,
   the dirty lines of its ARAM cache) persists between slices: kept in DMEM
   when nothing else needs the space, otherwise written back.
 - **65816 -> SPC port writes** go into the port ring with their APU-cycle
@@ -97,10 +117,11 @@ free room. Sizes are to be set from the measurements below.
 - **SPC -> 65816:** the output ports and the cycle reached, in the progress
   pair. A 65816 port read waits only until the SPC has passed the cycle it
   needs; Blue yields to Green meanwhile (step 1's machinery).
-- **The S-DSP stays a queued job.** The SPC writes the DSP log (register
-  writes and logged ARAM writes, as the C path keeps them) into RDRAM; an
+- **The S-DSP stays a queued job.** The SPC writes the DSP log into RDRAM
+  already in the S-DSP overlay's operation format (today it writes raw
+  entries that the CPU filters and decodes: 2.7 ms a frame in JM2), and an
   S-DSP batch command consumes it, ordered after the SPC slice that produced
-  it by Red. No CPU join between the two.
+  it by Red. No CPU work and no CPU join between the two.
 - **ARAM:** the RSP's copy is the ARAM while the SPC runs on the RSP. The
   CPU takes a view only when it needs one (state saves, C fallbacks), and the
   SPC reports the pages it wrote instead of invalidating the S-DSP view.
@@ -112,6 +133,23 @@ free room. Sizes are to be set from the measurements below.
   identical to the C core.
 
 ## Measurements first
+
+Phase 0 results (ares, `N64_PHASE0=1`, per frame; ares stretches frame time,
+so idle shares are high and need a hardware run):
+
+| | SMW (title demo) | Pitfall | JM2 |
+|---|---|---|---|
+| rspq words | 3,000-3,400 (peaks ~10,800) | 430-530 | ~600 |
+| CPU wait for a free queue buffer | 50-60 us (up to 190) | 7-9 us | 10-13 us |
+| RSP idle | 72-86% | 99% | 96-98% |
+| APU port writes | ~3 | ~0.1 | bursts to ~10 |
+| most port writes between two SPC runs | 4 | 2 | 2 |
+
+So: rdpq's stream (nearly all of SMW's words; S-DSP and BG queue about 4
+commands a frame each) travels as RDRAM lists, and the DMEM command ring
+carries control; 256 bytes is ample. Port bursts are small: 32 entries
+leave a wide margin even with horizons far rarer than today's SPC runs.
+
 
 1. rspq commands per frame by source (rdpq, S-DSP, BG): sizes the command
    ring and tells how much goes through RDRAM lists.

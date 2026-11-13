@@ -32,6 +32,29 @@ static uint32_t s_prof_ra[kProfMax];
 #endif
 static volatile unsigned s_prof_n;
 static timer_link_t *s_prof_timer;
+
+#ifdef N64_PHASE0
+/* Red sizing (docs/n64/RED_DESIGN.md, phase 0): RSP idle time, sampled
+ * every 50 us from a timer interrupt (halted = idle). */
+static volatile uint32_t s_p0_samples, s_p0_idle;
+static void p0_tick(int ovfl) {
+  (void)ovfl;
+  s_p0_samples++;
+  if (*SP_STATUS & SP_STATUS_HALTED) s_p0_idle++;
+}
+void n64_phase0_take(uint32_t *samples, uint32_t *idle, uint32_t *words, uint32_t *wait_ticks) {
+  static uint32_t s_words_last;
+  disable_interrupts();
+  *samples = s_p0_samples; *idle = s_p0_idle;
+  s_p0_samples = s_p0_idle = 0;
+  enable_interrupts();
+  const uint32_t w = rspq_words_written();
+  *words = w - s_words_last;
+  s_words_last = w;
+  *wait_ticks = rspq_buffer_wait_ticks;
+  rspq_buffer_wait_ticks = 0;
+}
+#endif
 volatile uint8_t g_n64_profile_phase;
 void n64_platform_set_phase(uint8_t phase) {
   g_n64_profile_phase = phase;
@@ -100,6 +123,9 @@ void n64_platform_init(void) {
   rdpq_debug_start();
 #endif
   timer_init();
+#ifdef N64_PHASE0
+  new_timer(TICKS_FROM_US(50), TF_CONTINUOUS, p0_tick);
+#endif
   dfs_init(DFS_DEFAULT_LOCATION);
   debugf("[n64] snesrecomp interpreter-only host, expansion pak: %s\n",
          is_memory_expanded() ? "yes" : "no");

@@ -275,6 +275,10 @@ uint64_t apucyc_prof_calls = 0;
 double apucyc_prof_ms = 0.0;
 #endif
 
+/* Sizing counters (Red's port ring): catch-ups, and the most port writes
+ * scheduled between two of them. */
+uint32_t g_apu_catchups, g_apu_port_burst_max;
+
 void snes_catchupApu(Snes* snes) {
   /* Upper cap is a guard against accumulator runaway after a long
    * stall; SPC runs at ~1 MHz so 10000 cycles is about 10 ms of real

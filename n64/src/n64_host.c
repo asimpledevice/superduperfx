@@ -606,6 +606,21 @@ static int host_main(void) {
       n64_platform_log("[dspsync] 60 frames, syncs/samples:%s\n", b);
     }
 #endif
+#ifdef N64_PHASE0
+    if (frame % 60 == 59) {
+      extern void n64_phase0_take(uint32_t *, uint32_t *, uint32_t *, uint32_t *);
+      extern uint32_t g_bgrsp_cmds, g_apu_port_writes, g_apu_catchups, g_apu_port_burst_max;
+      uint32_t samples, idle, words, wait;
+      n64_phase0_take(&samples, &idle, &words, &wait);
+      n64_platform_log("[phase0] per frame: rspq %lu words, BG %lu cmds, CPU waited %lu us for a queue buffer; "
+                       "RSP idle %lu%%; APU port writes %lu, SPC runs %lu, max writes between runs %lu (60 frames)\n",
+                       (unsigned long)(words / 60), (unsigned long)(g_bgrsp_cmds / 60),
+                       (unsigned long)(wait / 60 / 47), (unsigned long)(samples ? idle * 100 / samples : 0),
+                       (unsigned long)(g_apu_port_writes / 60), (unsigned long)(g_apu_catchups / 60),
+                       (unsigned long)g_apu_port_burst_max);
+      g_bgrsp_cmds = g_apu_port_writes = g_apu_catchups = g_apu_port_burst_max = 0;
+    }
+#endif
 #if SNESRECOMP_BLUE_THREAD
     if (frame % 60 == 59) {
       n64_platform_log("[blue] %lu pauses, %lu resumed, %lu unwound, %lu yields\n",

@@ -30,6 +30,7 @@ static bool s_vram_valid;
  * misalignment). */
 static uint8_t *s_snap_base;
 static const uint16_t *s_snap;
+uint32_t g_bgrsp_cmds;   /* commands queued (Red sizing counters) */
 static rspq_syncpoint_t s_snap_sync;
 static bool s_snap_pending;
 
@@ -53,6 +54,7 @@ void n64_bgrsp_sync_vram(const uint16_t *vram, uint32_t vram_count) {
   s_snap = (const uint16_t *)(s_snap_base + mis);
   const uint32_t src = PhysicalAddr(vram) & ~7u, dst = PhysicalAddr(s_snap_base);
   rspq_write(s_ovl, 1, src, dst, (0x10000 + mis + 7) & ~7u);
+  g_bgrsp_cmds++;
   s_snap_sync = rspq_syncpoint_new();
   s_snap_pending = true;
   rspq_flush();
@@ -87,6 +89,7 @@ int n64_bgrsp_submit(const uint16_t *vram, uint8_t *dst, int nrows, uint16_t y,
   j->pal = pal;
   data_cache_hit_writeback(j, sizeof *j);
   rspq_write(s_ovl, 0, PhysicalAddr(j));
+  g_bgrsp_cmds++;
   return s_njobs++;
 }
 

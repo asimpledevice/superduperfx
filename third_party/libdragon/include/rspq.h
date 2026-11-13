@@ -724,6 +724,10 @@ void rspq_wait(void);
  * flight at a time). Not available while the rdpq validator, which also uses
  * SIG0, is enabled.
  */
+/** @brief Words written to the queue so far (lowpri; counters for sizing). */
+uint32_t rspq_words_written(void);
+/** @brief CPU ticks spent waiting for the RSP to free a queue buffer. */
+extern uint32_t rspq_buffer_wait_ticks;
 void rspq_mailbox_set_handler(void (*handler)(uint32_t up));
 /** @brief Write the down box (the RSP sees it at its next poll). */
 void rspq_mailbox_send(uint32_t word);

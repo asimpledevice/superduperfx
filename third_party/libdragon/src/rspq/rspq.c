@@ -1135,6 +1135,19 @@ void rspq_overlay_unregister(uint32_t overlay_id)
  * we need to switch buffer (double buffering strategy), making sure the
  * other buffer has been already fully executed by the RSP.
  */
+/* Queue volume (SuperDuperFX Phase 0 counters, rspq_words_written): words
+ * written to buffers already switched away from, and the CPU time spent
+ * waiting for the RSP to finish a buffer before reusing it. */
+static uint32_t rspq_words_done;
+uint32_t rspq_buffer_wait_ticks;
+
+uint32_t rspq_words_written(void)
+{
+    if (!rspq_ctx) return 0;
+    return rspq_words_done +
+           (uint32_t)(rspq_cur_pointer - (volatile uint32_t *)rspq_ctx->buffers[rspq_ctx->buf_idx]);
+}
+
 __attribute__((noinline))
 void rspq_next_buffer(void) {
     // If we're creating a block
@@ -1164,6 +1177,7 @@ void rspq_next_buffer(void) {
     // so that the kernel can switch away while waiting. Even
     // if the overhead of an interrupt is obviously higher.
     MEMORY_BARRIER();
+    const uint32_t wait_t0 = TICKS_READ();
     if (!(*SP_STATUS & rspq_ctx->sp_status_bufdone)) {
         rspq_flush_internal();
         ACCT_SCOPE(ACCT_CAT_RSPQ) RSP_WAIT_LOOP(200) {
@@ -1177,6 +1191,8 @@ void rspq_next_buffer(void) {
     MEMORY_BARRIER();
 
     // Switch current buffer
+    rspq_buffer_wait_ticks += TICKS_READ() - wait_t0;
+    rspq_words_done += (uint32_t)(rspq_cur_pointer - (volatile uint32_t *)rspq_ctx->buffers[rspq_ctx->buf_idx]);
     rspq_ctx->buf_idx = 1-rspq_ctx->buf_idx;
     uint32_t *new = rspq_ctx->buffers[rspq_ctx->buf_idx];
     volatile uint32_t *prev = rspq_switch_buffer(new, rspq_ctx->buf_size, true);

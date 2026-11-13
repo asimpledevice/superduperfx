@@ -110,10 +110,16 @@ uint32_t apu_portQueueDepth(const Apu* apu) {
   return apu->portQTail - apu->portQHead;
 }
 
+/* Sizing counters (Red's port ring): writes scheduled, and the writes since
+ * the last APU catch-up (snes_catchupApu keeps the largest such burst). */
+uint32_t g_apu_port_writes, g_apu_port_burst;
+
 bool apu_schedulePortWrite(Apu* apu, uint8_t port, uint8_t val,
                            uint64_t guest_cycle) {
   if (apu_portQueueDepth(apu) >= APU_PORT_QUEUE_LEN)
     return false;
+  g_apu_port_writes++;
+  g_apu_port_burst++;
 
   /* Establish a correspondence between guest time and wherever the
    * callback-driven SPC is now. If the callback later runs ahead, rebase at
@@ -644,6 +650,12 @@ void SNESRECOMP_APU_RUN_HOOK(Apu* apu, uint32_t clocks);
 #endif
 
 void apu_runCycles(Apu* apu, uint32_t clocks) {
+  {  /* sizing counters: an SPC run is a horizon point for Red's port ring */
+    extern uint32_t g_apu_catchups, g_apu_port_burst_max;
+    g_apu_catchups++;
+    if (g_apu_port_burst > g_apu_port_burst_max) g_apu_port_burst_max = g_apu_port_burst;
+    g_apu_port_burst = 0;
+  }
 #ifdef SNESRECOMP_APU_RUN_HOOK
   SNESRECOMP_APU_RUN_HOOK(apu, clocks);
 #else
