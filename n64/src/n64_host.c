@@ -592,15 +592,15 @@ static int host_main(void) {
     }
 #endif
 #if SNESRECOMP_APU_DEFER_DSP
-    if (frame % 600 == 599) {
-      static const char *const why[APU_DSP_SYNC_REASONS] = {"host", "regread", "echoread", "echoreg", "logfull", "batch"};
+    if (frame % 60 == 59) {
+      static const char *const why[APU_DSP_SYNC_REASONS] = {"host", "regread", "echoread", "echoreg", "logfull", "batch", "frame"};
       char b[200]; int o = 0;
       for (int r = 0; r < APU_DSP_SYNC_REASONS; ++r) {
         o += snprintf(b + o, sizeof b - o, " %s %lu/%lu", why[r], (unsigned long)g_apu_dsp_sync_count[r],
                       (unsigned long)g_apu_dsp_sync_samples[r]);
         g_apu_dsp_sync_count[r] = g_apu_dsp_sync_samples[r] = 0;
       }
-      n64_platform_log("[dspsync] 600 frames, syncs/samples:%s\n", b);
+      n64_platform_log("[dspsync] 60 frames, syncs/samples:%s\n", b);
     }
 #endif
 #if SNESRECOMP_BLUE_THREAD
@@ -625,6 +625,11 @@ static int host_main(void) {
                       g_snesdsp_rsp_pages, g_snesdsp_rsp_async, g_snesdsp_rsp_join_wait_blue,
                       g_snesdsp_rsp_decode_ticks, g_snesdsp_rsp_log_entries,
                       g_snesdsp_rsp_view_ticks, g_snesdsp_rsp_pack_ticks, g_snesdsp_rsp_submit_ticks;
+      extern uint32_t g_snesdsp_rsp_reject[4];
+      n64_platform_log("[rspdsp] batches left in C (60 frames): echo wraps %lu, pitch modulation %lu, other state %lu, log %lu\n",
+                       (unsigned long)g_snesdsp_rsp_reject[0], (unsigned long)g_snesdsp_rsp_reject[1],
+                       (unsigned long)g_snesdsp_rsp_reject[2], (unsigned long)g_snesdsp_rsp_reject[3]);
+      memset(g_snesdsp_rsp_reject, 0, sizeof g_snesdsp_rsp_reject);
       n64_platform_log("[rspdsp] launch parts per frame: view %lu us, pack %lu us, submit %lu us\n",
                        (unsigned long)(g_snesdsp_rsp_view_ticks / 60 / 47),
                        (unsigned long)(g_snesdsp_rsp_pack_ticks / 60 / 47),

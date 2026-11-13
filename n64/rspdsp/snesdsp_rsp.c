@@ -424,7 +424,7 @@ bool snesdsp_rsp_apu_batch(Dsp *dsp, uint8_t *aram, const ApuDspLogEntry *log, u
  * join the DSP state and output are taken back and the echo bytes the batch
  * wrote are copied into the live ARAM (the runtime joins before the SPC can
  * touch the echo window). */
-static uint8_t s_view[0x10000] __attribute__((aligned(16)));
+static uint8_t s_view[RSPDSP_ARAM_SIZE] __attribute__((aligned(16)));  /* + the mirror of $0000-$000F */
 /* The view is only ever accessed uncached; drop any lines the startup BSS
  * clear left dirty, so a later eviction cannot overwrite page copies. */
 static void view_init(void) { data_cache_hit_writeback_invalidate(s_view, sizeof s_view); }
@@ -441,6 +441,7 @@ uint32_t g_snesdsp_rsp_launch_ticks, g_snesdsp_rsp_join_ticks, g_snesdsp_rsp_pag
 uint32_t g_snesdsp_rsp_join_wait_blue;   /* the part of join_wait spent on the Blue thread */
 uint32_t g_snesdsp_rsp_decode_ticks, g_snesdsp_rsp_log_entries;   /* launch: log decode, entries */
 uint32_t g_snesdsp_rsp_view_ticks, g_snesdsp_rsp_pack_ticks, g_snesdsp_rsp_submit_ticks;
+uint32_t g_snesdsp_rsp_reject[4];
 
 static bool launch(Dsp *dsp, uint8_t *aram, const ApuDspLogEntry *log, uint32_t n,
                    uint32_t samples, const uint8_t *marks, uint8_t *fresh);
@@ -453,14 +454,18 @@ bool snesdsp_rsp_apu_launch(Dsp *dsp, uint8_t *aram, const ApuDspLogEntry *log, 
 }
 static bool launch(Dsp *dsp, uint8_t *aram, const ApuDspLogEntry *log, uint32_t n,
                    uint32_t samples, const uint8_t *marks, uint8_t *fresh) {
-  if ((marks[31] & 0x80) || ((uintptr_t)aram & 7) || !batch_ok(dsp, samples, false))
-    return false;  /* page $FF */
+  /* Why batches stay in C (g_snesdsp_rsp_reject: an echo window that wraps
+   * past $FFFF, pitch modulation, other state, the log). The view mirrors
+   * $0000-$000F after $FFFF for BRR blocks that run past the end. */
+  if (!echo_ok(dsp)) { g_snesdsp_rsp_reject[0]++; return false; }
+  if (pmod_used(dsp)) { g_snesdsp_rsp_reject[1]++; return false; }
+  if (((uintptr_t)aram & 7) || !batch_ok(dsp, samples, true)) { g_snesdsp_rsp_reject[2]++; return false; }
   const uint32_t td = get_ticks();
   shadow_from(dsp);
   Op *o = s_ops.op, *end = s_ops.op + kMaxOps;
   for (uint32_t i = 0; i < n; i++)
-    if (!decode(&o, end, log[i].tag, log[i].isReg == 1, log[i].adr, log[i].val, false))
-      return false;
+    if (!decode(&o, end, log[i].tag, log[i].isReg == 1, log[i].adr, log[i].val, true))
+      { g_snesdsp_rsp_reject[3]++; return false; }
   g_snesdsp_rsp_decode_ticks += get_ticks() - td;
   g_snesdsp_rsp_log_entries += n;
   /* The view keeps its pages between batches: a marked page is copied only
@@ -478,6 +483,10 @@ static bool launch(Dsp *dsp, uint8_t *aram, const ApuDspLogEntry *log, uint32_t 
       const uint64_t *src = (const uint64_t *)(aram + p * 256);
       uint64_t *dst = (uint64_t *)(uview + p * 256);
       for (int i = 0; i < 32; i++) dst[i] = src[i];
+      if (p == 0) {  /* and its mirror */
+        uint64_t *m = (uint64_t *)(uview + 0x10000);
+        m[0] = src[0]; m[1] = src[1];
+      }
       fresh[p >> 3] |= bit;
       g_snesdsp_rsp_pages++;
     }
@@ -485,6 +494,7 @@ static bool launch(Dsp *dsp, uint8_t *aram, const ApuDspLogEntry *log, uint32_t 
   for (uint32_t i = n; i-- > 0;)
     if (!log[i].isReg) {
       uview[log[i].adr] = log[i].old;
+      if (log[i].adr < 16) uview[0x10000 + log[i].adr] = log[i].old;
       fresh[log[i].adr >> 11] &= (uint8_t)~(1u << ((log[i].adr >> 8) & 7));
     }
 
