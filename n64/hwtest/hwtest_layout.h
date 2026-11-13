@@ -22,7 +22,7 @@
 
 /* Modes */
 #define HT_M_COUNT  1   /* COUNT++ and an unprotected record, until SIG7 */
-#define HT_M_SEQ    2   /* the record under a sequence counter, until SIG7 */
+#define HT_M_SEQ    2   /* the record under a sequence counter, PARAM idle passes between updates, until SIG7 */
 #define HT_M_ECHO   3   /* OUT = IN, COUNT++, until SIG7; then GUARD sum -> RES0 */
 #define HT_M_SEM    4   /* PARAM increments of SHARED under the semaphore; retries -> RES1 */
 #define HT_M_SIGIN  5   /* for each IN = seq: OUT = seq << 8 | SIG byte; until SIG7 */

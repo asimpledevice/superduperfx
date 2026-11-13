@@ -61,11 +61,14 @@ m_count:
     j finish
     nop
 
-# The same record between two increments of SEQ (odd while writing).
+# The same record between two increments of SEQ (odd while writing), then
+# PARAM idle loop passes (2 cycles each) before the next update: 0 rewrites
+# back to back, faster than the CPU can read the record.
 m_seq:
     move s0, zero
     move s1, zero
     li s7, 0x5a5a5a5a
+    lw s6, HT_PARAM(zero)
 1:  addiu s0, s0, 1
     addiu s1, s1, 1                 # odd: writing
     sw s1, HT_SEQ(zero)
@@ -80,6 +83,9 @@ m_seq:
     addiu s1, s1, 1                 # even: stable
     sw s1, HT_SEQ(zero)
     sw s0, HT_COUNT(zero)
+    move t8, s6
+2:  bnez t8, 2b
+    addiu t8, t8, -1
     mfc0 t9, COP0_SP_STATUS
     andi t9, t9, SP_STATUS_SIG7
     beqz t9, 1b

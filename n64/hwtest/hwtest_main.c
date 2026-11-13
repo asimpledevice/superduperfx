@@ -139,24 +139,35 @@ static void t_read(void) {
   line("  RSP passes/ms idle %lu rd %lu wr %lu", r[0], r[1], r[2]);
 }
 
-/* 2: sequence counter: no torn record may be accepted. */
-static void t_seq(void) {
-  show("2 sequence counter");
-  start(HT_M_SEQ, 0, 0);
+/* 2: sequence counter: no torn record may be accepted. Back to back (the
+ * RSP rewrites the record every ~0.26 us, faster than the CPU reads 6 DMEM
+ * words, ~2.2 us) a reader may never get one; it must still accept none
+ * torn. Paced (an update every ~20 us, as a mailbox would post) it must get
+ * good records. */
+static void seq_run(uint32_t pause, uint32_t *good, uint32_t *retry, uint32_t *bad, bool *halted) {
+  start(HT_M_SEQ, pause, 0);
   spin_us(1000);
-  uint32_t good = 0, retry = 0, bad = 0;
+  *good = *retry = *bad = 0;
   for (int i = 0; i < 100000; i++) {
     const uint32_t s1 = DM(HT_SEQ);
-    if (s1 & 1) { retry++; continue; }
+    if (s1 & 1) { (*retry)++; continue; }
     const uint32_t k = DM(HT_REC), a = DM(HT_REC + 4), b = DM(HT_REC + 8), c = DM(HT_REC + 12);
-    if (DM(HT_SEQ) != s1) { retry++; continue; }
-    if (a != ~k || b != k * 3u || c != (k ^ 0x5a5a5a5au)) bad++;
-    else good++;
+    if (DM(HT_SEQ) != s1) { (*retry)++; continue; }
+    if (a != ~k || b != k * 3u || c != (k ^ 0x5a5a5a5au)) (*bad)++;
+    else (*good)++;
   }
-  const bool halted = stop_rsp();
-  const bool ok = bad == 0 && good > 0 && halted;
+  *halted = stop_rsp();
+}
+static void t_seq(void) {
+  show("2 sequence counter");
+  uint32_t g0, r0, b0, g1, r1, b1;
+  bool h0, h1;
+  seq_run(0, &g0, &r0, &b0, &h0);
+  seq_run(600, &g1, &r1, &b1, &h1);
+  const bool ok = b0 == 0 && b1 == 0 && g1 > 0 && h0 && h1;
   if (!ok) fail();
-  line("2 seq: %s g=%lu r=%lu bad=%lu", ok ? "ok" : "FAIL", good, retry, bad);
+  line("2 seq: %s b2b g=%lu r=%lu bad=%lu", ok ? "ok" : "FAIL", g0, r0, b0);
+  line("  paced g=%lu r=%lu bad=%lu", g1, r1, b1);
 }
 
 /* 3: CPU writes DMEM while the RSP runs: echo round trips, and a 2 KB
@@ -365,7 +376,7 @@ int main(void) {
   console_set_render_mode(RENDER_MANUAL);
   rsp_init();
   rsp_load(&rsp_hwtest);
-  line("RSP/CPU signalling test v1");
+  line("RSP/CPU signalling test v2");
   t_read();
   t_seq();
   t_echo();
