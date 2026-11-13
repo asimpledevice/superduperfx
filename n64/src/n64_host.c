@@ -395,6 +395,10 @@ static uint8_t *rom_window_provider(const uint8_t *data, int length) {
 }
 #endif
 
+#ifdef N64_PHASE0
+static char s_p0_line[40];   /* Red sizing summary for the status line */
+#endif
+
 static int host_main(void) {
 #if SNESRECOMP_BLUE_THREAD
   run_flags_reset();   /* before any interrupt can set a flag */
@@ -494,6 +498,12 @@ static int host_main(void) {
     snprintf(line, sizeof line, "f%lu cpu %lums ppu %lums",
              (unsigned long)frame, (unsigned long)((t1 - t0) / 1000),
              (unsigned long)((t2 - t1p) / 1000));
+#ifdef N64_PHASE0
+    /* Red sizing on screen (the debug log needs a USB link on hardware):
+     * q queue words, w CPU queue-buffer wait (us), i RSP idle %, p APU
+     * port writes / most between SPC runs, per frame over the last 60. */
+    if (s_p0_line[0]) snprintf(line, sizeof line, "%s f%lu", s_p0_line, (unsigned long)frame);
+#endif
 #ifdef N64_DSP_CLOCK
     snprintf(line, sizeof line, "f%lu cpu %lu ppu %lu dsp %lu/%lu",
              (unsigned long)frame, (unsigned long)((t1 - t0) / 1000),
@@ -612,6 +622,10 @@ static int host_main(void) {
       extern uint32_t g_bgrsp_cmds, g_apu_port_writes, g_apu_catchups, g_apu_port_burst_max;
       uint32_t samples, idle, words, wait;
       n64_phase0_take(&samples, &idle, &words, &wait);
+      snprintf(s_p0_line, sizeof s_p0_line, "q%lu w%lu i%lu p%lu/%lu",
+               (unsigned long)(words / 60), (unsigned long)(wait / 60 / 47),
+               (unsigned long)(samples ? idle * 100 / samples : 0),
+               (unsigned long)(g_apu_port_writes / 60), (unsigned long)g_apu_port_burst_max);
       n64_platform_log("[phase0] per frame: rspq %lu words, BG %lu cmds, CPU waited %lu us for a queue buffer; "
                        "RSP idle %lu%%; APU port writes %lu, SPC runs %lu, max writes between runs %lu (60 frames)\n",
                        (unsigned long)(words / 60), (unsigned long)(g_bgrsp_cmds / 60),
