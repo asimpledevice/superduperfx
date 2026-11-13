@@ -622,13 +622,15 @@ static int host_main(void) {
 #if defined(N64_RSPDSP) && !defined(N64_STATE_HASH)
     if (frame % 60 == 59) {
       extern uint32_t g_snesdsp_rsp_launch_ticks, g_snesdsp_rsp_join_ticks, g_snesdsp_rsp_join_wait,
-                      g_snesdsp_rsp_pages, g_snesdsp_rsp_async;
-      n64_platform_log("[rspdsp] per frame: launch %lu us, join %lu us (waiting %lu us), %lu launches, %lu pages\n",
+                      g_snesdsp_rsp_pages, g_snesdsp_rsp_async, g_snesdsp_rsp_join_wait_blue;
+      n64_platform_log("[rspdsp] per frame: launch %lu us, join %lu us (waiting %lu us, %lu on Blue), %lu launches, %lu pages\n",
                        (unsigned long)(g_snesdsp_rsp_launch_ticks / 60 / 47),
                        (unsigned long)(g_snesdsp_rsp_join_ticks / 60 / 47),
                        (unsigned long)(g_snesdsp_rsp_join_wait / 60 / 47),
+                       (unsigned long)(g_snesdsp_rsp_join_wait_blue / 60 / 47),
                        (unsigned long)(g_snesdsp_rsp_async / 60), (unsigned long)(g_snesdsp_rsp_pages / 60));
       g_snesdsp_rsp_launch_ticks = g_snesdsp_rsp_join_ticks = g_snesdsp_rsp_join_wait = 0;
+      g_snesdsp_rsp_join_wait_blue = 0;
       g_snesdsp_rsp_pages = g_snesdsp_rsp_async = 0;
     }
 #endif

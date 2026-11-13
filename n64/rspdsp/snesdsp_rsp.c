@@ -7,6 +7,7 @@
 #include <string.h>
 
 #include "snesdsp_rsp.h"
+#include "blue_thread.h"
 #include "dsp.h"
 #include "apu_dsp_batch.h"
 
@@ -428,6 +429,7 @@ static struct {
 } s_flight;
 uint32_t g_snesdsp_rsp_async, g_snesdsp_rsp_joins, g_snesdsp_rsp_join_wait;
 uint32_t g_snesdsp_rsp_launch_ticks, g_snesdsp_rsp_join_ticks, g_snesdsp_rsp_pages;
+uint32_t g_snesdsp_rsp_join_wait_blue;   /* the part of join_wait spent on the Blue thread */
 
 static bool launch(Dsp *dsp, uint8_t *aram, const ApuDspLogEntry *log, uint32_t n,
                    uint32_t samples, const uint8_t *marks);
@@ -495,6 +497,7 @@ void snesdsp_rsp_apu_join(void) {
   const uint32_t t0 = get_ticks();
   rspq_syncpoint_wait(s_flight.sync);
   g_snesdsp_rsp_join_wait += get_ticks() - t0;   /* time the CPU waited */
+  if (blue_is_current()) g_snesdsp_rsp_join_wait_blue += get_ticks() - t0;
   g_snesdsp_rsp_joins++;
   g_snesdsp_rsp_samples += s_flight.samples;
   Dsp *dsp = s_flight.dsp;
