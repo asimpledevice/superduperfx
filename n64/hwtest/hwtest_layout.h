@@ -15,6 +15,12 @@
 #define HT_RSPN    0x4c   /* RSP increments done */
 #define HT_RES     0x50   /* 8 result words */
 #define HT_SCRATCH 0x70   /* a word the CPU hammers */
+/* Mailboxes (v3): one-word boxes hold seq << 24 | payload; the block
+ * boxes hold 8 words written under the semaphore. Down = CPU to RSP. */
+#define HT_DOWNW   0x74
+#define HT_UPW     0x78
+#define HT_DOWNB   0x80   /* 8 words */
+#define HT_UPB     0xA0   /* 8 words */
 #define HT_GUARD   0x100  /* 2 KB pattern nobody writes during a test */
 #define HT_GUARD_END 0x900
 #define HT_DMABUF  0xA00  /* 1 KB DMA target */
@@ -29,5 +35,8 @@
 #define HT_M_SIGOUT 6   /* for v in 0..255: SIG byte = v, COUNT = v + 1, wait IN == v + 1 */
 #define HT_M_BELL   7   /* on SIG3: clear SIG3, set SIG0 (+ interrupt if PARAM), COUNT++; until SIG7 */
 #define HT_M_DMA    8   /* DMA 1 KB from PARAM to DMABUF, sum it, mismatches vs PARAM2 -> RES2; COUNT++; until SIG7 */
+#define HT_M_SPIN   9   /* COUNT++ until SIG7, holding the semaphore throughout if PARAM */
+#define HT_M_WORD  10   /* COUNT++; on a new DOWNW (changed, or SIG3 set with PARAM bit 2): UPW = top byte | (payload + 1), then SIG0 (PARAM bit 0) and the interrupt (bit 1); until SIG7 */
+#define HT_M_BLOCK 11   /* COUNT++; every 64 passes try the semaphore once: post UPB, check a new DOWNB; skips, bad words, DOWNBs seen, UPBs posted -> RES0-3; until SIG7 */
 
 #endif

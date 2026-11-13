@@ -369,6 +369,159 @@ static void t_cost(void) {
   line("  SP_STATUS rd %lu  sema take+rel %lu", sr, sem);
 }
 
+/* ---- v3: mailbox protocols ---------------------------------------------- */
+
+/* RSP loop passes per millisecond (10 ms) while the CPU does `op`. */
+enum { OP_IDLE, OP_STATUS, OP_DMEM, OP_SEMA_TAKEREL, OP_SEMA_POLL };
+static uint32_t rsp_rate_under(int op) {
+  const uint32_t c0 = DM(HT_COUNT), t0 = TICKS_READ();
+  volatile uint32_t sink = 0;
+  while (TICKS_READ() - t0 < US_TICKS(10000)) {
+    switch (op) {
+      case OP_STATUS: sink += *SP_STATUS; break;
+      case OP_DMEM: sink += DM(HT_SCRATCH); break;
+      case OP_SEMA_TAKEREL: if (*SP_SEMAPHORE == 0) *SP_SEMAPHORE = 0; break;
+      case OP_SEMA_POLL: sink += *SP_SEMAPHORE; break;   /* RSP holds it: reads return 1 */
+      default: break;
+    }
+  }
+  (void)sink;
+  return (DM(HT_COUNT) - c0) / 10;
+}
+
+/* 9: does CPU register traffic (SP_STATUS, the semaphore) slow the RSP the
+ * way DMEM traffic does? */
+static void t_regcost(void) {
+  show("9 RSP cost of CPU register traffic");
+  start(HT_M_SPIN, 0, 0);
+  spin_us(1000);
+  const uint32_t idle = rsp_rate_under(OP_IDLE), status = rsp_rate_under(OP_STATUS);
+  const uint32_t dmem = rsp_rate_under(OP_DMEM), takerel = rsp_rate_under(OP_SEMA_TAKEREL);
+  const bool h1 = stop_rsp();
+  *SP_SEMAPHORE = 0;
+  start(HT_M_SPIN, 1, 0);   /* the RSP takes the semaphore and keeps it */
+  spin_us(1000);
+  const uint32_t idle2 = rsp_rate_under(OP_IDLE), poll = rsp_rate_under(OP_SEMA_POLL);
+  const bool h2 = stop_rsp();
+  *SP_SEMAPHORE = 0;
+  const bool ok = h1 && h2;
+  if (!ok) fail();
+  line("9 RSP passes/ms, CPU doing: %s", ok ? "ok" : "FAIL");
+  line("  idle %lu STATUS rd %lu DMEM rd %lu", idle, status, dmem);
+  line("  sema take+rel %lu; held: idle %lu poll %lu", takerel, idle2, poll);
+}
+
+/* 10: one-word boxes, CPU <-> RSP round trips. The CPU sends seq << 24 |
+ * payload; the RSP answers seq << 24 | (payload + 1). The CPU learns of the
+ * answer by spinning on the DMEM word, by polling SIG0 in SP_STATUS, or by
+ * the SP interrupt; the last variant flags the CPU's word with SIG3 instead
+ * of a change of value. Any answer but the expected one counts as bad. */
+static void t_word(void) {
+  show("10 one-word boxes");
+  static const struct { uint32_t param; const char *name; } v[4] = {
+    {0, "dmem "}, {1, "sig0 "}, {3, "irq  "}, {5, "sig3>"}};
+  uint32_t sum[4], mx[4], bad[4], to[4], rate[4];
+  register_SP_handler(sp_irq);
+  set_SP_interrupt(1);
+  const uint32_t n = 20000;
+  for (int k = 0; k < 4; k++) {
+    start(HT_M_WORD, v[k].param, 0);
+    spin_us(1000);
+    sum[k] = mx[k] = bad[k] = to[k] = 0;
+    const uint32_t c0 = DM(HT_COUNT), tb = TICKS_READ();
+    for (uint32_t i = 1; i <= n; i++) {
+      const uint32_t seq = i & 0xff, payload = (i * 2654435761u >> 8) & 0xffffffu;
+      const uint32_t w = seq << 24 | payload, want = seq << 24 | ((payload + 1) & 0xffffffu);
+      if (v[k].param & 3) *SP_STATUS = SP_WSTATUS_CLEAR_SIG0;
+      const uint32_t n0 = s_irq_n, t0 = TICKS_READ();
+      DM(HT_DOWNW) = w;
+      if (v[k].param & 4) *SP_STATUS = SP_WSTATUS_SET_SIG3;
+      bool timed_out = false;
+      uint32_t dt;
+      if (v[k].param == 0) {
+        while ((DM(HT_UPW) >> 24) != seq)
+          if (TICKS_READ() - t0 > US_TICKS(1000)) { timed_out = true; break; }
+        dt = TICKS_READ() - t0;
+      } else if (v[k].param == 3) {
+        while (s_irq_n == n0)
+          if (TICKS_READ() - t0 > US_TICKS(1000)) { timed_out = true; break; }
+        dt = s_irq_t - t0;
+      } else {
+        while (!(*SP_STATUS & SP_STATUS_SIG0))
+          if (TICKS_READ() - t0 > US_TICKS(1000)) { timed_out = true; break; }
+        dt = TICKS_READ() - t0;
+      }
+      if (timed_out) { to[k]++; continue; }
+      if (DM(HT_UPW) != want) bad[k]++;
+      sum[k] += dt;
+      if (dt > mx[k]) mx[k] = dt;
+    }
+    const uint32_t ms = (TICKS_READ() - tb) / US_TICKS(1000);
+    rate[k] = ms ? (DM(HT_COUNT) - c0) / ms : 0;
+    stop_rsp();
+  }
+  set_SP_interrupt(0);
+  unregister_SP_handler(sp_irq);
+  bool ok = true;
+  for (int k = 0; k < 4; k++) ok = ok && bad[k] == 0 && to[k] == 0;
+  if (!ok) fail();
+  line("10 word box: %s (cyc avg/max, RSP p/ms)", ok ? "ok" : "FAIL");
+  for (int k = 0; k < 4; k++) {
+    const uint32_t got = n - to[k];
+    line("  %s %lu/%lu p%lu bad %lu to %lu", v[k].name, got ? CYC(sum[k] / got) : 0, CYC(mx[k]),
+         rate[k], bad[k], to[k]);
+  }
+}
+
+/* 11: block boxes under the semaphore. The RSP tries it once every 64
+ * passes and never waits; the CPU tries it with interrupts off, and on
+ * failure goes away for 2 us. Holding it, each side checks the other's
+ * newest 8-word record and posts its own. No record may be torn. */
+static void t_block(void) {
+  show("11 block boxes");
+  *SP_SEMAPHORE = 0;
+  start(HT_M_BLOCK, 0, 0);
+  spin_us(1000);
+  const uint32_t K = 0x01000001u;
+  uint32_t busy = 0, bad = 0, fresh = 0, last = 0, dseq = 0, hold_sum = 0, hold_max = 0, held = 0;
+  const uint32_t c0 = DM(HT_COUNT), tb = TICKS_READ();
+  for (int i = 0; i < 20000; i++) {
+    disable_interrupts();
+    const uint32_t t0 = TICKS_READ();
+    if (*SP_SEMAPHORE) { enable_interrupts(); busy++; spin_us(2); continue; }
+    uint32_t r[8];
+    for (int j = 0; j < 8; j++) r[j] = DM(HT_UPB + 4 * j);
+    if (r[0] != last) {
+      last = r[0];
+      fresh++;
+      bool torn = r[7] != ~r[0];
+      for (int j = 1; j < 7; j++) torn |= r[j] != r[0] + (uint32_t)j * K;
+      if (torn) bad++;
+    }
+    dseq++;
+    for (int j = 1; j < 7; j++) DM(HT_DOWNB + 4 * j) = dseq + (uint32_t)j * K;
+    DM(HT_DOWNB + 28) = ~dseq;
+    DM(HT_DOWNB) = dseq;
+    *SP_SEMAPHORE = 0;
+    const uint32_t h = TICKS_READ() - t0;
+    enable_interrupts();
+    held++;
+    hold_sum += h;
+    if (h > hold_max) hold_max = h;
+    spin_us(5);
+  }
+  const uint32_t ms = (TICKS_READ() - tb) / US_TICKS(1000);
+  const uint32_t rate = ms ? (DM(HT_COUNT) - c0) / ms : 0;
+  const bool halted = stop_rsp();
+  const uint32_t skips = DM(HT_RES), rbad = DM(HT_RES + 4), seen = DM(HT_RES + 8), posts = DM(HT_RES + 12);
+  *SP_SEMAPHORE = 0;
+  const bool ok = halted && bad == 0 && rbad == 0 && fresh > 0 && seen > 0;
+  if (!ok) fail();
+  line("11 block box: %s cpu new %lu bad %lu busy %lu", ok ? "ok" : "FAIL", fresh, bad, busy);
+  line("  rsp seen %lu bad %lu skips %lu posts %lu", seen, rbad, skips, posts);
+  line("  cpu hold cyc avg %lu max %lu; RSP p/ms %lu", held ? CYC(hold_sum / held) : 0, CYC(hold_max), rate);
+}
+
 int main(void) {
   debug_init_isviewer();
   debug_init_usblog();
@@ -376,15 +529,12 @@ int main(void) {
   console_set_render_mode(RENDER_MANUAL);
   rsp_init();
   rsp_load(&rsp_hwtest);
-  line("RSP/CPU signalling test v2");
-  t_read();
-  t_seq();
-  t_echo();
-  t_sem();
-  t_sig();
-  t_bell();
-  t_dma();
-  t_cost();
+  /* v3 runs the mailbox tests only; v1/v2 results are in BRINGUP_NOTES.md
+   * (t_read .. t_cost above). */
+  line("RSP/CPU signalling test v3 (mailboxes)");
+  t_regcost();
+  t_word();
+  t_block();
   line("RESULT: %s (%d failed)", s_fails ? "FAIL" : "ALL OK", s_fails);
   debugf("HWTEST_DONE\n");
   show(NULL);

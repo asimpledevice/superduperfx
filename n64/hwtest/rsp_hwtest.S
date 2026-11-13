@@ -33,6 +33,12 @@ _start:
     beq t0, t1, m_bell
     li t1, HT_M_DMA
     beq t0, t1, m_dma
+    li t1, HT_M_SPIN
+    beq t0, t1, m_spin
+    li t1, HT_M_WORD
+    beq t0, t1, m_word
+    li t1, HT_M_BLOCK
+    beq t0, t1, m_block
     nop
 finish:
     break
@@ -253,5 +259,143 @@ m_dma:
     andi t9, t9, SP_STATUS_SIG7
     beqz t9, 1b
     nop
+    j finish
+    nop
+
+# v3. COUNT++ until SIG7; with PARAM set, take the semaphore first and hold
+# it throughout (so CPU reads of it all return 1).
+m_spin:
+    lw s6, HT_PARAM(zero)
+    beqz s6, 2f
+    nop
+1:  mfc0 t1, COP0_SEMAPHORE
+    bnez t1, 1b
+    nop
+2:  lw s0, HT_COUNT(zero)
+3:  addiu s0, s0, 1
+    sw s0, HT_COUNT(zero)
+    mfc0 t9, COP0_SP_STATUS
+    andi t9, t9, SP_STATUS_SIG7
+    beqz t9, 3b
+    nop
+    beqz s6, 4f
+    nop
+    mtc0 zero, COP0_SEMAPHORE
+4:  j finish
+    nop
+
+# v3. One-word boxes. COUNT++ each pass (the background work); a new DOWNW
+# is answered in UPW with the same top byte and payload + 1 (low 24 bits),
+# then SIG0 if PARAM bit 0, plus the SP interrupt if bit 1. New means: it
+# differs from the last one, or with PARAM bit 2, SIG3 is set (the RSP
+# clears SIG3 once it has read the word). Until SIG7.
+m_word:
+    lw s3, HT_PARAM(zero)
+    li s4, SP_WSTATUS_SET_SIG0
+    andi t0, s3, 2
+    beqz t0, 0f
+    nop
+    ori s4, s4, SP_WSTATUS_SET_INTR
+0:  lw s0, HT_COUNT(zero)
+    move s1, zero                   # the last DOWNW
+    li s5, 0x00FFFFFF
+1:  addiu s0, s0, 1
+    sw s0, HT_COUNT(zero)
+    andi t3, s3, 4
+    beqz t3, 8f
+    nop
+    mfc0 t3, COP0_SP_STATUS         # SIG3 says a word is waiting
+    andi t3, t3, SP_STATUS_SIG3
+    beqz t3, 2f
+    nop
+    lw t0, HT_DOWNW(zero)
+    li t3, SP_WSTATUS_CLEAR_SIG3
+    b 9f
+    mtc0 t3, COP0_SP_STATUS
+8:  lw t0, HT_DOWNW(zero)
+    beq t0, s1, 2f
+    nop
+9:  move s1, t0
+    srl t1, t0, 24
+    sll t1, t1, 24                  # seq << 24
+    addiu t2, t0, 1
+    and t2, t2, s5
+    or t2, t2, t1
+    sw t2, HT_UPW(zero)
+    andi t3, s3, 3                  # a doorbell to ring?
+    beqz t3, 2f
+    nop
+    mtc0 s4, COP0_SP_STATUS
+2:  mfc0 t9, COP0_SP_STATUS
+    andi t9, t9, SP_STATUS_SIG7
+    beqz t9, 1b
+    nop
+    j finish
+    nop
+
+# v3. Block boxes. COUNT++ each pass; every 64 passes one try of the
+# semaphore, never a wait: busy counts a skip. Holding it: post a new UPB
+# (word i = seq + i * 0x01000001 for i < 7, word 7 = ~seq) and, if DOWNB
+# word 0 changed, check the CPU's record the same way (bad words counted).
+# Results: RES0 skips, RES1 bad words, RES2 DOWNBs seen, RES3 UPBs posted.
+m_block:
+    li s7, 0x01000001
+    move s0, zero
+    move s1, zero                   # UPB sequence
+    move s2, zero                   # the last DOWNB word 0
+    move s3, zero
+    move s4, zero
+    move s5, zero
+1:  addiu s0, s0, 1
+    sw s0, HT_COUNT(zero)
+    andi t0, s0, 63
+    bnez t0, 5f
+    nop
+    mfc0 t0, COP0_SEMAPHORE         # reading takes it if it was free
+    beqz t0, 2f
+    nop
+    b 5f
+    addiu s3, s3, 1
+2:  addiu s1, s1, 1
+    move t1, s1
+    li t2, HT_UPB
+    li t3, 7
+3:  sw t1, 0(t2)
+    addu t1, t1, s7
+    addiu t3, t3, -1
+    bnez t3, 3b
+    addiu t2, t2, 4
+    nor t1, s1, zero
+    sw t1, 0(t2)                    # word 7
+    lw t4, HT_DOWNB(zero)
+    beq t4, s2, 4f
+    nop
+    move s2, t4
+    addiu s5, s5, 1
+    move t1, t4
+    li t2, HT_DOWNB
+    li t3, 7
+6:  lw t5, 0(t2)
+    beq t5, t1, 7f
+    nop
+    addiu s4, s4, 1
+7:  addu t1, t1, s7
+    addiu t3, t3, -1
+    bnez t3, 6b
+    addiu t2, t2, 4
+    lw t5, 0(t2)
+    nor t1, t4, zero
+    beq t5, t1, 4f
+    nop
+    addiu s4, s4, 1
+4:  mtc0 zero, COP0_SEMAPHORE       # release
+5:  mfc0 t9, COP0_SP_STATUS
+    andi t9, t9, SP_STATUS_SIG7
+    beqz t9, 1b
+    nop
+    sw s3, HT_RES + 0(zero)
+    sw s4, HT_RES + 4(zero)
+    sw s5, HT_RES + 8(zero)
+    sw s1, HT_RES + 12(zero)
     j finish
     nop
