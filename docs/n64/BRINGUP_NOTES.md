@@ -678,7 +678,7 @@ instructions, by the routine and CPU mode containing each PC):
 | No routine at all in the manifest | 13.5% |
 | A routine, but not for this mode | 10% |
 
-### Blue thread (formerly the guest fiber) (`SNESRECOMP_BLUE_THREAD`, off by default)
+### Blue thread (formerly the guest fiber) (`SNESRECOMP_BLUE_THREAD`; default since 2026-11-13)
 
 Generated code's deadline checks now call `interp_bridge_lle_deadline_pause(cpu, pc)`
 (same result as `..._master_deadline_reached` without fibers; all hashes
@@ -2435,6 +2435,20 @@ the barrier cost 0.6% of generated code.
 - JM2 bank $80 (-Os): FPU 70,065 -> 62,553 bytes; struct 69,021 -> 60,317.
 - State hashes identical to step 3a (SMW 53, Pitfall 12, JM2 25 frames). C and
   Python tests pass.
+
+### Step 0: Blue/Green by default (2026-11-13)
+
+Owner direction: the CPU stays two-threaded, so `BLUE ?= 1` in
+`n64/Makefile` (`BLUE=0` keeps the single-stack build). The RSP overlays
+keep their current defaults (S-DSP and BG lines on, SPC off); they will be
+rewritten for the Yellow lane after Red.
+
+Blue changes state hashes from frame 60 on (boot timing: native code that
+resumes after a deadline instead of unwinding to the interpreter), as
+recorded when Blue was added, so Blue builds are the new reference.
+ares: every pause resumed, none unwound (SMW 197, Pitfall 65, JM2 73 by
+frame ~2,900/700/1,400); the 450 s screens match the single-stack build's
+(the title demo at a slightly different point in SMW).
 
 ## Next steps
 

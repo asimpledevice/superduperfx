@@ -185,9 +185,10 @@ N64_CFLAGS += -Iinclude -I$(RUNNER) -I$(RUNNER)/snes -I$(RUNNER)/desktop \
 	-Wno-error -Wno-unused-parameter -Wno-unused-variable \
 	-Wno-unused-function -Wno-sign-compare -Wno-unused-but-set-variable
 N64_CFLAGS += -O2
-# BLUE=1: the 65816 runs on the Blue thread (runner/src/blue_thread.c), paused
-# at deadlines instead of unwound. Off by default for now.
-BLUE ?= 0
+# BLUE=1 (default): the 65816 runs on the Blue thread (runner/src/blue_thread.c),
+# Green (the frame driver and the rest) on the main stack; the 65816 pauses at
+# deadlines instead of unwinding. BLUE=0 runs everything on one stack.
+BLUE ?= 1
 # CPUFPU=1 (default): the 65816 registers A..P live in reserved FPU
 # registers (runner/src/cpu_regs.h); CPUFPU=0 keeps them in g_cpu.
 CPUFPU ?= 1
