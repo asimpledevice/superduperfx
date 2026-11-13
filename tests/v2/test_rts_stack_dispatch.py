@@ -58,7 +58,7 @@ def test_pha_rts_stack_dispatch_replaces_fake_return_push():
 
     assert 'RTS-stack dispatch terminator: cfg-resolved target list' in src
     assert 'cpu_Y() & 0xFFFF) / 2' in src
-    assert 'cpu_set_P((uint8)(cpu_P() | 0x30))' in src
+    assert 'cpu_set_P_mxid(cpu_P_mxid() | 0x30u);' in src
     assert 'bank_00_9000_M1X1(cpu, _call_hrv)' in src
     assert 'bank_00_9100_M1X1(cpu, _call_hrv)' in src
     assert 'bank_00_9000_M0X0(cpu, _call_hrv)' not in src

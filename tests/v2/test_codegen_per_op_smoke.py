@@ -77,7 +77,7 @@ def test_alu_add_uses_carry():
     op = Alu(op=AluOp.ADD, lhs=Value(vid=1), rhs=Value(vid=2),
              width=1, out=Value(vid=3))
     s = _joined(emit_op(op))
-    assert "cpu->_flag_C" in s
+    assert "flag_C(" in s
     assert "_v1" in s and "_v2" in s and "_v3" in s
 
 
@@ -85,18 +85,16 @@ def test_alu_cmp_no_destination():
     op = Alu(op=AluOp.CMP, lhs=Value(vid=1), rhs=Value(vid=2),
              width=1, out=None)
     s = _joined(emit_op(op))
-    assert "cpu->_flag_C" in s
-    assert "cpu->_flag_Z" in s
-    assert "cpu->_flag_N" in s
+    assert "cpu_set_flag_C(" in s
+    assert "cpu_set_nz8(" in s
 
 
 def test_shift_asl_updates_carry_and_z_n():
     op = Shift(op=ShiftOp.ASL, src=Value(vid=1), width=1, out=Value(vid=2))
     s = _joined(emit_op(op))
     assert "<< 1" in s
-    assert "cpu->_flag_C" in s
-    assert "cpu->_flag_Z" in s
-    assert "cpu->_flag_N" in s
+    assert "cpu_set_flag_C(" in s
+    assert "cpu_set_nz8(" in s
 
 
 def test_increg_x_emits_x_plus_1():
@@ -110,21 +108,19 @@ def test_bittest_emits_a_and_operand():
     op = BitTest(operand=Value(vid=1), width=1)
     s = _joined(emit_op(op))
     assert "cpu_A()" in s and "_v1" in s
-    assert "_flag_V" in s
+    assert "cpu_set_flag_V(" in s
 
 
 def test_setflag_c_1():
     op = SetFlag(flag=Reg.C, value=1)
     s = _joined(emit_op(op))
-    assert "cpu->_flag_C" in s
-    assert "= 1" in s
+    assert "cpu_set_flag_C(1);" in s
 
 
 def test_rep_emits_p_clear_with_mask():
     op = RepFlags(mask=0x30)
     s = _joined(emit_op(op))
-    assert "cpu_P()" in s and "0x30" in s
-    assert "cpu_p_to_mirrors" in s
+    assert "cpu_set_P_mxid(cpu_P_mxid() & ~0x30u);" in s
 
 
 def test_sep_emits_p_set_with_mask():
@@ -137,7 +133,7 @@ def test_xce_swaps_emulation_and_carry():
     op = XCE()
     s = _joined(emit_op(op))
     assert "cpu_emulation()" in s
-    assert "cpu->_flag_C" in s
+    assert "flag_C(" in s
 
 
 def test_xba_swaps_a_high_low():
@@ -151,7 +147,7 @@ def test_xba_swaps_a_high_low():
     Invariants the emit must satisfy:
       - References cpu_A().
       - Does NOT read cpu->B (forbidden — field removed).
-      - Sets _flag_Z and _flag_N from the new low byte.
+      - Sets N and Z from the new low byte.
       - Computes a byte-swap of the prior cpu_A() bits (text shape).
     """
     op = XBA()
@@ -162,7 +158,7 @@ def test_xba_swaps_a_high_low():
         "and B is now derived from (A >> 8). Reading a stale shadow was "
         "the SMW Layer-3 stripe-corruption bug class."
     )
-    assert "cpu->_flag_Z" in s and "cpu->_flag_N" in s, (
+    assert "cpu_set_nz8(cpu_A());" in s, (
         "XBA must set Z and N from the new low byte"
     )
     # The emit must perform a byte swap. We don't pin the specific
@@ -260,10 +256,10 @@ def test_pullreg_a_static_m1_emits_unconditional_byte():
     assert "cpu_read16" not in s
 
 
-def test_pullreg_p_calls_mirrors_sync():
+def test_pullreg_p_writes_the_whole_status_byte():
     op = PullReg(reg=Reg.P)
     s = _joined(emit_op(op))
-    assert "cpu_p_to_mirrors" in s
+    assert "cpu_set_P(cpu_read8(cpu, 0x00, cpu_S()));" in s
 
 
 def test_transfer_a_to_x():
@@ -272,7 +268,7 @@ def test_transfer_a_to_x():
     # v2 transfer is width-aware (X width follows x_flag) and updates N/Z.
     assert "cpu_X()" in s and "cpu_A()" in s
     assert "x_flag" in s
-    assert "_flag_Z" in s and "_flag_N" in s
+    assert "cpu_set_nz8(_v);" in s and "cpu_set_nz16(" in s
 
 
 def test_call_long_emits_function_call():
@@ -290,7 +286,7 @@ def test_terminal_jsr_pushes_inline_frame_but_inherits_outer_context():
                   entry_m=0, entry_x=0, terminal=True)
         s = _joined(emit_op(op))
         assert "terminal JSR: callee consumes inline return frame" in s
-        assert "JSR return frame -> cpu->S" in s
+        assert "JSR return frame -> S" in s
         assert "cpu_tailcall_inherit_return_context(_entry_s, _hrv)" in s
         assert "interp_tier_dispatch_tail" in s
         assert "interp_tier_run_call_frame" not in s
@@ -306,7 +302,7 @@ def test_noreturn_jsr_preserves_frame_and_uses_exceptional_lle_path():
               entry_m=0, entry_x=0, noreturn=True)
     s = _joined(emit_op(op))
     assert "no-return JSR: preserve frame" in s
-    assert "JSR return frame -> cpu->S" in s
+    assert "JSR return frame -> S" in s
     assert "interp_tier_dispatch_tail" in s
     assert "interp_tier_run_call_frame" not in s
     assert "cpu_tailcall_inherit_return_context" not in s
@@ -423,7 +419,7 @@ def test_emit_block_wraps_in_braces():
     assert lines[0] == "{"
     assert lines[-1] == "}"
     body = "\n".join(lines[1:-1])
-    assert "cpu->_flag_C" in body
+    assert "flag_C(" in body
 
 
 if __name__ == '__main__':

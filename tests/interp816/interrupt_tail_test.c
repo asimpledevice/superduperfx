@@ -35,7 +35,6 @@ static void prepare_interrupt(void) {
     init_cpu();
     cpu_set_emulation(0);
     cpu_set_S(0x01FB);
-    cpu_mirrors_to_p(&g_cpu);
     /* Native NMI frame: P, PC.lo, PC.hi, PB; RTI resumes at $00:9000. */
     (*bus_at(0x01FC)) = cpu_P();
     (*bus_at(0x01FD)) = 0x00;

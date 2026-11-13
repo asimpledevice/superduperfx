@@ -1344,15 +1344,7 @@ void cpu_state_init(CpuState *cpu) {
     cpu_set_PB(0);
     /* Reset state per 65816 spec: emulation=1, M=X=I=1 (P=0x34). */
     cpu_set_P(CPU_P_M | CPU_P_X | CPU_P_I);
-    cpu_set_m_flag(1);
-    cpu_set_x_flag(1);
     cpu_set_emulation(1);
-    cpu->_flag_N = 0;
-    cpu->_flag_V = 0;
-    cpu->_flag_Z = 0;
-    cpu->_flag_C = 0;
-    cpu->_flag_I = 1;
-    cpu->_flag_D = 0;
     g_open_bus = 0;
     g_master_cycles = 0;
     g_coprocessor_master_cycles = 0;

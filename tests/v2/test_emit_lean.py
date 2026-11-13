@@ -222,7 +222,7 @@ def test_lean_and_default_bodies_leave_the_same_state(monkeypatch, tmp_path):
     for helper in ('cpu_read_dp8', 'cpu_read_absX8', 'cpu_write_absY8', 'cpu_read_longx8',
                    'cpu_write_dpx8', 'cpu_push8', 'cpu_pull8', 'recomp_frame', 'recomp_enter',
                    'recomp_block_enter_charge', 'cpu_charge_dl', 'cpu_charge_page',
-                   'cpu_sync_p_nz', 'cpu_charge(cpu, 1u); goto'):
+                   'cpu_charge(cpu, 1u); goto'):
         assert helper in lean, helper
     harness = seam._HARNESS.split('/* The C helpers.')[0]
     c_file = tmp_path / 'diff.c'

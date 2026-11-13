@@ -52,15 +52,14 @@ trip in place:
 
 ```c
 /* BRK to a bare RTI (brk_rti): the round trip, then on */
-if (cpu->emulation) {
+if (cpu_emulation()) {
   return interp_tier_dispatch_tail(cpu, ..., 0x008002u, _entry_s, _hrv);
 }
-{ uint16 _s = cpu->S;
-  cpu_mirrors_to_p(cpu);
-  cpu_write8(cpu, 0x00, _s, cpu->PB);
+{ uint16 _s = cpu_S();
+  cpu_write8(cpu, 0x00, _s, cpu_PB());
   cpu_write8(cpu, 0x00, (uint16)(_s - 1), 0x80);
   cpu_write8(cpu, 0x00, (uint16)(_s - 2), 0x04);
-  cpu_write8(cpu, 0x00, (uint16)(_s - 3), (uint8)cpu->P);
+  cpu_write8(cpu, 0x00, (uint16)(_s - 3), (uint8)cpu_P());
   g_master_cycles += 7 * 8; }
 goto L_8004_M1X1; /* implicit fall-through */
 ```

@@ -69,44 +69,15 @@ def masked(expr: str, width: int) -> str:
 
 
 def set_nz(src_expr: str, width: int) -> List[str]:
-    """Emit the canonical N/Z mirror update PLUS the cpu_P() refresh.
-
-    Replaces the duplicated N/Z tail in _emit_alu / _emit_shift /
-    _emit_incmem / _emit_increg / _emit_pullreg / _emit_transfer.
-
-    Includes the `cpu_P()` packed-flag update. The earlier asymmetry
-    (where some emitters set mirrors but not cpu_P()) was load-bearing
-    only because cpu_p_to_mirrors at the next REP/SEP would re-sync —
-    but that is exactly what produced the SEP/REP-clobber bug fixed
-    in 44c96a7. Always updating cpu_P() here keeps the packed/mirror
-    pair coherent without relying on the next REP/SEP to flush it.
-    """
-    sign = sign_bit(width)
-    return [
-        f"cpu->_flag_Z = (({src_expr}) == 0) ? 1 : 0;",
-        f"cpu->_flag_N = ((({src_expr}) & {sign}) != 0) ? 1 : 0;",
-        "cpu_set_P((uint8)((cpu_P() & ~0x82) | "
-        "(cpu->_flag_Z ? 0x02 : 0) | (cpu->_flag_N ? 0x80 : 0)));",
-    ]
-
-
-def set_nz_no_p(src_expr: str, width: int) -> List[str]:
-    """Same as set_nz but omits the cpu_P() update.
-
-    Some emitters intentionally update mirrors and defer the P flush
-    to a containing helper that does multiple flag updates in
-    sequence. Use sparingly; prefer `set_nz` (which keeps P in sync).
-    """
-    sign = sign_bit(width)
-    return [
-        f"cpu->_flag_Z = (({src_expr}) == 0) ? 1 : 0;",
-        f"cpu->_flag_N = ((({src_expr}) & {sign}) != 0) ? 1 : 0;",
-    ]
+    """N and Z from a result (cpu_regs.h): one store of the last result,
+    `cpu_set_nz8(v)` or `cpu_set_nz16(v)`, which takes the value's low 8 or
+    16 bits. P's N and Z bits are read from it when P is needed whole."""
+    return [f"cpu_set_nz{8 * width}({src_expr});"]
 
 
 def set_carry_from_bit(src_expr: str, bit_mask: str) -> str:
-    """Single-line C: `cpu->_flag_C = ((src & bit_mask) != 0) ? 1 : 0;`"""
-    return f"cpu->_flag_C = (({src_expr}) & {bit_mask}) ? 1 : 0;"
+    """Single-line C: C = whether `src & bit_mask` is non-zero."""
+    return f"cpu_set_flag_C((({src_expr}) & {bit_mask}) ? 1 : 0);"
 
 
 def set_carry_from_overflow(temp_var: str, width: int,
@@ -120,9 +91,9 @@ def set_carry_from_overflow(temp_var: str, width: int,
     """
     cb = carry_bit(width)
     if polarity == "add":
-        return f"cpu->_flag_C = ({temp_var} & {cb}) ? 1 : 0;"
+        return f"cpu_set_flag_C(({temp_var} & {cb}) ? 1 : 0);"
     elif polarity == "sub":
-        return f"cpu->_flag_C = ({temp_var} & {cb}) ? 0 : 1;"
+        return f"cpu_set_flag_C(({temp_var} & {cb}) ? 0 : 1);"
     raise ValueError(f"polarity must be 'add' or 'sub', got {polarity!r}")
 
 
@@ -131,8 +102,8 @@ def set_v_adc(lhs_m: str, rhs_m: str, out_v: str, width: int) -> str:
     V set when sign of result differs from sign of both operands —
     i.e. (lhs ^ result) & (rhs ^ result) & sign_bit."""
     sign = sign_bit(width)
-    return (f"cpu->_flag_V = ((({lhs_m} ^ {out_v}) & "
-            f"({rhs_m} ^ {out_v}) & {sign}) != 0) ? 1 : 0;")
+    return (f"cpu_set_flag_V(((({lhs_m} ^ {out_v}) & "
+            f"({rhs_m} ^ {out_v}) & {sign}) != 0) ? 1 : 0);")
 
 
 def set_v_sbc(lhs_m: str, rhs_m: str, out_v: str, width: int) -> str:
@@ -140,8 +111,8 @@ def set_v_sbc(lhs_m: str, rhs_m: str, out_v: str, width: int) -> str:
     V set when sign of (lhs - rhs) overflows: (lhs ^ rhs) sign-differ
     AND (lhs ^ result) sign-differ — both into the sign bit."""
     sign = sign_bit(width)
-    return (f"cpu->_flag_V = ((({lhs_m} ^ {rhs_m}) & "
-            f"({lhs_m} ^ {out_v}) & {sign}) != 0) ? 1 : 0;")
+    return (f"cpu_set_flag_V(((({lhs_m} ^ {rhs_m}) & "
+            f"({lhs_m} ^ {out_v}) & {sign}) != 0) ? 1 : 0);")
 
 
 # ── Register-write expression helpers ──────────────────────────────────

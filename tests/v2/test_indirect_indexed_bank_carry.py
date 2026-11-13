@@ -46,7 +46,7 @@ static void wr(void *p,uint32_t a,uint8_t v) { cpu_write8(p,a>>16,(uint16)a,v); 
 static void prepare(CpuState *c,int opcode,int stack,int m,int x,int db,int ptr,int y) {
  memset(c,0,sizeof *c); memset(bus,0,sizeof bus);
  cpu_set_A(0x1234);cpu_set_S(0x1ff);cpu_set_D(0x100);cpu_set_DB(db);cpu_set_Y(y);
- cpu_set_P((m?0x20:0)|(x?0x10:0));cpu_p_to_mirrors(c);
+ cpu_set_P((m?0x20:0)|(x?0x10:0));
  cpu_push_jsr_return_frame(c);
  bus[0x8000]=opcode;bus[0x8001]=stack?0x10:0;bus[0x8002]=0x60;
  ptr_at=stack?(uint16)(cpu_S()+0x10):cpu_D();
@@ -66,7 +66,7 @@ static int check(RecompEntryFn fn,int opcode,int stack,int store,int m,int x) {
   uint32 wrong=((uint32)db<<16)|(uint16)(ptr+y);
   /* One CPU state (g_cpu): run, keep a copy, prepare again for the reference. */
   CpuState native,memory;prepare(&g_cpu,opcode,stack,m,x,db,ptr,y);
-  fn(&g_cpu, 2);cpu_mirrors_to_p(&g_cpu);native=g_cpu;cpu_regs_store(&native);
+  fn(&g_cpu, 2);native=g_cpu;cpu_regs_store(&native);
   unsigned reads=ptr_reads,exits=g_other_exits;
   uint8 data[]={bus[address],bus[(address+1)&0xffffff],bus[wrong]};
   prepare(&g_cpu,opcode,stack,m,x,db,ptr,y);memory=g_cpu;cpu_regs_store(&memory);

@@ -1361,9 +1361,7 @@ bool RtlExecutionStateValid(const void *data, size_t size) {
   const uint8 *raw = (const uint8 *)&r.apu_port;
   if (raw[offsetof(ApuPortSched, timeValid)] > 1 ||
       r.magic != RTL_RB_RESIDUE_MAGIC || r.version != RTL_RB_RESIDUE_VERSION ||
-      r.cpu.reg_emulation > 1 || r.cpu._flag_N > 1 || r.cpu._flag_V > 1 ||
-      r.cpu._flag_Z > 1 || r.cpu._flag_C > 1 || r.cpu._flag_I > 1 ||
-      r.cpu._flag_D > 1 ||
+      r.cpu.reg_emulation > 1 || r.cpu.reg_nz > 0x1FFFFu ||
       r.apu_port.qTail - r.apu_port.qHead > APU_PORT_QUEUE_LEN ||
       r.apu_frame_time_valid > 1 || r.memsel > 1 || r.interp_apu_driving > 1 ||
       r.ppu_rb.oamInHigh > 1 || r.ppu_rb.oamSecondWrite > 1 ||
@@ -2174,9 +2172,7 @@ static bool RtlUploadSpcImageFromDpInternal(CpuState *cpu,
     cpu_set_A((uint16_t)(cpu_A() & 0xff00));
     cpu_set_X(0);
     cpu_set_Y(0);
-    cpu->_flag_Z = 1;
-    cpu->_flag_N = 0;
-    cpu_set_P((uint8_t)((cpu_P() & ~0x82) | 0x02));
+    cpu_set_nz16(0);   /* Z set, N clear */
   }
   return true;
 }

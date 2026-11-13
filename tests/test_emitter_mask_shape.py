@@ -123,11 +123,11 @@ def test_setnz_8bit_masks_src():
     assert "& 0xFF" in out, f"missing 8-bit mask on SetNZ-8:\n{out}"
 
 
-def test_setnz_emits_p_update():
-    """The DRY layer routes set_nz through cpu_P() update, fixing the
-    asymmetry where some emitters skipped P sync."""
+def test_setnz_stores_the_last_result():
+    """N and Z come from one store of the last result (cpu_regs.h)."""
     out = _join(_emit_setnz(SetNZ(src=_v(1), width=1)))
-    assert "cpu_P()" in out, f"SetNZ must update cpu_P():\n{out}"
+    assert "cpu_set_nz8(" in out, f"SetNZ-8 must store the result:\n{out}"
+    assert "cpu_set_P" not in out, f"SetNZ must not rebuild P:\n{out}"
 
 
 def test_writereg_a_m1_preserves_high_via_helper():
@@ -292,32 +292,41 @@ def test_pop_word_increments_reads_increments():
     assert "cpu_S() + 1" in env[2]
 
 
-# ── REP/SEP P-mirror sync (Follow-up D) ─────────────────────────────────
+# ── REP/SEP: each named part of P, nothing else ────────────────────────
 
-def test_rep_modify_p_via_mirrors_clears_bits():
-    from v2.emitter_helpers import modify_p_via_mirrors
-    env = modify_p_via_mirrors(0x30, "rep")
-    assert len(env) == 5
-    text = "\n".join(env)
+def test_rep_clears_mxid_bits():
+    from v2.emitter_helpers import modify_p
+    env = modify_p(0x30, "rep")
     assert "_old_p = cpu_P()" in env[0]
-    assert "cpu_mirrors_to_p" in env[1]
-    assert "& ~0x30" in env[2]                   # AND-NOT mask
-    assert "cpu_p_to_mirrors" in env[3]
-    assert "/*REP*/" in env[4] and "cpu_trace_px_record" in env[4]
+    assert "cpu_set_P_mxid(cpu_P_mxid() & ~0x30u);" in env
+    assert not any("cpu_set_flag" in s or "cpu_set_X" in s for s in env)
+    assert "/*REP*/" in env[-1] and "cpu_trace_px_record" in env[-1]
 
 
-def test_sep_modify_p_via_mirrors_sets_bits():
-    from v2.emitter_helpers import modify_p_via_mirrors
-    env = modify_p_via_mirrors(0x20, "sep")
-    text = "\n".join(env)
-    assert "| 0x20" in env[2]                    # OR mask
-    assert "/*SEP*/" in env[4]
+def test_sep_sets_bits_and_clears_index_high_bytes():
+    from v2.emitter_helpers import modify_p
+    env = modify_p(0x10, "sep")
+    assert "cpu_set_P_mxid(cpu_P_mxid() | 0x10u);" in env
+    assert "cpu_set_X(cpu_X() & 0xFFu); cpu_set_Y(cpu_Y() & 0xFFu);" in env
+    assert "/*SEP*/" in env[-1]
+    env = modify_p(0x20, "sep")
+    assert not any("cpu_set_X" in s for s in env)
 
 
-def test_modify_p_via_mirrors_rejects_bad_kind():
-    from v2.emitter_helpers import modify_p_via_mirrors
+def test_rep_sep_flag_bits():
+    from v2.emitter_helpers import modify_p
+    assert "cpu_set_flag_C(0);" in modify_p(0x01, "rep")
+    assert "cpu_set_flag_V(1);" in modify_p(0x40, "sep")
+    assert "cpu_set_flags_nz(0, 0);" in modify_p(0x82, "rep")
+    assert "cpu_set_flag_Z(1);" in modify_p(0x02, "sep")
+    assert "cpu_set_flag_N(0);" in modify_p(0x80, "rep")
+    assert not any("cpu_set_P_mxid" in s for s in modify_p(0xC3, "rep"))
+
+
+def test_modify_p_rejects_bad_kind():
+    from v2.emitter_helpers import modify_p
     try:
-        modify_p_via_mirrors(0x10, "xor")
+        modify_p(0x10, "xor")
     except ValueError:
         return
-    assert False, "modify_p_via_mirrors must reject non-rep/sep kinds"
+    assert False, "modify_p must reject non-rep/sep kinds"

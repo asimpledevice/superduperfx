@@ -96,11 +96,11 @@ int main(void) {
       case 0:bad.magic=0;break;
       case 1:bad.version++;break;
       case 2:bad.cpu.reg_emulation=2;break;
-      case 3:bad.cpu._flag_N=2;break;
+      case 3:bad.cpu.reg_nz=0x20000;break;
       case 4:bad.apu_port.qTail=APU_PORT_QUEUE_LEN+1;break;
       case 5:((uint8_t *)&bad.apu_port)[offsetof(ApuPortSched,timeValid)]=2;break;
       case 6:bad.interp[0]=0;break;
-      case 7:bad.cpu._flag_Z=2;break;
+      case 7:bad.cpu.reg_nz=0xFFFFFFFFu;break;
       case 8:bad.memsel=2;break;
       case 9:bad.ppu_rb.vramIncrement=0;break;
       case 10:bad.ppu_rb.vramRemapMode=4;break;

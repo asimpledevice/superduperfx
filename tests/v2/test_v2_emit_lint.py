@@ -1,34 +1,17 @@
 """Lint pass over v2 codegen output.
 
-Catches the next foot-gun in the cpu->B class:
+Catches the next foot-gun in the cpu->B class: a "shadow" copy of CPU
+state that some writers forget to update.
 
-  - "shadow" CPU fields that aren't part of the documented canonical
-    state and don't have a sync mechanism (e.g., a contributor adds
-    `cpu->Z` as a temporary cache and forgets every primary-Z writer
-    has to update it).
+Generated code reaches every 65816 register and flag through the accessors
+of runner/src/cpu_regs.h (cpu_A(), cpu_set_A(v), cpu_flag_C(), cpu_set_nz8(v),
+...), never through a CpuState field: each piece of state has exactly one
+home, so there is nothing to keep in sync. The lint fails on any `cpu->FIELD`
+reference in emit output, and checks that every register and flag the
+emitter names has an accessor.
 
-  - Stale historical references to deleted shadow fields like cpu->B.
-
-  - Unsynced shadow fields (declared in CpuState but not referenced
-    from cpu_p_to_mirrors / cpu_mirrors_to_p, so REP/SEP/PLP wouldn't
-    keep them coherent).
-
-The lint scans the actual emitted gen/*.c sources rather than the
-codegen.py emitter functions directly. That's the load-bearing surface
-— if codegen.py emits an unexpected field through any conditional code
-path, the gen output will reveal it. The lint runs as part of the
-standard v2 test suite.
-
-If a new field is genuinely needed:
-  - canonical primary state goes in CANONICAL,
-  - synced-from-P shadow goes in SHADOWS_FROM_P + cpu_p_to_mirrors,
-  - any other shadow needs its own sync mechanism documented and added
-    to ALLOWED with a comment explaining why it's safe.
-
-This lint is the "before-the-third-repeat" project rule made
-mechanical: it doesn't catch a stale-read bug at the use site (the
-fuzz does that), but it catches the architectural shape that makes
-stale-read bugs possible.
+If new state is genuinely needed, give it one home and accessors in
+cpu_regs.h, and add its name to STATE.
 """
 from __future__ import annotations
 
@@ -36,40 +19,17 @@ import pathlib
 import re
 
 
-# Canonical CpuState fields — real architectural state of the 65816.
-CANONICAL = {
-    'A', 'X', 'Y',       # accumulator + index regs (16-bit, m/x_flag govern semantic width)
-    'S',                 # stack pointer
-    'D',                 # direct page register
-    'DB', 'PB',          # data bank, program bank
-    'P',                 # canonical processor flags byte
+# The CPU state the emitter reaches through cpu_regs.h accessors.
+STATE = {
+    'A', 'X', 'Y', 'S', 'D', 'DB', 'PB',   # registers
+    'P',                                   # the whole status byte (assembled)
+    'P_mxid', 'nz', 'flag_C', 'flag_V',     # the status byte's homes
+    'flag_N', 'flag_Z', 'flag_I', 'flag_D', # flags read from those homes
+    'm_flag', 'x_flag', 'emulation',
 }
 
-# Shadow fields kept in sync with cpu->P via cpu_p_to_mirrors /
-# cpu_mirrors_to_p. Read by codegen for fast per-bit access; updated
-# whenever P is written via REP/SEP/PLP/RTI. The sync helpers in
-# cpu_state.h are the load-bearing invariant; test_shadow_p_sync_is_complete
-# below verifies every name here actually appears in cpu_p_to_mirrors.
-# m and x are P's own bits (cpu_regs.h: cpu_m_flag(), cpu_x_flag()), not
-# copies, so they are not listed.
-SHADOWS_FROM_P = {
-    '_flag_N', '_flag_V', '_flag_Z', '_flag_C', '_flag_I', '_flag_D',
-}
-
-# Hidden 65816 register bits — NOT part of P, but state nonetheless.
-# Their only mutator is XCE (which atomically swaps emulation <-> carry).
-# These are read freely by the codegen but the field's coherence is the
-# XCE emitter's responsibility, not cpu_p_to_mirrors'.
-HIDDEN_REGS = {
-    'emulation',
-}
-
-# NB: NLR pending-skip is intentionally NOT a CpuState field. It's a
-# function-local `RecompReturn _pending_skip` declared per emitted v2
-# function — see emit_function.py prologue + cpu_state.h header. So
-# no `cpu->pending_skip` reference should appear in v2 emit output.
-
-ALLOWED = CANONICAL | SHADOWS_FROM_P | HIDDEN_REGS
+# No CpuState field is read or written by generated code.
+ALLOWED: set[str] = set()
 
 
 # Fields that were once present and have since been deleted as
@@ -235,67 +195,12 @@ def test_no_historical_deleted_fields_reappear():
         )
 
 
-def test_shadow_p_sync_is_complete():
-    """Every shadow field in SHADOWS_FROM_P must be referenced inside
-    BOTH cpu_p_to_mirrors and cpu_mirrors_to_p. Without this, the
-    field would be `coherent at REP/SEP only by accident' — the bug
-    pattern this whole lint is designed to prevent. The check is text-
-    level (the helpers are inline functions in cpu_state.h)."""
-    text = _cpu_state_h().read_text(encoding='utf-8')
-
-    # Match the actual function definitions (not the doc-comment that
-    # mentions them by name above the struct).
-    p2m_def = re.search(r'static inline void cpu_p_to_mirrors\b[^{]*\{', text)
-    m2p_def = re.search(r'static inline void cpu_mirrors_to_p\b[^{]*\{', text)
-    assert p2m_def, "cpu_p_to_mirrors function definition not found"
-    assert m2p_def, "cpu_mirrors_to_p function definition not found"
-
-    # Slice each function body — from the open brace to the matching
-    # close brace. Inline functions are short so we just take a
-    # generous window and look for the next `}` at column 0.
-    def _body_after(open_idx: int) -> str:
-        # Walk forward to the closing `}` at start of a line.
-        end = text.index('\n}\n', open_idx)
-        return text[open_idx:end + 2]
-
-    p2m_body = _body_after(p2m_def.end())
-    m2p_body = _body_after(m2p_def.end())
-
-    def _mentions(body: str, field: str) -> bool:
-        # A register (cpu_regs.h) is reached through cpu_F() / cpu_set_F().
-        return (f'cpu->{field}' in body or f'cpu_{field}()' in body
-                or f'cpu_set_{field}(' in body)
-
-    for shadow in SHADOWS_FROM_P:
-        assert _mentions(p2m_body, shadow), (
-            f"shadow cpu->{shadow} declared in SHADOWS_FROM_P but not "
-            f"updated by cpu_p_to_mirrors (REP/SEP/PLP/RTI would leave it "
-            f"stale)"
-        )
-        assert _mentions(m2p_body, shadow), (
-            f"shadow cpu->{shadow} declared in SHADOWS_FROM_P but not "
-            f"folded back into cpu_P() by cpu_mirrors_to_p (PHP would push "
-            f"a stale P)"
-        )
-
-
-def test_canonical_set_documents_real_struct_fields():
-    """Every name in CANONICAL must appear as a top-level field in the
-    CpuState struct definition. If a canonical field is renamed in
-    cpu_state.h but not here, the gen lint above passes spuriously
-    (it'd see the new name but never check the old). This test catches
-    the drift."""
-    text = _cpu_state_h().read_text(encoding='utf-8')
-    struct_start = text.index('typedef struct CpuState')
-    struct_end = text.index('} CpuState;')
-    struct_body = text[struct_start:struct_end]
-    for field in CANONICAL:
-        # Match either `uint16 A;` or `uint8 *ram;` — i.e. any decl
-        # that ends with "<field>;" or "<field>;<comment>".
-        # The registers are reg_<F> fields behind accessors (cpu_regs.h).
-        pattern = re.compile(rf'\b(reg_)?{re.escape(field)}\s*;')
-        assert pattern.search(struct_body), (
-            f"CANONICAL field cpu->{field} declared in lint but not found "
-            f"in CpuState struct definition in cpu_state.h. Did the field "
-            f"get renamed?"
-        )
+def test_state_has_accessors():
+    """Every name in STATE has a read accessor in cpu_regs.h (a register
+    variable or field behind CPU_REG_IN_*, or an inline function), so a
+    rename there fails here instead of leaving the list stale."""
+    text = (_cpu_state_h().parent / 'cpu_regs.h').read_text(encoding='utf-8')
+    for name in STATE:
+        defined = (re.search(rf'CPU_REG_IN_(?:FPU|STRUCT)\({re.escape(name)},', text)
+                   or re.search(rf'\bcpu_{re.escape(name)}\(void\)', text))
+        assert defined, f"cpu_{name}() is not defined in cpu_regs.h"

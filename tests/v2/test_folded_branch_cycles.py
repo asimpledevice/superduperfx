@@ -59,7 +59,7 @@ static void prepare(CpuState *cpu, const uint8 *code, unsigned length,
   memset(cpu, 0, sizeof *cpu); memset(g_ram, 0, sizeof g_ram);
   memcpy(g_ram + 0x8000, code, length);
   cpu_set_S(0x01ff);
-  cpu_set_P((m << 5) | (x << 4)); cpu_p_to_mirrors(cpu);
+  cpu_set_P((m << 5) | (x << 4));
   cpu_push_jsr_return_frame(cpu);
   g_other_exits = 0; g_tc_valid = 0; g_recomp_stack_top = 0;
 }
@@ -68,7 +68,7 @@ static int check(const char *name, RecompEntryFn fn,
   /* One CPU state (g_cpu): run, keep a copy, prepare again for the reference. */
   CpuState native, memory;
   prepare(&g_cpu, code, length, m, x);
-  fn(&g_cpu, 2); cpu_mirrors_to_p(&g_cpu);
+  fn(&g_cpu, 2);
   native = g_cpu; cpu_regs_store(&native);
   if (g_other_exits || g_recomp_stack_top) return 1;
   prepare(&g_cpu, code, length, m, x);

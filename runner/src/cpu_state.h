@@ -1,25 +1,16 @@
 #pragma once
 
 /*
- * snesrecomp v2 runtime CpuState.
+ * snesrecomp v2 runtime: the 65816 CPU state.
  *
- * The single mutable container for 65816 register + flag state at
- * runtime. Every v2-recompiled function takes `CpuState *cpu` as its
- * sole parameter and mutates `cpu->A`, `cpu->X`, etc., directly. No
- * return values, no per-function locals masquerading as registers.
+ * There is one CPU, g_cpu. Generated functions take `CpuState *cpu` and
+ * reach its registers and flags through the accessors in cpu_regs.h
+ * (cpu_A(), cpu_set_A(v), cpu_flag_C(), cpu_set_nz8(v), ...), which decide
+ * where each one lives: in reserved FPU registers on N64 (CPUFPU=1), in
+ * g_cpu's reg_* fields otherwise. A CpuState record also serves as a saved
+ * copy of the whole state (cpu_regs_store / cpu_regs_load).
  *
- * REPLACES v1's per-function locals + decode-time M/X metadata fiction
- * + struct-packed return types (RetAY, RetY, PairU16, HdmaPtrs, etc.).
- *
- * v2 hand-written runtime bodies (NMI/IRQ entry, PPU/DMA orchestration,
- * etc.) keep working because `g_ram` aliases `g_ram` and existing
- * `g_ram[addr]` reads/writes from those bodies see the same bytes the
- * recompiled code sees.
- *
- * `m_flag` / `x_flag` / `emulation` are mirrors of P bits 5, 4, and the
- * E flag respectively. They're carried as their own slots so codegen
- * doesn't have to re-decode P every memory access; `RepFlags` /
- * `SepFlags` keep them in sync with `P` on every update.
+ * WRAM is g_ram; the data bus latch is g_open_bus.
  */
 
 #include "types.h"
@@ -109,24 +100,19 @@ typedef struct CpuState {
      * pushed: 2 JSR, 3 JSL, 0 none) is not CPU state: generated functions
      * receive it as their second argument (RecompEntryFn). */
 
-    /* Status register P (full byte). Individual bit mirrors below for
-     * codegen efficiency — they MUST be kept in sync via the helpers
-     * declared below (or RepFlags / SepFlags / SetFlag IR ops). */
-    uint8  reg_P;
+    /* The status register in parts (cpu_regs.h): M, X, I and D in place;
+     * the last N/Z result; C and V. cpu_P() assembles the byte. */
+    uint8  reg_P_mxid;
+    uint32_t reg_nz;
+    uint8  reg_flag_C;
+    uint8  reg_flag_V;
 
-    /* The E flag. (m and x are P's bits 5 and 4: cpu_m_flag(), cpu_x_flag().) */
+    /* The E flag. */
     uint8  reg_emulation;
 
-    /* Per-flag bit mirrors. v2 codegen reads/writes `cpu->_flag_C`
-     * etc. directly (rather than masking P each access). They MUST be
-     * kept in sync with `P` via cpu_p_to_mirrors / cpu_mirrors_to_p
-     * on every operation that updates P (REP/SEP/PLP/RTI). */
-    uint8  _flag_N;
-    uint8  _flag_V;
-    uint8  _flag_Z;
-    uint8  _flag_C;
-    uint8  _flag_I;
-    uint8  _flag_D;
+    /* A saved copy's whole status byte (cpu_regs_store); its N and Z bits
+     * agree with reg_nz. */
+    uint8  reg_P;
 
     /* Saved copies, for code that keeps a CpuState record (the rollback
      * residue): cpu_regs_store/cpu_regs_load fill them. The live values are
@@ -342,34 +328,6 @@ static inline void cpu_write_y_x(CpuState *cpu, uint32 v) {
 #define CPU_P_V  0x40u  /* Overflow */
 #define CPU_P_N  0x80u  /* Negative */
 
-/* Sync P <-> mirrors. Codegen calls these whenever P is touched in a
- * way that updates the bit mirrors (REP, SEP, PLP, RTI). */
-static inline void cpu_p_to_mirrors(CpuState *cpu) {
-    /* m and x are P's own bits (cpu_regs.h): nothing to copy. */
-    cpu->_flag_C = (cpu_P() & CPU_P_C) ? 1 : 0;
-    cpu->_flag_Z = (cpu_P() & CPU_P_Z) ? 1 : 0;
-    cpu->_flag_I = (cpu_P() & CPU_P_I) ? 1 : 0;
-    cpu->_flag_D = (cpu_P() & CPU_P_D) ? 1 : 0;
-    cpu->_flag_V = (cpu_P() & CPU_P_V) ? 1 : 0;
-    cpu->_flag_N = (cpu_P() & CPU_P_N) ? 1 : 0;
-    /* 65816: with X set the index registers are 8-bit and their high bytes
-     * read as zero (SEP #$10, PLP, RTI). 8-bit X/Y writes zero-extend, but a
-     * register kept across the switch would otherwise carry its old high byte
-     * into the next 16-bit use (e.g. an IRQ handler's REP #$30; PHX). */
-    if (cpu_x_flag()) { cpu_set_X(cpu_X() & (0xFFu)); cpu_set_Y(cpu_Y() & (0xFFu)); }
-}
-
-static inline void cpu_mirrors_to_p(CpuState *cpu) {
-    cpu_set_P((uint8)(
-        (cpu_P() & (CPU_P_M | CPU_P_X)) |   /* m and x live in P */
-        (cpu->_flag_C ? CPU_P_C : 0) |
-        (cpu->_flag_Z ? CPU_P_Z : 0) |
-        (cpu->_flag_I ? CPU_P_I : 0) |
-        (cpu->_flag_D ? CPU_P_D : 0) |
-        (cpu->_flag_V ? CPU_P_V : 0) |
-        (cpu->_flag_N ? CPU_P_N : 0)
-    ));
-}
 
 /* ── Memory access ──────────────────────────────────────────────────────── */
 
@@ -441,9 +399,7 @@ void   cpu_write16_paced(CpuState *cpu, uint8 bank, uint16 addr, uint16 v);
  * restores the frame before returning through the C call structure. */
 static inline void cpu_push_interrupt_frame_at(CpuState *cpu, uint32 pc24) {
     /* Interpreter/event-loop callers provide the architectural 24-bit PC so
-     * RTI resumes the suspended instruction stream. Materialize P from the
-     * generated flag mirrors before placing the real frame on the stack. */
-    cpu_mirrors_to_p(cpu);
+     * RTI resumes the suspended instruction stream. */
     if (!cpu_emulation()) {
         cpu_write8(cpu, 0x00, cpu_S(), (uint8)(pc24 >> 16)); cpu_set_S((uint16)(cpu_S() - 1));
     }
@@ -452,9 +408,8 @@ static inline void cpu_push_interrupt_frame_at(CpuState *cpu, uint32 pc24) {
     cpu_write8(cpu, 0x00, cpu_S(), cpu_P()); cpu_set_S((uint16)(cpu_S() - 1));
     /* Preserve the interrupted flags in the frame, then enter the handler
      * with IRQ masked and binary arithmetic. RTI restores the saved P. */
-    cpu->_flag_I = 1;
-    cpu->_flag_D = 0;
-    cpu_set_P((uint8)((cpu_P() | 0x04u) & ~0x08u));
+    cpu_set_flag_I(1);
+    cpu_set_flag_D(0);
 }
 
 /* Generated host-C control flow has no runtime PC offset. Its generated RTI

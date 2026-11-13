@@ -2043,13 +2043,17 @@ callee-saved: a function that uses one restores it before returning.
      calling convention's return-frame size, not CPU state.
   5. The per-flag mirrors (186k accesses in SMW's generated code, the most
      used fields): lazy N/Z keeps the last result, N and Z are derived from
-     it; C and V get a register each; D and I fold into P.
-  6. The rest leaves `g_cpu` too: `master_cycles` and
+     it; C and V get a register each; D and I fold into P. Done
+     (2026-11-13).
+  6. The rest leaves `g_cpu` too (done 2026-11-13): `master_cycles` and
      `coprocessor_master_cycles` to FPU registers, `cycles` deleted if
      nothing reads it, `ram` becomes a fixed address (WRAM never moves),
      `open_bus` moves to the bus code's state.
   With `g_cpu` gone, its D-cache conflict with the main stack (81% of its
-  misses, SMW) goes with it, so no placement pass is planned for it.
+  misses, SMW) goes with it, so no placement pass is planned for it. With
+  CPUFPU=1, generated code no longer touches `g_cpu`; only saved copies
+  (rollback) and struct-mode homes use the record. `$f31` (run flags) is
+  the one slot left.
 
 **To discuss later:** I-cache/D-cache layering, e.g. code and data
 alternating through RDRAM in 16 KB / 8 KB blocks. First thought: the caches
@@ -2367,6 +2371,40 @@ MSU playback test.
 - JM2 bank $80 (-Os) is unchanged (FPU 70,065, struct 69,021): lean
   emission charges through out-of-line `cpu_charge`, which loses its
   `cycles` add.
+- State hashes identical to step 3a (SMW 53, Pitfall 12, JM2 25 frames). C and
+  Python tests pass.
+
+### g_cpu: the flags (2026-11-13)
+
+P is kept in parts (`runner/src/cpu_regs.h`), each in one FPU register with
+CPUFPU=1:
+- `P_mxid` (`$f24`): P's M, X, I and D bits in place, the rest 0.
+- `nz` (`$f28`): the last result. A 16-bit result is stored as it is, an
+  8-bit one as `v << 8`, so Z is "low 16 bits zero" and N is `nz >= 0x8000`.
+  Setting N and Z separately (PLP, BIT, REP/SEP) stores
+  `(N ? 0x10000 : 0) | (Z ? 0 : 1)`. An N/Z update is one store
+  (`cpu_set_nz8`/`cpu_set_nz16`) instead of two byte stores and a rebuild of
+  P (`cpu_sync_p_nz`, 32k sites in SMW).
+- `flag_C` (`$f29`), `flag_V` (`$f30`): 0 or 1.
+- `cpu_P()` assembles the byte (PHP, interrupts, the interpreter);
+  `cpu_set_P()` splits one (PLP, RTI) and clears the index registers' high
+  bytes when X is set, as `cpu_p_to_mirrors` did.
+
+The emitter writes each flag through its accessor; REP/SEP change only the
+parts their mask names (`emitter_helpers.modify_p`). The `_flag_*` mirrors,
+`cpu_mirrors_to_p`, `cpu_p_to_mirrors` and `cpu_sync_p_nz` are gone. A saved
+`CpuState` keeps the whole byte in `reg_P` and the exact `reg_nz`.
+
+GCC 16 also fails (the `mips_load_store_insns` internal compiler error) on
+storing a masked FPU-register read into an FPU register
+(`cpu_set_X(cpu_X() & 0xFF)`, now in `cpu_set_P`), so writes pass through the
+same empty asm as reads. `nz` goes without: it is never stored narrowed, and
+the barrier cost 0.6% of generated code.
+
+- Generated source: SMW's banks are about 13% smaller (banks $03-$0F now fall
+  under the 4 MiB shard threshold and stay one file each). ROMs: SMW
+  8.99 -> 8.24 MB, Pitfall 3.33 -> 3.24 MB, JM2 1.67 -> 1.65 MB.
+- JM2 bank $80 (-Os): FPU 70,065 -> 62,553 bytes; struct 69,021 -> 60,317.
 - State hashes identical to step 3a (SMW 53, Pitfall 12, JM2 25 frames). C and
   Python tests pass.
 

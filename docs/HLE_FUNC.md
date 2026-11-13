@@ -105,15 +105,15 @@ At entry, `cpu` holds the exact guest state at the routine's first
 instruction: A/X/Y/S/D/DB/PB, P with its mirrors, `m_flag`/`x_flag`. The
 helper must leave the state that the original's final instruction leaves.
 
-### Return frame (Option-1 `cpu->S` ABI)
+### Return frame (Option-1 stack ABI)
 
-Generated callers push the real hardware return frame onto `cpu->S` before
+Generated callers push the real hardware return frame onto the stack (S) before
 entering the stub: 2 bytes for `JSR`, 3 for `JSL`, holding return address − 1
 (`codegen._emit_return_frame_push`). Generated code then pops it in the
 callee's own RTS/RTL (`codegen._emit_return`). The stub has no RTS, so:
 
 **The helper must pop exactly what the replaced routine's terminating
-instruction pops:** `cpu->S += 2` for an RTS routine, `cpu->S += 3` for an
+instruction pops:** S += 2 for an RTS routine, S += 3 for an
 RTL routine.
 
 - Pop by the original's return opcode, not by `hrv`. That value
@@ -158,10 +158,11 @@ way must end the same way the generated RTS does.
   [`EXIT_WIDTH_CONTRACTS.md`](EXIT_WIDTH_CONTRACTS.md)). Then make the helper
   leave exactly that width. A mismatch makes the continuation decode operands
   at the wrong width.
-- **P and its mirrors.** Generated code reads the `_flag_*` mirrors and
-  `m_flag`/`x_flag`, and also `P`. Keep them in agreement: set the mirrors and
-  call `cpu_mirrors_to_p(cpu)`, or set `P` and call `cpu_p_to_mirrors(cpu)`.
-  Any flag that the caller tests after the call (for example the carry from a
+- **Flags.** Each flag has one home, reached through `cpu_regs.h`:
+  `cpu_set_nz8(v)` / `cpu_set_nz16(v)` set N and Z from a result,
+  `cpu_set_flag_C(v)`, `cpu_set_flag_V(v)` and the others set one flag, and
+  `cpu_set_P(v)` sets the whole status byte. There is nothing to sync. Any
+  flag that the caller tests after the call (for example the carry from a
   final `CMP`) is part of the contract.
 - **Register widths.** Use `cpu_write_a8/a16/a_m` and the X/Y helpers.
   Writing A in 8-bit mode preserves B. Index writes with `x_flag` set clear the
@@ -208,7 +209,7 @@ call. There are two ways to run original behaviour from a helper:
   RecompReturn HleTextStep(CpuState *cpu, uint32 hrv) {
     prepare(cpu);                                        /* optional pre-work */
     RecompReturn r = interp_tier_run_call_frame(
-        cpu, ((uint32)cpu->PB << 16) | 0x9000, 0x009000, 2 /* RTS frame */, NULL);
+        cpu, ((uint32)cpu_PB() << 16) | 0x9000, 0x009000, 2 /* RTS frame */, NULL);
     if (r != RECOMP_RETURN_NORMAL) return r;             /* NLR / yield */
     finish(cpu);                                         /* optional post-work */
     return RECOMP_RETURN_NORMAL;
@@ -244,15 +245,13 @@ hle_func 9000 HleMaxA
 
 RecompReturn HleMaxA(CpuState *cpu, uint32 hrv) {
   uint8 a = cpu_read_a8(cpu);
-  uint8 m = cpu_read8(cpu, 0x00, (uint16)(cpu->D + 0x40));
+  uint8 m = cpu_read8(cpu, 0x00, (uint16)(cpu_D() + 0x40));
   uint8 r = a > m ? a : m;
   cpu_write_a8(cpu, r);                 /* 8-bit A: B preserved */
-  cpu->_flag_Z = r == 0;
-  cpu->_flag_N = (r & 0x80) != 0;
-  cpu_mirrors_to_p(cpu);
+  cpu_set_nz8(r);                       /* N and Z */
   g_master_cycles += 17 * 8;            /* the replaced path, incl. RTS:
                                            17 cycles in SlowROM bank $00 */
-  cpu->S = (uint16)(cpu->S + 2);        /* the original's RTS */
+  cpu_set_S((uint16)(cpu_S() + 2));     /* the original's RTS */
   return RECOMP_RETURN_NORMAL;
 }
 ```
@@ -275,7 +274,7 @@ the instructions on the replaced path.
 
 ## Pitfalls
 
-- **No frame pop.** This is the most common mistake. The symptom is `cpu->S`
+- **No frame pop.** This is the most common mistake. The symptom is S
   drift, then stack corruption, or a continuation that runs twice.
 - **Undeclared width change.** The original ends with `REP`/`SEP` but the cfg
   has no `exit_mx`.

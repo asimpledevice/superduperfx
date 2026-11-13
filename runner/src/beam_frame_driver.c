@@ -81,7 +81,7 @@ static bool irq_line_asserted(void) {
 }
 
 static bool irq_wanted(void) {
-  return !g_cpu._flag_I && irq_line_asserted();
+  return !cpu_flag_I() && irq_line_asserted();
 }
 
 /* Master clocks the CPU has spent that the beam has not walked yet: the walk

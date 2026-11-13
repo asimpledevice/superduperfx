@@ -60,7 +60,7 @@ def runtime_code_speed(pc24: int):
 # reads are the accessor calls `cpu_A()` etc. Code that holds a register's
 # read text as a "field" assigns through here, so the same text works for a
 # register and for a plain variable.
-_ACCESSOR = re.compile(r"cpu_(A|X|Y|S|D|DB|PB|P|m_flag|x_flag|emulation)\(\)")
+_ACCESSOR = re.compile(r"cpu_(A|X|Y|S|D|DB|PB|P|m_flag|x_flag|emulation|flag_[NVZCID])\(\)")
 
 
 def assign(target: str, value: str) -> str:
@@ -132,46 +132,44 @@ def stack_op_traced(op_id: str, delta: int, body: List[str]) -> List[str]:
     ]
 
 
-# ── REP/SEP P-mirror sync envelope (DRY_REFACTOR follow-up D) ──────────
+# ── REP/SEP ────────────────────────────────────────────────────────────
 #
-# REP and SEP modify the packed `cpu->P` byte. To stay correct, the
-# canonical envelope is:
-#   1. save old P for trace
-#   2. cpu_mirrors_to_p — sync mirrors INTO P (so freshly-set _flag_Z/N
-#      from a prior ALU op aren't clobbered when we modify P)
-#   3. modify cpu->P (REP: AND ~mask; SEP: OR mask)
-#   4. cpu_p_to_mirrors — sync P back to mirrors
-#   5. cpu_trace_px_record(REP or SEP, _old_p, cpu->P)
-#
-# 44c96a7 fixed the regression where step 2 was missing.
+# P is kept in parts (runner/src/cpu_regs.h): M, X, I and D as bits of
+# P_mxid, N/Z as the last result, C and V on their own. REP and SEP change
+# only the parts their mask names.
 
 # Trace-event kind constants (match cpu_trace.h):
 PX_REP = 0  # /*REP*/
 PX_SEP = 1  # /*SEP*/
 
-def modify_p_via_mirrors(mask: int, kind: str) -> List[str]:
-    """Emit the 5-statement REP/SEP envelope as a list of raw C
-    statements (no leading indent, no enclosing braces).
-
-    kind: "rep" → AND ~mask (clear bits); "sep" → OR mask (set bits).
-    """
-    if kind == "rep":
-        modify = f"cpu_set_P((uint8)(cpu_P() & ~{mask:#04x}));"
-        px_kind = PX_REP
-        px_label = "REP"
-    elif kind == "sep":
-        modify = f"cpu_set_P((uint8)(cpu_P() | {mask:#04x}));"
-        px_kind = PX_SEP
-        px_label = "SEP"
-    else:
+def modify_p(mask: int, kind: str) -> List[str]:
+    """REP (kind "rep": clear the mask's bits) or SEP ("sep": set them), as
+    raw C statements (no leading indent, no enclosing braces)."""
+    if kind not in ("rep", "sep"):
         raise ValueError(f"kind must be 'rep' or 'sep', got {kind!r}")
-    return [
-        "uint8 _old_p = cpu_P();",
-        "cpu_mirrors_to_p(cpu);",
-        modify,
-        "cpu_p_to_mirrors(cpu);",
-        f"cpu_trace_px_record(cpu, 0, {px_kind} /*{px_label}*/, _old_p, cpu_P());",
-    ]
+    sep = kind == "sep"
+    v = 1 if sep else 0
+    lines = ["uint8 _old_p = cpu_P();"]
+    mxid = mask & 0x3C
+    if mxid:
+        op = f"| {mxid:#04x}u" if sep else f"& ~{mxid:#04x}u"
+        lines.append(f"cpu_set_P_mxid(cpu_P_mxid() {op});")
+        if sep and mxid & 0x10:
+            # 8-bit index registers have no high byte.
+            lines.append("cpu_set_X(cpu_X() & 0xFFu); cpu_set_Y(cpu_Y() & 0xFFu);")
+    if mask & 0x01:
+        lines.append(f"cpu_set_flag_C({v});")
+    if mask & 0x40:
+        lines.append(f"cpu_set_flag_V({v});")
+    if (mask & 0x82) == 0x82:
+        lines.append(f"cpu_set_flags_nz({v}, {v});")
+    elif mask & 0x80:
+        lines.append(f"cpu_set_flag_N({v});")
+    elif mask & 0x02:
+        lines.append(f"cpu_set_flag_Z({v});")
+    px_kind, px_label = (PX_SEP, "SEP") if sep else (PX_REP, "REP")
+    lines.append(f"cpu_trace_px_record(cpu, 0, {px_kind} /*{px_label}*/, _old_p, cpu_P());")
+    return lines
 
 
 def pb_save_restore_envelope(

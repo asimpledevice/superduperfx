@@ -430,7 +430,7 @@ static int g_fail = 0, g_check = 0;
 static void init_cpu(void) {
     memset(&g_cpu, 0, sizeof g_cpu);
     cpu_set_S(0x01FF); cpu_set_emulation(1); cpu_set_m_flag(1); cpu_set_x_flag(1);
-    g_cpu._flag_I = 1; cpu_mirrors_to_p(&g_cpu);
+    cpu_set_flag_I(1);
 }
 static void load(uint32 pc24, const uint8_t *code, int len) {
     memcpy(bus_at(pc24 & 0xFFFFFF), code, (size_t)len);
@@ -491,8 +491,7 @@ typedef struct {
 static S18Run s18_run(const uint8_t *code, int len, uint32_t declare, int i_flag) {
     S18Run r; memset(&r, 0, sizeof r);
     bus_clear(); init_cpu();
-    cpu_set_emulation(0); g_cpu._flag_I = (uint8)(i_flag ? 1 : 0);
-    cpu_mirrors_to_p(&g_cpu);
+    cpu_set_emulation(0); cpu_set_flag_I((uint8)(i_flag ? 1 : 0));
     load(0x8900, code, len);
     (*bus_at(0x2140)) = 0xAA;                       /* an APU port that reads non-zero */
     interp_bridge_reset_dynamic_cache();
@@ -509,7 +508,6 @@ static S18Run s18_run(const uint8_t *code, int len, uint32_t declare, int i_flag
     r.rc = interp_bridge_run_until_quiescent(&g_cpu, 0x008900);
     g_interp_bridge_pc_hook = NULL;
     interp_bridge_set_master_deadline(0);
-    cpu_mirrors_to_p(&g_cpu);
     r.master = g_master_cycles;
     r.resume = interp_bridge_lle_resume_pc();
     r.site = -1;
@@ -547,7 +545,7 @@ typedef struct { int rc, site; unsigned steps; uint32_t resume; uint16_t a; } S1
 static S19Run s19_run(const uint8_t *code, int len, int x16) {
     S19Run r; memset(&r, 0, sizeof r);
     bus_clear(); init_cpu();
-    cpu_set_emulation(0); cpu_set_x_flag(x16 ? 0 : 1); cpu_mirrors_to_p(&g_cpu);
+    cpu_set_emulation(0); cpu_set_x_flag(x16 ? 0 : 1);
     load(0x8A00, code, len);
     interp_bridge_reset_dynamic_cache();
     g_master_cycles = 1000;
@@ -1221,7 +1219,6 @@ int main(void) {
      * SKIP_1 even when the synthetic resolver has no matching ancestor. */
     { bus_clear(); init_cpu(); g_post_return_skip = 0;
       cpu_set_emulation(0); cpu_set_m_flag(0); cpu_set_x_flag(0);
-      cpu_mirrors_to_p(&g_cpu);
       uint8_t c[] = {0x68,0x6B};              /* PLA (16-bit) ; RTL */
       load(0x8400, c, sizeof c);
       cpu_push_jsl_return_frame(&g_cpu);        /* compiled caller's outer frame */
@@ -1251,7 +1248,7 @@ int main(void) {
      * distinguish an ordinary continuation whose entry equals its site. */
     for (unsigned tail = 0; tail < 2; ++tail) {
       bus_clear(); init_cpu(); g_post_return_skip = 0;
-      cpu_set_emulation(0); cpu_set_PB(0xA6); cpu_mirrors_to_p(&g_cpu);
+      cpu_set_emulation(0); cpu_set_PB(0xA6);
       uint8_t jump[] = {0xDC,0x00,0x10}; /* JML [$1000] */
       uint8_t body[] = {0xA9,0x07,0x60}; /* LDA #7 ; RTS */
       load(0xA69000, jump, sizeof jump); load(0xA69100, body, sizeof body);
@@ -1264,7 +1261,7 @@ int main(void) {
             "mirrored indirect tail=%u r=%d S=%04X A=%04X", tail, r, cpu_S(), cpu_A());
     }
     { bus_clear(); init_cpu(); g_post_return_skip = 0;
-      cpu_set_emulation(0); cpu_set_PB(0xA6); cpu_mirrors_to_p(&g_cpu);
+      cpu_set_emulation(0); cpu_set_PB(0xA6);
       uint8_t body[] = {0xA9,0x07,0x60};
       load(0xA69200, body, sizeof body); cpu_push_jsr_return_frame(&g_cpu);
       RecompReturn r = interp_tier_dispatch_balanced(
@@ -1690,7 +1687,7 @@ int main(void) {
       };
       for (unsigned k = 0; k < sizeof cases / sizeof cases[0]; k++) {
         bus_clear(); init_cpu();
-        cpu_set_emulation(0); cpu_mirrors_to_p(&g_cpu);
+        cpu_set_emulation(0);
         load(0x8B00, code, sizeof code);
         interp_bridge_reset_dynamic_cache();
         g_master_cycles = 1000;

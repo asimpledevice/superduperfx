@@ -110,7 +110,7 @@ void snes_generic_frame_driver_run_frame(void) {
         }
         /* A raster IRQ asserted while the guest ran: service it before
          * continuing, exactly as the CPU samples it between instructions. */
-        if (g_snes->inIrq && !g_cpu._flag_I) {
+        if (g_snes->inIrq && !cpu_flag_I()) {
             run_interrupt(irq_vector(), frame_end);
             continue;
         }

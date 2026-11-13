@@ -176,11 +176,10 @@ static void compiled(RecompEntryFn fn, uint8 p, Outcome *o) {
   memset(&g_cpu, 0, sizeof g_cpu);
   memset(g_ram, 0, sizeof g_ram);
   g_ram[0x40] = g_ram[0x41] = 0xFF;
-  cpu_set_S(0x01FF); cpu_set_P(p); cpu_p_to_mirrors(&g_cpu);
+  cpu_set_S(0x01FF); cpu_set_P(p);
   g_tc_valid = 0; g_recomp_stack_top = 0; g_other_exits = 0;
   cpu_push_jsr_return_frame(&g_cpu);            /* S = $01FD at the BRK */
   fn(&g_cpu, 2);
-  cpu_mirrors_to_p(&g_cpu);
   o->p = cpu_P(); o->pb = cpu_PB(); o->s = cpu_S();
   memcpy(o->stack, &g_ram[0x01FA], 4);
   memcpy(o->zp, &g_ram[0x40], 2);
@@ -252,7 +251,7 @@ int main(void) {
     
     memset(&g_cpu, 0, sizeof g_cpu);
     memset(g_ram, 0, sizeof g_ram);
-    cpu_set_S(0x01FF); cpu_set_P(0x30); cpu_p_to_mirrors(&g_cpu); cpu_set_emulation(1);
+    cpu_set_S(0x01FF); cpu_set_P(0x30); cpu_set_emulation(1);
     g_tc_valid = 0; g_recomp_stack_top = 0; g_other_exits = 0;
     cpu_push_jsr_return_frame(&g_cpu);
     Trip_M1X1(&g_cpu, 2);

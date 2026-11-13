@@ -69,7 +69,7 @@ def test_cond_branch_emits_label_targets():
     assert "L_8004_M1X1:" in src
 
     # Conditional goto on the carry flag.
-    assert "cpu->_flag_C" in src
+    assert "flag_C(" in src
     assert "goto L_8004_M1X1" in src
 
 
@@ -142,23 +142,22 @@ def test_jsr_emits_function_call():
 
 
 def test_alu_emits_carry_chain_for_adc():
-    """ADC #$10 -> emits cpu->_flag_C in carry chain."""
+    """ADC #$10 -> emits a carry chain (C read and set)."""
     rom = make_lorom_bank0({
         0x8000: bytes([0x69, 0x10, 0x60]),  # ADC #$10; RTS
     })
     src = emit_function(rom, bank=0, start=0x8000, entry_m=1, entry_x=1)
-    assert "cpu->_flag_C" in src
+    assert "flag_C(" in src
 
 
-def test_rep_sep_emits_p_updates_with_mirrors():
-    """REP #$30 / SEP #$30 emit P-byte updates + cpu_p_to_mirrors call."""
+def test_rep_sep_emit_p_updates():
+    """REP #$30 / SEP #$30 update P's M and X bits."""
     rom = make_lorom_bank0({
         0x8000: bytes([0xC2, 0x30, 0xE2, 0x30, 0x60]),  # REP, SEP, RTS
     })
     src = emit_function(rom, bank=0, start=0x8000, entry_m=1, entry_x=1)
-    assert "cpu_P()" in src
-    assert "cpu_p_to_mirrors" in src
-    assert "0x30" in src
+    assert "cpu_set_P_mxid(cpu_P_mxid() & ~0x30u);" in src
+    assert "cpu_set_P_mxid(cpu_P_mxid() | 0x30u);" in src
 
 
 def test_wai_bounce_unwind_pops_generated_diagnostic_frame():

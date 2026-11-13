@@ -50,14 +50,12 @@ int main(void) {{
     int fails = 0;
     /* SEP #$10 / PLP / RTI all end in cpu_p_to_mirrors. */
     cpu_set_X(0xF000); cpu_set_Y(0x1234); cpu_set_P(0x30);
-    cpu_p_to_mirrors(&g_cpu);
     fails += check(&g_cpu, 0x0000, 0x0034, "x set");
     /* x clear keeps the 16-bit values. */
     cpu_set_X(0xF000); cpu_set_Y(0x1234); cpu_set_P(0x20);
-    cpu_p_to_mirrors(&g_cpu);
     fails += check(&g_cpu, 0xF000, 0x1234, "x clear");
     /* XCE into emulation forces x = 1. */
-    cpu_set_X(0xABCD); cpu_set_Y(0x5678); cpu_set_emulation(0); g_cpu._flag_C = 1; cpu_set_x_flag(0);
+    cpu_set_X(0xABCD); cpu_set_Y(0x5678); cpu_set_emulation(0); cpu_set_flag_C(1); cpu_set_x_flag(0);
     xce(&g_cpu);
     fails += check(&g_cpu, 0x00CD, 0x0078, "xce");
     return fails;

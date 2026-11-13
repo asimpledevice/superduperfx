@@ -523,9 +523,9 @@ _REG_FIELD = {
     Reg.DB: "cpu_DB()", Reg.PB: "cpu_PB()",
     Reg.P: "cpu_P()",
     Reg.M: "cpu_m_flag()", Reg.XF: "cpu_x_flag()", Reg.E: "cpu_emulation()",
-    Reg.N: "cpu->_flag_N", Reg.V: "cpu->_flag_V",
-    Reg.ZF: "cpu->_flag_Z", Reg.C: "cpu->_flag_C",
-    Reg.I: "cpu->_flag_I", Reg.DF: "cpu->_flag_D",
+    Reg.N: "cpu_flag_N()", Reg.V: "cpu_flag_V()",
+    Reg.ZF: "cpu_flag_Z()", Reg.C: "cpu_flag_C()",
+    Reg.I: "cpu_flag_I()", Reg.DF: "cpu_flag_D()",
 }
 
 
@@ -737,71 +737,71 @@ def _emit_addsub(tname, lhs_m, rhs_m, out_v, width, is_sub) -> List[str]:
     point interp816 does (after the nibble add, before the final >9.. fixup)."""
     ct = widths.ctype(width)
     L, R = lhs_m, rhs_m
-    lines = [f"{ct} {out_v};", "if (cpu->_flag_D) {"]
+    lines = [f"{ct} {out_v};", "if (cpu_flag_D()) {"]
     if not is_sub:
         if width == 1:
             bcd = [
-                f"int _bcd = ({L} & 0xf) + ({R} & 0xf) + cpu->_flag_C;",
+                f"int _bcd = ({L} & 0xf) + ({R} & 0xf) + cpu_flag_C();",
                 "if (_bcd > 0x9) _bcd = ((_bcd + 0x6) & 0xf) + 0x10;",
                 f"_bcd = ({L} & 0xf0) + ({R} & 0xf0) + _bcd;",
-                f"cpu->_flag_V = (({L} & 0x80) == ({R} & 0x80)) && (({R} & 0x80) != (_bcd & 0x80)) ? 1 : 0;",
+                f"cpu_set_flag_V((({L} & 0x80) == ({R} & 0x80)) && (({R} & 0x80) != (_bcd & 0x80)) ? 1 : 0);",
                 "if (_bcd > 0x9f) _bcd += 0x60;",
-                "cpu->_flag_C = (_bcd > 0xff) ? 1 : 0;",
+                "cpu_set_flag_C((_bcd > 0xff) ? 1 : 0);",
                 f"{out_v} = (uint8)(_bcd & 0xff);",
             ]
         else:
             bcd = [
-                f"int _bcd = ({L} & 0xf) + ({R} & 0xf) + cpu->_flag_C;",
+                f"int _bcd = ({L} & 0xf) + ({R} & 0xf) + cpu_flag_C();",
                 "if (_bcd > 0x9) _bcd = ((_bcd + 0x6) & 0xf) + 0x10;",
                 f"_bcd = ({L} & 0xf0) + ({R} & 0xf0) + _bcd;",
                 "if (_bcd > 0x9f) _bcd = ((_bcd + 0x60) & 0xff) + 0x100;",
                 f"_bcd = ({L} & 0xf00) + ({R} & 0xf00) + _bcd;",
                 "if (_bcd > 0x9ff) _bcd = ((_bcd + 0x600) & 0xfff) + 0x1000;",
                 f"_bcd = ({L} & 0xf000) + ({R} & 0xf000) + _bcd;",
-                f"cpu->_flag_V = (({L} & 0x8000) == ({R} & 0x8000)) && (({R} & 0x8000) != (_bcd & 0x8000)) ? 1 : 0;",
+                f"cpu_set_flag_V((({L} & 0x8000) == ({R} & 0x8000)) && (({R} & 0x8000) != (_bcd & 0x8000)) ? 1 : 0);",
                 "if (_bcd > 0x9fff) _bcd += 0x6000;",
-                "cpu->_flag_C = (_bcd > 0xffff) ? 1 : 0;",
+                "cpu_set_flag_C((_bcd > 0xffff) ? 1 : 0);",
                 f"{out_v} = (uint16)_bcd;",
             ]
     else:
         if width == 1:
             bcd = [
                 f"int _bcv = ({R} ^ 0xff) & 0xff;",
-                f"int _bcd = ({L} & 0xf) + (_bcv & 0xf) + cpu->_flag_C;",
+                f"int _bcd = ({L} & 0xf) + (_bcv & 0xf) + cpu_flag_C();",
                 "if (_bcd < 0x10) _bcd = (_bcd - 0x6) & ((_bcd - 0x6 < 0) ? 0xf : 0x1f);",
                 f"_bcd = ({L} & 0xf0) + (_bcv & 0xf0) + _bcd;",
-                f"cpu->_flag_V = (({L} & 0x80) == (_bcv & 0x80)) && ((_bcv & 0x80) != (_bcd & 0x80)) ? 1 : 0;",
+                f"cpu_set_flag_V((({L} & 0x80) == (_bcv & 0x80)) && ((_bcv & 0x80) != (_bcd & 0x80)) ? 1 : 0);",
                 "if (_bcd < 0x100) _bcd -= 0x60;",
-                "cpu->_flag_C = (_bcd > 0xff) ? 1 : 0;",
+                "cpu_set_flag_C((_bcd > 0xff) ? 1 : 0);",
                 f"{out_v} = (uint8)(_bcd & 0xff);",
             ]
         else:
             bcd = [
                 f"int _bcv = ({R} ^ 0xffff) & 0xffff;",
-                f"int _bcd = ({L} & 0xf) + (_bcv & 0xf) + cpu->_flag_C;",
+                f"int _bcd = ({L} & 0xf) + (_bcv & 0xf) + cpu_flag_C();",
                 "if (_bcd < 0x10) _bcd = (_bcd - 0x6) & ((_bcd - 0x6 < 0) ? 0xf : 0x1f);",
                 f"_bcd = ({L} & 0xf0) + (_bcv & 0xf0) + _bcd;",
                 "if (_bcd < 0x100) _bcd = (_bcd - 0x60) & ((_bcd - 0x60 < 0) ? 0xff : 0x1ff);",
                 f"_bcd = ({L} & 0xf00) + (_bcv & 0xf00) + _bcd;",
                 "if (_bcd < 0x1000) _bcd = (_bcd - 0x600) & ((_bcd - 0x600 < 0) ? 0xfff : 0x1fff);",
                 f"_bcd = ({L} & 0xf000) + (_bcv & 0xf000) + _bcd;",
-                f"cpu->_flag_V = (({L} & 0x8000) == (_bcv & 0x8000)) && ((_bcv & 0x8000) != (_bcd & 0x8000)) ? 1 : 0;",
+                f"cpu_set_flag_V((({L} & 0x8000) == (_bcv & 0x8000)) && ((_bcv & 0x8000) != (_bcd & 0x8000)) ? 1 : 0);",
                 "if (_bcd < 0x10000) _bcd -= 0x6000;",
-                "cpu->_flag_C = (_bcd > 0xffff) ? 1 : 0;",
+                "cpu_set_flag_C((_bcd > 0xffff) ? 1 : 0);",
                 f"{out_v} = (uint16)_bcd;",
             ]
     lines += ["  " + s for s in bcd]
     lines.append("} else {")
     if not is_sub:
         bin_lines = [
-            f"uint32 {tname} = (uint32){L} + (uint32){R} + cpu->_flag_C;",
+            f"uint32 {tname} = (uint32){L} + (uint32){R} + cpu_flag_C();",
             f"{out_v} = ({ct}){tname};",
             widths.set_carry_from_overflow(tname, width, "add"),
             widths.set_v_adc(L, R, out_v, width),
         ]
     else:
         bin_lines = [
-            f"uint32 {tname} = (uint32){L} - (uint32){R} - (1 - cpu->_flag_C);",
+            f"uint32 {tname} = (uint32){L} - (uint32){R} - (1 - cpu_flag_C());",
             f"{out_v} = ({ct}){tname};",
             widths.set_carry_from_overflow(tname, width, "sub"),
             widths.set_v_sbc(L, R, out_v, width),
@@ -854,18 +854,13 @@ def _emit_alu(op: Alu) -> List[str]:
         lines.append(
             f"uint32 {tname} = (uint32){lhs_m} - (uint32){rhs_m};"
         )
-        lines.append(f"cpu->_flag_C = ({lhs_m} >= {rhs_m}) ? 1 : 0;")
-        # CMP doesn't update cpu->P here either — historical
-        # behavior matched _emit_shift; both now route through helpers.
-        lines.extend(widths.set_nz_no_p(f"({widths.ctype(op.width)}){tname}", op.width))
+        lines.append(f"cpu_set_flag_C(({lhs_m} >= {rhs_m}) ? 1 : 0);")
+        lines.extend(widths.set_nz(f"({widths.ctype(op.width)}){tname}", op.width))
         return lines
 
     if op.out is not None:
-        # Result is already in width-typed _v(op.out), so set N/Z from
-        # it. Skip cpu->P update for ALU (preserves historical
-        # behavior; SEP/REP at next mode boundary will resync via
-        # cpu_mirrors_to_p as fixed in 44c96a7).
-        lines.extend(widths.set_nz_no_p(_v(op.out), op.width))
+        # Result is already in width-typed _v(op.out), so set N/Z from it.
+        lines.extend(widths.set_nz(_v(op.out), op.width))
     return lines
 
 
@@ -881,25 +876,25 @@ def _emit_shift(op: Shift) -> List[str]:
         return [
             f"{out_t} {out_v} = ({out_t})({src_m} << 1);",
             widths.set_carry_from_bit(src_m, sign),
-        ] + widths.set_nz_no_p(out_v, op.width)
+        ] + widths.set_nz(out_v, op.width)
     if op.op == ShiftOp.LSR:
         return [
             f"{out_t} {out_v} = ({out_t})({src_m} >> 1);",
             widths.set_carry_from_bit(src_m, "1"),
-        ] + widths.set_nz_no_p(out_v, op.width)
+        ] + widths.set_nz(out_v, op.width)
     if op.op == ShiftOp.ROL:
         return [
             f"{out_t} {out_v} = "
-            f"({out_t})(({src_m} << 1) | cpu->_flag_C);",
+            f"({out_t})(({src_m} << 1) | cpu_flag_C());",
             widths.set_carry_from_bit(src_m, sign),
-        ] + widths.set_nz_no_p(out_v, op.width)
+        ] + widths.set_nz(out_v, op.width)
     if op.op == ShiftOp.ROR:
         return [
             f"{out_t} {out_v} = "
             f"({out_t})(({src_m} >> 1) | "
-            f"((uint{op.width*8})cpu->_flag_C << {op.width * 8 - 1}));",
+            f"((uint{op.width*8})cpu_flag_C() << {op.width * 8 - 1}));",
             widths.set_carry_from_bit(src_m, "1"),
-        ] + widths.set_nz_no_p(out_v, op.width)
+        ] + widths.set_nz(out_v, op.width)
     raise ValueError(f"unhandled Shift op {op.op}")
 
 
@@ -922,10 +917,10 @@ def _emit_increg(op: IncReg) -> List[str]:
         lines = [f"if (cpu_m_flag()) {{",
                  f"  uint8 _lo8 = ({widths.low_byte(field)}) + ({delta});",
                  "  " + emitter_helpers.assign(field, widths.preserve_high(field, '_lo8'))]
-        lines.extend(f"  {s}" for s in widths.set_nz_no_p("_lo8", 1))
+        lines.extend(f"  {s}" for s in widths.set_nz("_lo8", 1))
         lines.append("} else {")
         lines.append("  " + emitter_helpers.assign(field, f"(uint16)(({field}) + ({delta}))"))
-        lines.extend(f"  {s}" for s in widths.set_nz_no_p(field, 2))
+        lines.extend(f"  {s}" for s in widths.set_nz(field, 2))
         lines.append("}")
         return lines
     if op.reg in (Reg.X, Reg.Y):
@@ -934,14 +929,14 @@ def _emit_increg(op: IncReg) -> List[str]:
                  f"  uint8 _lo8 = ({widths.low_byte(field)}) + ({delta});",
                  "  " + emitter_helpers.assign(field, widths.zero_extend_lo('_lo8'))
                  + "  /* x=1 zeros high byte (hw contract) */"]
-        lines.extend(f"  {s}" for s in widths.set_nz_no_p("_lo8", 1))
+        lines.extend(f"  {s}" for s in widths.set_nz("_lo8", 1))
         lines.append("} else {")
         lines.append("  " + emitter_helpers.assign(field, f"(uint16)(({field}) + ({delta}))"))
-        lines.extend(f"  {s}" for s in widths.set_nz_no_p(field, 2))
+        lines.extend(f"  {s}" for s in widths.set_nz(field, 2))
         lines.append("}")
         return lines
     # Other registers (D, S) — always 16-bit native.
-    return [emitter_helpers.assign(field, f"({field}) + ({delta})")] + widths.set_nz_no_p(field, 2)
+    return [emitter_helpers.assign(field, f"({field}) + ({delta})")] + widths.set_nz(field, 2)
 
 
 def _emit_incmem(op: IncMem) -> List[str]:
@@ -957,7 +952,7 @@ def _emit_incmem(op: IncMem) -> List[str]:
         f"  _im = ({ctype})(_im {delta});",
         f"  {widths.write_fn(op.width)}(cpu, {bank}, {addr}, _im);",
     ]
-    lines.extend(f"  {s}" for s in widths.set_nz_no_p("_im", op.width))
+    lines.extend(f"  {s}" for s in widths.set_nz("_im", op.width))
     lines.append("}")
     return lines
 
@@ -976,15 +971,14 @@ def _emit_bittest(op: BitTest) -> List[str]:
         return [
             "{",
             f"  {ctype} _bt = ({ctype})({a_m} & {operand_m});",
-            f"  cpu->_flag_Z = (_bt == 0) ? 1 : 0;",
+            f"  cpu_set_flag_Z((_bt == 0) ? 1 : 0);",
             "}",
         ]
     return [
         "{",
         f"  {ctype} _bt = ({ctype})({a_m} & {operand_m});",
-        f"  cpu->_flag_Z = (_bt == 0) ? 1 : 0;",
-        f"  cpu->_flag_N = (({operand_m} & {sign}) != 0) ? 1 : 0;",
-        f"  cpu->_flag_V = (({operand_m} & {overflow}) != 0) ? 1 : 0;",
+        f"  cpu_set_flags_nz((({operand_m} & {sign}) != 0) ? 1 : 0, (_bt == 0) ? 1 : 0);",
+        f"  cpu_set_flag_V((({operand_m} & {overflow}) != 0) ? 1 : 0);",
         "}",
     ]
 
@@ -995,7 +989,7 @@ def _emit_bitsetmem(op: BitSetMem) -> List[str]:
     return [
         "{",
         f"  {ctype} _m = {widths.read_fn(op.width)}(cpu, {bank}, {addr});",
-        f"  cpu->_flag_Z = ((_m & cpu_A()) == 0) ? 1 : 0;",
+        f"  cpu_set_flag_Z(((_m & cpu_A()) == 0) ? 1 : 0);",
         f"  {widths.write_fn(op.width)}(cpu, {bank}, {addr}, _m | cpu_A());",
         "}",
     ]
@@ -1007,43 +1001,30 @@ def _emit_bitclearmem(op: BitClearMem) -> List[str]:
     return [
         "{",
         f"  {ctype} _m = {widths.read_fn(op.width)}(cpu, {bank}, {addr});",
-        f"  cpu->_flag_Z = ((_m & cpu_A()) == 0) ? 1 : 0;",
+        f"  cpu_set_flag_Z(((_m & cpu_A()) == 0) ? 1 : 0);",
         f"  {widths.write_fn(op.width)}(cpu, {bank}, {addr}, _m & ~cpu_A());",
         "}",
     ]
 
 
 def _emit_setflag(op: SetFlag) -> List[str]:
-    # Update both the per-flag mirror and the canonical cpu->P bit,
-    # so subsequent PHP / direct cpu->P reads see a consistent byte.
-    flag_to_p_mask = {
-        Reg.C: "0x01", Reg.ZF: "0x02", Reg.I: "0x04", Reg.DF: "0x08",
-        Reg.XF: "0x10", Reg.M: "0x20", Reg.V: "0x40", Reg.N: "0x80",
-    }
-    mask = flag_to_p_mask.get(op.flag)
-    lines = [emitter_helpers.assign(_reg(op.flag), str(op.value))]
-    if mask is not None:
-        if op.value:
-            lines.append(f"cpu_set_P((uint8)(cpu_P() | {mask}));")
-        else:
-            lines.append(f"cpu_set_P((uint8)(cpu_P() & ~{mask}));")
-    return lines
+    # Each flag has its own home (cpu_regs.h); P is assembled when read.
+    return [emitter_helpers.assign(_reg(op.flag), str(op.value))]
 
 
 def _emit_setnz(op) -> List[str]:
-    """Update N/Z mirrors and cpu_P() bits based on op.src's bits."""
+    """N and Z from op.src (the last result)."""
     return widths.set_nz(widths.masked(_v(op.src), op.width), op.width)
 
 
 def _emit_repflags(op: RepFlags) -> List[str]:
-    # mirrors_to_p BEFORE modifying P (44c96a7) — see emitter_helpers.
     return ["{"] + [f"  {s}" for s in
-                    emitter_helpers.modify_p_via_mirrors(op.mask, "rep")] + ["}"]
+                    emitter_helpers.modify_p(op.mask, "rep")] + ["}"]
 
 
 def _emit_sepflags(op: SepFlags) -> List[str]:
     return ["{"] + [f"  {s}" for s in
-                    emitter_helpers.modify_p_via_mirrors(op.mask, "sep")] + ["}"]
+                    emitter_helpers.modify_p(op.mask, "sep")] + ["}"]
 
 
 def _emit_xce(op: XCE) -> List[str]:
@@ -1051,10 +1032,9 @@ def _emit_xce(op: XCE) -> List[str]:
         "{",
         "  uint8 _old_p = cpu_P();",
         "  uint8 _t = cpu_emulation();",
-        "  cpu_set_emulation(cpu->_flag_C);",
-        "  cpu->_flag_C = _t;",
-        "  if (cpu_emulation()) { cpu_set_m_flag(1); cpu_set_x_flag(1); cpu_set_X(cpu_X() & (0xFFu)); cpu_set_Y(cpu_Y() & (0xFFu));",
-        "                        cpu_mirrors_to_p(cpu); }",
+        "  cpu_set_emulation(cpu_flag_C());",
+        "  cpu_set_flag_C(_t);",
+        "  if (cpu_emulation()) { cpu_set_m_flag(1); cpu_set_x_flag(1); cpu_set_X(cpu_X() & (0xFFu)); cpu_set_Y(cpu_Y() & (0xFFu)); }",
         "  cpu_trace_px_record(cpu, 0, 7 /*XCE*/, _old_p, cpu_P());",
         "}",
     ]
@@ -1081,8 +1061,7 @@ def _emit_xba(op: XBA) -> List[str]:
         "{",
         "  uint16 _old = cpu_A();",
         "  cpu_set_A((uint16)(((_old & 0xFF) << 8) | ((_old >> 8) & 0xFF)));",
-        "  cpu->_flag_Z = ((cpu_A() & 0xFF) == 0) ? 1 : 0;",
-        "  cpu->_flag_N = ((cpu_A() & 0x80) != 0) ? 1 : 0;",
+        "  cpu_set_nz8(cpu_A());",
         "}",
     ]
 
@@ -1094,7 +1073,6 @@ def _emit_pushreg(op: PushReg) -> List[str]:
     if op.reg == Reg.P:
         # PHP also records the P-mutation ring snapshot.
         return [
-            "cpu_mirrors_to_p(cpu);",
             *emitter_helpers.stack_op_traced(
                 "CPU_STACK_OP_PHP", -1,
                 emitter_helpers.push_byte(f"(uint8)({field})")),
@@ -1185,7 +1163,6 @@ def _emit_pullreg(op: PullReg) -> List[str]:
     if op.reg == Reg.P:
         return ["{ uint8 _old_p = cpu_P(); uint16 _old_s = cpu_S();",
                 *(f"  {s}" for s in emitter_helpers.pop_byte_assign(field)),
-                "  cpu_p_to_mirrors(cpu);",
                 "  cpu_trace_stack_op(cpu, 0, CPU_STACK_OP_PLP, _old_s, +1);",
                 "  cpu_trace_event(cpu, 0, CPU_TR_PLP, _old_p, cpu_P());",
                 "  cpu_trace_px_record(cpu, 0, 2 /*PLP*/, _old_p, cpu_P()); }"]
@@ -1210,9 +1187,6 @@ def _emit_pullreg(op: PullReg) -> List[str]:
         return emitter_helpers.stack_op_traced(
             "CPU_STACK_OP_PLD", +2,
             emitter_helpers.pop_word_assign(field) + widths.set_nz(field, 2))
-    # Final cpu->P sync line — both A and X/Y end with the same packed-flag update.
-    p_sync = ("cpu_set_P((uint8)((cpu_P() & ~0x82) | "
-              "(cpu->_flag_Z ? 0x02 : 0) | (cpu->_flag_N ? 0x80 : 0)));")
     if op.reg == Reg.A:
         # PLA: width follows M. Preserve B (high byte) in m=1.
         # Prefer decoder static `op.static_m` over runtime cpu->m_flag
@@ -1223,30 +1197,30 @@ def _emit_pullreg(op: PullReg) -> List[str]:
                 "{ uint16 _old_s = cpu_S();",
                 *(f"  {s}" for s in emitter_helpers.pop_byte_assign("uint8 _v")),
                 "  " + emitter_helpers.assign(field, widths.preserve_high(field, '_v')),
-                *(f"  {s}" for s in widths.set_nz_no_p("_v", 1)),
+                *(f"  {s}" for s in widths.set_nz("_v", 1)),
                 "  cpu_trace_stack_op(cpu, 0, CPU_STACK_OP_PLA, _old_s, +1);",
-                f"  {p_sync} }}",
+                "}",
             ]
         if op.static_m == 0:
             return [
                 "{ uint16 _old_s = cpu_S();",
                 *(f"  {s}" for s in emitter_helpers.pop_word_assign(field)),
-                *(f"  {s}" for s in widths.set_nz_no_p(field, 2)),
+                *(f"  {s}" for s in widths.set_nz(field, 2)),
                 "  cpu_trace_stack_op(cpu, 0, CPU_STACK_OP_PLA, _old_s, +2);",
-                f"  {p_sync} }}",
+                "}",
             ]
         lines = ["{ uint16 _old_s = cpu_S();",
                  "  if (cpu_m_flag()) {",
                  *(f"    {s}" for s in emitter_helpers.pop_byte_assign("uint8 _v")),
                  "    " + emitter_helpers.assign(field, widths.preserve_high(field, '_v')),
-                 *(f"    {s}" for s in widths.set_nz_no_p("_v", 1)),
+                 *(f"    {s}" for s in widths.set_nz("_v", 1)),
                  "    cpu_trace_stack_op(cpu, 0, CPU_STACK_OP_PLA, _old_s, +1);",
                  "  } else {",
                  *(f"    {s}" for s in emitter_helpers.pop_word_assign(field)),
-                 *(f"    {s}" for s in widths.set_nz_no_p(field, 2)),
+                 *(f"    {s}" for s in widths.set_nz(field, 2)),
                  "    cpu_trace_stack_op(cpu, 0, CPU_STACK_OP_PLA, _old_s, +2);",
                  "  }",
-                 f"  {p_sync} }}"]
+                 "}"]
         return lines
     if op.reg in (Reg.X, Reg.Y):
         op_id = "CPU_STACK_OP_PLX" if op.reg == Reg.X else "CPU_STACK_OP_PLY"
@@ -1260,31 +1234,31 @@ def _emit_pullreg(op: PullReg) -> List[str]:
                 *(f"  {s}" for s in emitter_helpers.pop_byte_assign("uint8 _v")),
                 "  " + emitter_helpers.assign(field, widths.zero_extend_lo('_v'))
                 + "  /* x=1 zeros high byte (hw contract) */",
-                *(f"  {s}" for s in widths.set_nz_no_p("_v", 1)),
+                *(f"  {s}" for s in widths.set_nz("_v", 1)),
                 f"  cpu_trace_stack_op(cpu, 0, {op_id}, _old_s, +1);",
-                f"  {p_sync} }}",
+                "}",
             ]
         if op.static_x == 0:
             return [
                 "{ uint16 _old_s = cpu_S();",
                 *(f"  {s}" for s in emitter_helpers.pop_word_assign(field)),
-                *(f"  {s}" for s in widths.set_nz_no_p(field, 2)),
+                *(f"  {s}" for s in widths.set_nz(field, 2)),
                 f"  cpu_trace_stack_op(cpu, 0, {op_id}, _old_s, +2);",
-                f"  {p_sync} }}",
+                "}",
             ]
         lines = ["{ uint16 _old_s = cpu_S();",
                  "  if (cpu_x_flag()) {",
                  *(f"    {s}" for s in emitter_helpers.pop_byte_assign("uint8 _v")),
                  "    " + emitter_helpers.assign(field, widths.zero_extend_lo('_v'))
                  + "  /* x=1 zeros high byte (hw contract) */",
-                 *(f"    {s}" for s in widths.set_nz_no_p("_v", 1)),
+                 *(f"    {s}" for s in widths.set_nz("_v", 1)),
                  f"    cpu_trace_stack_op(cpu, 0, {op_id}, _old_s, +1);",
                  "  } else {",
                  *(f"    {s}" for s in emitter_helpers.pop_word_assign(field)),
-                 *(f"    {s}" for s in widths.set_nz_no_p(field, 2)),
+                 *(f"    {s}" for s in widths.set_nz(field, 2)),
                  f"    cpu_trace_stack_op(cpu, 0, {op_id}, _old_s, +2);",
                  "  }",
-                 f"  {p_sync} }}"]
+                 "}"]
         return lines
     return [f"/* TODO PullReg({op.reg}) */"]
 
@@ -1334,14 +1308,11 @@ def _emit_transfer(op: Transfer) -> List[str]:
     lines = [f"if ({flag}) {{",
              f"  uint8 _v = {widths.low_byte(src)};",
              f"  {dst_8bit}"]
-    lines.extend(f"  {s}" for s in widths.set_nz_no_p("_v", 1))
+    lines.extend(f"  {s}" for s in widths.set_nz("_v", 1))
     lines.append("} else {")
     lines.append("  " + emitter_helpers.assign(dst, f"(uint16)({src})"))
-    lines.extend(f"  {s}" for s in widths.set_nz_no_p(dst, 2))
+    lines.extend(f"  {s}" for s in widths.set_nz(dst, 2))
     lines.append("}")
-    # Final cpu->P sync after both branches.
-    lines.append("cpu_set_P((uint8)((cpu_P() & ~0x82) | "
-                 "(cpu->_flag_Z ? 0x02 : 0) | (cpu->_flag_N ? 0x80 : 0)));")
     return lines
 
 
@@ -1673,7 +1644,7 @@ def _emit_indirect_dispatch(insn) -> List[str]:
             )
         if is_rts_stack_dispatch:
             lines.append("  {")
-            for stmt in emitter_helpers.modify_p_via_mirrors(0x30, "sep"):
+            for stmt in emitter_helpers.modify_p(0x30, "sep"):
                 lines.append(f"    {stmt}")
             lines.append("  }")
         lines.append("  switch (_target) {")
@@ -1853,7 +1824,7 @@ def _emit_indirect_dispatch(insn) -> List[str]:
         )
     if is_rts_stack_dispatch:
         lines.append("  {")
-        for stmt in emitter_helpers.modify_p_via_mirrors(0x30, "sep"):
+        for stmt in emitter_helpers.modify_p(0x30, "sep"):
             lines.append(f"    {stmt}")
         lines.append("  }")
     # An index outside the recovered target list is a coverage gap, not an
@@ -2122,11 +2093,7 @@ def _emit_dispatch(insn) -> List[str]:
         # Trampoline contract: dispatched handler observes (m=1, x=1).
         # Mirror the SEP #$30 the long-call helper performs.
         lines.append("  {")
-        lines.append("    uint8 _old_p = cpu_P();")
-        lines.append("    cpu_mirrors_to_p(cpu);")
-        lines.append("    cpu_set_P((uint8)(cpu_P() | 0x30));")
-        lines.append("    cpu_p_to_mirrors(cpu);")
-        lines.append("    cpu_trace_px_record(cpu, 0, 1 /*SEP*/, _old_p, cpu_P());")
+        lines.extend(f"    {stmt}" for stmt in emitter_helpers.modify_p(0x30, "sep"))
         lines.append("  }")
     # Option-1 cpu->S ABI: the ExecutePtr trampoline's own return frame is
     # discarded by the PLA*N IR ops preceding this dispatch (now emitted as
@@ -2222,7 +2189,7 @@ def _emit_return_frame_push(op: 'Call') -> List[str]:
         # not the bank used to name/decode that body (W65C816S table 5-7, 4c).
         pbr = "cpu_PB()" if site is not None else "0xff"
         return [
-            "  /* JSL return frame -> cpu->S (Option-1) */",
+            "  /* JSL return frame -> S (Option-1) */",
             f"  cpu_write8(cpu, 0x00, cpu_S(), {pbr}); cpu_set_S((uint16)(cpu_S() - 1));",
             f"  cpu_write8(cpu, 0x00, cpu_S(), 0x{(ret16 >> 8) & 0xFF:02x}); cpu_set_S((uint16)(cpu_S() - 1));",
             f"  cpu_write8(cpu, 0x00, cpu_S(), 0x{ret16 & 0xFF:02x}); cpu_set_S((uint16)(cpu_S() - 1));",
@@ -2230,7 +2197,7 @@ def _emit_return_frame_push(op: 'Call') -> List[str]:
         ]
     ret16 = ((site + 2) & 0xFFFF) if site is not None else 0xFFFF
     return [
-        "  /* JSR return frame -> cpu->S (Option-1) */",
+        "  /* JSR return frame -> S (Option-1) */",
         f"  cpu_write8(cpu, 0x00, cpu_S(), 0x{(ret16 >> 8) & 0xFF:02x}); cpu_set_S((uint16)(cpu_S() - 1));",
         f"  cpu_write8(cpu, 0x00, cpu_S(), 0x{ret16 & 0xFF:02x}); cpu_set_S((uint16)(cpu_S() - 1));",
         "  _call_hrv = 2;  /* paired host caller, JSR frame */",
@@ -2486,7 +2453,7 @@ def _emit_return(op: Return) -> List[str]:
         # I_NMI/I_IRQ invocation; without that push this over-pops cpu->S.
         return [
             "cpu_trace_event(cpu, 0, CPU_TR_RTI, 0, 0);",
-            "{ cpu_set_S((uint16)(cpu_S() + 1)); cpu_set_P(cpu_read8(cpu, 0x00, cpu_S())); cpu_p_to_mirrors(cpu);",
+            "{ cpu_set_S((uint16)(cpu_S() + 1)); cpu_set_P(cpu_read8(cpu, 0x00, cpu_S()));",
             "  cpu_set_S((uint16)(cpu_S() + 2));  /* pull + discard PC */",
             "  if (!cpu_emulation()) cpu_set_S((uint16)(cpu_S() + 1));  /* native: pull + discard PB */",
             "  cpu_trace_px_record(cpu, 0, 3 /*RTI*/, cpu_P(), cpu_P());",
@@ -2708,7 +2675,6 @@ def _emit_break(op: Break) -> List[str]:
             f"{_transfer_target_expr(site, False)}, 0x{site:06x}u, _entry_s, _hrv);",
             "}",
             "{ uint16 _s = cpu_S();",
-            "  cpu_mirrors_to_p(cpu);",
             "  cpu_write8(cpu, 0x00, _s, cpu_PB());",
             f"  cpu_write8(cpu, 0x00, (uint16)(_s - 1), 0x{ret >> 8:02x});",
             f"  cpu_write8(cpu, 0x00, (uint16)(_s - 2), 0x{ret & 0xFF:02x});",

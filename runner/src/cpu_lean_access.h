@@ -19,7 +19,6 @@
  *   cpu_charge(cpu, n)          = g_master_cycles += n * speed
  *   cpu_charge_dl(cpu)          = if (D & 0xFF) cpu_charge(cpu, 1)
  *   cpu_charge_page(cpu, k, i)  = if ((k & 0xFF00) != ((k + i) & 0xFF00)) cpu_charge(cpu, 1)
- *   cpu_sync_p_nz(cpu)          = P's N and Z bits from the flag mirrors
  *   recomp_block_enter(cpu, pc) = WatchdogCheck(); deadline test at PB:pc
  *   recomp_block_enter_charge   = the same, then (no yield) the coprocessor
  *                                 clock store and the block's static charge
@@ -59,7 +58,6 @@ uint32 cpu_host_return_pc24(CpuState *cpu, uint16 entry_s, uint8 hrv, uint32 ski
 void   cpu_charge(CpuState *cpu, uint32 n);
 void   cpu_charge_dl(CpuState *cpu);
 void   cpu_charge_page(CpuState *cpu, uint32 k, uint32 i);
-void   cpu_sync_p_nz(CpuState *cpu);
 int    recomp_block_enter(CpuState *cpu, uint32 pc16);
 int    recomp_block_enter_charge(CpuState *cpu, uint32 pc16, uint32 n);
 int    recomp_block_enter_charge_c(CpuState *cpu, uint32 pc16, uint32 n, uint32 master);
@@ -136,9 +134,6 @@ void cpu_charge_dl(CpuState *cpu) {
 }
 void cpu_charge_page(CpuState *cpu, uint32 k, uint32 i) {
   if ((k & 0xFF00) != ((k + i) & 0xFF00)) cpu_charge(cpu, 1u);
-}
-void cpu_sync_p_nz(CpuState *cpu) {
-  cpu_set_P((uint8)((cpu_P() & ~0x82) | (cpu->_flag_Z ? 0x02 : 0) | (cpu->_flag_N ? 0x80 : 0)));
 }
 int recomp_block_enter(CpuState *cpu, uint32 pc16) {
   WatchdogCheck();

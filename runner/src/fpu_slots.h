@@ -39,13 +39,19 @@
 #define FPU_CPU_D "$f21"
 #define FPU_CPU_DB "$f22"
 #define FPU_CPU_PB "$f23"
-#define FPU_CPU_P "$f24"
+#define FPU_CPU_P_MXID "$f24" /* P's M, X, I and D bits (the rest are 0) */
 #define FPU_CPU_E "$f25"   /* the emulation bit, 0 or 1 */
 
 /* The master clocks (64-bit; cpu_regs.h g_master_cycles). */
 #define FPU_MASTER_CYCLES "$f26"
 #define FPU_COPROCESSOR_MASTER_CYCLES "$f27"
 
-/* Free: $f28-$f31. */
+/* The other status flags (cpu_regs.h): the last N/Z result, then C and V,
+ * each 0 or 1. */
+#define FPU_CPU_NZ "$f28"
+#define FPU_CPU_C "$f29"
+#define FPU_CPU_V "$f30"
+
+/* Free: $f31. */
 
 #endif

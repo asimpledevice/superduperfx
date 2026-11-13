@@ -250,7 +250,6 @@ int main(void) {
     cpu_set_S(0x01f0);
     cpu_set_emulation(false);
     cpu_set_P(0x34);
-    cpu_p_to_mirrors(&g_cpu);
     cpu_push_interrupt_frame_at(&g_cpu, 0xabcdef);
     fails += check(cpu_S() == 0x01ec, "native interrupt frame consumes four bytes");
     fails += check(g_ram[0x01f0] == 0xab && g_ram[0x01ef] == 0xcd &&

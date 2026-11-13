@@ -632,24 +632,26 @@ void interp_bridge_test_apu_port_diag_probe(CpuState *cpu, int apu_port) {
 #endif
 
 /* ── register/flag sync ────────────────────────────────────────────────────
- * interp816 carries flags as discrete bools + an `e` (emulation) bit; CpuState
- * carries packed P + per-bit mirrors + m/x/emulation. Map both directions.
+ * interp816 carries flags as discrete bools + an `e` (emulation) bit; the CPU
+ * state carries P in parts (cpu_regs.h). Map both directions.
  * PC has no CpuState home (control flow is host-C calls) — it is interp-only
  * and set explicitly by the run loop, never synced. */
 static void sync_cpu_to_interp(const CpuState *c, Interp816 *in) {
     in->a  = cpu_A();  in->x = cpu_X();  in->y = cpu_Y();
     in->sp = cpu_S();  in->dp = cpu_D(); in->db = cpu_DB(); in->k = cpu_PB();
-    in->c  = c->_flag_C; in->z = c->_flag_Z; in->v = c->_flag_V;
-    in->n  = c->_flag_N; in->i = c->_flag_I; in->d = c->_flag_D;
+    (void)c;
+    in->c  = cpu_flag_C(); in->z = cpu_flag_Z(); in->v = cpu_flag_V();
+    in->n  = cpu_flag_N(); in->i = cpu_flag_I(); in->d = cpu_flag_D();
     in->mf = cpu_m_flag();  in->xf = cpu_x_flag(); in->e = cpu_emulation();
 }
 static void sync_interp_to_cpu(const Interp816 *in, CpuState *c) {
     cpu_set_A(in->a);  cpu_set_X(in->x);  cpu_set_Y(in->y);
     cpu_set_S(in->sp); cpu_set_D(in->dp); cpu_set_DB(in->db); cpu_set_PB(in->k);
-    c->_flag_C = in->c; c->_flag_Z = in->z; c->_flag_V = in->v;
-    c->_flag_N = in->n; c->_flag_I = in->i; c->_flag_D = in->d;
-    cpu_set_m_flag(in->mf); cpu_set_x_flag(in->xf); cpu_set_emulation(in->e);
-    cpu_mirrors_to_p(c);   /* keep packed P consistent for PHP/PLP/stack ops */
+    (void)c;
+    cpu_set_flag_C(in->c); cpu_set_flags_nz(in->n, in->z); cpu_set_flag_V(in->v);
+    cpu_set_P_mxid((in->mf ? 0x20u : 0u) | (in->xf ? 0x10u : 0u) |
+                   (in->d ? 0x08u : 0u) | (in->i ? 0x04u : 0u));
+    cpu_set_emulation(in->e);
 }
 
 /* Multi-PC pre-opcode hooks (Metal Warriors DMA widen + sprite draw-window

@@ -602,7 +602,7 @@ void cpu_trace_disarm_scoped_tripwire(void);
 
 typedef struct PxPMutEvent {
     uint32_t pc24;            /* PC of the instruction causing the mutation */
-    uint8_t  source_kind;     /* 0=REP, 1=SEP, 2=PLP, 3=RTI, 4=PHP, 5=p_to_mirrors, 6=mirrors_to_p, 7=other */
+    uint8_t  source_kind;     /* 0=REP, 1=SEP, 2=PLP, 3=RTI, 4=PHP, 5, 6 unused (former mirror syncs), 7=other */
     uint8_t  old_p;
     uint8_t  new_p;
     uint8_t  old_x_flag;
