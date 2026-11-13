@@ -2038,7 +2038,7 @@ def emit_function(rom: bytes, bank: int, start: int,
             elif (len(succs) > 1 and pairs
                   and (pairs[-1][0].mnem in ('JSR', 'JSL')
                        or getattr(pairs[-1][0], 'dispatch_call', False))):
-                lines.append("switch (((cpu_m_flag() & 1) << 1) | (cpu_x_flag() & 1)) {")
+                lines.append("switch (cpu_mx()) {")
                 seen_mx = set()
                 fallback_stmt = None
                 for succ in succs:

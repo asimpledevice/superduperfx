@@ -2327,6 +2327,21 @@ Regenerating with the final emitter gives byte-identical output to the
 validated builds. C tests pass; Python tests pass except the intermittent
 MSU playback test.
 
+### g_cpu: m and x are P's bits; E in an FPU register (2026-11-13)
+
+- `m_flag`/`x_flag` were copies of P's bits 5 and 4. Every writer of P
+  already keeps them (REP/SEP envelope, PLP/RTI with `cpu_p_to_mirrors`,
+  XCE, SetFlag, interrupt entry touches only I/D, the interpreter sync), so
+  `cpu_m_flag()`/`cpu_x_flag()` now read P and their setters write P. The
+  fields are gone (rollback residue version 10).
+- `cpu_mx()` = `(P >> 4) & 3`, the `(m << 1) | x` variant index. Every
+  mode-dispatch switch (generated and runtime) uses it instead of reading
+  and combining two bytes.
+- E (`emulation`) is in `$f25` with CPUFPU=1 (`SDFX_FPU_SHARED` includes it).
+- JM2 bank $80 (-Os): FPU 71,877 -> 70,065 bytes; struct 69,973 -> 69,021
+  (gap 1.5%).
+- State hashes identical to step 3a (SMW 53, Pitfall 12, JM2 25 frames).
+
 ## Next steps
 
 1. Audio: check the RSP DSP by ear on hardware (output arrives later than

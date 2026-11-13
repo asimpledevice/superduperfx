@@ -1077,7 +1077,7 @@ bool RtlLoadSnapshotFromMemory(const void *data, size_t size) {
  */
 
 #define RTL_RB_RESIDUE_MAGIC 0x53524252u /* 'RBRS' */
-#define RTL_RB_RESIDUE_VERSION 9u   /* 9: CpuState lost host_return_valid */
+#define RTL_RB_RESIDUE_VERSION 10u  /* 10: CpuState lost m_flag/x_flag (9: host_return_valid) */
 
 typedef struct RtlRollbackResidue {
   uint32 magic;
@@ -1363,7 +1363,7 @@ bool RtlExecutionStateValid(const void *data, size_t size) {
   const uint8 *raw = (const uint8 *)&r.apu_port;
   if (raw[offsetof(ApuPortSched, timeValid)] > 1 ||
       r.magic != RTL_RB_RESIDUE_MAGIC || r.version != RTL_RB_RESIDUE_VERSION ||
-      r.cpu.ram != NULL || r.cpu.reg_m_flag > 1 || r.cpu.reg_x_flag > 1 ||
+      r.cpu.ram != NULL ||
       r.cpu.reg_emulation > 1 || r.cpu._flag_N > 1 || r.cpu._flag_V > 1 ||
       r.cpu._flag_Z > 1 || r.cpu._flag_C > 1 || r.cpu._flag_I > 1 ||
       r.cpu._flag_D > 1 ||

@@ -137,7 +137,7 @@ def test_jsr_emits_function_call():
             f"variant bank_00_8010{sfx} missing from emit\n{src}"
         )
     assert "RecompReturn _r;" in src
-    assert "cpu_m_flag()" in src and "cpu_x_flag()" in src
+    assert "cpu_mx()" in src   # the live (m, x) variant index, P bits 5:4
     assert "RECOMP_RETURN_NORMAL" in src
 
 

@@ -1600,7 +1600,7 @@ def _emit_indirect_dispatch(insn) -> List[str]:
                 lines.append("      _call_hrv = _hrv;")
                 lines.append("      RecompReturn _r;")
                 lines.append(
-                    "      switch (((cpu_m_flag() & 1) << 1) | (cpu_x_flag() & 1)) {")
+                    "      switch (cpu_mx()) {")
                 lines += variant_dispatch_case_lines(
                     tgt_addr, base_name, indent="        ",
                     pre_call=["cpu_tailcall_inherit_return_context(_entry_s, _hrv);"],
@@ -1723,7 +1723,7 @@ def _emit_indirect_dispatch(insn) -> List[str]:
                     _UNRESOLVED_CALL_TARGETS.add((tgt_addr, em_v, ex_v))
                 body = [
                     "RecompReturn _r;",
-                    "switch (((cpu_m_flag() & 1) << 1) | (cpu_x_flag() & 1)) {",
+                    "switch (cpu_mx()) {",
                 ]
                 # A pointer-matched JMP/JML is still a true tail transfer.
                 # Its selected handler inherits the dispatcher's architectural
@@ -1953,7 +1953,7 @@ def _emit_indirect_dispatch(insn) -> List[str]:
                 _UNRESOLVED_CALL_TARGETS.add((tgt_addr, em_v, ex_v))
             body = [
                 "RecompReturn _r;",
-                "switch (((cpu_m_flag() & 1) << 1) | (cpu_x_flag() & 1)) {",
+                "switch (cpu_mx()) {",
             ]
             # Tail-context inherit is for TRUE tail transfers only. A JSR
             # dispatch and a PEA+JMP ptr-call both enter the handler as a
@@ -2330,7 +2330,7 @@ def _emit_call(op: Call) -> List[str]:
         lines += [
             "  _call_hrv = _hrv;",
             "  RecompReturn _r;",
-            "  switch (((cpu_m_flag() & 1) << 1) | (cpu_x_flag() & 1)) {",
+            "  switch (cpu_mx()) {",
         ]
         lines += variant_dispatch_case_lines(
             addr, base_name,
@@ -2391,7 +2391,7 @@ def _emit_call(op: Call) -> List[str]:
         lines += _emit_return_frame_push(op)
         body = [
             "RecompReturn _r;",
-            "switch (((cpu_m_flag() & 1) << 1) | (cpu_x_flag() & 1)) {",
+            "switch (cpu_mx()) {",
         ]
         body += variant_dispatch_case_lines(
             addr, base_name, indent="  ",
@@ -2412,7 +2412,7 @@ def _emit_call(op: Call) -> List[str]:
     lines += _emit_return_frame_push(op)
     lines += [
         "  RecompReturn _r;",
-        "  switch (((cpu_m_flag() & 1) << 1) | (cpu_x_flag() & 1)) {",
+        "  switch (cpu_mx()) {",
     ]
     lines += variant_dispatch_case_lines(
         addr, base_name,

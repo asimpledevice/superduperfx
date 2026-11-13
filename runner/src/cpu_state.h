@@ -114,9 +114,7 @@ typedef struct CpuState {
      * declared below (or RepFlags / SepFlags / SetFlag IR ops). */
     uint8  reg_P;
 
-    /* Mirrors of P bits 5 and 4 plus the E flag. 1 = 8-bit width. */
-    uint8  reg_m_flag;
-    uint8  reg_x_flag;
+    /* The E flag. (m and x are P's bits 5 and 4: cpu_m_flag(), cpu_x_flag().) */
     uint8  reg_emulation;
 
     /* Per-flag bit mirrors. v2 codegen reads/writes `cpu->_flag_C`
@@ -370,8 +368,7 @@ static inline void cpu_write_y_x(CpuState *cpu, uint32 v) {
 /* Sync P <-> mirrors. Codegen calls these whenever P is touched in a
  * way that updates the bit mirrors (REP, SEP, PLP, RTI). */
 static inline void cpu_p_to_mirrors(CpuState *cpu) {
-    cpu_set_m_flag((cpu_P() & CPU_P_M) ? 1 : 0);
-    cpu_set_x_flag((cpu_P() & CPU_P_X) ? 1 : 0);
+    /* m and x are P's own bits (cpu_regs.h): nothing to copy. */
     cpu->_flag_C = (cpu_P() & CPU_P_C) ? 1 : 0;
     cpu->_flag_Z = (cpu_P() & CPU_P_Z) ? 1 : 0;
     cpu->_flag_I = (cpu_P() & CPU_P_I) ? 1 : 0;
@@ -387,8 +384,7 @@ static inline void cpu_p_to_mirrors(CpuState *cpu) {
 
 static inline void cpu_mirrors_to_p(CpuState *cpu) {
     cpu_set_P((uint8)(
-        (cpu_m_flag()  ? CPU_P_M : 0) |
-        (cpu_x_flag()  ? CPU_P_X : 0) |
+        (cpu_P() & (CPU_P_M | CPU_P_X)) |   /* m and x live in P */
         (cpu->_flag_C ? CPU_P_C : 0) |
         (cpu->_flag_Z ? CPU_P_Z : 0) |
         (cpu->_flag_I ? CPU_P_I : 0) |

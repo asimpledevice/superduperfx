@@ -1110,7 +1110,7 @@ const char *cpu_dispatch_entry_reason(uint32_t pc24, uint8_t mx) {
 static RecompEntryFn _cpu_dispatch_lookup(CpuState *cpu, uint32 pc24) {
     const DispatchEntry *row = _cpu_dispatch_find(pc24);
     if (row != NULL) {
-        unsigned idx = (unsigned)(((cpu_m_flag() & 1) << 1) | (cpu_x_flag() & 1));
+        unsigned idx = (unsigned)(cpu_mx());
         RecompEntryFn fp = row->variant[idx];
         /* A WRAM body may only run while its live bytes match the snapshot. */
         if (fp != NULL && _ram_guard_blocks(cpu, pc24)) return NULL;
@@ -1124,7 +1124,7 @@ RecompReturn cpu_dispatch_pc_from(CpuState *cpu, uint32 pc24,
                                   uint32 source_pc24) {
     pc24 &= 0xFFFFFFu;
     source_pc24 &= 0xFFFFFFu;
-    unsigned mx_idx = (unsigned)(((cpu_m_flag() & 1) << 1) | (cpu_x_flag() & 1));
+    unsigned mx_idx = (unsigned)(cpu_mx());
     int via_mirror = 0;
     int known_entry = 0;
     const DispatchEntry *row = _cpu_dispatch_find(pc24);
@@ -1220,7 +1220,7 @@ RecompReturn cpu_dispatch_call_pc(CpuState *cpu, uint32 pc24,
     cpu_write8(cpu, 0x00, cpu_S(), (uint8)(iret16 & 0xFF));
     cpu_set_S((uint16)(cpu_S() - 1));
 
-    unsigned mx_idx = (unsigned)(((cpu_m_flag() & 1) << 1) | (cpu_x_flag() & 1));
+    unsigned mx_idx = (unsigned)(cpu_mx());
     int via_mirror = 0;
     RecompEntryFn fp = _cpu_dispatch_lookup(cpu, pc24);
     if (fp == NULL) {
@@ -1244,7 +1244,7 @@ RecompReturn cpu_dispatch_call_pc_pushed(CpuState *cpu, uint32 pc24,
                                          uint32 *return_pc24) {
     pc24 &= 0xFFFFFFu;
     source_pc24 &= 0xFFFFFFu;
-    unsigned mx_idx = (unsigned)(((cpu_m_flag() & 1) << 1) | (cpu_x_flag() & 1));
+    unsigned mx_idx = (unsigned)(cpu_mx());
     int via_mirror = 0;
     RecompEntryFn fp = _cpu_dispatch_lookup(cpu, pc24);
     if (fp == NULL) {
@@ -1289,7 +1289,7 @@ RecompReturn cpu_dispatch_call_pc_pushed(CpuState *cpu, uint32 pc24,
  * makes the bounce stack-exact regardless of what sits at the return address. */
 RecompReturn cpu_dispatch_pc_paired(CpuState *cpu, uint32 pc24, uint8 frame_size) {
     pc24 &= 0xFFFFFFu;
-    unsigned mx_idx = (unsigned)(((cpu_m_flag() & 1) << 1) | (cpu_x_flag() & 1));
+    unsigned mx_idx = (unsigned)(cpu_mx());
     int via_mirror = 0;
     RecompEntryFn fp = _cpu_dispatch_lookup(cpu, pc24);
     if (fp == NULL) {

@@ -89,7 +89,7 @@ def test_plain_indirect_dispatch_switches_on_runtime_mx():
     )
 
     assert 'indirect dispatch terminator: cfg-resolved target list' in src
-    assert 'switch (((cpu_m_flag() & 1) << 1) | (cpu_x_flag() & 1))' in src
+    assert 'switch (cpu_mx())' in src
     for sfx in ("_M0X0", "_M0X1", "_M1X0", "_M1X1"):
         assert f'bank_00_9000{sfx}(cpu, _call_hrv)' in src
 

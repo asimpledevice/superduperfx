@@ -40,7 +40,8 @@
 #define FPU_CPU_DB "$f22"
 #define FPU_CPU_PB "$f23"
 #define FPU_CPU_P "$f24"
+#define FPU_CPU_E "$f25"   /* the emulation bit, 0 or 1 */
 
-/* Free: $f25-$f31. */
+/* Free: $f26-$f31. */
 
 #endif

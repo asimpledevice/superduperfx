@@ -284,7 +284,7 @@ def emit_bank(rom: bytes, bank: int,
                 "  cpu_interrupt_context_enter();",
             ])
         body.extend([
-            "  switch (((cpu_m_flag() & 1) << 1) | (cpu_x_flag() & 1)) {",
+            "  switch (cpu_mx()) {",
         ])
         for m in (0, 1):
             for x in (0, 1):

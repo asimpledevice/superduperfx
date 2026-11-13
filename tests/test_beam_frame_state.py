@@ -100,7 +100,7 @@ int main(void) {
       case 4:bad.apu_port.qTail=APU_PORT_QUEUE_LEN+1;break;
       case 5:((uint8_t *)&bad.apu_port)[offsetof(ApuPortSched,timeValid)]=2;break;
       case 6:bad.interp[0]=0;break;
-      case 7:bad.cpu.reg_m_flag=2;break;
+      case 7:bad.cpu._flag_Z=2;break;
       case 8:bad.memsel=2;break;
       case 9:bad.ppu_rb.vramIncrement=0;break;
       case 10:bad.ppu_rb.vramRemapMode=4;break;

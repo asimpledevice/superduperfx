@@ -56,6 +56,7 @@ typedef struct { uint16 S, X; uint8 PB, m_flag, x_flag; } CpuState;
 #define cpu_set_m_flag(v) ((void)(cpu->m_flag = (uint8)(v)))
 #define cpu_x_flag() (cpu->x_flag)
 #define cpu_set_x_flag(v) ((void)(cpu->x_flag = (uint8)(v)))
+#define cpu_mx() ((uint32)((cpu->m_flag & 1) << 1) | (cpu->x_flag & 1))
 static uint32 seen;
 static int aot_calls, lle_calls;
 static uint8 ram[65536];

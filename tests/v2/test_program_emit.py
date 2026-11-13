@@ -418,7 +418,7 @@ def test_host_alias_dispatches_live_mx_and_missing_exact_slot_to_lle(tmp_path):
     assert result.returncode == 0, result.stdout + result.stderr
 
     source = (out_dir / "bank00_v2.c").read_text(encoding="utf-8")
-    assert "switch (((cpu_m_flag() & 1) << 1)" in source
+    assert "switch (cpu_mx())" in source
     assert "case 3: _r = I_RESET_M1X1(cpu, _call_hrv);" in source
     # Wrong-width reset decodes are structural and intentionally remain LLE.
     assert "interp_tier_dispatch(cpu, 0x008000u)" in source

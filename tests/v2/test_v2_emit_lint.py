@@ -51,8 +51,9 @@ CANONICAL = {
 # whenever P is written via REP/SEP/PLP/RTI. The sync helpers in
 # cpu_state.h are the load-bearing invariant; test_shadow_p_sync_is_complete
 # below verifies every name here actually appears in cpu_p_to_mirrors.
+# m and x are P's own bits (cpu_regs.h: cpu_m_flag(), cpu_x_flag()), not
+# copies, so they are not listed.
 SHADOWS_FROM_P = {
-    'm_flag', 'x_flag',
     '_flag_N', '_flag_V', '_flag_Z', '_flag_C', '_flag_I', '_flag_D',
 }
 

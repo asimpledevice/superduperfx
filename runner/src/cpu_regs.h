@@ -13,7 +13,7 @@
  * in reserved FPU registers (fpu_slots.h) as GCC global register variables,
  * always zero-extended, so a read is one MFC1 and a write one MTC1 (plus the
  * conversion the C type asks for). Otherwise they live in g_cpu's reg_*
- * fields. m_flag, x_flag and emulation stay in g_cpu either way for now.
+ * fields. E is in an FPU register too (CPUFPU=1); m and x are P's bits.
  *
  * Code that copies g_cpu as a whole (rollback) calls cpu_regs_store() after
  * the copy and cpu_regs_load() before using one, which move the registers
@@ -66,7 +66,6 @@ CPU_REG_IN_FPU(D, uint16, FPU_CPU_D, 0xFFFFu, 1)
 CPU_REG_IN_FPU(DB, uint8, FPU_CPU_DB, 0xFFu, 1)
 CPU_REG_IN_FPU(PB, uint8, FPU_CPU_PB, 0xFFu, 1)
 CPU_REG_IN_FPU(P, uint8, FPU_CPU_P, 0xFFu, 1)
-#undef CPU_REG_IN_FPU
 #else
 CPU_REG_IN_STRUCT(A, uint16)
 CPU_REG_IN_STRUCT(X, uint16)
@@ -77,21 +76,45 @@ CPU_REG_IN_STRUCT(DB, uint8)
 CPU_REG_IN_STRUCT(PB, uint8)
 CPU_REG_IN_STRUCT(P, uint8)
 #endif
-CPU_REG_IN_STRUCT(m_flag, uint8)
-CPU_REG_IN_STRUCT(x_flag, uint8)
+#if SNESRECOMP_CPU_REGS_FPU
+CPU_REG_IN_FPU(emulation, uint8, FPU_CPU_E, 0xFFu, 1)
+#undef CPU_REG_IN_FPU
+#else
 CPU_REG_IN_STRUCT(emulation, uint8)
+#endif
 #undef CPU_REG_IN_STRUCT
+
+/* M and X are P's bits 5 and 4: every writer of P keeps them (REP/SEP, PLP,
+ * RTI, XCE, interrupt entry, the interpreter's sync), so they have no copy of
+ * their own. cpu_mx() is the (m << 1) | x index of a function's variants. */
+static inline __attribute__((always_inline)) uint8 cpu_m_flag(void) {
+  return (uint8)((cpu_P() >> 5) & 1u);
+}
+static inline __attribute__((always_inline)) uint8 cpu_x_flag(void) {
+  return (uint8)((cpu_P() >> 4) & 1u);
+}
+static inline __attribute__((always_inline)) uint32_t cpu_mx(void) {
+  return (cpu_P() >> 4) & 3u;
+}
+static inline __attribute__((always_inline)) void cpu_set_m_flag(uint32_t v) {
+  cpu_set_P((uint8)((cpu_P() & ~0x20u) | ((uint8)v ? 0x20u : 0u)));
+}
+static inline __attribute__((always_inline)) void cpu_set_x_flag(uint32_t v) {
+  cpu_set_P((uint8)((cpu_P() & ~0x10u) | ((uint8)v ? 0x10u : 0u)));
+}
 
 /* Copy the registers from their home into c's reg_* fields, and back. */
 static inline void cpu_regs_store(struct CpuState *c) {
   c->reg_A = cpu_A(); c->reg_X = cpu_X(); c->reg_Y = cpu_Y();
   c->reg_S = cpu_S(); c->reg_D = cpu_D();
   c->reg_DB = cpu_DB(); c->reg_PB = cpu_PB(); c->reg_P = cpu_P();
+  c->reg_emulation = cpu_emulation();
 }
 static inline void cpu_regs_load(const struct CpuState *c) {
   cpu_set_A(c->reg_A); cpu_set_X(c->reg_X); cpu_set_Y(c->reg_Y);
   cpu_set_S(c->reg_S); cpu_set_D(c->reg_D);
   cpu_set_DB(c->reg_DB); cpu_set_PB(c->reg_PB); cpu_set_P(c->reg_P);
+  cpu_set_emulation(c->reg_emulation);
 }
 
 #endif
