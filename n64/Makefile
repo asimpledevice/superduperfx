@@ -188,9 +188,9 @@ N64_CFLAGS += -O2
 # BLUE=1: the 65816 runs on the Blue thread (runner/src/blue_thread.c), paused
 # at deadlines instead of unwound. Off by default for now.
 BLUE ?= 0
-# CPUFPU=1: the 65816 registers A..P live in reserved FPU registers
-# (runner/src/cpu_regs.h) instead of g_cpu. Off by default until measured.
-CPUFPU ?= 0
+# CPUFPU=1 (default): the 65816 registers A..P live in reserved FPU
+# registers (runner/src/cpu_regs.h); CPUFPU=0 keeps them in g_cpu.
+CPUFPU ?= 1
 N64_CFLAGS += -DSNESRECOMP_CPU_REGS_FPU=$(CPUFPU)
 N64_CFLAGS += -DSNESRECOMP_FAST_READ_MAP=1 -DSNESRECOMP_QUIESCENT_BACKEDGE=1 \
 	-DSNESRECOMP_LAZY_BEAM=1 -DSNESRECOMP_REVERSE_DEBUG=0 -DSNESRECOMP_INTERP_EDGE_TRACE=0 \

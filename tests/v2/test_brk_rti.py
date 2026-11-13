@@ -283,12 +283,12 @@ def test_compiled_round_trip_matches_the_interpreter(tmp_path):
                       end=0x8005, func_name='Trip', brk_rti_sites={0x008000})
         for m, x in ((1, 1), (0, 0), (0, 1)))
     harness = seam._HARNESS.split('/* The C helpers.')[0]
-    read8 = ('uint8 cpu_read8(CpuState *cpu, uint8 bank, uint16 addr) {\n'
+    read8 = ('uint8 cpu_read8(CpuState *cpu, uint32 bank_arg, uint32 addr_arg) { uint8 bank = (uint8)bank_arg; uint16 addr = (uint16)addr_arg;\n'
              '  (void)cpu; (void)bank; return g_ram[addr];\n}')
     assert read8 in harness
     harness = harness.replace(read8, (
         'uint8 g_rom[0x8000];\n'
-        'uint8 cpu_read8(CpuState *cpu, uint8 bank, uint16 addr) {\n'
+        'uint8 cpu_read8(CpuState *cpu, uint32 bank_arg, uint32 addr_arg) { uint8 bank = (uint8)bank_arg; uint16 addr = (uint16)addr_arg;\n'
         '  (void)cpu; (void)bank;\n'
         '  return addr >= 0x8000 ? g_rom[addr - 0x8000] : g_ram[addr];\n}'))
     table = ('static const uint8 ROM_TRIP[] = {'

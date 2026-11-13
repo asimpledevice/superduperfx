@@ -55,7 +55,7 @@ void snes_sync_master_clock(Snes *snes, uint64_t master_clock) {
     (void)snes;
     (void)master_clock;
 }
-uint8 cpu_read8(CpuState *cpu, uint8 bank, uint16 addr) {
+uint8 cpu_read8(CpuState *cpu, uint32 bank_arg, uint32 addr_arg) { uint8 bank = (uint8)bank_arg; uint16 addr = (uint16)addr_arg;
     (void)cpu;
     (void)bank;
     return g_ram[addr];
@@ -65,7 +65,7 @@ void cpu_write8(CpuState *cpu, uint8 bank, uint16 addr, uint8 value) {
     (void)bank;
     g_ram[addr] = value;
 }
-uint16 cpu_read16(CpuState *cpu, uint8 bank, uint16 addr) {
+uint16 cpu_read16(CpuState *cpu, uint32 bank_arg, uint32 addr_arg) { uint8 bank = (uint8)bank_arg; uint16 addr = (uint16)addr_arg;
     uint16 lo = cpu_read8(cpu, bank, addr);
     uint16 hi = cpu_read8(cpu, bank, (uint16)(addr + 1));
     return (uint16)(lo | (uint16)(hi << 8));

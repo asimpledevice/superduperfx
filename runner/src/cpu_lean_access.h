@@ -48,11 +48,13 @@
 #define CPU_LEAN_ACCESS_DECLARE(name, bank, addr) \
   uint8  cpu_read_##name##8(CpuState *cpu, uint32 k); \
   uint16 cpu_read_##name##16(CpuState *cpu, uint32 k); \
-  void   cpu_write_##name##8(CpuState *cpu, uint32 k, uint8 v); \
-  void   cpu_write_##name##16(CpuState *cpu, uint32 k, uint16 v);
+  void   cpu_write_##name##8(CpuState *cpu, uint32 k, uint32 v); \
+  void   cpu_write_##name##16(CpuState *cpu, uint32 k, uint32 v);
 CPU_LEAN_ACCESS_FORMS(CPU_LEAN_ACCESS_DECLARE)
-void   cpu_push8(CpuState *cpu, uint8 v);
+void   cpu_push8(CpuState *cpu, uint32 v);   /* stores (uint8)v */
 uint8  cpu_pull8(CpuState *cpu);
+void   cpu_push16(CpuState *cpu, uint32 v);   /* S-1, word at S, S-1 */
+uint16 cpu_pull16(CpuState *cpu);              /* S+1, word at S, S+1 */
 uint32 cpu_host_return_pc24(CpuState *cpu, uint16 entry_s, uint8 hrv, uint32 skip);
 void   cpu_charge(CpuState *cpu, uint32 n);
 void   cpu_charge_dl(CpuState *cpu);
@@ -79,18 +81,29 @@ RecompReturn recomp_return_slow(CpuState *cpu, uint32 rpc24, uint16 ret_s, uint1
     return cpu_read8(cpu, bank, addr); } \
   uint16 cpu_read_##name##16(CpuState *cpu, uint32 k) { \
     return cpu_read16(cpu, bank, addr); } \
-  void cpu_write_##name##8(CpuState *cpu, uint32 k, uint8 v) { \
+  void cpu_write_##name##8(CpuState *cpu, uint32 k, uint32 v) { \
     cpu_write8(cpu, bank, addr, v); } \
-  void cpu_write_##name##16(CpuState *cpu, uint32 k, uint16 v) { \
+  void cpu_write_##name##16(CpuState *cpu, uint32 k, uint32 v) { \
     cpu_write16(cpu, bank, addr, v); }
 CPU_LEAN_ACCESS_FORMS(CPU_LEAN_ACCESS_DEFINE_FORM)
-void cpu_push8(CpuState *cpu, uint8 v) {
+void cpu_push8(CpuState *cpu, uint32 v) {
   cpu_write8(cpu, 0x00, cpu_S(), v);
   cpu_set_S((uint16)(cpu_S() - 1));
 }
 uint8 cpu_pull8(CpuState *cpu) {
   cpu_set_S((uint16)(cpu_S() + 1));
   return cpu_read8(cpu, 0x00, cpu_S());
+}
+void cpu_push16(CpuState *cpu, uint32 v) {
+  cpu_set_S((uint16)(cpu_S() - 1));
+  cpu_write16(cpu, 0x00, cpu_S(), v);
+  cpu_set_S((uint16)(cpu_S() - 1));
+}
+uint16 cpu_pull16(CpuState *cpu) {
+  cpu_set_S((uint16)(cpu_S() + 1));
+  uint16 v = cpu_read16(cpu, 0x00, cpu_S());
+  cpu_set_S((uint16)(cpu_S() + 1));
+  return v;
 }
 /* The return address a paired host caller left on the stack (hrv 2: JSR
  * frame, 3: JSL frame), plus 1 and the inline argument bytes the function

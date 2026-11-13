@@ -62,7 +62,7 @@ static uint8 ram[65536];
 static void cpu_write8(CpuState *cpu, uint8 bank, uint16 addr, uint8 value) {
     (void)cpu; assert(bank == 0); ram[addr] = value;
 }
-static uint16 cpu_read16(CpuState *cpu, uint8 bank, uint16 addr) {
+static uint16 cpu_read16(CpuState *cpu, uint32 bank_arg, uint32 addr_arg) { uint8 bank = (uint8)bank_arg; uint16 addr = (uint16)addr_arg;
     assert(bank == cpu_PB() && addr == 0x8100); return 0x9000;
 }
 static int cpu_trace_dispatch_oob(CpuState *cpu, uint32 pc, uint16 target) {

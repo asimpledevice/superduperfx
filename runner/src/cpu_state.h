@@ -305,7 +305,7 @@ static inline void cpu_write_a16(CpuState *cpu, uint16 v) { (void)cpu;
 }
 /* M-flag-driven write. 8-bit semantics in m=1 (preserve high), full
  * 16-bit in m=0. Caller passes a 16-bit value; we mask in m=1. */
-static inline void cpu_write_a_m(CpuState *cpu, uint16 v) {
+static inline void cpu_write_a_m(CpuState *cpu, uint32 v) {
     if (cpu_m_flag()) cpu_write_a8(cpu, (uint8)(v & 0xFF));
     else             cpu_write_a16(cpu, v);
 }
@@ -333,7 +333,7 @@ static inline void cpu_write_x8(CpuState *cpu, uint8 v) { (void)cpu;
 static inline void cpu_write_x16(CpuState *cpu, uint16 v) { (void)cpu;
     cpu_set_X(v);
 }
-static inline void cpu_write_x_x(CpuState *cpu, uint16 v) {
+static inline void cpu_write_x_x(CpuState *cpu, uint32 v) {
     if (cpu_x_flag()) cpu_write_x8(cpu, (uint8)(v & 0xFF));
     else             cpu_write_x16(cpu, v);
 }
@@ -355,7 +355,7 @@ static inline void cpu_write_y8(CpuState *cpu, uint8 v) { (void)cpu;
 static inline void cpu_write_y16(CpuState *cpu, uint16 v) { (void)cpu;
     cpu_set_Y(v);
 }
-static inline void cpu_write_y_x(CpuState *cpu, uint16 v) {
+static inline void cpu_write_y_x(CpuState *cpu, uint32 v) {
     if (cpu_x_flag()) cpu_write_y8(cpu, (uint8)(v & 0xFF));
     else             cpu_write_y16(cpu, v);
 }
@@ -418,10 +418,10 @@ static inline void cpu_mirrors_to_p(CpuState *cpu) {
  * ship just the raw byte/word read/write primitives.
  */
 
-uint8  cpu_read8 (CpuState *cpu, uint8 bank, uint16 addr);
-uint16 cpu_read16(CpuState *cpu, uint8 bank, uint16 addr);
-void   cpu_write8 (CpuState *cpu, uint8 bank, uint16 addr, uint8  v);
-void   cpu_write16(CpuState *cpu, uint8 bank, uint16 addr, uint16 v);
+uint8  cpu_read8 (CpuState *cpu, uint32 bank, uint32 addr);
+uint16 cpu_read16(CpuState *cpu, uint32 bank, uint32 addr);
+void   cpu_write8 (CpuState *cpu, uint32 bank, uint32 addr, uint32 v);
+void   cpu_write16(CpuState *cpu, uint32 bank, uint32 addr, uint32 v);
 /* Addressing-mode helpers for lean generated code (SNESRECOMP_EMIT_LEAN). */
 #include "cpu_lean_access.h"
 

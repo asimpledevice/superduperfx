@@ -996,7 +996,7 @@ def _emit_bitsetmem(op: BitSetMem) -> List[str]:
         "{",
         f"  {ctype} _m = {widths.read_fn(op.width)}(cpu, {bank}, {addr});",
         f"  cpu->_flag_Z = ((_m & cpu_A()) == 0) ? 1 : 0;",
-        f"  {widths.write_fn(op.width)}(cpu, {bank}, {addr}, ({ctype})(_m | cpu_A()));",
+        f"  {widths.write_fn(op.width)}(cpu, {bank}, {addr}, _m | cpu_A());",
         "}",
     ]
 
@@ -1008,7 +1008,7 @@ def _emit_bitclearmem(op: BitClearMem) -> List[str]:
         "{",
         f"  {ctype} _m = {widths.read_fn(op.width)}(cpu, {bank}, {addr});",
         f"  cpu->_flag_Z = ((_m & cpu_A()) == 0) ? 1 : 0;",
-        f"  {widths.write_fn(op.width)}(cpu, {bank}, {addr}, ({ctype})(_m & ~cpu_A()));",
+        f"  {widths.write_fn(op.width)}(cpu, {bank}, {addr}, _m & ~cpu_A());",
         "}",
     ]
 
@@ -1134,7 +1134,7 @@ def _emit_pushreg(op: PushReg) -> List[str]:
         if op.static_m == 1:
             return [
                 "{ uint16 _old_s = cpu_S();",
-                *(f"  {s}" for s in emitter_helpers.push_byte(widths.low_byte(field))),
+                *(f"  {s}" for s in emitter_helpers.push_byte(field)),
                 "  cpu_trace_stack_op(cpu, 0, CPU_STACK_OP_PHA, _old_s, -1); }",
             ]
         if op.static_m == 0:
@@ -1146,7 +1146,7 @@ def _emit_pushreg(op: PushReg) -> List[str]:
         return [
             "{ uint16 _old_s = cpu_S();",
             "  if (cpu_m_flag()) {",
-            *(f"    {s}" for s in emitter_helpers.push_byte(widths.low_byte(field))),
+            *(f"    {s}" for s in emitter_helpers.push_byte(field)),
             "    cpu_trace_stack_op(cpu, 0, CPU_STACK_OP_PHA, _old_s, -1);",
             "  } else {",
             *(f"    {s}" for s in emitter_helpers.push_word(field)),
@@ -1158,7 +1158,7 @@ def _emit_pushreg(op: PushReg) -> List[str]:
         if op.static_x == 1:
             return [
                 "{ uint16 _old_s = cpu_S();",
-                *(f"  {s}" for s in emitter_helpers.push_byte(widths.low_byte(field))),
+                *(f"  {s}" for s in emitter_helpers.push_byte(field)),
                 f"  cpu_trace_stack_op(cpu, 0, {op_id}, _old_s, -1); }}",
             ]
         if op.static_x == 0:
@@ -1170,7 +1170,7 @@ def _emit_pushreg(op: PushReg) -> List[str]:
         return [
             "{ uint16 _old_s = cpu_S();",
             "  if (cpu_x_flag()) {",
-            *(f"    {s}" for s in emitter_helpers.push_byte(widths.low_byte(field))),
+            *(f"    {s}" for s in emitter_helpers.push_byte(field)),
             f"    cpu_trace_stack_op(cpu, 0, {op_id}, _old_s, -1);",
             "  } else {",
             *(f"    {s}" for s in emitter_helpers.push_word(field)),
