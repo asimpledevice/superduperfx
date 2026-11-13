@@ -33,6 +33,9 @@ static void view_init(void);
 void snesdsp_rsp_init(void) {
   s_overlay_id = rspq_overlay_register(&rsp_snesdsp);
   view_init();
+  /* Launches invalidate only the samples a batch writes: no line of the
+   * output buffer may stay dirty from the startup BSS clear. */
+  data_cache_hit_writeback_invalidate(&s_out, sizeof s_out);
 }
 
 static inline void put(RspDspState *s, unsigned off, int v) {
@@ -281,20 +284,26 @@ static Op *emit_reg(Op *o, uint16_t tag, uint8_t reg) {
     case 0xf: HALF(RSPDSP_FIR_VALS + v, d->firValues[c]); break;
     default: break;
   }
-  /* Split coefficients that follow the fields above. */
-  {
-    RspDspState tmp;
-    pack_coefficients(d, &tmp);
-#define COPY(off) HALF(off, *(int16_t *)(tmp.bytes + (off)))
-    if (lo == 0) { COPY(RSPDSP_V_VOLL_U + v); COPY(RSPDSP_V_VOLL_C + v); }
-    if (lo == 1) { COPY(RSPDSP_V_VOLR_U + v); COPY(RSPDSP_V_VOLR_C + v); }
-    if (lo == 0xf) { COPY(RSPDSP_FIR_U + v); COPY(RSPDSP_FIR_C + v); }
-    if (lo == 0xc && c < 4) { COPY(RSPDSP_SC_U + 2 * c); COPY(RSPDSP_SC_C + 2 * c); }
-    if (reg == 0x0d) { COPY(RSPDSP_SC_U + 8); COPY(RSPDSP_SC_C + 8);
-                       COPY(RSPDSP_SC_U + 10); COPY(RSPDSP_SC_C + 10); }
-    if (reg == 0x4d) for (int i = 0; i < 8; i++) COPY(RSPDSP_V_ECHOMASK + 2 * i);
-#undef COPY
+  /* Split coefficients that follow the fields above (pack_coefficients
+   * computes the same values for the whole block). */
+#define UC(off_u, off_c, k, shift) do { \
+    const int32_t K_ = (int32_t)(k) * (1 << (16 - (shift))); \
+    HALF(off_u, (int)(uint16_t)(K_ & 0xffff)); HALF(off_c, (int)(K_ >> 16)); } while (0)
+  if (lo == 0) UC(RSPDSP_V_VOLL_U + v, RSPDSP_V_VOLL_C + v, ch->volumeL, 6);
+  if (lo == 1) UC(RSPDSP_V_VOLR_U + v, RSPDSP_V_VOLR_C + v, ch->volumeR, 6);
+  if (lo == 0xf) UC(RSPDSP_FIR_U + v, RSPDSP_FIR_C + v, d->firValues[c], 6);
+  if (lo == 0xc && c < 4) {
+    const int k = c == 0 ? d->masterVolumeL : c == 1 ? d->masterVolumeR
+                : c == 2 ? d->echoVolumeL : d->echoVolumeR;
+    UC(RSPDSP_SC_U + 2 * c, RSPDSP_SC_C + 2 * c, k, 7);
   }
+  if (reg == 0x0d) {
+    UC(RSPDSP_SC_U + 8, RSPDSP_SC_C + 8, d->feedbackVolume, 7);
+    UC(RSPDSP_SC_U + 10, RSPDSP_SC_C + 10, d->feedbackVolume, 7);
+  }
+  if (reg == 0x4d)
+    for (int i = 0; i < 8; i++) HALF(RSPDSP_V_ECHOMASK + 2 * i, d->channel[i].echoEnable ? -1 : 0);
+#undef UC
 #undef HALF
   o->tag = tag; o->kind = RSPDSP_LOG_BYTE; o->pad = 0;
   o->adr = RSPDSP_RAM + reg; o->val = d->ram[reg]; o++;
@@ -430,6 +439,8 @@ static struct {
 uint32_t g_snesdsp_rsp_async, g_snesdsp_rsp_joins, g_snesdsp_rsp_join_wait;
 uint32_t g_snesdsp_rsp_launch_ticks, g_snesdsp_rsp_join_ticks, g_snesdsp_rsp_pages;
 uint32_t g_snesdsp_rsp_join_wait_blue;   /* the part of join_wait spent on the Blue thread */
+uint32_t g_snesdsp_rsp_decode_ticks, g_snesdsp_rsp_log_entries;   /* launch: log decode, entries */
+uint32_t g_snesdsp_rsp_view_ticks, g_snesdsp_rsp_pack_ticks, g_snesdsp_rsp_submit_ticks;
 
 static bool launch(Dsp *dsp, uint8_t *aram, const ApuDspLogEntry *log, uint32_t n,
                    uint32_t samples, const uint8_t *marks, uint8_t *fresh);
@@ -444,11 +455,14 @@ static bool launch(Dsp *dsp, uint8_t *aram, const ApuDspLogEntry *log, uint32_t 
                    uint32_t samples, const uint8_t *marks, uint8_t *fresh) {
   if ((marks[31] & 0x80) || ((uintptr_t)aram & 7) || !batch_ok(dsp, samples, false))
     return false;  /* page $FF */
+  const uint32_t td = get_ticks();
   shadow_from(dsp);
   Op *o = s_ops.op, *end = s_ops.op + kMaxOps;
   for (uint32_t i = 0; i < n; i++)
     if (!decode(&o, end, log[i].tag, log[i].isReg == 1, log[i].adr, log[i].val, false))
       return false;
+  g_snesdsp_rsp_decode_ticks += get_ticks() - td;
+  g_snesdsp_rsp_log_entries += n;
   /* The view keeps its pages between batches: a marked page is copied only
    * when ARAM's page changed since (fresh bit clear). Pages go to the view
    * through the uncached segment: no write-allocate misses, and nothing to
@@ -456,6 +470,7 @@ static bool launch(Dsp *dsp, uint8_t *aram, const ApuDspLogEntry *log, uint32_t 
    * which invalidates first. Pages the undo below touches differ from ARAM
    * afterwards, so they lose their bit; echo pages the batch writes match
    * ARAM again after the join's copy-back. */
+  const uint32_t tv = get_ticks();
   uint8_t *uview = UncachedAddr(s_view);
   for (unsigned p = 0; p < 256; p++) {
     const uint8_t bit = (uint8_t)(1u << (p & 7));
@@ -473,20 +488,26 @@ static bool launch(Dsp *dsp, uint8_t *aram, const ApuDspLogEntry *log, uint32_t 
       fresh[log[i].adr >> 11] &= (uint8_t)~(1u << ((log[i].adr >> 8) & 7));
     }
 
+  const uint32_t tp = get_ticks();
+  g_snesdsp_rsp_view_ticks += tp - tv;
   const uint32_t nops = (uint32_t)(o - s_ops.op);
   memset(o, 0, 32 * sizeof *o);
   snesdsp_rsp_pack(dsp, &s_block);
   put(&s_block, RSPDSP_P_SAMPLES, (int)samples);
   put(&s_block, RSPDSP_P_LOGN, (int)nops);
+  const uint32_t ts = get_ticks();
+  g_snesdsp_rsp_pack_ticks += ts - tp;
   *(uint32_t *)(s_block.bytes + RSPDSP_P_ARAM) = PhysicalAddr(s_view);
   *(uint32_t *)(s_block.bytes + RSPDSP_P_LOG) = PhysicalAddr(s_ops.op);
   *(uint32_t *)(s_block.bytes + RSPDSP_P_OUT) = PhysicalAddr(s_out.s);
   data_cache_hit_writeback_invalidate(&s_block, sizeof s_block);
   data_cache_hit_writeback_invalidate(s_ops.op, (nops + 32) * sizeof(Op));
-  data_cache_hit_writeback_invalidate(&s_out, sizeof s_out);
+  /* Only the samples this batch writes; the CPU never writes s_out. */
+  data_cache_hit_invalidate(&s_out, (samples * 4 + 15) & ~15u);
   rspq_write(s_overlay_id, 0, PhysicalAddr(&s_block), 0);
   s_flight.sync = rspq_syncpoint_new();
   rspq_flush();
+  g_snesdsp_rsp_submit_ticks += get_ticks() - ts;
   s_flight.active = true;
   s_flight.dsp = dsp;
   s_flight.aram = aram;
