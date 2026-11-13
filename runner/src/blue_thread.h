@@ -22,6 +22,9 @@
 
 #include <stdint.h>
 #include "cpu_state.h"
+#if SNESRECOMP_BLUE_THREAD
+#include "run_flags.h"
+#endif
 
 #ifndef SNESRECOMP_BLUE_THREAD
 #define SNESRECOMP_BLUE_THREAD 0
@@ -37,14 +40,22 @@ int blue_run_until_quiescent(CpuState *cpu, uint32_t entry_pc24);
 int blue_is_current(void);
 int blue_pause(uint32_t resume_pc24, uint16_t resume_s);
 
+/* Yield (Blue, at a safe point, when the run flags ask for a switch): Green
+ * clears RUN_FLAG_SWITCH, runs its service and switches straight back; the
+ * driver does not see it. The service must not touch emulated state (the
+ * 65816's run is mid-flight), so a yield never changes results; it is where
+ * Green's independent work goes. Defined with the run flags (run_flags.h). */
+void blue_yield(void);
+void blue_set_green_service(void (*service)(void));
+
 /* Optional: the host stack the guest runs on, [lo, top) (default: 256 KB
  * from malloc). A host that places its stack for the data cache gives the
  * guest the same placement: the guest's frames are the hot ones. Call
  * before the first run. */
 void blue_set_stack(void *lo, void *top);
 
-/* Pauses, resumes and unwound pauses so far (diagnostics). */
-extern uint32_t g_blue_pauses, g_blue_resumes, g_blue_unwinds;
+/* Pauses, resumes, unwound pauses and yields so far (diagnostics). */
+extern uint32_t g_blue_pauses, g_blue_resumes, g_blue_unwinds, g_blue_yields;
 #else
 #include "snes/interp_bridge.h"
 static inline int blue_run_until_quiescent(CpuState *cpu, uint32_t entry_pc24) {

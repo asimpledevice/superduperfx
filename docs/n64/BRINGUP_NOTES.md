@@ -2482,9 +2482,18 @@ RDRAM for bulk data and jobs.
 - The emulator builds' state hashes are unchanged (SMW, Pitfall, JM2,
   against the Blue builds): no overlay uses the mailbox yet.
 
-Next: the safe-point check of `RUN_FLAG_SWITCH` on Blue (block entries) and
-Green, and a yield that hands the CPU to the other thread without the frame
-driver seeing a run end.
+- **Yield:** Blue checks `RUN_FLAG_SWITCH` at its safe point, every block
+  entry (`interp_bridge_lle_deadline_pause`), and calls `blue_yield`: Green
+  clears the flag, runs its service (`blue_set_green_service`; it must not
+  touch emulated state) and switches straight back, unseen by the frame
+  driver. `N64_YIELD_TEST=1` sets the flag from every vertical blank (a
+  wall-clock source, as Red's doorbell will be): SMW 8,525 yields, Pitfall
+  449, JM2 1,311, state hashes identical to the Blue builds. The check costs
+  nothing measurable (ares frame times within noise).
+
+Next: Green's side (a safe point in the frame driver that yields to Blue),
+the doorbell handler setting `RUN_FLAG_SWITCH` from Red's messages, and
+Green service work that is independent of emulated state.
 
 ## Next steps
 

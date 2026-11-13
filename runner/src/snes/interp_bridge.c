@@ -1285,6 +1285,12 @@ void interp_bridge_nest_load(const void *in) {
  * PC, the APU flush, a current beam), and continues (0) when the driver
  * resumes this PC. */
 int interp_bridge_lle_deadline_pause(CpuState *cpu, uint32_t resume_pc24) {
+#if SNESRECOMP_BLUE_THREAD
+    /* A block entry is Blue's safe point: honour a switch request (Red's
+     * doorbell sets the run flag) by yielding to Green, which runs its
+     * service and hands the CPU straight back (blue_thread.h). */
+    if (__builtin_expect(run_flags() & RUN_FLAG_SWITCH, 0) && blue_is_current()) blue_yield();
+#endif
     if (!interp_bridge_lle_master_deadline_reached(cpu)) return 0;
 #if SNESRECOMP_BLUE_THREAD
     if (blue_is_current()) {

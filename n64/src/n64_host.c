@@ -396,6 +396,9 @@ static uint8_t *rom_window_provider(const uint8_t *data, int length) {
 #endif
 
 static int host_main(void) {
+#if SNESRECOMP_BLUE_THREAD
+  run_flags_reset();   /* before any interrupt can set a flag */
+#endif
 #if N64_STACK_COLOR >= 0 && defined(__mips__) && SNESRECOMP_BLUE_THREAD
   blue_set_stack(s_blue_stack, s_blue_stack + sizeof s_blue_stack - 8192 +
                                            (N64_STACK_COLOR & 8191) - 64);
@@ -605,9 +608,9 @@ static int host_main(void) {
 #endif
 #if SNESRECOMP_BLUE_THREAD
     if (frame % 60 == 59) {
-      n64_platform_log("[blue] %lu pauses, %lu resumed, %lu unwound\n",
+      n64_platform_log("[blue] %lu pauses, %lu resumed, %lu unwound, %lu yields\n",
                        (unsigned long)g_blue_pauses, (unsigned long)g_blue_resumes,
-                       (unsigned long)g_blue_unwinds);
+                       (unsigned long)g_blue_unwinds, (unsigned long)g_blue_yields);
     }
 #endif
 #if defined(N64_RSPSPC) && !defined(N64_STATE_HASH)

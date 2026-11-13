@@ -12,7 +12,7 @@
 
 #if SNESRECOMP_BLUE_THREAD
 
-uint32_t g_blue_pauses, g_blue_resumes, g_blue_unwinds;
+uint32_t g_blue_pauses, g_blue_resumes, g_blue_unwinds, g_blue_yields;
 
 #ifndef BLUE_STACK_SIZE
 #define BLUE_STACK_SIZE (256 * 1024)
@@ -92,7 +92,8 @@ static inline void switch_to_green(void) { thread_park_swap(); }
 /* ---- Runs and pauses ----------------------------------------------------- */
 
 enum { GF_IDLE, GF_PAUSED };
-static int s_ready, s_state, s_on_blue, s_done, s_resume, s_result;
+static int s_ready, s_state, s_on_blue, s_done, s_resume, s_result, s_yield;
+static void (*s_green_service)(void);
 static CpuState *s_cpu;
 static uint32_t s_entry_pc24, s_paused_pc24;
 static uint16_t s_paused_s;
@@ -130,14 +131,29 @@ static void ensure_ready(void) {
   s_ready = 1;
 }
 
-/* Run the Blue thread until it finishes its run or pauses. */
+/* Run the Blue thread until it finishes its run or pauses. A yield comes
+ * back here too: Green serves and switches straight back. */
 static int enter_blue(void) {
   s_done = 0;
-  s_on_blue = 1;
-  switch_to_blue();
-  s_on_blue = 0;
+  for (;;) {
+    s_on_blue = 1;
+    switch_to_blue();
+    s_on_blue = 0;
+    if (!s_yield) break;
+    s_yield = 0;
+    run_flags_clear(RUN_FLAG_SWITCH);
+    if (s_green_service) s_green_service();
+  }
   s_state = s_done ? GF_IDLE : GF_PAUSED;
   return s_result;
+}
+
+void blue_set_green_service(void (*service)(void)) { s_green_service = service; }
+
+void blue_yield(void) {
+  g_blue_yields++;
+  s_yield = 1;
+  switch_to_green();
 }
 
 int blue_is_current(void) { return s_on_blue; }
