@@ -2450,6 +2450,42 @@ ares: every pause resumed, none unwound (SMW 197, Pitfall 65, JM2 73 by
 frame ~2,900/700/1,400); the 450 s screens match the single-stack build's
 (the title demo at a slightly different point in SMW).
 
+### Red step 1: the mailbox and doorbell in rspq (2026-11-13, in progress)
+
+Design (owner discussion, hardware test v1): DMEM for realtime coordination,
+RDRAM for bulk data and jobs.
+
+- **Boxes** in rspq's resident DMEM (`rsp_queue.inc` `RSPQ_MAILBOX_DOWN/UP`,
+  mirrored in `rsp_queue_t`), so they survive overlay loads: one down word
+  (written only by the CPU, `rspq_mailbox_send`) and one up word (written
+  only by the RSP), plus two reserved words for the block boxes.
+- **Up messages** ring SIG0 and the SP interrupt: `RSPQ_MailboxPost` (latest
+  wins) or `RSPQ_MailboxTryPost` (only when SIG0 is clear: one message in
+  flight, for messages that must not be lost). rspq's SP interrupt handler
+  reads the up word before it clears SIG0 and passes it to the handler set
+  with `rspq_mailbox_set_handler`. SIG0 is shared with the rdpq validator,
+  which our builds do not enable.
+- **Message kinds:** a status or progress word where the latest wins needs
+  no sequence bits; a message that must not be lost is one in flight,
+  flagged by a SIG bit where one is spare or a toggle bit, acknowledged
+  through the other direction's box. Block boxes (more than one word) take
+  the semaphore with a try-lock that never waits on the RSP side.
+- **Run flags** in `$f31` (`runner/src/run_flags.h`): set from the SP
+  interrupt (`run_flags_set_in_interrupt` enables the FPU around its write
+  and restores the status register), read by the threads with one DMFC1,
+  cleared with interrupts off. `$f31` joins `SDFX_FPU_SHARED`.
+- `n64/redtest`: two overlays on real rspq. ares: post to flag 834 cycles
+  average (command fetch included), a running job's round trip 454 cycles,
+  1,000 overlay switches with the mailbox intact, run flags stable. Sent for
+  a hardware run, with `n64/hwtest` v3 (register traffic cost, one-word and
+  block box protocols).
+- The emulator builds' state hashes are unchanged (SMW, Pitfall, JM2,
+  against the Blue builds): no overlay uses the mailbox yet.
+
+Next: the safe-point check of `RUN_FLAG_SWITCH` on Blue (block entries) and
+Green, and a yield that hands the CPU to the other thread without the frame
+driver seeing a run end.
+
 ## Next steps
 
 1. Audio: check the RSP DSP by ear on hardware (output arrives later than

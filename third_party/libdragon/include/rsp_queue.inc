@@ -254,6 +254,30 @@ _RSPQ_SAVED_STATE_END:
 #define vshift   $v30
 #define vshift8  $v31
 
+# Mailbox (see RSPQ_MAILBOX_DOWN): post `reg` to the up box and ring the
+# CPU, SIG0 and the SP interrupt. Latest wins: a post before the CPU took
+# the last one replaces it.
+.macro RSPQ_MailboxPost reg, tmp
+    sw \reg, %lo(RSPQ_MAILBOX_UP)
+    li \tmp, SP_WSTATUS_SET_SIG0 | SP_WSTATUS_SET_INTR
+    mtc0 \tmp, COP0_SP_STATUS
+.endm
+
+# Post only if the CPU has taken the last message (SIG0 clear), for messages
+# that must not be lost. Leaves `tmp` zero when posted, non-zero when the box
+# was still full (nothing written: try again later).
+.macro RSPQ_MailboxTryPost reg, tmp
+    mfc0 \tmp, COP0_SP_STATUS
+    andi \tmp, SP_STATUS_SIG0
+    bnez \tmp, .Lrspq_mbx_full\@
+    nop
+    sw \reg, %lo(RSPQ_MAILBOX_UP)
+    li \tmp, SP_WSTATUS_SET_SIG0 | SP_WSTATUS_SET_INTR
+    mtc0 \tmp, COP0_SP_STATUS
+    move \tmp, zero
+.Lrspq_mbx_full\@:
+.endm
+
 # vcopy macro: copy one vector register to another. This requires
 # vzero to be initialized to zero, which is true within rspq.
 .macro vcopy dest, source
@@ -314,6 +338,14 @@ RSPQ_POINTER_STACK:           .ds.l (RSPQ_MAX_BLOCK_NESTING_LEVEL+2)
 RSPQ_SCRATCH_MEM: # the following 32-bytes can be used by any overlay as temporary scratch-memory
     .ascii "Dragon RSP Queue"
     .ascii "Rasky & Snacchus"
+
+# Mailbox (SuperDuperFX "Red"): one-word boxes the CPU reads and writes in
+# DMEM while the RSP runs (safe: hardware-tested, see n64/hwtest). Down is
+# written only by the CPU, up only by the RSP; posting up rings SIG0 (and
+# the SP interrupt). Two words are reserved for the block boxes.
+RSPQ_MAILBOX_DOWN:            .long 0
+RSPQ_MAILBOX_UP:              .long 0
+RSPQ_MAILBOX_RESERVED:        .long 0, 0
 
     .align 3
 RSPQ_DMEM_BUFFER:             .ds.b RSPQ_DMEM_BUFFER_SIZE

@@ -713,6 +713,24 @@ void rspq_flush(void);
 void rspq_wait(void);
 
 /**
+ * @brief Mailbox (SuperDuperFX "Red"): one-word boxes in rspq's resident DMEM.
+ *
+ * The down box is written only by the CPU (#rspq_mailbox_send) and read by
+ * an overlay while it runs (lw from RSPQ_MAILBOX_DOWN); the up box is written
+ * only by the RSP (RSPQ_MailboxPost / RSPQ_MailboxTryPost in rsp_queue.inc),
+ * which rings SIG0 and the SP interrupt. The interrupt passes the up word to
+ * the handler, then clears SIG0. Words are atomic; the caller's protocol says
+ * what they mean (a status word where the latest wins, or one message in
+ * flight at a time). Not available while the rdpq validator, which also uses
+ * SIG0, is enabled.
+ */
+void rspq_mailbox_set_handler(void (*handler)(uint32_t up));
+/** @brief Write the down box (the RSP sees it at its next poll). */
+void rspq_mailbox_send(uint32_t word);
+/** @brief Read the up box (34 CPU cycles: prefer the doorbell). */
+uint32_t rspq_mailbox_up(void);
+
+/**
  * @brief Create a syncpoint in the queue.
  * 
  * This function creates a new "syncpoint" referencing the current position

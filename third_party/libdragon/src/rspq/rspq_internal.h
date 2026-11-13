@@ -207,6 +207,9 @@ typedef struct rsp_queue_s {
     uint32_t rspq_dram_lowpri_addr;      ///< Address of the lowpri queue (special slot in the pointer stack)
     uint32_t rspq_dram_highpri_addr;     ///< Address of the highpri queue  (special slot in the pointer stack)
     uint8_t banner[32];                  ///< Banner
+    uint32_t mailbox_down;               ///< Mailbox: CPU to RSP (rsp_queue.inc RSPQ_MAILBOX_DOWN)
+    uint32_t mailbox_up;                 ///< Mailbox: RSP to CPU, rung with SIG0
+    uint32_t mailbox_reserved[2];        ///< Mailbox: reserved for the block boxes
     uint32_t cmds[RSPQ_DMEM_BUFFER_SIZE/4]; ///< RSPQ command buffer
     rspq_rdp_mode_t rdp_mode;            ///< RDP current render mode definition
     uint64_t rdp_scissor_rect;           ///< Current RDP scissor rectangle

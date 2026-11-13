@@ -506,6 +506,28 @@ static void rspq_chain_free(uint32_t *first_chunk, int size)
 }
 
 /** @brief RSP interrupt handler, used for syncpoints. */
+/** @brief Mailbox doorbell handler (rspq_mailbox_set_handler), or NULL. */
+static void (*rspq_mailbox_handler)(uint32_t up);
+
+/** @brief The mailbox words in DMEM, by their place in the rspq state. */
+#define RSPQ_MAILBOX_DOWN_PTR ((volatile uint32_t *)SP_DMEM + offsetof(rsp_queue_t, mailbox_down) / 4)
+#define RSPQ_MAILBOX_UP_PTR   ((volatile uint32_t *)SP_DMEM + offsetof(rsp_queue_t, mailbox_up) / 4)
+
+void rspq_mailbox_set_handler(void (*handler)(uint32_t up))
+{
+    rspq_mailbox_handler = handler;
+}
+
+void rspq_mailbox_send(uint32_t word)
+{
+    *RSPQ_MAILBOX_DOWN_PTR = word;
+}
+
+uint32_t rspq_mailbox_up(void)
+{
+    return *RSPQ_MAILBOX_UP_PTR;
+}
+
 static void rspq_sp_interrupt(void) 
 {
     uint32_t status = *SP_STATUS;
@@ -522,6 +544,9 @@ static void rspq_sp_interrupt(void)
     if (status & SP_STATUS_SIG0) {
         wstatus |= SP_WSTATUS_CLEAR_SIG0;
         if (rdpq_trace_fetch) rdpq_trace_fetch(true);
+        /* The mailbox doorbell: the up word is read before SIG0 is cleared
+         * below, so RSPQ_MailboxTryPost cannot overwrite it unread. */
+        else if (rspq_mailbox_handler) rspq_mailbox_handler(*RSPQ_MAILBOX_UP_PTR);
     }
 
     MEMORY_BARRIER();

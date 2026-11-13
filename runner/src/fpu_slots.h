@@ -52,6 +52,9 @@
 #define FPU_CPU_C "$f29"
 #define FPU_CPU_V "$f30"
 
-/* Free: $f31. */
+/* Blue/Green run flags (run_flags.h): set by the SP interrupt (Red's
+ * mailbox doorbell), read by both threads at their safe points. In the range
+ * the interrupt path does not save, so the handler's write stays. */
+#define FPU_RUN_FLAGS "$f31"
 
 #endif
