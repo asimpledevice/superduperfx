@@ -164,7 +164,7 @@ def test_jsr_callsite_propagates_skip_n():
     assert "(int)_r - 1" in src or "(int)_r-1" in src
     # All four (m, x) variants emitted as switch cases.
     for sfx in ("_M0X0", "_M0X1", "_M1X0", "_M1X1"):
-        assert f"bank_00_8010{sfx}(cpu)" in src, (
+        assert f"bank_00_8010{sfx}(cpu, _call_hrv)" in src, (
             f"variant bank_00_8010{sfx} missing\n{src}"
         )
 

@@ -216,4 +216,4 @@ def test_inherited_dispatch_keeps_near_bank_and_absolute_long_target(
         '--no-host-root-scan'], text=True, capture_output=True)
     assert result.returncode == 0, result.stdout + result.stderr
     source = (output / 'bank00_v2.c').read_text()
-    assert ('_r = Target_M1X1(cpu)' in source) == long_target
+    assert ('_r = Target_M1X1(cpu, _call_hrv)' in source) == long_target

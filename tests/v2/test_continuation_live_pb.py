@@ -55,7 +55,7 @@ const char *g_last_recomp_func;
 static unsigned g_memsel, deadline, depth;
 uint8_t g_code_speed[2] = {8, 8};   /* lean emission (SNESRECOMP_EMIT_LEAN) */
 static uint32 resume;
-#define RecompStackPush(...) (++depth)
+#define RecompStackPush(name, hrv) ((void)(name), (void)(hrv), ++depth)
 #define RecompStackPopYield() (--depth)
 #define cpu_dbg_funcname(...) ((void)0)
 #define cpu_trace_func_entry(...) ((void)0)
@@ -77,7 +77,7 @@ int main(void) {
     for (unsigned bank = 0; bank <= 0x80; bank += 0x80) {
         for (deadline = 0; deadline < 2; deadline++) {
             CpuState cpu = {bank, 0x1ffc, 0};
-            assert(Wait_M0X0(&cpu) == 99);
+            assert(Wait_M0X0(&cpu, 0) == 99);
             assert(resume == ((bank << 16) | 0x8000));
             assert(cpu.S == 0x1ffc && cpu.PB == bank && depth == 0);
             for (g_memsel = 0; g_memsel < 2; g_memsel++) {

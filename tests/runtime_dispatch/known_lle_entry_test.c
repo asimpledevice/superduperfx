@@ -84,10 +84,10 @@ void debug_on_wram_write_word(uint32 addr, uint16 old_value, uint16 new_value) {
     (void)addr; (void)old_value; (void)new_value;
 }
 
-static RecompReturn fake_aot(CpuState *cpu) {
+static RecompReturn fake_aot(CpuState *cpu, uint32 hrv) {
     g_aot_calls++;
     g_aot_pb = cpu_PB();
-    g_aot_hrv = cpu->host_return_valid;
+    g_aot_hrv = (uint8)hrv;
     cpu_set_A(cpu_A() + 1);
     return g_aot_return;
 }

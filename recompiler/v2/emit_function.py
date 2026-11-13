@@ -568,18 +568,17 @@ def emit_function(rom: bytes, bank: int, start: int,
         upload_helper = ('RtlUploadSpcImageFromDpLive' if live_upload else
                          'RtlUploadSpcImageFromDp')
         return "\n".join([
-            f"RecompReturn {variant_name}{'__body' if code_cache_emit() else ''}(CpuState *cpu) {{",
+            f"RecompReturn {variant_name}{'__body' if code_cache_emit() else ''}(CpuState *cpu, uint32 _hrv_in) {{",
             "  extern const char *g_last_recomp_func;",
             f"  extern bool {upload_helper}(CpuState *cpu);",
             f"  g_last_recomp_func = \"{variant_name}\";",
-            f"  RecompStackPush(\"{variant_name}\");",
+            f"  RecompStackPush(\"{variant_name}\", _hrv_in);",
             f"  cpu_dbg_funcname(\"{variant_name}\");",
             f"  cpu_trace_func_entry(cpu, 0x{pc24:06X}, \"{variant_name}\");",
             "  uint16 _entry_s = cpu_S();",
-            "  uint8 _hrv = cpu->host_return_valid;",
-            "  if (cpu_take_tailcall_return_context(&_entry_s, &_hrv)) {",
-            "    cpu->host_return_valid = _hrv;",
-            "  }",
+            "  uint8 _hrv = (uint8)_hrv_in;",
+            "  (void)cpu_take_tailcall_return_context(&_entry_s, &_hrv);",
+            "  uint32 _call_hrv = _hrv; (void)_call_hrv;  /* hrv passed to generated callees */",
             "  uint32 _host_return_pc24 = 0xFFFFFFFFu;",
             "  if (_hrv == 2) {",
             "    uint16 _host_rpcl = cpu_read8(cpu, 0x00, (uint16)(_entry_s + 1u));",
@@ -635,17 +634,17 @@ def emit_function(rom: bytes, bank: int, start: int,
         variant_name = f"{base_func_name}{_variant_suffix(entry_m, entry_x)}"
         pc24 = ((bank & 0xFF) << 16) | (start & 0xFFFF)
         return "\n".join([
-            f"RecompReturn {variant_name}{'__body' if code_cache_emit() else ''}(CpuState *cpu) {{",
+            f"RecompReturn {variant_name}{'__body' if code_cache_emit() else ''}(CpuState *cpu, uint32 _hrv_in) {{",
             "  extern const char *g_last_recomp_func;",
-            f"  extern RecompReturn {c_helper}(CpuState *cpu);",
+            f"  extern RecompReturn {c_helper}(CpuState *cpu, uint32 hrv);",
             f"  g_last_recomp_func = \"{variant_name}\";",
-            f"  RecompStackPush(\"{variant_name}\");",
+            f"  RecompStackPush(\"{variant_name}\", _hrv_in);",
             "  cpu_take_tailcall_return_context(NULL, NULL);",
             f"  cpu_dbg_funcname(\"{variant_name}\");",
             f"  cpu_trace_func_entry(cpu, 0x{pc24:06X}, \"{variant_name}\");",
             f"  cpu_trace_block(cpu, 0x{pc24:06X});",
             "  WatchdogCheck();",
-            f"  RecompReturn _r = {c_helper}(cpu);",
+            f"  RecompReturn _r = {c_helper}(cpu, _hrv_in);  /* the helper gets this entry's hrv */",
             "  RecompStackPop();",
             "  return _r;",
             "}",
@@ -852,13 +851,13 @@ def emit_function(rom: bytes, bank: int, start: int,
         # a same-bank caller is harmless and avoids compiler-specific implicit
         # declaration behavior.
         declaration = ""
-        if call_expr.endswith("(cpu)"):
-            callee = call_expr[:-5]
+        if call_expr.endswith("(cpu, _call_hrv)"):
+            callee = call_expr[:-len("(cpu, _call_hrv)")]
             if callee and callee.replace("_", "").isalnum():
                 declaration = (
-                    f"extern RecompReturn {callee}(CpuState *cpu); ")
+                    f"extern RecompReturn {callee}(CpuState *cpu, uint32 hrv); ")
         return (
-            f"{prefix}{{ {declaration}cpu->host_return_valid = _hrv; "
+            f"{prefix}{{ {declaration}_call_hrv = _hrv; "
             f"cpu_tailcall_inherit_return_context(_entry_s, _hrv); "
             f"RecompReturn _tc = {call_expr}; "
             f"RecompStackPop(); return _tc; }}  {comment}"
@@ -870,7 +869,7 @@ def emit_function(rom: bytes, bank: int, start: int,
         # function's stack watermark. Do not arm the compiled-tail context:
         # there is no generated callee prologue to consume it.
         return (
-            f"{prefix}{{ cpu->host_return_valid = _hrv; "
+            f"{prefix}{{ _call_hrv = _hrv; "
             f"RecompReturn _tc = interp_tier_dispatch_tail(cpu, "
             f"{_transfer_target_expr(target_pc24, False)}, "
             f"0x{site_pc24 & 0xFFFFFF:06X}u, _entry_s, _hrv); "
@@ -1327,7 +1326,7 @@ def emit_function(rom: bytes, bank: int, start: int,
                     prefix=prefix)
             sib_suffix = _variant_suffix(target.m, target.x)
             return _tail_call_stmt(
-                f"{tail_call_target_name}{sib_suffix}(cpu)",
+                f"{tail_call_target_name}{sib_suffix}(cpu, _call_hrv)",
                 f"/* tail_call into sibling fn at ${target.pc & 0xFFFF:04X} "
                 f"(cfg tail_call: directive) */",
                 prefix=prefix,
@@ -1370,7 +1369,7 @@ def emit_function(rom: bytes, bank: int, start: int,
                     prefix=prefix)
             sib_suffix = _variant_suffix(target.m, target.x)
             return _tail_call_stmt(
-                f"{sibling_name}{sib_suffix}(cpu)",
+                f"{sibling_name}{sib_suffix}(cpu, _call_hrv)",
                 f"/* tail-call past end: into {sibling_name}{sib_suffix} "
                 f"at ${target.pc & 0xFFFF:04X} */",
                 prefix=prefix,
@@ -1685,7 +1684,7 @@ def emit_function(rom: bytes, bank: int, start: int,
                                     )
                                     if exact_aot:
                                         lines.append(_tail_call_stmt(
-                                            f"{tgt_name}{sib_suffix}(cpu)",
+                                            f"{tgt_name}{sib_suffix}(cpu, _call_hrv)",
                                             f"/* tail-call cross-bank into "
                                             f"{tgt_name}{sib_suffix} at "
                                             f"${target_pc24:06X} (JML "
@@ -1769,7 +1768,7 @@ def emit_function(rom: bytes, bank: int, start: int,
                                     )
                                     if exact_aot:
                                         lines.append(_tail_call_stmt(
-                                            f"{synth_name}{sib_suffix}(cpu)",
+                                            f"{synth_name}{sib_suffix}(cpu, _call_hrv)",
                                             f"/* tail-call cross-bank into "
                                             f"{synth_name}{sib_suffix} at "
                                             f"${target_pc24:06X} "
@@ -1915,8 +1914,8 @@ def emit_function(rom: bytes, bank: int, start: int,
                                         f"/* balanced_interp_dispatch */")
                             else:
                                 lines.append(
-                                    f"{{ extern RecompReturn {c_helper}(CpuState *cpu); "
-                                    f"RecompReturn _r = {c_helper}(cpu); "
+                                    f"{{ extern RecompReturn {c_helper}(CpuState *cpu, uint32 hrv); "
+                                    f"RecompReturn _r = {c_helper}(cpu, _call_hrv); "
                                     f"RecompStackPop(); return _r; }} "
                                     f"/* hle_dispatch ${site_pc24:06X} — "
                                     f"host-side dispatcher */"
@@ -2099,7 +2098,7 @@ def emit_function(rom: bytes, bank: int, start: int,
     src: List[str] = []
     # Code cache (SNESRECOMP_EMIT_CODE_CACHE): the body is F__body; F is the
     # resident trampoline dispatch_v2.c defines.
-    src.append(f"RecompReturn {func_name}{'__body' if code_cache_emit() else ''}(CpuState *cpu) {{")
+    src.append(f"RecompReturn {func_name}{'__body' if code_cache_emit() else ''}(CpuState *cpu, uint32 _hrv_in) {{")
     # Diagnostics — same call-stack plumbing v1 emitted, so the runtime
     # debug_server's `call_stack` cmd and crash-handler attribution work.
     lean = lean_emit()
@@ -2108,13 +2107,13 @@ def emit_function(rom: bytes, bank: int, start: int,
         if code_cache_emit():
             # The name lives in the resident record: this body's own strings
             # go away when the cache evicts it.
-            src.append(f'  extern struct RecompRoutine {func_name}__rt; recomp_enter_rt(&{func_name}__rt);')
+            src.append(f'  extern struct RecompRoutine {func_name}__rt; recomp_enter_rt(&{func_name}__rt, _hrv_in);')
         else:
-            src.append(f'  recomp_enter("{func_name}");')
+            src.append(f'  recomp_enter("{func_name}", _hrv_in);')
     else:
         src.append(f'  extern const char *g_last_recomp_func;')
         src.append(f'  g_last_recomp_func = "{func_name}";')
-        src.append(f'  RecompStackPush("{func_name}");')
+        src.append(f'  RecompStackPush("{func_name}", _hrv_in);')
         src.append(f'  cpu_dbg_funcname("{func_name}");')
     # Trace ring: function entry (carries name hash) — first entry per call.
     fn_entry_pc = (bank << 16) | (start & 0xFFFF)
@@ -2179,9 +2178,10 @@ def emit_function(rom: bytes, bank: int, start: int,
         # cpu_lean_access.h recomp_frame: entry S (with this offset), the
         # tail-call context, the host return frame and the entry-S record,
         # in the order written out below.
-        src.append(f'  uint16 _entry_s; uint8 _hrv;')
+        src.append(f'  uint16 _entry_s; uint8 _hrv = (uint8)_hrv_in;')
         src.append(f'  uint32 _host_return_pc24 = recomp_frame(cpu, {entry_s_offset}, '
                    f'{own_inline_skip}u, &_entry_s, &_hrv);')
+        src.append(f'  uint32 _call_hrv = _hrv; (void)_call_hrv;  /* hrv passed to generated callees */')
     elif entry_s_offset:
         sign = '+' if entry_s_offset > 0 else '-'
         src.append(
@@ -2192,14 +2192,13 @@ def emit_function(rom: bytes, bank: int, start: int,
     # Option-1 cpu->S return-frame ABI (see docs/MULTI_TIER.md): capture whether
     # a paired host-C caller exists at entry. RTS/RTL may host-return NORMAL
     # only when _hrv==1 AND the stack is balanced (cpu->S == _entry_s);
-    # otherwise it dispatches on the popped PC. The caller sets
-    # cpu->host_return_valid right before each invoke (direct call -> 1;
-    # tail JMP/JML -> propagate the caller's _hrv; dispatch -> 0).
+    # otherwise it dispatches on the popped PC. The caller passes the
+    # hrv argument on each invoke, through the local _call_hrv (direct call
+    # -> 2/3; tail JMP/JML -> propagate the caller's _hrv; dispatch -> 0).
     if not lean_frame:
-        src.append(f'  uint8 _hrv = cpu->host_return_valid;')
-        src.append(f'  if (cpu_take_tailcall_return_context(&_entry_s, &_hrv)) {{')
-        src.append(f'    cpu->host_return_valid = _hrv;')
-        src.append(f'  }}')
+        src.append(f'  uint8 _hrv = (uint8)_hrv_in;')
+        src.append(f'  (void)cpu_take_tailcall_return_context(&_entry_s, &_hrv);')
+        src.append(f'  uint32 _call_hrv = _hrv; (void)_call_hrv;  /* hrv passed to generated callees */')
     # Debug bisection guard (codegen-flag gated): after the prologue has
     # established the ACTUAL invocation's _entry_s/_hrv (incl. tail-call
     # context), tier the whole body to the interpreter if this node's PC is in

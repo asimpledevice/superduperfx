@@ -55,7 +55,7 @@ CACHE_FORMAT_VERSION = 5
 # generated definition -- and every direct call to one -- is then renamed
 # `<prefix>_<name>` through `module_namespace.h`, which every translation unit
 # of that module includes first. The header is derived from the emitted text
-# itself (the set of top-level `RecompReturn|void <name>(CpuState *cpu)`
+# itself (the set of top-level `RecompReturn|void <name>(CpuState *cpu, uint32 hrv)`
 # definitions), so it is authoritative rather than a regex run after the fact.
 _MODULE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$")
 _MODULE_PREFIX_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,31}$")
@@ -189,7 +189,7 @@ _HOST_RUNTIME_DISPATCH_RE = re.compile(
     r"\bcpu_dispatch_(?:call_pc(?:_pushed)?|pc(?:_from|_paired)?)\s*"
     r"\(\s*[^,]+,\s*(0x[0-9A-Fa-f]+|[0-9]+)[uUlL]*")
 _HOST_ALIAS_RE = re.compile(
-    r"\bvoid\s+([A-Za-z_]\w*)\s*\(CpuState\s*\*cpu\)\s*;"
+    r"\bvoid\s+([A-Za-z_]\w*)\s*\(CpuState\s*\*cpu(?:,\s*uint32\s+hrv)?\)\s*;"
     r"[^\n]*?/\*\s*\$([0-9A-Fa-f]{2}):([0-9A-Fa-f]{4})\s+alias\s*\*/")
 _PROFILE_MX_RE = re.compile(r"M([01])X([01])$")
 
@@ -653,7 +653,7 @@ def emit_dispatch_table(manifest: ProgramManifest, emitted_variants: Mapping,
     for pc24 in known_pcs:
         base = base_name(pc24)
         for m, x in sorted(emitted_variants.get(pc24, ())):
-            lines.append(f"RecompReturn {base}_M{m}X{x}(CpuState *cpu);")
+            lines.append(f"RecompReturn {base}_M{m}X{x}(CpuState *cpu, uint32 hrv);")
     lines.extend(["", "const DispatchEntry g_dispatch_table[] = {"])
     if not known_pcs:
         lines.append("    { 0xFFFFFFu, { NULL, NULL, NULL, NULL }, 0 },")
@@ -681,9 +681,9 @@ def emit_dispatch_table(manifest: ProgramManifest, emitted_variants: Mapping,
                  for m, x in sorted(emitted_variants.get(pc24, ()))]
         lines.append('#include "recomp_cache.h"')
         for n in names:
-            lines.append(f"RecompReturn {n}__body(CpuState *cpu);")
+            lines.append(f"RecompReturn {n}__body(CpuState *cpu, uint32 hrv);")
             lines.append(f'RecompRoutine {n}__rt = RECOMP_ROUTINE({n}__body, "{n}");')
-            lines.append(f"RecompReturn {n}(CpuState *cpu) {{ return recomp_call(&{n}__rt, cpu); }}")
+            lines.append(f"RecompReturn {n}(CpuState *cpu, uint32 hrv) {{ return recomp_call(&{n}__rt, cpu, hrv); }}")
         lines.append("RecompRoutine *const g_recomp_routines[] = {")
         lines.extend(f"    &{n}__rt," for n in names)
         if not names:

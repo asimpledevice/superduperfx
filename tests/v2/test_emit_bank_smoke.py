@@ -18,8 +18,8 @@ def test_two_entry_bank_emits_both_functions():
         BankEntry(name="tick",  start=0x8010, end=0x8012),
     ])
 
-    assert "void init(CpuState *cpu)" in src
-    assert "void tick(CpuState *cpu)" in src
+    assert "void init(CpuState *cpu, uint32 hrv)" in src
+    assert "void tick(CpuState *cpu, uint32 hrv)" in src
     # Header was emitted.
     assert "#include \"cpu_state.h\"" in src
     assert "#include \"funcs.h\"" in src
@@ -40,7 +40,7 @@ def test_default_func_name_when_none_specified():
     src = emit_bank(rom, bank=0x01, entries=[
         BankEntry(name=None, start=0x8000),
     ])
-    assert "RecompReturn bank_01_8000_M1X1(CpuState *cpu)" in src
+    assert "RecompReturn bank_01_8000_M1X1(CpuState *cpu, uint32 _hrv_in)" in src
 
 
 def test_emitted_bank_is_brace_balanced():
@@ -91,7 +91,7 @@ def test_overlapping_entry_inside_range_remains_local_branch():
         BankEntry(name="shared", start=0x8005, end=0x8007),
     ])
 
-    assert "RecompReturn wrapper_M1X1(CpuState *cpu)" in src
+    assert "RecompReturn wrapper_M1X1(CpuState *cpu, uint32 _hrv_in)" in src
     assert "L_8005_M1X1:" in src
     assert "goto L_8005_M1X1;" in src
     assert "cpu_trace_unresolved_goto_trap" not in src

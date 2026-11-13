@@ -76,7 +76,7 @@ int main(void) {
     g_ram[0x10] = 1;      /* BEQ not taken: all three blocks run, $40 gets 6 */
     cpu_push_jsr_return_frame(&g_cpu);
     g_stop_pc = stops[i];
-    Lean_M1X1(&g_cpu);
+    Lean_M1X1(&g_cpu, 2);
     if (g_recomp_stack_top != 0) { printf("stack %d at stop %u\n", g_recomp_stack_top, i); return 1; }
     if (i == 0) {
       if (g_other_exits || g_ram[0x40] != 0x06 || cpu_S() != 0x01FF) {
@@ -170,7 +170,7 @@ _DIFF_MAIN = r'''
 static uint8 ram_after[2][0x20000];
 static CpuState cpu_after[2];
 static uint8 g_pb;
-static void run(int which, RecompReturn (*fn)(CpuState *)) {
+static void run(int which, RecompEntryFn fn) {
   
   memset(&g_cpu, 0, sizeof g_cpu);
   for (unsigned i = 0; i < sizeof g_ram; i++) g_ram[i] = (uint8)(i * 7 + 3);
@@ -179,7 +179,7 @@ static void run(int which, RecompReturn (*fn)(CpuState *)) {
   cpu_set_X(0xF3); cpu_set_Y(5); cpu_set_D(0x0101); cpu_set_DB(0x7E); cpu_set_PB(g_pb);
   g_tc_valid = 0; g_recomp_stack_top = 0; g_other_exits = 0;
   cpu_push_jsr_return_frame(&g_cpu);
-  fn(&g_cpu);
+  fn(&g_cpu, 2);
   memcpy(ram_after[which], g_ram, sizeof g_ram);
   g_cpu.ram = NULL;
   cpu_after[which] = g_cpu; cpu_regs_store(&cpu_after[which]);
@@ -273,7 +273,7 @@ RecompReturn cpu_dispatch_pc_from(CpuState *cpu, uint32 pc24, uint16 restore, ui
 
 _TREE_MAIN = r'''
 typedef struct { int ret, kind, pops, yields, top; uint32 pc, site; uint16 restore, S; uint8 hrv; } Out;
-static Out run(RecompReturn (*fn)(CpuState *), int hrv, int pattern) {
+static Out run(RecompEntryFn fn, int hrv, int pattern) {
   
   memset(&g_cpu, 0, sizeof g_cpu);
   memset(g_ram, 0, sizeof g_ram);
@@ -281,14 +281,13 @@ static Out run(RecompReturn (*fn)(CpuState *), int hrv, int pattern) {
   cpu_set_S(0x01F0); cpu_set_m_flag(1); cpu_set_x_flag(1); cpu_set_P(0x30); cpu_set_PB(0x00); cpu_set_A(0x77);
   for (int i = 0; i < 16; i++)   /* the stack above S: equal or distinct bytes */
     g_ram[0x01F0 + i - 4] = pattern ? (uint8)(0x31 + 0x11 * i) : 0x80;
-  g_cpu.host_return_valid = (uint8)hrv;
   g_tc_valid = 0; g_recomp_stack_top = 1;
   g_kind = 0; g_pc = g_site = 0; g_restore = 0; g_pops = g_yields = 0;
   Out o;
-  o.ret = fn(&g_cpu);
+  o.ret = fn(&g_cpu, hrv);
   o.kind = g_kind; o.pc = g_pc; o.site = g_site; o.restore = g_restore;
   o.pops = g_pops; o.yields = g_yields; o.top = g_recomp_stack_top;
-  o.S = cpu_S(); o.hrv = g_cpu.host_return_valid;
+  o.S = cpu_S(); o.hrv = (uint8)hrv;
   return o;
 }
 int main(void) {

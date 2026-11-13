@@ -48,7 +48,7 @@ def _emit(tmp_path, cfg_dir, rom):
 
 
 def _body(src, name):
-    i = src.index('RecompReturn %s(CpuState *cpu) {' % name)
+    i = src.index('RecompReturn %s(CpuState *cpu, uint32 _hrv_in) {' % name)
     return src[i:src.index('\n}\n', i)]
 
 

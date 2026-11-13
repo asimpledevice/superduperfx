@@ -125,7 +125,8 @@ static void redirect_to_return(CpuState *cpu, uint32_t pc) {
     (void)cpu; (void)pc;
     interp_bridge_pre_opcode_redirect(0x008500);
 }
-void RecompStackPush(const char *name) {
+void RecompStackPush(const char *name, uint32 hrv) {
+    (void)hrv;
     if (g_push_count < 16) g_push_log[g_push_count] = name;
     g_push_count++;
     g_push_depth++;
@@ -136,7 +137,7 @@ void RecompStackPush(const char *name) {
 }
 void RecompStackPushInterpreter(const char *name) {
     ++g_interp_push_count;
-    RecompStackPush(name);
+    RecompStackPush(name, 0);
 }
 void RecompStackPop(void) {
     if (g_push_depth <= 0) g_pop_underflow = 1;
@@ -237,7 +238,6 @@ RecompReturn cpu_dispatch_pc(CpuState *cpu, uint32 pc24, uint16 miss_restore) {
 }
 RecompReturn cpu_dispatch_pc_paired(CpuState *cpu, uint32 pc24,
                                     uint8 frame_size) {
-    cpu->host_return_valid = frame_size;
     if (g_aot_nested_deadline && pc24 == FAKE_AOT) {
         RecompReturn result = interp_tier_dispatch_balanced(
             cpu, 0x008300, FAKE_AOT, cpu_S(), frame_size, false);

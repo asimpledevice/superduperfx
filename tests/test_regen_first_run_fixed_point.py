@@ -62,7 +62,7 @@ def test_first_regeneration_is_the_fixed_point(tmp_path, recipe):
     first = root.parent / "first"
     shutil.copytree(root / "src/gen", first)
     header = (root / "recomp/funcs.h").read_text(encoding="utf-8")
-    assert "void ResetEntry(CpuState *cpu);  /* $00:8000 alias */" in header
+    assert "void ResetEntry(CpuState *cpu, uint32 hrv);  /* $00:8000 alias */" in header
 
     _generate(root, rom)
     second = _tree(root / "src/gen")
@@ -72,5 +72,5 @@ def test_first_regeneration_is_the_fixed_point(tmp_path, recipe):
     assert drift == []
     assert (root / "recomp/funcs.h").read_text(encoding="utf-8") == header
     # The wrapper that only a second run used to emit is there the first time.
-    assert any("void ResetEntry(CpuState *cpu) {" in p.read_text(encoding="utf-8")
+    assert any("void ResetEntry(CpuState *cpu, uint32 hrv) {" in p.read_text(encoding="utf-8")
                for p in _tree(first).values() if p.suffix == ".c")

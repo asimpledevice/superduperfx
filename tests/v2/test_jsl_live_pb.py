@@ -21,7 +21,8 @@ def test_jsl_frame_preserves_live_program_bank_through_rom_mirrors(tmp_path):
 #include <assert.h>
 #include <stdint.h>
 typedef uint16_t uint16;
-typedef struct { uint16 S; uint8_t PB, host_return_valid; } CpuState;
+typedef uint32_t uint32;
+typedef struct { uint16 S; uint8_t PB; } CpuState;
 /* Accessors over this mock state (runner/src/cpu_regs.h shape). */
 #define cpu_S() (cpu->S)
 #define cpu_set_S(v) ((void)(cpu->S = (uint16)(v)))
@@ -31,16 +32,18 @@ static uint8_t ram[65536];
 static void cpu_write8(CpuState *cpu, unsigned bank, uint16 address, uint8_t value) {
   (void)cpu; assert(bank == 0); ram[address] = value;
 }
-static void generated(CpuState *cpu) {
+static uint32 generated(CpuState *cpu) {
+  uint32 _call_hrv = 0;  /* the hrv the frame push arms for the callee */
 ''' + frame + '''
+  return _call_hrv;
 }
 int main(void) {
   /* Same generated $0B:A100 body, two valid execution banks. */
   const uint8_t banks[] = {0x0b, 0x8b};
   for (unsigned i = 0; i < 2; ++i) {
-    CpuState cpu = {0x1fff, banks[i], 0};
-    generated(&cpu);
-    assert(cpu.S == 0x1ffc && cpu.host_return_valid == 3);
+    CpuState cpu = {0x1fff, banks[i]};
+    uint32 hrv = generated(&cpu);
+    assert(cpu.S == 0x1ffc && hrv == 3);
     /* W65C816S JSL bus sequence: PBR, PCH, PCL; return is PC+3. */
     assert(ram[0x1fff] == banks[i]);
     assert(ram[0x1ffe] == 0xa1 && ram[0x1ffd] == 0x03);

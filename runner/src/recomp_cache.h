@@ -24,7 +24,7 @@
 
 #include "cpu_state.h"
 
-typedef RecompReturn (*RecompFn)(CpuState *cpu);
+typedef RecompEntryFn RecompFn;   /* (cpu, hrv) */
 
 typedef struct RecompRoutine {
   RecompFn fn;          /* entry while resident, else NULL */
@@ -54,13 +54,13 @@ void recomp_cache_load(RecompRoutine *rt);
 /* A call to an absent routine: loads it and runs it, or, with background
  * loading (recomp_cache_set_async), starts its load and runs it through the
  * host's interpreter fallback this time. */
-RecompReturn recomp_cache_call_absent(RecompRoutine *rt, CpuState *cpu);
+RecompReturn recomp_cache_call_absent(RecompRoutine *rt, CpuState *cpu, uint32 hrv);
 
-static inline RecompReturn recomp_call(RecompRoutine *rt, CpuState *cpu) {
-  if (__builtin_expect(rt->fn == NULL, 0)) return recomp_cache_call_absent(rt, cpu);
+static inline RecompReturn recomp_call(RecompRoutine *rt, CpuState *cpu, uint32 hrv) {
+  if (__builtin_expect(rt->fn == NULL, 0)) return recomp_cache_call_absent(rt, cpu, hrv);
   rt->last = ++g_recomp_clock;
   rt->active++;
-  RecompReturn r = rt->fn(cpu);
+  RecompReturn r = rt->fn(cpu, hrv);
   rt->active--;
   return r;
 }
@@ -74,7 +74,7 @@ static inline RecompReturn recomp_call(RecompRoutine *rt, CpuState *cpu) {
  * pinned (counted active) so it cannot be evicted. */
 void recomp_cache_set_async(int (*begin)(RecompRoutine *rt),
                             int (*finish)(RecompRoutine *rt, int wait),
-                            RecompReturn (*fallback)(RecompRoutine *rt, CpuState *cpu));
+                            RecompReturn (*fallback)(RecompRoutine *rt, CpuState *cpu, uint32 hrv));
 /* Completes a load in flight if its data has arrived (call once per frame). */
 void recomp_cache_poll(void);
 
@@ -86,7 +86,7 @@ typedef struct RecompFallback { uint32_t pc24; int32_t s_offset; } RecompFallbac
 extern const RecompFallback g_recomp_fallback[];
 /* The fallback for recomp_cache_set_async (recomp_cache_interp.c): needs
  * g_recomp_fallback and rt->id. */
-RecompReturn recomp_cache_interp_fallback(RecompRoutine *rt, CpuState *cpu);
+RecompReturn recomp_cache_interp_fallback(RecompRoutine *rt, CpuState *cpu, uint32 hrv);
 
 /* Budget in bytes for resident routines (0, the default: unlimited). */
 void recomp_cache_set_capacity(uint32_t bytes);

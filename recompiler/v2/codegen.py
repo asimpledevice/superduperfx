@@ -357,7 +357,7 @@ def variant_dispatch_case_lines(addr_24: int, base_name: str,
 
     def emit(label: str, name: str, comment: str = ""):
         pre = (" ".join(pre_call) + " ") if pre_call else ""
-        lines.append(f"{indent}{label}: {pre}_r = {name}(cpu); break;{comment}")
+        lines.append(f"{indent}{label}: {pre}_r = {name}(cpu, _call_hrv); break;{comment}")
 
     def emit_lle(label: str, m: int, x: int):
         if not lle_fallback:
@@ -1528,7 +1528,7 @@ def _emit_indirect_dispatch(insn) -> List[str]:
         _iret16 = (site_pc24 + 2) & 0xFFFF  # JSR (abs,X) is 3 bytes; push return-1
         lines.append(f"  cpu_write8(cpu, 0x00, cpu_S(), 0x{(_iret16 >> 8) & 0xFF:02x}); cpu_set_S((uint16)(cpu_S() - 1));")
         lines.append(f"  cpu_write8(cpu, 0x00, cpu_S(), 0x{_iret16 & 0xFF:02x}); cpu_set_S((uint16)(cpu_S() - 1));")
-        lines.append("  cpu->host_return_valid = 2;  /* indirect JSR call, 2-byte frame */")
+        lines.append("  _call_hrv = 2;  /* indirect JSR call, 2-byte frame */")
     elif is_call:
         # PEA already pushed the return frame; enter the handler as a paired
         # host call so its balanced RTS host-returns here (and pops the PEA'd
@@ -1536,11 +1536,11 @@ def _emit_indirect_dispatch(insn) -> List[str]:
         # an immediately preceding PHK byte which the handler's RTL consumes
         # along with PEA's two-byte PC.
         lines.append(
-            f"  cpu->host_return_valid = {call_frame_size};  "
+            f"  _call_hrv = {call_frame_size};  "
             f"/* {'PHK+PEA+JML' if kind == 'long' else 'PEA+JMP'} indirect call, "
             f"{call_frame_size}-byte frame */")
     else:
-        lines.append("  cpu->host_return_valid = _hrv;  /* JMP/JML indirect tail dispatch */")
+        lines.append("  _call_hrv = _hrv;  /* JMP/JML indirect tail dispatch */")
     # Index source: X or Y register. For JMP/JSR (abs,X)-style dispatch
     # (table_bases empty — the dispatch consumes the operand directly as
     # `(table, X)`), the asm shifts the entry index up by the entry size
@@ -1597,7 +1597,7 @@ def _emit_indirect_dispatch(insn) -> List[str]:
                 for em_v, ex_v in valid_variant_list(tgt_addr):
                     _UNRESOLVED_CALL_TARGETS.add((tgt_addr, em_v, ex_v))
                 lines.append(f"    case 0x{local_pc:04x}: {{  /* HLE boundary */")
-                lines.append("      cpu->host_return_valid = _hrv;")
+                lines.append("      _call_hrv = _hrv;")
                 lines.append("      RecompReturn _r;")
                 lines.append(
                     "      switch (((cpu_m_flag() & 1) << 1) | (cpu_x_flag() & 1)) {")
@@ -1934,7 +1934,7 @@ def _emit_indirect_dispatch(insn) -> List[str]:
                     target_bank if kind == 'long' else None, name, trace_pc24=site_pc24)
                 for stmt in env:
                     if (not (is_jsr or is_call)
-                            and stmt.endswith(f"{name}(cpu);")):
+                            and stmt.endswith(f"{name}(cpu, _call_hrv);")):
                         lines.append(
                             "      cpu_tailcall_inherit_return_context(_entry_s, _hrv);")
                     lines.append(f"      {stmt}")
@@ -2133,7 +2133,7 @@ def _emit_dispatch(insn) -> List[str]:
     # normal cpu->S pops). The dispatched handler is a dispatch-trampoline
     # target with no paired host-C caller -> enter with host_return_valid=0
     # so its RTS/RTL re-dispatches on the popped PC rather than host-return.
-    lines.append("  cpu->host_return_valid = 0;  /* dispatch-trampoline target */")
+    lines.append("  _call_hrv = 0;  /* dispatch-trampoline target */")
     lines.append("  switch (_idx) {")
     for i, e in enumerate(entries):
         if e == 0:
@@ -2226,14 +2226,14 @@ def _emit_return_frame_push(op: 'Call') -> List[str]:
             f"  cpu_write8(cpu, 0x00, cpu_S(), {pbr}); cpu_set_S((uint16)(cpu_S() - 1));",
             f"  cpu_write8(cpu, 0x00, cpu_S(), 0x{(ret16 >> 8) & 0xFF:02x}); cpu_set_S((uint16)(cpu_S() - 1));",
             f"  cpu_write8(cpu, 0x00, cpu_S(), 0x{ret16 & 0xFF:02x}); cpu_set_S((uint16)(cpu_S() - 1));",
-            "  cpu->host_return_valid = 3;  /* paired host caller, JSL frame */",
+            "  _call_hrv = 3;  /* paired host caller, JSL frame */",
         ]
     ret16 = ((site + 2) & 0xFFFF) if site is not None else 0xFFFF
     return [
         "  /* JSR return frame -> cpu->S (Option-1) */",
         f"  cpu_write8(cpu, 0x00, cpu_S(), 0x{(ret16 >> 8) & 0xFF:02x}); cpu_set_S((uint16)(cpu_S() - 1));",
         f"  cpu_write8(cpu, 0x00, cpu_S(), 0x{ret16 & 0xFF:02x}); cpu_set_S((uint16)(cpu_S() - 1));",
-        "  cpu->host_return_valid = 2;  /* paired host caller, JSR frame */",
+        "  _call_hrv = 2;  /* paired host caller, JSR frame */",
     ]
 
 
@@ -2328,7 +2328,7 @@ def _emit_call(op: Call) -> List[str]:
         lines = ["{ /* terminal JSR: callee consumes inline return frame */"]
         lines += _emit_return_frame_push(op)
         lines += [
-            "  cpu->host_return_valid = _hrv;",
+            "  _call_hrv = _hrv;",
             "  RecompReturn _r;",
             "  switch (((cpu_m_flag() & 1) << 1) | (cpu_x_flag() & 1)) {",
         ]
@@ -2364,7 +2364,7 @@ def _emit_call(op: Call) -> List[str]:
             env = emitter_helpers.pb_save_restore_envelope(
                 target_bank,
                 [
-                    f"RecompReturn _r = {pinned_name}(cpu);  "
+                    f"RecompReturn _r = {pinned_name}(cpu, _call_hrv);  "
                     f"/* cfg force_variant_at ${op.source_pc24:06X} -> "
                     f"M{pm}X{px} */",
                 ],
@@ -2373,7 +2373,7 @@ def _emit_call(op: Call) -> List[str]:
         # JSR: same-bank short call. No PB change.
         return [
             "{",
-            f"  RecompReturn _r = {pinned_name}(cpu);  "
+            f"  RecompReturn _r = {pinned_name}(cpu, _call_hrv);  "
             f"/* cfg force_variant_at ${op.source_pc24:06X} -> "
             f"M{pm}X{px} */",
             "  if (_r != RECOMP_RETURN_NORMAL) {",

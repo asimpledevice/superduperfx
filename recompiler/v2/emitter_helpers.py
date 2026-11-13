@@ -241,6 +241,6 @@ def call_with_pb_save(
     """Emit the canonical JSL PB envelope around one AOT callee."""
     return pb_save_restore_envelope(
         target_bank,
-        [f"RecompReturn _r = {callee_name}(cpu);"],
+        [f"RecompReturn _r = {callee_name}(cpu, _call_hrv);"],
         trace_pc24=trace_pc24,
     )

@@ -20,7 +20,7 @@ def test_linear_function_signature_and_return():
     """A trivial LDA #$05; STA $00; RTS function.
 
     Expected shape (LLE-first hardware-stack emit):
-        RecompReturn bank_00_8000_M1X1(CpuState *cpu) {
+        RecompReturn bank_00_8000_M1X1(CpuState *cpu, uint32 _hrv_in) {
           L_8000_M1X1:
             cpu_trace_block(cpu, 0x008000);
             uint8 _v1 = 0x5;
@@ -38,7 +38,7 @@ def test_linear_function_signature_and_return():
     })
     src = emit_function(rom, bank=0, start=0x8000, entry_m=1, entry_x=1)
 
-    assert "RecompReturn bank_00_8000_M1X1(CpuState *cpu)" in src
+    assert "RecompReturn bank_00_8000_M1X1(CpuState *cpu, uint32 _hrv_in)" in src
     assert "L_8000_M1X1:" in src
     # A-register touched (via width-aware helper, not a literal cpu->A=).
     assert "cpu_write_a_m" in src
@@ -115,12 +115,12 @@ def test_generic_hle_consumes_inherited_tail_context():
 
     assert "cpu_take_tailcall_return_context(NULL, NULL);" in src, src
     assert src.index("cpu_take_tailcall_return_context") < src.index(
-        "HleSchedulerReturn(cpu)"), src
+        "HleSchedulerReturn(cpu, _hrv_in)"), src
 
 
 def test_jsr_emits_function_call():
     """JSR $8010 -> emits a runtime (m, x) dispatch switch that calls
-    one of bank_00_8010_M{m}X{x}(cpu) per cpu_m_flag()/x_flag, with the
+    one of bank_00_8010_M{m}X{x}(cpu, _call_hrv) per cpu_m_flag()/x_flag, with the
     skip-propagation block after the switch (RecompReturn ABI
     2026-05-02; runtime dispatch 2026-05-23)."""
     rom = make_lorom_bank0({
@@ -133,7 +133,7 @@ def test_jsr_emits_function_call():
     src = emit_function(rom, bank=0, start=0x8000, entry_m=1, entry_x=1)
     # All four variants emitted as switch cases.
     for sfx in ("_M0X0", "_M0X1", "_M1X0", "_M1X1"):
-        assert f"bank_00_8010{sfx}(cpu)" in src, (
+        assert f"bank_00_8010{sfx}(cpu, _call_hrv)" in src, (
             f"variant bank_00_8010{sfx} missing from emit\n{src}"
         )
     assert "RecompReturn _r;" in src

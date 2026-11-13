@@ -105,24 +105,9 @@ typedef struct CpuState {
     uint8  reg_DB;
     uint8  reg_PB;
 
-    /* Option-1 cpu->S return-frame ABI (see docs/MULTI_TIER.md). NON-ZERO
-     * when the current function was entered via a direct generated JSR/JSL
-     * C call (a paired host-C caller exists and pushed a matching return
-     * frame on cpu->S) — and the value IS the pushed frame size in bytes:
-     * 2 for a JSR-paired caller, 3 for a JSL-paired caller. 0 when entered
-     * via cpu_dispatch_pc_from / PEI-RTL trampoline / interrupt / dynarec
-     * (no proven paired host caller). Each function captures it into a
-     * local `_hrv` at entry; the caller sets it right before every invoke
-     * (direct JSR call -> 2, JSL -> 3; tail JMP/JML -> propagate the
-     * caller's _hrv; dispatch -> 0). RTS/RTL may return RECOMP_RETURN_NORMAL
-     * only when _hrv!=0 AND the stack was balanced at entry (cpu->S ==
-     * _entry_s); otherwise it dispatches on the popped PC24. The frame-size
-     * payload exists for cpu_unresolved_abandon_balanced(): at an
-     * unresolved control transfer there is no RTS/RTL op to take a static
-     * frame size from, so the abandon path pops the caller's frame by the
-     * size the caller actually pushed. The legacy boolean value 1 is
-     * INVALID — every setter must write 0/2/3. */
-    uint8  host_return_valid;
+    /* host_return_valid (the size of the return frame a paired host caller
+     * pushed: 2 JSR, 3 JSL, 0 none) is not CPU state: generated functions
+     * receive it as their second argument (RecompEntryFn). */
 
     /* Status register P (full byte). Individual bit mirrors below for
      * codegen efficiency — they MUST be kept in sync via the helpers
@@ -247,6 +232,18 @@ typedef enum RecompReturn {
     RECOMP_RETURN_SKIP_2 = 2,
     RECOMP_RETURN_SKIP_3 = 3,
 } RecompReturn;
+
+/* A generated function. hrv is the size of the return frame its paired
+ * host-C caller pushed on the guest stack: 2 for a direct JSR, 3 for a JSL,
+ * 0 when there is no paired caller (dispatch, PEI/RTL trampoline, interrupt).
+ * The caller passes it on every invoke (a tail JMP/JML passes its own hrv
+ * on); the function captures it as _hrv. RTS/RTL may host-return
+ * RECOMP_RETURN_NORMAL only when _hrv != 0 and the stack is balanced
+ * (S == entry S); otherwise they dispatch on the popped PC. The size, not a
+ * flag, so cpu_unresolved_abandon_balanced() can pop exactly the caller's
+ * frame. The old boolean value 1 is invalid. (docs/MULTI_TIER.md) */
+struct CpuState;
+typedef RecompReturn (*RecompEntryFn)(struct CpuState *cpu, uint32 hrv);
 
 /* ── Typed register access ────────────────────────────────────────────────
  *
@@ -503,21 +500,21 @@ static inline void cpu_push_interrupt_frame(CpuState *cpu) {
  * by 2 on every call (SMW's per-frame GameMode dispatch leaked exactly this).
  * PC bytes are placeholders — the trampoline-RTS dispatch-misses on them and
  * miss-restores S to entry_s + 2. Symmetric to cpu_push_interrupt_frame. */
-static inline void cpu_push_jsr_return_frame(CpuState *cpu) {
+static inline uint32 cpu_push_jsr_return_frame(CpuState *cpu) {
     cpu_write8(cpu, 0x00, cpu_S(), 0x00); cpu_set_S((uint16)(cpu_S() - 1));  /* PCH */
     cpu_write8(cpu, 0x00, cpu_S(), 0x00); cpu_set_S((uint16)(cpu_S() - 1));  /* PCL */
-    cpu->host_return_valid = 2;  /* JSR-paired: 2-byte frame */
+    return 2;  /* JSR-paired: pass as the callee's hrv */
 }
 
 /* Model a 65816 hardware JSL's 3-byte return-frame push for host glue
  * that calls a long subroutine alias directly. The sentinel address is
  * only observed on a trampoline miss; a balanced RTL host-returns before
  * dispatching on it. */
-static inline void cpu_push_jsl_return_frame(CpuState *cpu) {
+static inline uint32 cpu_push_jsl_return_frame(CpuState *cpu) {
     cpu_write8(cpu, 0x00, cpu_S(), 0xFF); cpu_set_S((uint16)(cpu_S() - 1));  /* PB */
     cpu_write8(cpu, 0x00, cpu_S(), 0xFF); cpu_set_S((uint16)(cpu_S() - 1));  /* PCH */
     cpu_write8(cpu, 0x00, cpu_S(), 0xFF); cpu_set_S((uint16)(cpu_S() - 1));  /* PCL */
-    cpu->host_return_valid = 3;  /* JSL-paired: 3-byte frame */
+    return 3;  /* JSL-paired: pass as the callee's hrv */
 }
 
 /* ── Initialisation ─────────────────────────────────────────────────────── */
@@ -583,7 +580,7 @@ typedef struct DispatchEntry {
      *   0 = M0X0, 1 = M0X1, 2 = M1X0, 3 = M1X1.
      * NULL = this exact architectural variant remains authoritative LLE.
      * The row itself still marks pc24 as a known function boundary. */
-    RecompReturn (*variant[4])(CpuState *);
+    RecompEntryFn variant[4];
     /* Bytes embedded after a JSR/JSL and consumed by this callee.  The
      * interpreter bridge uses this to resume a bounced call at the same
      * continuation the decoder selected for compiled callers. */

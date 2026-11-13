@@ -2300,6 +2300,33 @@ directly; masks GCC re-adds because the read barrier hides the range),
 +54 NOP (MFC1 hazard slots GCC could not fill), and about +130 from register
 pressure (MOVE/ADDIU, SW/LW spills).
 
+### g_cpu step 3: host_return_valid as an argument (2026-11-13)
+
+Generated functions are `RecompReturn f(CpuState *cpu, uint32 hrv)`
+(`RecompEntryFn`); the field is gone from `CpuState`.
+- Callee: the prologue captures `_hrv` from the argument (the tail-call
+  context can still override it) and starts a local `_call_hrv = _hrv`.
+- Caller: every former `cpu->host_return_valid = X` sets `_call_hrv`, and
+  every call to a generated function passes it, so a constant frame size
+  becomes one `li` into an argument register instead of a store.
+- Runtime: the dispatchers pass the size they used to store;
+  `RecompStackPush`, `recomp_enter`, `recomp_enter_rt`, `recomp_frame` and
+  the code cache's call/fallback path take it; Blue nesting state and the
+  rollback residue (version 9) drop it. An interpreter scope pushes 0 (its
+  slot is marked invalid, so the value is unread).
+- Host aliases are `void name(CpuState *cpu, uint32 hrv)`;
+  `cpu_push_jsr_return_frame`/`..._jsl_...` return the size to pass. HLE
+  helpers are `RecompReturn H(CpuState *cpu, uint32 hrv)`.
+- Tools: `v2_sync_funcs_h.py`, `split_code_cache.py`, the bank splitter and
+  the link-closure check follow the new signature. A config's funcs.h must
+  be regenerated (`tools/v2_sync_funcs_h.py`); `smw-ref`'s copy is still the
+  old form, as are its hand-written glue and its own generated sources.
+
+State hashes identical to step 3a (SMW 53, Pitfall 12, JM2 25 frames).
+Regenerating with the final emitter gives byte-identical output to the
+validated builds. C tests pass; Python tests pass except the intermittent
+MSU playback test.
+
 ## Next steps
 
 1. Audio: check the RSP DSP by ear on hardware (output arrives later than

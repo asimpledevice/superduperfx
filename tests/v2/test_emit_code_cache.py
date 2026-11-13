@@ -52,13 +52,13 @@ def _dispatch():
 
 def test_bodies_are_renamed_and_trampolines_emitted(cache_mode):
     src = _bodies()
-    assert 'RecompReturn CallerA_M1X1__body(CpuState *cpu) {' in src
-    assert f'RecompReturn {_B}_M1X1__body(CpuState *cpu) {{' in src
+    assert 'RecompReturn CallerA_M1X1__body(CpuState *cpu, uint32 _hrv_in) {' in src
+    assert f'RecompReturn {_B}_M1X1__body(CpuState *cpu, uint32 _hrv_in) {{' in src
     # The caller still calls the plain name: the trampoline.
-    assert re.search(rf'_r = {_B}_M1X1\(cpu\);', src)
+    assert re.search(rf'_r = {_B}_M1X1\(cpu, _call_hrv\);', src)
     d = _dispatch()
     assert 'RecompRoutine CallerA_M1X1__rt = RECOMP_ROUTINE(CallerA_M1X1__body, "CallerA_M1X1");' in d
-    assert f'RecompReturn {_B}_M1X1(CpuState *cpu) {{ return recomp_call(&{_B}_M1X1__rt, cpu); }}' in d
+    assert f'RecompReturn {_B}_M1X1(CpuState *cpu, uint32 hrv) {{ return recomp_call(&{_B}_M1X1__rt, cpu, hrv); }}' in d
     assert 'const unsigned g_recomp_routine_count = 5u;' in d
 
 
@@ -71,7 +71,7 @@ def test_default_mode_is_unchanged(monkeypatch):
 def test_sharding_places_bodies_by_their_pc(cache_mode):
     head = '#include "cpu_state.h"\n/* forward declarations */\n'
     src = _bodies()
-    marker = src.index('RecompReturn CallerA_M1X1__body(CpuState *cpu) {')
+    marker = src.index('RecompReturn CallerA_M1X1__body(CpuState *cpu, uint32 _hrv_in) {')
     # Shard a bank built from both bodies; only their placement is checked.
     from v2 import translation_units as tu
     preamble = head.replace('/* forward declarations */', tu._FORWARD_DECL_MARKER)
@@ -99,7 +99,7 @@ static int run(void) {
   cpu_set_S(0x01FF); cpu_set_m_flag(1); cpu_set_x_flag(1); cpu_set_P(0x30);
   g_tc_valid = 0; g_recomp_stack_top = 0;
   cpu_push_jsr_return_frame(&g_cpu);
-  CallerA_M1X1(&g_cpu);
+  CallerA_M1X1(&g_cpu, 2);
   return g_ram[0x40] == 0x33 && cpu_S() == 0x01FF;
 }
 int main(void) {
@@ -121,7 +121,7 @@ int main(void) {
     g_cpu.ram = g_ram; cpu_set_S(0x01FF); cpu_set_m_flag(1); cpu_set_x_flag(0); cpu_set_P(0x20);
     g_tc_valid = 0; g_recomp_stack_top = 0;
     cpu_push_jsr_return_frame(&g_cpu);
-    bank_00_8010_M1X0(&g_cpu);
+    bank_00_8010_M1X0(&g_cpu, 2);
   }
   recomp_cache_stats(&st);
   if (st.loads != 3 || st.evictions != 2 || CallerA_M1X1__rt.fn || CalleeB_M1X1__rt.fn ||

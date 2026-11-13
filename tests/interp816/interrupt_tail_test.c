@@ -24,7 +24,6 @@ RecompReturn cpu_dispatch_pc_paired(CpuState *cpu, uint32 pc24,
                                    uint8 frame_size) {
     CHECK(pc24 == FAKE_AOT, "unexpected AOT target %06X", pc24);
     g_aot_called++;
-    cpu->host_return_valid = frame_size;
     /* Model a generated subroutine's unresolved tail into an RTS/RTL suffix. */
     bounce_result = interp_tier_dispatch_tail(cpu, 0x008200, 0x008100,
                                               cpu_S(), frame_size);

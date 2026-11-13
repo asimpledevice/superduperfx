@@ -123,7 +123,7 @@ def emit_bank(rom: bytes, bank: int,
     for entry in entries:
         base = entry.name or _default_func_name_local(bank, entry.start)
         suffix = _variant_suffix(entry.entry_m, entry.entry_x)
-        parts.append(f"RecompReturn {base}{suffix}(CpuState *cpu);")
+        parts.append(f"RecompReturn {base}{suffix}(CpuState *cpu, uint32 hrv);")
     parts.append("")
 
     # Build a (start_pc16 -> base_name) lookup so a `tail_call:<addr>`
@@ -274,13 +274,13 @@ def emit_bank(rom: bytes, bank: int,
             "interp_tier_dispatch_interrupt"
             if spec["interrupt"] else "interp_tier_dispatch")
         body = [
-            f"void {name}(CpuState *cpu) {{",
+            f"void {name}(CpuState *cpu, uint32 hrv) {{",
             "  RecompReturn _r;",
+            "  uint32 _call_hrv = hrv;",
         ]
         if spec["interrupt"]:
             body.extend([
-                "  uint8 _interrupted_hrv = cpu->host_return_valid;",
-                "  cpu->host_return_valid = 0;",
+                "  _call_hrv = 0;  /* an interrupt has no paired host caller */",
                 "  cpu_interrupt_context_enter();",
             ])
         body.extend([
@@ -291,7 +291,7 @@ def emit_bank(rom: bytes, bank: int,
                 index = (m << 1) | x
                 if (m, x) in modes:
                     body.append(
-                        f"    case {index}: _r = {name}_M{m}X{x}(cpu); break;")
+                        f"    case {index}: _r = {name}_M{m}X{x}(cpu, _call_hrv); break;")
                 else:
                     body.append(
                         f"    case {index}: _r = {tier_dispatch}(cpu, "
@@ -304,7 +304,6 @@ def emit_bank(rom: bytes, bank: int,
         if spec["interrupt"]:
             body.extend([
                 "  cpu_interrupt_context_leave();",
-                "  cpu->host_return_valid = _interrupted_hrv;",
             ])
         if lean_emit():
             body.extend([

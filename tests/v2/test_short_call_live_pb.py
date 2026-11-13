@@ -44,7 +44,7 @@ typedef int RecompReturn;
 #define RECOMP_RETURN_NORMAL 0
 #define cpu_trace_event(...) ((void)0)
 #define cpu_trace_mark_nlr_exit(...) ((void)0)
-typedef struct { uint16 S, X; uint8 PB, m_flag, x_flag, host_return_valid; } CpuState;
+typedef struct { uint16 S, X; uint8 PB, m_flag, x_flag; } CpuState;
 /* Accessors over this mock state (runner/src/cpu_regs.h shape). */
 #define cpu_S() (cpu->S)
 #define cpu_set_S(v) ((void)(cpu->S = (uint16)(v)))
@@ -68,8 +68,8 @@ static uint16 cpu_read16(CpuState *cpu, uint32 bank_arg, uint32 addr_arg) { uint
 static int cpu_trace_dispatch_oob(CpuState *cpu, uint32 pc, uint16 target) {
     (void)cpu; (void)pc; (void)target; assert(0); return 0;
 }
-static RecompReturn Target_M1X1(CpuState *cpu) {
-    aot_calls++; seen = ((uint32)cpu_PB() << 16) | 0x9000;
+static RecompReturn Target_M1X1(CpuState *cpu, uint32 _hrv_in) {
+    (void)_hrv_in; aot_calls++; seen = ((uint32)cpu_PB() << 16) | 0x9000;
     cpu_set_S(cpu_S() + (2)); return 0;
 }
 static RecompReturn interp_tier_run_call_frame(CpuState *cpu, uint32 target,
@@ -78,13 +78,14 @@ static RecompReturn interp_tier_run_call_frame(CpuState *cpu, uint32 target,
     lle_calls++; seen = target; cpu_set_S(cpu_S() + (2)); return 0;
 }
 static RecompReturn generated(CpuState *cpu) {
+    uint32 _call_hrv = 0;
 ''' + '\n'.join(lines) + r'''
     return 0;
 }
 int main(void) {
     for (unsigned bank = 0; bank <= 0x80; bank += 0x80) {
         for (unsigned compiled = 0; compiled < 2; compiled++) {
-            CpuState cpu = {0x1fff, 0, bank, compiled, 1, 0};
+            CpuState cpu = {0x1fff, 0, bank, compiled, 1};
             assert(generated(&cpu) == 0);
             assert(seen == ((bank << 16) | 0x9000));
             assert(cpu.PB == bank && cpu.S == 0x1fff);

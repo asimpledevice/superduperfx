@@ -122,7 +122,7 @@ def test_all_lle_host_alias_still_links_to_authoritative_dispatch(tmp_path):
 
     assert result.returncode == 0, result.stdout + result.stderr
     source = (out_dir / "bank00_v2.c").read_text(encoding="utf-8")
-    assert "void I_RESET(CpuState *cpu)" in source
+    assert "void I_RESET(CpuState *cpu, uint32 hrv)" in source
     assert "I_RESET_M" not in source
     assert source.count("interp_tier_dispatch(cpu, 0x008000u)") == 5
 
@@ -140,7 +140,7 @@ def test_all_lle_interrupt_alias_uses_rti_aware_dispatch(tmp_path):
 
     assert result.returncode == 0, result.stdout + result.stderr
     source = (out_dir / "bank00_v2.c").read_text(encoding="utf-8")
-    assert "void Interrupt_NMI(CpuState *cpu)" in source
+    assert "void Interrupt_NMI(CpuState *cpu, uint32 hrv)" in source
     assert source.count(
         "interp_tier_dispatch_interrupt(cpu, 0x008000u)") == 5
 
@@ -168,11 +168,12 @@ def test_aot_interrupt_tail_to_lle_preserves_rti_boundary(tmp_path):
     source = (out_dir / "bank00_v2.c").read_text(encoding="utf-8")
     assert "RecompReturn Interrupt_NMI_M1X1" in source
     assert "interp_tier_dispatch_tail(cpu, (((uint32)cpu_PB() << 16) | 0x8010u)" in source
-    assert "uint8 _interrupted_hrv = cpu->host_return_valid;" in source
-    assert "cpu->host_return_valid = 0;" in source
+    # The interrupt body is entered with hrv 0 (no paired host caller); hrv is
+    # a local of the alias, so the interrupted code needs no restore.
+    assert "_call_hrv = 0;  /* an interrupt has no paired host caller */" in source
     assert "cpu_interrupt_context_enter();" in source
     assert "cpu_interrupt_context_leave();" in source
-    assert "cpu->host_return_valid = _interrupted_hrv;" in source
+    assert "Interrupt_NMI_M1X1(cpu, _call_hrv)" in source
 
 
 def test_hle_override_covers_all_mx_modes_at_lorom_mirror(tmp_path):
@@ -201,8 +202,8 @@ def test_hle_override_covers_all_mx_modes_at_lorom_mirror(tmp_path):
     for m in (0, 1):
         for x in (0, 1):
             name = f"bank_80_8099_M{m}X{x}"
-            assert f"RecompReturn {name}(CpuState *cpu)" in source
-            assert "RecompReturn _r = HleSchedulerReturn(cpu);" in source
+            assert f"RecompReturn {name}(CpuState *cpu, uint32 _hrv_in)" in source
+            assert "RecompReturn _r = HleSchedulerReturn(cpu, _hrv_in);" in source
             assert name in dispatch
     assert source.count(
         "cpu_take_tailcall_return_context(NULL, NULL);") == 4
@@ -234,9 +235,9 @@ def test_hle_override_without_static_demand_gets_dispatch_row(tmp_path):
     assert f"0x008050u, {{ {slots} }}" in dispatch
     for m in (0, 1):
         for x in (0, 1):
-            assert f"RecompReturn bank_00_8050_M{m}X{x}(CpuState *cpu)" \
+            assert f"RecompReturn bank_00_8050_M{m}X{x}(CpuState *cpu, uint32 _hrv_in)" \
                 in source
-    assert source.count("RecompReturn _r = HleRuntimeOnly(cpu);") == 4
+    assert source.count("RecompReturn _r = HleRuntimeOnly(cpu, _hrv_in);") == 4
 
 
 def test_hle_override_without_static_demand_keeps_analysis(tmp_path):
@@ -418,14 +419,14 @@ def test_host_alias_dispatches_live_mx_and_missing_exact_slot_to_lle(tmp_path):
 
     source = (out_dir / "bank00_v2.c").read_text(encoding="utf-8")
     assert "switch (((cpu_m_flag() & 1) << 1)" in source
-    assert "case 3: _r = I_RESET_M1X1(cpu);" in source
+    assert "case 3: _r = I_RESET_M1X1(cpu, _call_hrv);" in source
     # Wrong-width reset decodes are structural and intentionally remain LLE.
     assert "interp_tier_dispatch(cpu, 0x008000u)" in source
 
 
 def _function_def_counts(source: str) -> Counter:
     return Counter(re.findall(
-        r'^RecompReturn\s+([A-Za-z_]\w*)\(CpuState \*cpu\) \{',
+        r'^RecompReturn\s+([A-Za-z_]\w*)\(CpuState \*cpu, uint32 _hrv_in\) \{',
         source, re.MULTILINE))
 
 

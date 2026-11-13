@@ -39,7 +39,7 @@ void cpu_write16(CpuState *cpu, uint32 bank_arg, uint32 addr_arg, uint32 v_arg) 
   cpu_write8(cpu, bank, addr, (uint8)v);
   cpu_write8(cpu, bank, (uint16)(addr + 1), (uint8)(v >> 8));
 }
-void RecompStackPush(const char *s) { (void)s; g_recomp_stack_top++; }
+void RecompStackPush(const char *s, uint32 hrv) { (void)s; (void)hrv; g_recomp_stack_top++; }
 void RecompStackPop(void) { g_recomp_stack_top--; }
 void RecompStackPopYield(void) { g_recomp_stack_top--; }
 void WatchdogCheck(void) {}
@@ -87,15 +87,15 @@ RecompReturn cpu_dispatch_pc_from(CpuState *cpu, uint32 pc,
 
 GENERATED
 
-static int check(RecompReturn (*fn)(CpuState *), unsigned frame,
+static int check(RecompEntryFn fn, unsigned frame,
                  unsigned cleanup, uint16 entry, int skip, int rewrite) {
   memset(&g_cpu, 0, sizeof g_cpu);
   memset(g_ram, 0, sizeof g_ram);
-  g_cpu.ram = g_ram; cpu_set_S(entry); g_cpu.host_return_valid = frame;
+  g_cpu.ram = g_ram; cpu_set_S(entry);
   cpu_write16(&g_cpu, 0, (uint16)(entry + 1), 0x1234);
   cpu_write16(&g_cpu, 0, (uint16)(entry + frame + 1), 0xabcd);
   other_exits = 0; ancestor_skip = skip;
-  RecompReturn result = fn(&g_cpu);
+  RecompReturn result = fn(&g_cpu, frame);
   if (skip >= 0) {
     if (result != skip || other_exits) return 1;
   } else if (rewrite) {

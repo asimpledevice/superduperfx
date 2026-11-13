@@ -29,11 +29,11 @@ _SAMPLE_BANK = """\
 /* header */
 #include "funcs.h"
 
-RecompReturn GameMode08_FileSelect_M1X1(CpuState *cpu) {
-  return GameMode08_FileSelect_Entry3_M1X1(cpu);
+RecompReturn GameMode08_FileSelect_M1X1(CpuState *cpu, uint32 _hrv_in) {
+  return GameMode08_FileSelect_Entry3_M1X1(cpu, _call_hrv);
 }
-RecompReturn bank_00_9CB0_M1X0(CpuState *cpu) { return RECOMP_RETURN_NORMAL; }
-void I_RESET(CpuState *cpu) { (void)cpu; }
+RecompReturn bank_00_9CB0_M1X0(CpuState *cpu, uint32 _hrv_in) { return RECOMP_RETURN_NORMAL; }
+void I_RESET(CpuState *cpu, uint32 hrv) { (void)cpu; (void)hrv; }
 static RecompReturn helper_not_top_level(CpuState *cpu) { return 0; }
 """
 

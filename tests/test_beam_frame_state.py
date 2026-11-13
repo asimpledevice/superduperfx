@@ -96,7 +96,7 @@ int main(void) {
       case 0:bad.magic=0;break;
       case 1:bad.version++;break;
       case 2:bad.cpu.ram=(uint8_t *)1;break;
-      case 3:bad.cpu.host_return_valid=1;break;
+      case 3:bad.cpu._flag_N=2;break;
       case 4:bad.apu_port.qTail=APU_PORT_QUEUE_LEN+1;break;
       case 5:((uint8_t *)&bad.apu_port)[offsetof(ApuPortSched,timeValid)]=2;break;
       case 6:bad.interp[0]=0;break;

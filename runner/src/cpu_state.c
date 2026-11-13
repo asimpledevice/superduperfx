@@ -1107,11 +1107,11 @@ const char *cpu_dispatch_entry_reason(uint32_t pc24, uint8_t mx) {
     return "compiled_entry_available_check_policy";
 }
 
-static RecompReturn (*_cpu_dispatch_lookup(CpuState *cpu, uint32 pc24))(CpuState *) {
+static RecompEntryFn _cpu_dispatch_lookup(CpuState *cpu, uint32 pc24) {
     const DispatchEntry *row = _cpu_dispatch_find(pc24);
     if (row != NULL) {
         unsigned idx = (unsigned)(((cpu_m_flag() & 1) << 1) | (cpu_x_flag() & 1));
-        RecompReturn (*fp)(CpuState *) = row->variant[idx];
+        RecompEntryFn fp = row->variant[idx];
         /* A WRAM body may only run while its live bytes match the snapshot. */
         if (fp != NULL && _ram_guard_blocks(cpu, pc24)) return NULL;
         return fp;
@@ -1128,7 +1128,7 @@ RecompReturn cpu_dispatch_pc_from(CpuState *cpu, uint32 pc24,
     int via_mirror = 0;
     int known_entry = 0;
     const DispatchEntry *row = _cpu_dispatch_find(pc24);
-    RecompReturn (*fp)(CpuState *) = NULL;
+    RecompEntryFn fp = NULL;
     if (row != NULL) {
         known_entry = 1;
         fp = row->variant[mx_idx];
@@ -1158,7 +1158,6 @@ RecompReturn cpu_dispatch_pc_from(CpuState *cpu, uint32 pc24,
              * emitted no body for the live M/X state.  That is not a return
              * continuation miss: execute the exact ROM bytes.  cpu->S already
              * reflects the RTS/RTL pop that reached this tail target. */
-            cpu->host_return_valid = 0;
             cpu_set_PB((uint8)(pc24 >> 16));
             return interp_tier_dispatch_popped_return(
                 cpu, pc24, source_pc24, entry_s_for_miss_restore);
@@ -1181,9 +1180,8 @@ RecompReturn cpu_dispatch_pc_from(CpuState *cpu, uint32 pc24,
      * runs with host_return_valid=0 so its RTS/RTL re-dispatches on the
      * popped PC rather than host-returning into this dispatch frame. The
      * chain unwinds when a dispatch misses (S restored above) -> NORMAL. */
-    cpu->host_return_valid = 0;
     cpu_set_PB((uint8)(pc24 >> 16));
-    return fp(cpu);
+    return fp(cpu, 0);
 }
 
 RecompReturn cpu_dispatch_pc(CpuState *cpu, uint32 pc24,
@@ -1224,7 +1222,7 @@ RecompReturn cpu_dispatch_call_pc(CpuState *cpu, uint32 pc24,
 
     unsigned mx_idx = (unsigned)(((cpu_m_flag() & 1) << 1) | (cpu_x_flag() & 1));
     int via_mirror = 0;
-    RecompReturn (*fp)(CpuState *) = _cpu_dispatch_lookup(cpu, pc24);
+    RecompEntryFn fp = _cpu_dispatch_lookup(cpu, pc24);
     if (fp == NULL) {
         if (dispatch_has_rom_mirror(pc24)) {
             fp = _cpu_dispatch_lookup(cpu, pc24 ^ 0x800000u);
@@ -1234,8 +1232,7 @@ RecompReturn cpu_dispatch_call_pc(CpuState *cpu, uint32 pc24,
     _dispatch_log_record(pc24, source_pc24, mx_idx, fp != NULL, via_mirror);
     if (fp != NULL) {
         /* Paired host-call: handler host-returns through the pushed frame. */
-        cpu->host_return_valid = 2;
-        return fp(cpu);
+        return fp(cpu, 2);
     }
     /* No AOT body for the live pointer -> interpreter tier. */
     return interp_tier_run_call(cpu, pc24, source_pc24);
@@ -1249,7 +1246,7 @@ RecompReturn cpu_dispatch_call_pc_pushed(CpuState *cpu, uint32 pc24,
     source_pc24 &= 0xFFFFFFu;
     unsigned mx_idx = (unsigned)(((cpu_m_flag() & 1) << 1) | (cpu_x_flag() & 1));
     int via_mirror = 0;
-    RecompReturn (*fp)(CpuState *) = _cpu_dispatch_lookup(cpu, pc24);
+    RecompEntryFn fp = _cpu_dispatch_lookup(cpu, pc24);
     if (fp == NULL) {
         if (dispatch_has_rom_mirror(pc24)) {
             fp = _cpu_dispatch_lookup(cpu, pc24 ^ 0x800000u);
@@ -1266,8 +1263,7 @@ RecompReturn cpu_dispatch_call_pc_pushed(CpuState *cpu, uint32 pc24,
          * its bank restored while propagating that unwind. */
         uint8 saved_pb = cpu_PB();
         if (frame_size == 3) cpu_set_PB((uint8)(pc24 >> 16));
-        cpu->host_return_valid = frame_size;
-        RecompReturn r = fp(cpu);
+        RecompReturn r = fp(cpu, frame_size);
         cpu_set_PB(saved_pb);
         return r;
     }
@@ -1295,7 +1291,7 @@ RecompReturn cpu_dispatch_pc_paired(CpuState *cpu, uint32 pc24, uint8 frame_size
     pc24 &= 0xFFFFFFu;
     unsigned mx_idx = (unsigned)(((cpu_m_flag() & 1) << 1) | (cpu_x_flag() & 1));
     int via_mirror = 0;
-    RecompReturn (*fp)(CpuState *) = _cpu_dispatch_lookup(cpu, pc24);
+    RecompEntryFn fp = _cpu_dispatch_lookup(cpu, pc24);
     if (fp == NULL) {
         if (dispatch_has_rom_mirror(pc24)) {
             fp = _cpu_dispatch_lookup(cpu, pc24 ^ 0x800000u);
@@ -1304,8 +1300,7 @@ RecompReturn cpu_dispatch_pc_paired(CpuState *cpu, uint32 pc24, uint8 frame_size
     }
     _dispatch_log_record(pc24, 0xFFFFFFu, mx_idx, fp != NULL, via_mirror);
     if (fp == NULL) return RECOMP_RETURN_NORMAL;  /* caller already checked has_entry */
-    cpu->host_return_valid = frame_size;
-    return fp(cpu);
+    return fp(cpu, frame_size);
 }
 
 /* Read-only probe: would a dispatch to pc24 find an exact AOT body?
@@ -1351,7 +1346,6 @@ void cpu_state_init(CpuState *cpu, uint8 *ram) {
     cpu_set_m_flag(1);
     cpu_set_x_flag(1);
     cpu_set_emulation(1);
-    cpu->host_return_valid = 0;
     cpu->_flag_N = 0;
     cpu->_flag_V = 0;
     cpu->_flag_Z = 0;

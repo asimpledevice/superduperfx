@@ -34,10 +34,10 @@ int main(void) {
     memset(&g_cpu, 0, sizeof g_cpu);
     memset(g_ram, 0, sizeof g_ram);
     g_cpu.ram = g_ram; cpu_set_S(entries[i]); cpu_set_X(1);
-    g_cpu.host_return_valid = 2; cpu_set_x_flag(1); cpu_set_P(0x10);
+    cpu_set_x_flag(1); cpu_set_P(0x10);
     cpu_write16(&g_cpu, 0, (uint16)(cpu_S() + 1), 0x8123);
     other_exits = 0; ancestor_skip = -1;
-    ComputedCall_M0X1(&g_cpu);
+    ComputedCall_M0X1(&g_cpu, 2);
     if (other_exits != 1 || other_target != TARGET ||
         cpu_S() != (uint16)(entries[i] - LOCALS) || g_recomp_stack_top != 0)
       return 1;

@@ -59,9 +59,9 @@ def test_pha_rts_stack_dispatch_replaces_fake_return_push():
     assert 'RTS-stack dispatch terminator: cfg-resolved target list' in src
     assert 'cpu_Y() & 0xFFFF) / 2' in src
     assert 'cpu_set_P((uint8)(cpu_P() | 0x30))' in src
-    assert 'bank_00_9000_M1X1(cpu)' in src
-    assert 'bank_00_9100_M1X1(cpu)' in src
-    assert 'bank_00_9000_M0X0(cpu)' not in src
+    assert 'bank_00_9000_M1X1(cpu, _call_hrv)' in src
+    assert 'bank_00_9100_M1X1(cpu, _call_hrv)' in src
+    assert 'bank_00_9000_M0X0(cpu, _call_hrv)' not in src
     assert 'CPU_STACK_OP_PHA' not in src
 
 
@@ -92,8 +92,8 @@ def test_pha_rts_dispatch_missing_exact_target_uses_lle():
         codegen.set_valid_variants(
             saved, authoritative=saved_authoritative)
 
-    assert 'bank_00_9000_M1X1(cpu)' in src
-    assert 'bank_00_9100_M1X1(cpu)' not in src
+    assert 'bank_00_9000_M1X1(cpu, _call_hrv)' in src
+    assert 'bank_00_9100_M1X1(cpu, _call_hrv)' not in src
     assert ('interp_tier_dispatch_tail(cpu, (((uint32)cpu_PB() << 16) | 0x9100u)' in src
             and 'authoritative LLE M1X1' in src)
 

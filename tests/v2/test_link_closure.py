@@ -15,9 +15,9 @@ from v2.link_closure import (  # noqa: E402
     LinkClosureError, assert_closed, scan_tree)
 
 
-_DEF = "RecompReturn {name}(CpuState *cpu) {{\n  return RECOMP_RETURN_NORMAL;\n}}\n"
-_DECL = "RecompReturn {name}(CpuState *cpu);\n"
-_CALL = "RecompReturn {caller}(CpuState *cpu) {{\n  return {name}(cpu);\n}}\n"
+_DEF = "RecompReturn {name}(CpuState *cpu, uint32 _hrv_in) {{\n  return RECOMP_RETURN_NORMAL;\n}}\n"
+_DECL = "RecompReturn {name}(CpuState *cpu, uint32 hrv);\n"
+_CALL = "RecompReturn {caller}(CpuState *cpu, uint32 _hrv_in) {{\n  return {name}(cpu, _hrv_in);\n}}\n"
 
 
 def _tree(**files):
@@ -84,7 +84,7 @@ def test_variant_named_in_a_comment_is_not_a_call():
     """The emitter writes variant names into comments; those aren't refs."""
     root = _tree(
         bank00_v2__c=(
-            "RecompReturn a_M1X1(CpuState *cpu) {\n"
+            "RecompReturn a_M1X1(CpuState *cpu, uint32 _hrv_in) {\n"
             "  /* tail-call past end: into ghost_M0X1 at $8123 */\n"
             "  return RECOMP_RETURN_NORMAL;\n}\n"),
     )
@@ -102,12 +102,12 @@ def test_dispatch_switch_cases_are_real_references():
     """
     root = _tree(
         bank89_v2__c=(
-            "RecompReturn caller_M0X0(CpuState *cpu) {\n"
+            "RecompReturn caller_M0X0(CpuState *cpu, uint32 _hrv_in) {\n"
             "  RecompReturn _r;\n"
             "  switch (((cpu->m_flag & 1) << 1) | (cpu->x_flag & 1)) {\n"
             "    case 0: _r = interp_tier_run_call_frame(cpu, 0x88b279u,"
             " 0x89ac51u, 3, NULL); break;\n"
-            "    case 3: _r = bank_88_B279_M1X1(cpu); break;\n"
+            "    case 3: _r = bank_88_B279_M1X1(cpu, _call_hrv); break;\n"
             "  }\n  return _r;\n}\n"),
     )
     report = scan_tree(root)

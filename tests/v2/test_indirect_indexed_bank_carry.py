@@ -57,7 +57,7 @@ static void prepare(CpuState *c,int opcode,int stack,int m,int x,int db,int ptr,
  g_ram[correct]=0xab;g_ram[(correct+1)&0xffffff]=0x4c;
  g_other_exits=g_tc_valid=g_recomp_stack_top=ptr_reads=0;
 }
-static int check(RecompReturn(*fn)(CpuState*),int opcode,int stack,int store,int m,int x) {
+static int check(RecompEntryFn fn,int opcode,int stack,int store,int m,int x) {
  int fails=0;
  const int pointers[]={0xfffc,0xfffd,0xfffe,0xffff,0x1234};
  for(int dbi=0;dbi<2;dbi++)for(unsigned pi=0;pi<sizeof pointers/sizeof *pointers;pi++) {
@@ -66,7 +66,7 @@ static int check(RecompReturn(*fn)(CpuState*),int opcode,int stack,int store,int
   uint32 wrong=((uint32)db<<16)|(uint16)(ptr+y);
   /* One CPU state (g_cpu): run, keep a copy, prepare again for the reference. */
   CpuState native,memory;prepare(&g_cpu,opcode,stack,m,x,db,ptr,y);
-  fn(&g_cpu);cpu_mirrors_to_p(&g_cpu);native=g_cpu;cpu_regs_store(&native);
+  fn(&g_cpu, 2);cpu_mirrors_to_p(&g_cpu);native=g_cpu;cpu_regs_store(&native);
   unsigned reads=ptr_reads,exits=g_other_exits;
   uint8 data[]={g_ram[address],g_ram[(address+1)&0xffffff],g_ram[wrong]};
   prepare(&g_cpu,opcode,stack,m,x,db,ptr,y);memory=g_cpu;cpu_regs_store(&memory);

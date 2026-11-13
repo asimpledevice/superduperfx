@@ -348,7 +348,7 @@ def _emit_dispatch_table(out_dir: pathlib.Path, parsed,
                 if name in fwd_seen:
                     continue
                 fwd_seen.add(name)
-                disp_lines.append(f"RecompReturn {name}(CpuState *cpu);")
+                disp_lines.append(f"RecompReturn {name}(CpuState *cpu, uint32 hrv);")
     disp_lines.append('')
     disp_lines.append('const DispatchEntry g_dispatch_table[] = {')
     if not sorted_pc24s:
@@ -467,7 +467,7 @@ def _compute_prunable(dirty_variants: set, emitted_variants: set,
 # The def line is `Name_MmXx(CpuState *cpu)` so the literal `(cpu)` tail
 # keeps defs from matching. Intra-function labels are `goto L_..._MmXx;`
 # (no `(cpu)`) and carry no cross-variant link dependency.
-_VARIANT_CALL_RE = re.compile(r'([A-Za-z_]\w*)_M([01])X([01])\(cpu\)')
+_VARIANT_CALL_RE = re.compile(r'([A-Za-z_]\w*)_M([01])X([01])\(cpu(?:, \w+)?\)')
 _VARIANT_SYMBOL_RE = re.compile(r'\b([A-Za-z_]\w*)_M([01])X([01])\b')
 _SYNTHETIC_NAME_RE = re.compile(r'^bank_([0-9A-Fa-f]{2})_([0-9A-Fa-f]{4})$')
 # The runtime-(m,x) dispatch switch — `switch (((cpu->m_flag & 1) << 1)
@@ -2526,12 +2526,10 @@ def main() -> int:
         for pc, em, ex in sorted(by_bank[bank]):
             name = f'bank_{bank:02X}_{pc:04X}_M{em}X{ex}'
             target_pc24 = (bank << 16) | (pc & 0xFFFF)
-            lines.append(f'RecompReturn {name}(CpuState *cpu) {{')
-            lines.append('  uint16 _entry_s = cpu->S;')
-            lines.append('  uint8 _hrv = cpu->host_return_valid;')
-            lines.append('  if (cpu_take_tailcall_return_context(&_entry_s, &_hrv)) {')
-            lines.append('    cpu->host_return_valid = _hrv;')
-            lines.append('  }')
+            lines.append(f'RecompReturn {name}(CpuState *cpu, uint32 _hrv_in) {{')
+            lines.append('  uint16 _entry_s = cpu_S();')
+            lines.append('  uint8 _hrv = (uint8)_hrv_in;')
+            lines.append('  (void)cpu_take_tailcall_return_context(&_entry_s, &_hrv);')
             if tier_down_stubs_on:
                 # Phase-4 opt-in: run the real bytes via the interpreter tier
                 # instead of the no-op trap. Bail -> same abandon (never worse);
@@ -2610,7 +2608,7 @@ def main() -> int:
                         continue
                     fwd_seen.add(name)
                     disp_lines.append(
-                        f"RecompReturn {name}(CpuState *cpu);")
+                        f"RecompReturn {name}(CpuState *cpu, uint32 hrv);")
     disp_lines.append('')
     disp_lines.append('const DispatchEntry g_dispatch_table[] = {')
     if not sorted_pc24s:

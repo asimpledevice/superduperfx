@@ -13,19 +13,19 @@ SOURCE = """/* generated */
 #include "cpu_state.h"
 
 /* Forward declarations for in-bank entries. */
-RecompReturn bank_00_8000_M1X1(CpuState *cpu);
-RecompReturn bank_00_8800_M1X1(CpuState *cpu);
+RecompReturn bank_00_8000_M1X1(CpuState *cpu, uint32 hrv);
+RecompReturn bank_00_8800_M1X1(CpuState *cpu, uint32 hrv);
 
-RecompReturn bank_00_8000_M1X1(CpuState *cpu) {
-  return bank_00_8800_M1X1(cpu);
+RecompReturn bank_00_8000_M1X1(CpuState *cpu, uint32 _hrv_in) {
+  return bank_00_8800_M1X1(cpu, _call_hrv);
 }
 
-RecompReturn bank_00_8800_M1X1(CpuState *cpu) {
+RecompReturn bank_00_8800_M1X1(CpuState *cpu, uint32 _hrv_in) {
   return RECOMP_RETURN_NORMAL;
 }
 
-void ResetHandler(CpuState *cpu) {
-  RecompReturn r = bank_00_8000_M1X1(cpu);
+void ResetHandler(CpuState *cpu, uint32 hrv) {
+  RecompReturn r = bank_00_8000_M1X1(cpu, hrv);
 }
 """
 
@@ -40,13 +40,13 @@ def test_large_bank_splits_by_stable_pc_range():
     parts = split_bank_translation_units(
         SOURCE, 0, SYMBOL_PCS, threshold_bytes=0, pc_span=0x800)
     assert set(parts) == {"bank00_part00_v2.c", "bank00_part01_v2.c"}
-    assert "bank_00_8000_M1X1(CpuState *cpu) {" in \
+    assert "bank_00_8000_M1X1(CpuState *cpu, uint32 _hrv_in) {" in \
         parts["bank00_part00_v2.c"]
-    assert "void ResetHandler(CpuState *cpu) {" in \
+    assert "void ResetHandler(CpuState *cpu, uint32 hrv) {" in \
         parts["bank00_part00_v2.c"]
-    assert "bank_00_8800_M1X1(CpuState *cpu) {" in \
+    assert "bank_00_8800_M1X1(CpuState *cpu, uint32 _hrv_in) {" in \
         parts["bank00_part01_v2.c"]
-    assert "bank_00_8000_M1X1(CpuState *cpu) {" not in \
+    assert "bank_00_8000_M1X1(CpuState *cpu, uint32 _hrv_in) {" not in \
         parts["bank00_part01_v2.c"]
 
 
@@ -54,9 +54,9 @@ def test_shard_embeds_only_referenced_variant_declarations():
     parts = split_bank_translation_units(
         SOURCE, 0, SYMBOL_PCS, threshold_bytes=0, pc_span=0x800)
     part0 = parts["bank00_part00_v2.c"]
-    assert "RecompReturn bank_00_8800_M1X1(CpuState *cpu);" in part0
+    assert "RecompReturn bank_00_8800_M1X1(CpuState *cpu, uint32 hrv);" in part0
     part1_preamble = parts["bank00_part01_v2.c"].split(
-        "RecompReturn bank_00_8800_M1X1(CpuState *cpu) {", 1)[0]
+        "RecompReturn bank_00_8800_M1X1(CpuState *cpu, uint32 _hrv_in) {", 1)[0]
     assert "bank_00_8000_M1X1(CpuState *cpu);" not in part1_preamble
 
 
@@ -67,20 +67,20 @@ def test_small_bank_keeps_monolithic_filename_and_adds_call_declarations():
     assert set(parts) == {"bank00_v2.c"}
     generated = parts["bank00_v2.c"]
     body = generated.split(
-        "RecompReturn bank_00_8000_M1X1(CpuState *cpu) {", 1)[0]
-    assert "RecompReturn bank_00_8800_M1X1(CpuState *cpu);" in body
+        "RecompReturn bank_00_8000_M1X1(CpuState *cpu, uint32 _hrv_in) {", 1)[0]
+    assert "RecompReturn bank_00_8800_M1X1(CpuState *cpu, uint32 hrv);" in body
 
 
 def test_monolithic_bank_declares_cross_bank_dispatch_target():
     source = SOURCE.replace(
-        "return bank_00_8800_M1X1(cpu);",
-        "return bank_82_80B4_M1X1(cpu);")
+        "return bank_00_8800_M1X1(cpu, _call_hrv);",
+        "return bank_82_80B4_M1X1(cpu, _call_hrv);")
     parts = split_bank_translation_units(
         source, 0, SYMBOL_PCS, threshold_bytes=len(source) + 1,
         pc_span=0x800)
     body = parts["bank00_v2.c"].split(
-        "RecompReturn bank_00_8000_M1X1(CpuState *cpu) {", 1)[0]
-    assert "RecompReturn bank_82_80B4_M1X1(CpuState *cpu);" in body
+        "RecompReturn bank_00_8000_M1X1(CpuState *cpu, uint32 _hrv_in) {", 1)[0]
+    assert "RecompReturn bank_82_80B4_M1X1(CpuState *cpu, uint32 hrv);" in body
 
 
 def test_writer_removes_stale_bank_shape():

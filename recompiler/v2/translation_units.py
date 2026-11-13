@@ -11,9 +11,9 @@ from .atomic_output import write_if_changed
 
 _TOP_LEVEL_CPU_FN_RE = re.compile(
     r"^(?:RecompReturn|void)\s+([A-Za-z_]\w*)\s*"
-    r"\(CpuState\s*\*cpu\)\s*\{", re.MULTILINE)
+    r"\(CpuState\s*\*cpu,\s*uint32\s+\w+\)\s*\{", re.MULTILINE)
 _VARIANT_CALL_NAME_RE = re.compile(
-    r"\b([A-Za-z_]\w*_M[01]X[01])\s*\(\s*cpu\s*\)")
+    r"\b([A-Za-z_]\w*_M[01]X[01])\s*\(\s*cpu\s*,\s*\w+\s*\)")
 _VARIANT_SUFFIX_RE = re.compile(r"_M[01]X[01](?:__body)?$")  # __body: code cache
 _SYNTHETIC_BANK_FN_RE = re.compile(
     r"^bank_([0-9A-Fa-f]{2})_([0-9A-Fa-f]{4})$")
@@ -40,7 +40,7 @@ def _with_referenced_variant_declarations(source: str) -> str:
     if line_end < 0:
         line_end = len(source)
     declarations = "".join(
-        f"RecompReturn {name}(CpuState *cpu);\n"
+        f"RecompReturn {name}(CpuState *cpu, uint32 hrv);\n"
         for name in references)
     return source[:line_end + 1] + declarations + source[line_end + 1:]
 
@@ -99,7 +99,7 @@ def split_bank_translation_units(
         joined = "\n".join(bodies)
         references = sorted(set(_VARIANT_CALL_NAME_RE.findall(joined)))
         declarations = "".join(
-            f"RecompReturn {name}(CpuState *cpu);\n"
+            f"RecompReturn {name}(CpuState *cpu, uint32 hrv);\n"
             for name in references)
         start = 0x8000 + part * pc_span
         end = min(0xFFFF, start + pc_span - 1)

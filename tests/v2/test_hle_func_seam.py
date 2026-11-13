@@ -121,7 +121,7 @@ def _emit_shapes(tmp_path, declare_func):
 
 def _function_body(source, name):
     match = re.search(
-        r"^RecompReturn " + re.escape(name) + r"\(CpuState \*cpu\) \{\n"
+        r"^RecompReturn " + re.escape(name) + r"\(CpuState \*cpu, uint32 _hrv_in\) \{\n"
         r"(.*?)^\}\n", source, re.S | re.M)
     assert match, f"{name} not emitted"
     return match.group(1)
@@ -151,7 +151,7 @@ def test_every_generated_transfer_reaches_the_hle_stub(tmp_path, declare_func):
     }
     for caller, stub in expected.items():
         body = _function_body(bank00, f"{caller}_M1X1")
-        assert re.search(rf"\b{stub}_M1X1\(cpu\)", body), (caller, body)
+        assert re.search(rf"\b{stub}_M1X1\(cpu, _call_hrv\)", body), (caller, body)
 
     # Tail-shaped arrivals hand the caller's return context to the stub.
     for caller in ("CallerJmp", "CallerBrl", "WideRange", "FallInto",
@@ -160,9 +160,9 @@ def test_every_generated_transfer_reaches_the_hle_stub(tmp_path, declare_func):
         assert "cpu_tailcall_inherit_return_context(_entry_s, _hrv);" in body
     # Call-shaped arrivals push the hardware frame the helper must pop.
     jsr = _function_body(bank00, "CallerJsr_M1X1")
-    assert "cpu->host_return_valid = 2;  /* paired host caller, JSR frame */" in jsr
+    assert "_call_hrv = 2;  /* paired host caller, JSR frame */" in jsr
     jsl = _function_body(bank00, "CallerJsl_M1X1")
-    assert "cpu->host_return_valid = 3;  /* paired host caller, JSL frame */" in jsl
+    assert "_call_hrv = 3;  /* paired host caller, JSL frame */" in jsl
 
     # All four M/X variants are stubs, in both LoROM mirrors, each with a
     # complete dispatch row so runtime lookups also land on the helper.
@@ -172,7 +172,7 @@ def test_every_generated_transfer_reaches_the_hle_stub(tmp_path, declare_func):
         for m in (0, 1):
             for x in (0, 1):
                 body = _function_body(source, f"{base}_M{m}X{x}")
-                assert f"RecompReturn _r = {helper}(cpu);" in body
+                assert f"RecompReturn _r = {helper}(cpu, _hrv_in);" in body
                 assert "cpu_S()" not in body          # no frame pop
                 assert "cycles" not in body          # no cycle charge
                 assert "cpu_take_tailcall_return_context(NULL, NULL);" in body
@@ -245,7 +245,7 @@ void cpu_write16(CpuState *cpu, uint32 bank_arg, uint32 addr_arg, uint32 v_arg) 
 
 /* Minimal recomp-stack / tail-context runtime with production semantics. */
 static int g_tc_valid; static uint16 g_tc_s; static uint8 g_tc_hrv;
-void RecompStackPush(const char *name) { (void)name; g_recomp_stack_top++; }
+void RecompStackPush(const char *name, uint32 hrv) { (void)name; (void)hrv; g_recomp_stack_top++; }
 void RecompStackPop(void) { g_recomp_stack_top--; }
 void RecompStackPopYield(void) { g_recomp_stack_top--; }
 void WatchdogCheck(void) {}
@@ -319,10 +319,10 @@ RecompReturn interp_tier_dispatch_tail(CpuState *cpu, uint32 pc24,
  * mode 1 forgets the pop, mode 2 returns to the caller's caller. */
 static int g_mode, g_helper_calls;
 static uint16 g_helper_entry_s; static uint8 g_helper_entry_hrv;
-static RecompReturn helper(CpuState *cpu, unsigned frame) {
+static RecompReturn helper(CpuState *cpu, unsigned frame, uint32 hrv) {
   g_helper_calls++;
   g_helper_entry_s = cpu_S();
-  g_helper_entry_hrv = cpu->host_return_valid;
+  g_helper_entry_hrv = (uint8)hrv;
   if (g_mode == 1) return RECOMP_RETURN_NORMAL;
   if (g_mode == 2) {                    /* PLA;PLA;RTS-style exit */
     cpu_set_S((uint16)(cpu_S() + frame + 2));
@@ -331,8 +331,8 @@ static RecompReturn helper(CpuState *cpu, unsigned frame) {
   cpu_set_S((uint16)(cpu_S() + frame));
   return RECOMP_RETURN_NORMAL;
 }
-RecompReturn HleShort(CpuState *cpu) { return helper(cpu, 2); }
-RecompReturn HleLong(CpuState *cpu) { return helper(cpu, 3); }
+RecompReturn HleShort(CpuState *cpu, uint32 hrv) { return helper(cpu, 2, hrv); }
+RecompReturn HleLong(CpuState *cpu, uint32 hrv) { return helper(cpu, 3, hrv); }
 
 GENERATED
 
@@ -340,7 +340,7 @@ static int fails;
 #define CHECK(c) do { if (!(c)) { fprintf(stderr, "%s:%d %s FAILED: %s\n", \
     __FILE__, __LINE__, scenario, #c); fails++; } } while (0)
 
-static RecompReturn run(CpuState *cpu, RecompReturn (*fn)(CpuState *),
+static RecompReturn run(CpuState *cpu, RecompEntryFn fn,
                         int mode) {
   memset(cpu, 0, sizeof *cpu);
   memset(g_ram, 0, sizeof g_ram);
@@ -348,8 +348,7 @@ static RecompReturn run(CpuState *cpu, RecompReturn (*fn)(CpuState *),
   cpu_set_S(0x01FF); cpu_set_m_flag(1); cpu_set_x_flag(1); cpu_set_P(0x30);
   g_mode = mode; g_helper_calls = 0; g_other_exits = 0; g_other_target = 0;
   g_tc_valid = 0; g_recomp_stack_top = 0;
-  cpu_push_jsr_return_frame(cpu);       /* host calls the caller like a JSR */
-  return fn(cpu);
+  return fn(cpu, cpu_push_jsr_return_frame(cpu));   /* host calls the caller like a JSR */
 }
 
 int main(void) {
@@ -455,8 +454,8 @@ def test_helper_owns_the_return_frame_end_to_end(tmp_path):
         codegen.set_valid_variants(saved[0], authoritative=saved[1])
         codegen.set_name_resolver(saved[2])
     generated = "\n".join(parts)
-    assert "HleShort(cpu)" in generated and "HleLong(cpu)" in generated
-    protos = "".join(f"RecompReturn {n}_M{m}X{x}(CpuState *cpu);\n"
+    assert "HleShort(cpu, _hrv_in)" in generated and "HleLong(cpu, _hrv_in)" in generated
+    protos = "".join(f"RecompReturn {n}_M{m}X{x}(CpuState *cpu, uint32 hrv);\n"
                      for n in ("Short", "Long") for m in (0, 1) for x in (0, 1))
     source = _HARNESS.replace("GENERATED", protos + generated)
     c_file = tmp_path / "hle_seam.c"

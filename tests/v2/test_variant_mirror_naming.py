@@ -14,7 +14,7 @@ produces a call to a function nothing defines: the generate succeeds, and
 the link fails minutes later.
 
 Measured on Super Metroid: $88:B279 has no emitted variant, mirror $08:B279
-has M1X1, and the switch emitted `bank_88_B279_M1X1(cpu)` for a body that
+has M1X1, and the switch emitted `bank_88_B279_M1X1(cpu, _call_hrv)` for a body that
 exists as `FxTypeFunc_2_Lava_M1X1`.
 """
 from v2.codegen import (  # noqa: E402
@@ -80,7 +80,7 @@ def test_dispatch_case_names_the_mirror_body_not_the_caller_s_bank():
         lines = variant_dispatch_case_lines(
             0x88B279, "bank_88_B279", lle_fallback=LLE)
         body = "\n".join(lines)
-        assert "FxTypeFunc_2_Lava_M1X1(cpu)" in body, body
+        assert "FxTypeFunc_2_Lava_M1X1(cpu, _call_hrv)" in body, body
         assert "bank_88_B279_M1X1" not in body, (
             "named the caller's bank for a body that lives on the mirror")
         # The three widths with no body still tier to LLE, never to a
@@ -103,7 +103,7 @@ def test_mirror_body_with_no_friendly_name_uses_the_synthetic_mirror_name():
         lines = variant_dispatch_case_lines(
             0x2DE293, "MotherBrain_CalcHdma_Down_Down", lle_fallback=LLE)
         body = "\n".join(lines)
-        assert "bank_AD_E293_M0X0(cpu)" in body, body
+        assert "bank_AD_E293_M0X0(cpu, _call_hrv)" in body, body
         assert "MotherBrain_CalcHdma_Down_Down_M0X0" not in body, body
     finally:
         _reset()

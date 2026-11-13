@@ -15,7 +15,7 @@ import pathlib
 import re
 import sys
 
-_FN = re.compile(r"^(?:RecompReturn|void)\s+([A-Za-z_]\w*)\s*\(CpuState\s*\*cpu\)\s*\{",
+_FN = re.compile(r"^(?:RecompReturn|void)\s+([A-Za-z_]\w*)\s*\(CpuState\s*\*cpu,\s*uint32\s+\w+\)\s*\{",
                  re.MULTILINE)
 _CALLED = re.compile(r"\b([A-Za-z_]\w*_M[01]X[01])\s*\(")
 
@@ -97,7 +97,7 @@ def main(gen_dir, out_dir):
         for name, chunk in bodies:
             bodies_by_name[name] = chunk
             called = sorted(set(_CALLED.findall(chunk)))
-            decls = "".join(f"RecompReturn {c}(CpuState *cpu);\n" for c in called)
+            decls = "".join(f"RecompReturn {c}(CpuState *cpu, uint32 hrv);\n" for c in called)
             write_if_changed(out / "cc" / f"{name}.c",
                              f"/* Code-cache module: {name} (split from {src.name}). */\n"
                              + inc + "\n" + decls + "\n" + chunk, cc_written)

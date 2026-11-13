@@ -17,7 +17,7 @@ static void default_unload(RecompRoutine *rt) { (void)rt; }
 static void (*s_load)(RecompRoutine *rt) = default_load;
 static void (*s_unload)(RecompRoutine *rt) = default_unload;
 
-void recomp_enter_rt(const struct RecompRoutine *rt) { recomp_enter(rt->name); }
+void recomp_enter_rt(const struct RecompRoutine *rt, uint32 hrv) { recomp_enter(rt->name, hrv); }
 
 void recomp_cache_set_capacity(uint32_t bytes) { s_capacity = bytes; }
 void recomp_cache_set_size_hook(uint32_t (*size_of)(const char *name)) { s_size_of = size_of; }
@@ -61,12 +61,12 @@ static int evict_one(void) {
 
 static int (*s_async_begin)(RecompRoutine *rt);
 static int (*s_async_finish)(RecompRoutine *rt, int wait);
-static RecompReturn (*s_fallback)(RecompRoutine *rt, CpuState *cpu);
+static RecompReturn (*s_fallback)(RecompRoutine *rt, CpuState *cpu, uint32 hrv);
 static RecompRoutine *s_pending;    /* the load in flight */
 
 void recomp_cache_set_async(int (*begin)(RecompRoutine *rt),
                             int (*finish)(RecompRoutine *rt, int wait),
-                            RecompReturn (*fallback)(RecompRoutine *rt, CpuState *cpu)) {
+                            RecompReturn (*fallback)(RecompRoutine *rt, CpuState *cpu, uint32 hrv)) {
   s_async_begin = begin;
   s_async_finish = finish;
   s_fallback = fallback;
@@ -100,16 +100,16 @@ static void complete_pending(int wait) {
 
 void recomp_cache_poll(void) { complete_pending(0); }
 
-RecompReturn recomp_cache_call_absent(RecompRoutine *rt, CpuState *cpu) {
+RecompReturn recomp_cache_call_absent(RecompRoutine *rt, CpuState *cpu, uint32 hrv) {
   if (!s_async_begin) {
     recomp_cache_load(rt);
-    return recomp_call(rt, cpu);
+    return recomp_call(rt, cpu, hrv);
   }
   complete_pending(0);
-  if (rt->fn) return recomp_call(rt, cpu);
+  if (rt->fn) return recomp_call(rt, cpu, hrv);
   if (rt == s_pending) {           /* still on its way: interpret again */
     s_stats.fallbacks++;
-    return s_fallback(rt, cpu);
+    return s_fallback(rt, cpu, hrv);
   }
   complete_pending(1);             /* one load in flight at a time */
   rt->active++;                    /* pinned while it loads */
@@ -117,10 +117,10 @@ RecompReturn recomp_cache_call_absent(RecompRoutine *rt, CpuState *cpu) {
   s_pending = rt;
   if (!s_async_begin(rt)) {        /* cannot run before it is loaded */
     complete_pending(1);
-    return recomp_call(rt, cpu);
+    return recomp_call(rt, cpu, hrv);
   }
   s_stats.fallbacks++;
-  return s_fallback(rt, cpu);
+  return s_fallback(rt, cpu, hrv);
 }
 
 void recomp_cache_load(RecompRoutine *rt) {

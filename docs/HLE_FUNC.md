@@ -24,7 +24,7 @@ hle_func 9000 HleTextStep
 - `<pc>` is the routine's 16-bit entry in this cfg's bank. The LoROM execution
   mirror (`$00`/`$80`) is covered automatically.
 - `<c_function>` must be a valid C identifier. The port defines it, normally
-  in `src/gen_stubs.c`, as `RecompReturn HleTextStep(CpuState *cpu)`.
+  in `src/gen_stubs.c`, as `RecompReturn HleTextStep(CpuState *cpu, uint32 hrv)`.
 - A `func` line is optional, but it gives the stubs a readable name
   (`TextStep_M1X1` rather than `bank_00_9000_M1X1`). It is also where an exit
   width other than the entry width is declared (see
@@ -44,7 +44,7 @@ For the replaced PC (and its mirror), `recompiler/v2/emit_function.py` emits
 one forwarding stub for each of the four M/X variants:
 
 ```c
-RecompReturn TextStep_M1X1(CpuState *cpu) {
+RecompReturn TextStep_M1X1(CpuState *cpu, uint32 _hrv_in) {
   ...                                       /* name/trace bookkeeping */
   RecompStackPush("TextStep_M1X1");
   cpu_take_tailcall_return_context(NULL, NULL);
@@ -72,7 +72,10 @@ available if the helper delegates to them.
 
 ## Which arrivals reach the helper
 
-| Arrival | Reaches the helper | `host_return_valid` at entry |
+A helper receives `hrv`, the return-frame size its arrival carried (the
+generated functions' second argument; see MULTI_TIER.md).
+
+| Arrival | Reaches the helper | `hrv` argument |
 |---|---|---|
 | Compiled `JSR abs` | yes | 2 |
 | Compiled `JSL long` | yes | 3 |
@@ -95,7 +98,7 @@ table, with and without a `func` line.
 ## The helper contract
 
 ```c
-RecompReturn HleTextStep(CpuState *cpu);
+RecompReturn HleTextStep(CpuState *cpu, uint32 hrv);
 ```
 
 At entry, `cpu` holds the exact guest state at the routine's first
@@ -113,7 +116,7 @@ callee's own RTS/RTL (`codegen._emit_return`). The stub has no RTS, so:
 instruction pops:** `cpu->S += 2` for an RTS routine, `cpu->S += 3` for an
 RTL routine.
 
-- Pop by the original's return opcode, not by `host_return_valid`. That value
+- Pop by the original's return opcode, not by `hrv`. That value
   is 0 for dispatch entries, and for a tail arrival it describes the jumping
   function's frame. The frame on the stack is the one the original RTS/RTL
   would consume in every case.
@@ -138,7 +141,7 @@ RTL routine.
 
 A `void` host alias aborts if anything other than `NORMAL` reaches it.
 
-A dispatch entry (`host_return_valid == 0`) is reached by an RTS/RTL
+A dispatch entry (`hrv == 0`) is reached by an RTS/RTL
 trampoline. In that case generated code would not host-return after popping.
 It would dispatch on the popped PC: `cpu_dispatch_pc_from(cpu, pc24, S, site)`.
 `NORMAL` after the pop is equivalent unless the popped PC is itself a function
@@ -203,7 +206,7 @@ call. There are two ways to run original behaviour from a helper:
   frame and charges its own cycles.
 
   ```c
-  RecompReturn HleTextStep(CpuState *cpu) {
+  RecompReturn HleTextStep(CpuState *cpu, uint32 hrv) {
     prepare(cpu);                                        /* optional pre-work */
     RecompReturn r = interp_tier_run_call_frame(
         cpu, ((uint32)cpu->PB << 16) | 0x9000, 0x009000, 2 /* RTS frame */, NULL);
@@ -240,7 +243,7 @@ hle_func 9000 HleMaxA
 /* gen_stubs.c */
 #include "cpu_state.h"
 
-RecompReturn HleMaxA(CpuState *cpu) {
+RecompReturn HleMaxA(CpuState *cpu, uint32 hrv) {
   uint8 a = cpu_read_a8(cpu);
   uint8 m = cpu_read8(cpu, 0x00, (uint16)(cpu->D + 0x40));
   uint8 r = a > m ? a : m;

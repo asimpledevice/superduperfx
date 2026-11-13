@@ -161,7 +161,7 @@ def test_phk_per_jml_dispatcher_calls_handlers_by_name():
     # Suffix is _M1X1 because the JML insn's m_flag/x_flag = (1,1) after
     # the SEP #$30 prologue.
     for handler_pc in (0xC000, 0xC100, 0xC200, 0xC300):
-        sym = f'bank_00_{handler_pc:04X}_M1X1(cpu)'
+        sym = f'bank_00_{handler_pc:04X}_M1X1(cpu, _call_hrv)'
         assert sym in src, (
             f'expected handler call {sym} in synthesized dispatch; '
             f'src=\n{src[:6000]}'
@@ -194,8 +194,8 @@ def test_phk_per_jml_dispatcher_tiers_manifest_lle_target_down():
         codegen.set_valid_variants(
             saved_variants, authoritative=saved_authoritative)
 
-    assert 'bank_00_C000_M1X1(cpu)' in src
-    assert 'bank_00_C100_M1X1(cpu)' not in src
+    assert 'bank_00_C000_M1X1(cpu, _call_hrv)' in src
+    assert 'bank_00_C100_M1X1(cpu, _call_hrv)' not in src
     assert (
         'interp_tier_dispatch_tail(cpu, (((uint32)cpu_PB() << 16) | 0xc100u), 0x00bfc5u, '
         '_entry_s, _hrv)' in src

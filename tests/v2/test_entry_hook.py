@@ -118,12 +118,12 @@ def test_no_hook_no_code():
 
 
 _PRELUDE = r'''
-RecompReturn bank_00_8000_M0X0(CpuState *cpu);
-RecompReturn bank_00_8000_M0X1(CpuState *cpu);
-RecompReturn bank_00_8000_M1X0(CpuState *cpu);
-RecompReturn bank_00_8100_M0X0(CpuState *cpu);
-RecompReturn bank_00_8100_M0X1(CpuState *cpu);
-RecompReturn bank_00_8100_M1X0(CpuState *cpu);
+RecompReturn bank_00_8000_M0X0(CpuState *cpu, uint32 hrv);
+RecompReturn bank_00_8000_M0X1(CpuState *cpu, uint32 hrv);
+RecompReturn bank_00_8000_M1X0(CpuState *cpu, uint32 hrv);
+RecompReturn bank_00_8100_M0X0(CpuState *cpu, uint32 hrv);
+RecompReturn bank_00_8100_M0X1(CpuState *cpu, uint32 hrv);
+RecompReturn bank_00_8100_M1X0(CpuState *cpu, uint32 hrv);
 
 /* The host's observer: records what it saw, changes nothing. */
 enum { kMaxHooks = 32 };
@@ -153,12 +153,12 @@ static RecompReturn wrong_width(CpuState *cpu) {
   (void)cpu; fails++; fprintf(stderr, "%s: wrong-width variant\n", scenario);
   return RECOMP_RETURN_NORMAL;
 }
-RecompReturn bank_00_8000_M0X0(CpuState *cpu) { return wrong_width(cpu); }
-RecompReturn bank_00_8000_M0X1(CpuState *cpu) { return wrong_width(cpu); }
-RecompReturn bank_00_8000_M1X0(CpuState *cpu) { return wrong_width(cpu); }
-RecompReturn bank_00_8100_M0X0(CpuState *cpu) { return wrong_width(cpu); }
-RecompReturn bank_00_8100_M0X1(CpuState *cpu) { return wrong_width(cpu); }
-RecompReturn bank_00_8100_M1X0(CpuState *cpu) { return wrong_width(cpu); }
+RecompReturn bank_00_8000_M0X0(CpuState *cpu, uint32 _hrv_in) { return wrong_width(cpu); }
+RecompReturn bank_00_8000_M0X1(CpuState *cpu, uint32 _hrv_in) { return wrong_width(cpu); }
+RecompReturn bank_00_8000_M1X0(CpuState *cpu, uint32 _hrv_in) { return wrong_width(cpu); }
+RecompReturn bank_00_8100_M0X0(CpuState *cpu, uint32 _hrv_in) { return wrong_width(cpu); }
+RecompReturn bank_00_8100_M0X1(CpuState *cpu, uint32 _hrv_in) { return wrong_width(cpu); }
+RecompReturn bank_00_8100_M1X0(CpuState *cpu, uint32 _hrv_in) { return wrong_width(cpu); }
 
 static void prepare(CpuState *cpu, int deadline_at) {
   memset(cpu, 0, sizeof *cpu);
@@ -177,7 +177,7 @@ int main(void) {
 
   scenario = "loop back to the hooked entry";
   prepare(&g_cpu, 0);
-  bank_00_8000_M1X1(&g_cpu);
+  bank_00_8000_M1X1(&g_cpu, 2);
   CHECK(g_hooks == 4);                  /* $8000 executed four times */
   for (int i = 0; i < 4; i++) {
     CHECK(g_hook_pc[i] == 0x008000u);
@@ -191,28 +191,28 @@ int main(void) {
 
   scenario = "deadline in the prologue";
   prepare(&g_cpu, 1);
-  bank_00_8000_M1X1(&g_cpu);
+  bank_00_8000_M1X1(&g_cpu, 2);
   CHECK(g_hooks == 0);                  /* nothing executed compiled */
   CHECK(g_other_exits == 1 && g_other_target == 0x008000u);
   CHECK(g_ram[0x40] == 0);
 
   scenario = "deadline at the hooked block";
   prepare(&g_cpu, 2);
-  bank_00_8000_M1X1(&g_cpu);
+  bank_00_8000_M1X1(&g_cpu, 2);
   CHECK(g_hooks == 0);
   CHECK(g_other_exits == 1 && g_other_target == 0x008000u);
   CHECK(g_ram[0x40] == 0);
 
   scenario = "deadline on the back-edge to the hooked block";
   prepare(&g_cpu, 3);
-  bank_00_8000_M1X1(&g_cpu);
+  bank_00_8000_M1X1(&g_cpu, 2);
   CHECK(g_hooks == 1);                  /* the one execution done compiled */
   CHECK(g_ram[0x40] == 1);
   CHECK(g_other_exits == 1 && g_other_target == 0x008000u);
 
   scenario = "two calls";
   prepare(&g_cpu, 0);
-  Twice_M1X1(&g_cpu);
+  Twice_M1X1(&g_cpu, 2);
   CHECK(g_hooks == 8);
   for (int i = 0; i < 8 && i < kMaxHooks; i++) {
     CHECK(g_hook_pc[i] == 0x008000u);
@@ -224,7 +224,7 @@ int main(void) {
   scenario = "recursion";
   prepare(&g_cpu, 0);
   g_ram[0x41] = 2;
-  bank_00_8100_M1X1(&g_cpu);
+  bank_00_8100_M1X1(&g_cpu, 2);
   CHECK(g_hooks == 3);
   CHECK(g_hook_s[0] == 0x01FD && g_hook_s[1] == 0x01FB && g_hook_s[2] == 0x01F9);
   CHECK(g_hook_counter[0] == 2 && g_hook_counter[1] == 1 &&
@@ -235,7 +235,7 @@ int main(void) {
 
   scenario = "fall-through into a hooked instruction";
   prepare(&g_cpu, 0);
-  Fall_M1X1(&g_cpu);
+  Fall_M1X1(&g_cpu, 2);
   CHECK(g_hooks == 1);
   CHECK(g_hook_pc[0] == 0x008304u);
   CHECK(g_hook_counter[0] == 5);        /* STA done, INC not yet */

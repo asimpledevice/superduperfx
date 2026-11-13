@@ -159,7 +159,7 @@ def test_cli_generates_unreachable_hirom_symbol_and_honors_tier_toggle(tmp_path)
     manifest = run()
     assert manifest["nodes"]["C00100:M1X1"]["disposition"] == "aot_eligible"
     assert "Optional_M1X1" in (out / "bankc0_v2.c").read_text()
-    assert "void Optional(CpuState *cpu)" in (cfg / "funcs.h").read_text()
+    assert "void Optional(CpuState *cpu, uint32 hrv)" in (cfg / "funcs.h").read_text()
     # A manual entry mode override must control the explicit symbol root too.
     with (cfg / "bankc0.cfg").open("a", encoding="utf-8") as stream:
         stream.write("entry_mx_at 0100 0 1\n")

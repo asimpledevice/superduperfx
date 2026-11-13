@@ -78,7 +78,7 @@ const char *g_last_recomp_func;
 int snes_frame_counter = 0;
 int g_recomp_stack_top = 0;
 uint16_t g_cpu_entry_s[256];
-void RecompStackPush(const char *n) { (void)n; if (g_recomp_stack_top < 255) g_recomp_stack_top++; }
+void RecompStackPush(const char *n, uint32 hrv) { (void)n; (void)hrv; if (g_recomp_stack_top < 255) g_recomp_stack_top++; }
 void RecompStackPushInterpreter(const char *n) { RecompStackPush(n); }
 void RecompStackPop(void) { if (g_recomp_stack_top > 0) g_recomp_stack_top--; }
 void WatchdogCheck(void) {}
@@ -168,9 +168,8 @@ static void run_one(const OpTest *op, const St *st, Interp816 *ip) {
     cpu_set_m_flag(op->m); cpu_set_x_flag(op->x); cpu_set_emulation(0);
     g_cpu._flag_C = st->C; g_cpu._flag_Z = st->Z; g_cpu._flag_V = st->V;
     g_cpu._flag_N = st->N; g_cpu._flag_D = st->D; g_cpu._flag_I = st->I;
-    g_cpu.host_return_valid = 0;
     cpu_mirrors_to_p(&g_cpu);
-    op->fn(&g_cpu);
+    op->fn(&g_cpu, 0);
     cpu_set_S((uint16)(cpu_S() - 2));  /* undo the RTS frame pop */
 
     /* interp816 side: same state, one opcode */

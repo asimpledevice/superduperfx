@@ -622,7 +622,7 @@ void aot_prof_frame_end(int frame) {
 
 void RecompStackPushInterpreter(const char *name) {
   const int slot = g_recomp_stack_top;
-  RecompStackPush(name);
+  RecompStackPush(name, 0);   /* no paired host caller: the slot is marked invalid below */
   /* The diagnostic scope can start below its enclosing function's entry S
    * (PHB; PEA; JMP is one example). An AOT helper's non-local RTS can land
    * exactly at this seed while still inside the interpreted continuation.
@@ -632,7 +632,7 @@ void RecompStackPushInterpreter(const char *name) {
     g_cpu_entry_s_valid[slot] = 0;
 }
 
-void RecompStackPush(const char *name) {
+void RecompStackPush(const char *name, uint32 hrv) {
 #ifdef SNESRECOMP_INTERP_PROFILE
   if (g_aotprof_on < 0) aotprof_latch_env();
   if (g_aotprof_on == 1) {
@@ -653,9 +653,7 @@ void RecompStackPush(const char *name) {
       wlog_scope_enter(name);
     }
     g_cpu_entry_return_frame[slot] =
-        (g_cpu.host_return_valid == 2 || g_cpu.host_return_valid == 3)
-            ? g_cpu.host_return_valid
-            : 0;
+        (hrv == 2 || hrv == 3) ? (uint8_t)hrv : 0;
     /* Seed the entry-S baseline HERE, not only in the generated prologue.
      *
      * The prologue's `g_cpu_entry_s[g_recomp_stack_top-1] = _entry_s` runs
@@ -1157,7 +1155,7 @@ Snes *SnesInit(const uint8 *data, int data_size) {
 struct RecompNestState {
   int top;
   unsigned interrupt_depth;
-  uint8_t tailcall_valid, tailcall_hrv, host_return_valid;
+  uint8_t tailcall_valid, tailcall_hrv;
   uint16_t tailcall_entry_s;
   const char *last_func;
   int wlog_slot;
@@ -1175,7 +1173,6 @@ void recomp_nest_state_save(void *out) {
   n->tailcall_valid = g_tailcall_context_valid;
   n->tailcall_hrv = g_tailcall_hrv;
   n->tailcall_entry_s = g_tailcall_entry_s;
-  n->host_return_valid = g_cpu.host_return_valid;
   n->last_func = g_last_recomp_func;
   n->wlog_slot = g_wlog_aot_slot;
   memcpy(n->names, g_recomp_stack, sizeof n->names);
@@ -1191,7 +1188,6 @@ void recomp_nest_state_load(const void *in) {
   g_tailcall_context_valid = n->tailcall_valid;
   g_tailcall_hrv = n->tailcall_hrv;
   g_tailcall_entry_s = n->tailcall_entry_s;
-  g_cpu.host_return_valid = n->host_return_valid;
   g_last_recomp_func = n->last_func;
   g_wlog_aot_slot = n->wlog_slot;
   memcpy(g_recomp_stack, n->names, sizeof n->names);

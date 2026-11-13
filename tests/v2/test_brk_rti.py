@@ -171,7 +171,7 @@ typedef struct {
   uint8 p, pb; uint16 s; uint8 stack[4]; uint8 zp[2]; uint64 cycles;
 } Outcome;
 
-static void compiled(RecompReturn (*fn)(CpuState *), uint8 p, Outcome *o) {
+static void compiled(RecompEntryFn fn, uint8 p, Outcome *o) {
   
   memset(&g_cpu, 0, sizeof g_cpu);
   memset(g_ram, 0, sizeof g_ram);
@@ -180,7 +180,7 @@ static void compiled(RecompReturn (*fn)(CpuState *), uint8 p, Outcome *o) {
   cpu_set_S(0x01FF); cpu_set_P(p); cpu_p_to_mirrors(&g_cpu);
   g_tc_valid = 0; g_recomp_stack_top = 0; g_other_exits = 0;
   cpu_push_jsr_return_frame(&g_cpu);            /* S = $01FD at the BRK */
-  fn(&g_cpu);
+  fn(&g_cpu, 2);
   cpu_mirrors_to_p(&g_cpu);
   o->p = cpu_P(); o->pb = cpu_PB(); o->s = cpu_S();
   memcpy(o->stack, &g_ram[0x01FA], 4);
@@ -217,7 +217,7 @@ static void interpreted(uint8 p, Outcome *o) {
   interp816_free(cpu);
 }
 
-static void same(RecompReturn (*fn)(CpuState *), uint8 p) {
+static void same(RecompEntryFn fn, uint8 p) {
   Outcome c, i;
   compiled(fn, p, &c);
   interpreted(p, &i);
@@ -257,7 +257,7 @@ int main(void) {
     cpu_set_S(0x01FF); cpu_set_P(0x30); cpu_p_to_mirrors(&g_cpu); cpu_set_emulation(1);
     g_tc_valid = 0; g_recomp_stack_top = 0; g_other_exits = 0;
     cpu_push_jsr_return_frame(&g_cpu);
-    Trip_M1X1(&g_cpu);
+    Trip_M1X1(&g_cpu, 2);
     CHECK(g_other_exits == 1 && g_other_target == 0x008000u);
     CHECK(g_ram[0x01FA] == 0 && g_ram[0x01FB] == 0 && g_ram[0x01FC] == 0 &&
           g_ram[0x01FD] == 0);

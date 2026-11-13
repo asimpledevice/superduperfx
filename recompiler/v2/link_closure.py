@@ -37,14 +37,14 @@ import pathlib
 import re
 from dataclasses import dataclass, field
 
-# `RecompReturn Foo_M1X1(CpuState *cpu) {` -- a body, brace required.
+# `RecompReturn Foo_M1X1(CpuState *cpu, uint32 _hrv_in) {` -- a body, brace required.
 _DEFINITION_RE = re.compile(
     r'^(?:RecompReturn|void)\s+([A-Za-z0-9_]+_M[01]X[01])\s*'
-    r'\(CpuState\s*\*cpu\)\s*\{', re.MULTILINE)
-# `Foo_M1X1(cpu)` -- a call. Requiring the argument keeps prose out: the
+    r'\(CpuState\s*\*cpu,\s*uint32\s+\w+\)\s*\{', re.MULTILINE)
+# `Foo_M1X1(cpu, _call_hrv)` -- a call. Requiring the argument keeps prose out: the
 # emitter writes variant names into comments ("tail-call past end: into
 # Foo_M0X1 at $8123") that are not references to anything.
-_CALL_RE = re.compile(r'\b([A-Za-z0-9_]+_M[01]X[01])\s*\(\s*cpu\s*\)')
+_CALL_RE = re.compile(r'\b([A-Za-z0-9_]+_M[01]X[01])\s*\(\s*cpu\s*,\s*\w+\s*\)')
 
 
 class LinkClosureError(RuntimeError):

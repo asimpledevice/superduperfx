@@ -51,7 +51,7 @@ def test_parallel_byte_table_dispatch_uses_logical_index_register():
     assert 'uint16 _idx = (uint16)(cpu_Y() & 0xFFFF)' in src
     assert 'cpu_Y() & 0xFFFF) / 3' not in src
     assert 'case 7:' in src
-    assert 'bank_00_9700_M1X1(cpu)' in src
+    assert 'bank_00_9700_M1X1(cpu, _call_hrv)' in src
 
 
 def test_plain_indirect_dispatch_switches_on_runtime_mx():
@@ -91,7 +91,7 @@ def test_plain_indirect_dispatch_switches_on_runtime_mx():
     assert 'indirect dispatch terminator: cfg-resolved target list' in src
     assert 'switch (((cpu_m_flag() & 1) << 1) | (cpu_x_flag() & 1))' in src
     for sfx in ("_M0X0", "_M0X1", "_M1X0", "_M1X1"):
-        assert f'bank_00_9000{sfx}(cpu)' in src
+        assert f'bank_00_9000{sfx}(cpu, _call_hrv)' in src
 
 
 def test_absolute_indirect_dispatch_switches_on_loaded_pointer():

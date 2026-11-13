@@ -29,6 +29,9 @@ typedef struct Dma Dma;
 #endif
 
 CpuState g_cpu;
+/* The hrv the next RecompStackPush records (a generated prologue passes its
+ * own argument). */
+static uint32 g_test_hrv;
 int snes_frame_counter;
 int g_wlog_configured;
 uint8 g_ram[0x20000];
@@ -116,15 +119,15 @@ static int hle_entry_s_frames_do_not_resolve_returns(void) {
 
   g_recomp_stack_top = 0;
   cpu_set_S(entry_s);
-  g_cpu.host_return_valid = 0;
+  g_test_hrv = 0;
 
   /* Prime slot zero with a valid generated-frame entry, then reuse the same
    * slot for an HLE forwarding frame. That frame has no generated prologue. */
-  RecompStackPush("previous_generated_frame");
+  RecompStackPush("previous_generated_frame", g_test_hrv);
   RecompStackPop();
-  RecompStackPush("hle_forwarding_stub");
+  RecompStackPush("hle_forwarding_stub", g_test_hrv);
   cpu_take_tailcall_return_context(NULL, NULL);
-  RecompStackPush("generated_child");
+  RecompStackPush("generated_child", g_test_hrv);
 
   failures += check(cpu_resolve_ancestor_skip(entry_s) == -1,
                     "HLE entry-S is excluded from ancestor return resolution");
@@ -139,15 +142,15 @@ static int hle_entry_s_frames_do_not_resolve_returns(void) {
 static int interpreter_scope_does_not_resolve_returns(void) {
   int failures = 0;
   g_recomp_stack_top = 0;
-  g_cpu.host_return_valid = 2;
+  g_test_hrv = 2;
   cpu_set_S(0x1fef);
-  RecompStackPush("compiled_tail_root");
+  RecompStackPush("compiled_tail_root", g_test_hrv);
   /* PHB + PEA precede a fallback. A later PLA; RTS returns to the manual
    * PEA continuation while leaving PHB on the stack for its real PLB. */
   cpu_set_S(0x1fec);
   RecompStackPushInterpreter("interp@$A6CBE5");
   cpu_set_S(0x1fea);
-  RecompStackPush("compiled_nonlocal_return");
+  RecompStackPush("compiled_nonlocal_return", g_test_hrv);
   failures += check(cpu_resolve_ancestor_skip(0x1fec) == -1,
                     "interpreter attribution is not a compiled ancestor");
   failures += check(cpu_resolve_post_return_skip(0x1fee) == -1,
@@ -156,9 +159,9 @@ static int interpreter_scope_does_not_resolve_returns(void) {
   RecompStackPop();
   /* Reusing the observer's slot for a real compiled frame must restore it. */
   cpu_set_S(0x1fec);
-  RecompStackPush("compiled_parent");
+  RecompStackPush("compiled_parent", g_test_hrv);
   cpu_set_S(0x1fea);
-  RecompStackPush("compiled_child");
+  RecompStackPush("compiled_child", g_test_hrv);
   failures += check(cpu_resolve_ancestor_skip(0x1fec) == 1,
                     "reused interpreter slot accepts a real compiled ancestor");
   RecompStackPop();
@@ -172,11 +175,11 @@ static int generated_entry_s_frames_still_resolve_returns(void) {
   int failures = 0;
 
   g_recomp_stack_top = 0;
-  g_cpu.host_return_valid = 0;
+  g_test_hrv = 0;
   cpu_set_S(parent_entry_s);
-  RecompStackPush("generated_parent");
+  RecompStackPush("generated_parent", g_test_hrv);
   cpu_set_S(0x01ce);
-  RecompStackPush("generated_child");
+  RecompStackPush("generated_child", g_test_hrv);
 
   failures += check(cpu_resolve_ancestor_skip(parent_entry_s) == 1,
                     "generated entry-S remains eligible for ancestor returns");
@@ -195,11 +198,11 @@ static int callee_post_return_resolves_without_its_frame(void) {
   int failures = 0;
 
   g_recomp_stack_top = 0;
-  g_cpu.host_return_valid = 2;
+  g_test_hrv = 2;
   cpu_set_S(0x01f0);
-  RecompStackPush("grandparent");     /* entry 01f0, JSR frame: post 01f2 */
+  RecompStackPush("grandparent", g_test_hrv);     /* entry 01f0, JSR frame: post 01f2 */
   cpu_set_S(0x01e0);
-  RecompStackPush("caller");          /* entry 01e0, JSR frame: post 01e2 */
+  RecompStackPush("caller", g_test_hrv);          /* entry 01e0, JSR frame: post 01e2 */
 
   failures += check(cpu_resolve_callee_post_return_skip(0x01e2, 0) == 1,
                     "return to the immediate caller's continuation is SKIP_1");
@@ -211,14 +214,14 @@ static int callee_post_return_resolves_without_its_frame(void) {
                     "no matching ancestor resolves to nothing");
   /* With the callee's frame on top, the existing resolver agrees. */
   cpu_set_S(0x01d0);
-  RecompStackPush("callee");
+  RecompStackPush("callee", g_test_hrv);
   failures += check(cpu_resolve_post_return_skip(0x01e2) == 1 &&
                     cpu_resolve_post_return_skip(0x01f2) == 2,
                     "matches the resolver with the callee's frame present");
   RecompStackPop();
   RecompStackPop();
   RecompStackPop();
-  g_cpu.host_return_valid = 0;
+  g_test_hrv = 0;
   return failures;
 }
 
@@ -252,9 +255,9 @@ int main(void) {
 
   memset(&g_cpu, 0, sizeof(g_cpu));
   g_recomp_stack_top = 0;
-  g_cpu.host_return_valid = 2;
+  g_test_hrv = 2;
   cpu_set_S(0x01fd);
-  RecompStackPush("diagnostic_gates_test");
+  RecompStackPush("diagnostic_gates_test", g_test_hrv);
   g_cpu_entry_s[g_recomp_stack_top - 1] = 0x01fd;
   cpu_set_S(0x01fe);
   RecompStackPop();
@@ -269,7 +272,7 @@ int main(void) {
 
   g_recomp_snap_on_func = "diagnostic_gates_test";
   g_recomp_snap_count = 7;
-  RecompStackPush("diagnostic_gates_test");
+  RecompStackPush("diagnostic_gates_test", g_test_hrv);
   RecompStackPop();
 #if SNESRECOMP_FUNC_SNAPSHOT
   failures += check(g_recomp_snap_count == 8 && recomp_snap_lookup(8) != NULL,

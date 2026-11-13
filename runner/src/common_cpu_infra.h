@@ -66,7 +66,7 @@ void snes_refresh_exempt(void);   /* mark a master-clock teleport (park, load) *
 void snes_refresh_state_get(uint64_t *phase, uint64_t *charged_upto);
 void snes_refresh_state_set(uint64_t phase, uint64_t charged_upto);
 void WatchdogFrameStart(void);
-void RecompStackPush(const char *name);
+void RecompStackPush(const char *name, uint32 hrv);   /* hrv: the function's frame size argument */
 /* Attribution only: an interpreter run is not a compiled guest caller and
  * cannot be selected as a SKIP_N return target. */
 void RecompStackPushInterpreter(const char *name);

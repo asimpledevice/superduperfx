@@ -9,7 +9,8 @@ See [LLE-first analysis](LLE_FIRST_ANALYSIS.md) for static analysis and
 ## Generated call/return contract
 
 Generated JSR/JSL calls maintain the guest return frame on `cpu->S` as well
-as the host C call. `CpuState.host_return_valid` describes a proven paired
+as the host C call. The `hrv` argument of every generated function
+(`RecompEntryFn`; formerly the field `CpuState.host_return_valid`) describes a proven paired
 host caller and carries its guest frame size: 2 bytes for JSR, 3 for JSL,
 and 0 when no paired caller is established. The old boolean value 1 is invalid.
 

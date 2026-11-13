@@ -29,12 +29,13 @@ static void enter_frame(uint16_t entry_s, uint8_t hrv) {
 static RecompReturn tail_owner(CpuState *cpu) {
     uint16_t _entry_s = g_cpu_entry_s[g_recomp_stack_top - 1];
     uint8_t _hrv = 2;
+    uint32 _call_hrv = _hrv;
     /* GENERATED_TAIL */
 }
 
-RecompReturn TailTarget_M1X1(CpuState *cpu) {
+RecompReturn TailTarget_M1X1(CpuState *cpu, uint32 hrv_in) {
     uint16_t entry_s = cpu_S();
-    uint8_t hrv = cpu->host_return_valid;
+    uint8_t hrv = (uint8)hrv_in;
     enter_frame(entry_s, hrv);
     if (!cpu_take_tailcall_return_context(&entry_s, &hrv)) abort();
     g_cpu_entry_s[g_recomp_stack_top - 1] = entry_s;

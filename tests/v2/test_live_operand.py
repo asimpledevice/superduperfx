@@ -142,7 +142,7 @@ static int fails;
 #define CHECK(c) do { if (!(c)) { fprintf(stderr, "%s:%d FAILED: %s\n", \
     __FILE__, __LINE__, #c); fails++; } } while (0)
 
-static void call(RecompReturn (*fn)(CpuState *)) {
+static void call(RecompEntryFn fn) {
   
   memset(&g_cpu, 0, sizeof g_cpu);
   memset(g_ram, 0, sizeof g_ram);
@@ -150,7 +150,7 @@ static void call(RecompReturn (*fn)(CpuState *)) {
   cpu_set_S(0x01FF); cpu_set_m_flag(1); cpu_set_x_flag(1); cpu_set_P(0x30);
   g_tc_valid = 0; g_recomp_stack_top = 0;
   cpu_push_jsr_return_frame(&g_cpu);
-  fn(&g_cpu);
+  fn(&g_cpu, 2);
   CHECK(cpu_S() == 0x01FF);
 }
 
@@ -284,7 +284,7 @@ int main(void) {{
     reads = hooks = bad_bank = 0;
     patched = pass == 0 ? 0x1242 : 0x2363;
     cpu_push_jsr_return_frame(&g_cpu);
-    Patched_M{m}X{x}(&g_cpu);
+    Patched_M{m}X{x}(&g_cpu, 2);
     unsigned want = {'(patched & 0xFF)' if narrow else 'patched'};
     if (cpu_{reg}() != want || reads != {1 if narrow else 2} || bad_bank ||
         hooks != 1 || cpu_S() != 0x01FF || g_other_exits) return 1;

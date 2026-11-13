@@ -15,10 +15,10 @@
 #include "recomp_cache.h"
 #include "common_cpu_infra.h"
 
-RecompReturn recomp_cache_interp_fallback(RecompRoutine *rt, CpuState *cpu) {
+RecompReturn recomp_cache_interp_fallback(RecompRoutine *rt, CpuState *cpu, uint32 hrv_arg) {
   const RecompFallback *fb = &g_recomp_fallback[rt->id];
-  recomp_enter_rt(rt);
-  uint16 entry_s; uint8 hrv;
+  recomp_enter_rt(rt, hrv_arg);
+  uint16 entry_s; uint8 hrv = (uint8)hrv_arg;
   (void)recomp_frame(cpu, fb->s_offset, 0u, &entry_s, &hrv);
   const int tail = cpu_top_frame_tail_entered();
   RecompStackPop();

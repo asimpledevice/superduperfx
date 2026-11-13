@@ -5,7 +5,7 @@ crosses that boundary into a target PC that resolves to a known
 function entry in `codegen._NAME_RESOLVER`, emit a tail call:
 
     {
-      cpu->host_return_valid = _hrv;
+      _call_hrv = _hrv;
       cpu_tailcall_inherit_return_context(_entry_s, _hrv);
       RecompReturn _tc = B_M{m}X{x}(cpu);
       RecompStackPop();
@@ -84,7 +84,7 @@ def test_fallthrough_past_end_into_named_sibling_emits_tail_call():
                             func_name='IntroInit')
 
     # Tail-call to the sibling, with the boundary's (m, x) variant.
-    assert 'IntroInitContinue_M1X1(cpu)' in src, src
+    assert 'IntroInitContinue_M1X1(cpu, _call_hrv)' in src, src
     assert 'tail-call past end:' in src, src
     assert 'cpu_tailcall_inherit_return_context(_entry_s, _hrv);' in src, src
     # Must NOT emit the unresolved-goto trap for that boundary.
@@ -116,7 +116,7 @@ def test_fallthrough_past_end_records_call_demand_for_variant():
     # After REP #$30 + NOP, m=0 x=0 — the tail-call demand must reflect
     # that, NOT (1, 1).
     assert ((0x00 << 16) | 0x8003, 0, 0) in demand, demand
-    assert 'NextSibling_M0X0(cpu)' in src, src
+    assert 'NextSibling_M0X0(cpu, _call_hrv)' in src, src
     assert 'cpu_tailcall_inherit_return_context(_entry_s, _hrv);' in src, src
 
 
@@ -164,7 +164,7 @@ def test_jump_past_end_into_sibling_emits_tail_call_not_inline_import():
     # Tail-call path keeps A small and routes BCS-taken through tail-call.
     assert 'L_8005_M1X1:' not in src_tail, \
         f'expected NO inline-import with gate, got:\n{src_tail}'
-    assert 'B_M1X1(cpu)' in src_tail, src_tail
+    assert 'B_M1X1(cpu, _call_hrv)' in src_tail, src_tail
     assert 'tail-call past end:' in src_tail, src_tail
     assert 'cpu_tailcall_inherit_return_context(_entry_s, _hrv);' in src_tail, src_tail
 
@@ -198,8 +198,8 @@ def test_branch_past_end_uses_mx_after_rep_for_sibling_variant():
                             sibling_entry_pcs={0x8008})
     demand = v2_codegen.take_unresolved_call_targets()
 
-    assert 'SharedBody_M0X0(cpu)' in src, src
-    assert 'SharedBody_M1X1(cpu)' not in src, src
+    assert 'SharedBody_M0X0(cpu, _call_hrv)' in src, src
+    assert 'SharedBody_M1X1(cpu, _call_hrv)' not in src, src
     assert (target, 0, 0) in demand, demand
 
 
@@ -250,7 +250,7 @@ def test_tail_called_shared_epilogue_consumes_inherited_return_context():
                               func_name='SharedEpilogue',
                               sibling_entry_pcs={0x8000})
 
-    assert 'SharedEpilogue_M1X1(cpu)' in src_a, src_a
+    assert 'SharedEpilogue_M1X1(cpu, _call_hrv)' in src_a, src_a
     assert 'cpu_tailcall_inherit_return_context(_entry_s, _hrv);' in src_a, src_a
     assert 'cpu_take_tailcall_return_context(&_entry_s, &_hrv)' in src_b, src_b
 
@@ -284,8 +284,8 @@ def test_tail_call_past_end_routes_pruned_variant_to_lle():
     demand = v2_codegen.take_unresolved_call_targets()
 
     assert 'interp_tier_dispatch_tail(cpu, (((uint32)cpu_PB() << 16) | 0x8003u)' in src, src
-    assert 'NextSibling_M0X0(cpu)' not in src, src
-    assert 'NextSibling_M0X1(cpu)' not in src, src
+    assert 'NextSibling_M0X0(cpu, _call_hrv)' not in src, src
+    assert 'NextSibling_M0X1(cpu, _call_hrv)' not in src, src
     assert 'cpu_tailcall_inherit_return_context' not in src, src
     # Migration-era discovery still records the exact architectural demand.
     # The stable manifest will replace this generated-C feedback channel.
@@ -321,7 +321,7 @@ def test_tail_call_demands_missing_live_variant_before_lle_routing():
     demand = v2_codegen.take_unresolved_call_targets()
 
     assert 'interp_tier_dispatch_tail(cpu, (((uint32)cpu_PB() << 16) | 0x8008u)' in src, src
-    assert 'SharedBody_M1X1(cpu)' not in src, src
+    assert 'SharedBody_M1X1(cpu, _call_hrv)' not in src, src
     assert (target, 0, 0) in demand, demand
     assert (target, 1, 1) not in demand, demand
 
@@ -343,9 +343,9 @@ def test_cross_bank_tail_call_keeps_positional_nlr_argument_out_of_prefix():
                             func_name='Caller')
 
     assert 'None{' not in src, src
-    assert ('extern RecompReturn CrossBankTail_M1X1(CpuState *cpu);'
+    assert ('extern RecompReturn CrossBankTail_M1X1(CpuState *cpu, uint32 hrv);'
             in src), src
-    assert 'CrossBankTail_M1X1(cpu)' in src, src
+    assert 'CrossBankTail_M1X1(cpu, _call_hrv)' in src, src
     assert 'cpu_tailcall_inherit_return_context(_entry_s, _hrv);' in src, src
 
 
@@ -372,7 +372,7 @@ def test_cross_bank_jml_tail_call_uses_instruction_mx_after_rep():
                             func_name='Vector')
     demand = v2_codegen.take_unresolved_call_targets()
 
-    assert 'InterruptBody_M0X0(cpu)' in src, src
-    assert 'InterruptBody_M1X1(cpu)' not in src, src
+    assert 'InterruptBody_M0X0(cpu, _call_hrv)' in src, src
+    assert 'InterruptBody_M1X1(cpu, _call_hrv)' not in src, src
     assert (target, 0, 0) in demand, demand
     assert (target, 1, 1) not in demand, demand

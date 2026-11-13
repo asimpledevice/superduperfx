@@ -86,10 +86,10 @@ def emit_funcs_h(items: list) -> str:
     for (name, addr) in items:
         bank = (addr >> 16) & 0xFF
         pc = addr & 0xFFFF
-        lines.append(f'void {name}(CpuState *cpu);  /* ${bank:02X}:{pc:04X} alias */')
+        lines.append(f'void {name}(CpuState *cpu, uint32 hrv);  /* ${bank:02X}:{pc:04X} alias */')
         for em in (0, 1):
             for ex in (0, 1):
-                lines.append(f'RecompReturn {name}_M{em}X{ex}(CpuState *cpu);')
+                lines.append(f'RecompReturn {name}_M{em}X{ex}(CpuState *cpu, uint32 hrv);')
     lines.append('')
     lines.append('/* Hand-written non-recompiled bodies still declared here.')
     lines.append(' * These are not produced by the v2 emit pipeline but are')

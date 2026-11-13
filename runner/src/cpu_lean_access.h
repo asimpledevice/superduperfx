@@ -23,7 +23,7 @@
  *   recomp_block_enter(cpu, pc) = WatchdogCheck(); deadline test at PB:pc
  *   recomp_block_enter_charge   = the same, then (no yield) the coprocessor
  *                                 clock store and the block's static charge
- *   recomp_enter(name)          = g_last_recomp_func, RecompStackPush, cpu_dbg_funcname
+ *   recomp_enter(name, hrv)     = g_last_recomp_func, RecompStackPush, cpu_dbg_funcname
  *   recomp_frame(...)           = entry S, tail-call context, host return frame,
  *                                 entry-S record
  *
@@ -63,10 +63,11 @@ void   cpu_sync_p_nz(CpuState *cpu);
 int    recomp_block_enter(CpuState *cpu, uint32 pc16);
 int    recomp_block_enter_charge(CpuState *cpu, uint32 pc16, uint32 n);
 int    recomp_block_enter_charge_c(CpuState *cpu, uint32 pc16, uint32 n, uint32 master);
-void   recomp_enter(const char *name);
+void   recomp_enter(const char *name, uint32 hrv);
 struct RecompRoutine;
 /* recomp_enter with the name from a code-cache record (recomp_cache.c). */
-void   recomp_enter_rt(const struct RecompRoutine *rt);
+void   recomp_enter_rt(const struct RecompRoutine *rt, uint32 hrv);
+/* *hrv: in, the function's hrv argument; out, after any tail-call context. */
 uint32 recomp_frame(CpuState *cpu, int s_offset, uint32 skip, uint16 *entry_s, uint8 *hrv);
 RecompReturn recomp_return_slow(CpuState *cpu, uint32 rpc24, uint16 ret_s, uint16 entry_s,
                                 uint8 hrv, uint32 host_return_pc24, uint32 frame_sz,
@@ -118,7 +119,7 @@ uint32 cpu_host_return_pc24(CpuState *cpu, uint16 entry_s, uint8 hrv, uint32 ski
 
 /* The runtime symbols the sequences below call (common_cpu_infra.h). */
 void WatchdogCheck(void);
-void RecompStackPush(const char *name);
+void RecompStackPush(const char *name, uint32 hrv);
 void RecompStackPop(void);
 void RecompStackPopYield(void);
 int cpu_resolve_ancestor_skip(uint16_t ret_s);
@@ -158,15 +159,15 @@ int recomp_block_enter_charge_c(CpuState *cpu, uint32 pc16, uint32 n, uint32 mas
   cpu->master_cycles += master;
   return 0;
 }
-void recomp_enter(const char *name) {
+void recomp_enter(const char *name, uint32 hrv) {
   g_last_recomp_func = name;
-  RecompStackPush(name);
+  RecompStackPush(name, hrv);
   cpu_dbg_funcname(name);
 }
 uint32 recomp_frame(CpuState *cpu, int s_offset, uint32 skip, uint16 *entry_s, uint8 *hrv) {
   uint16 s = (uint16)(cpu_S() + s_offset);
-  uint8 h = cpu->host_return_valid;
-  if (cpu_take_tailcall_return_context(&s, &h)) cpu->host_return_valid = h;
+  uint8 h = *hrv;
+  (void)cpu_take_tailcall_return_context(&s, &h);
   uint32 host_return_pc24 = cpu_host_return_pc24(cpu, s, h, skip);
   if (g_recomp_stack_top >= 1) g_cpu_entry_s[g_recomp_stack_top - 1] = s;
   *entry_s = s;

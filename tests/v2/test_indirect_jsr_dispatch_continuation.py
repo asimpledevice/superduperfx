@@ -56,7 +56,7 @@ def test_indirect_jsr_dispatch_falls_through_after_selected_handler():
     )
 
     assert 'indirect dispatch call: cfg-resolved target list' in src
-    assert 'bank_00_9000_M1X1(cpu)' in src
+    assert 'bank_00_9000_M1X1(cpu, _call_hrv)' in src
     case0 = src[src.index('case 0:'):src.index('case 1:')]
     assert 'break;' in case0
     assert 'return RECOMP_RETURN_NORMAL;' not in case0
@@ -203,7 +203,7 @@ def test_long_ptrcall_can_override_handler_frame_size():
             },
         },
     )
-    assert 'host_return_valid = 2' in src
+    assert '_call_hrv = 2' in src
     assert '2-byte frame' in src
     assert 'cpu_set_S((uint16)(cpu_S() + 2));  /* unpop unconsumed call frame */' in src
     assert 'goto L_8100_M1X1' in src
