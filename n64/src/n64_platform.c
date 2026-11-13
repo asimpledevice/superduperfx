@@ -1,5 +1,6 @@
 /* libdragon side of the N64 host. See n64_platform.h. */
 #include <libdragon.h>
+#include "red.h"
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
@@ -76,7 +77,7 @@ void n64_platform_profile_stop_and_dump(void) {
 /* Test source of switch requests: every vertical blank asks Blue to yield,
  * at a wall-clock moment as Red's doorbell will. Yields must leave the
  * state hashes unchanged. */
-static void yield_test_vi(void) { run_flags_set_in_interrupt(RUN_FLAG_SWITCH); }
+static void yield_test_vi(void) { run_flags_set_in_interrupt(RUN_FLAG_WANT_GREEN); }
 #endif
 
 void n64_platform_init(void) {
@@ -88,6 +89,7 @@ void n64_platform_init(void) {
   display_init(RESOLUTION_320x240, DEPTH_16_BPP, 2, GAMMA_NONE, FILTERS_DISABLED);
   joypad_init();
   rdpq_init();
+  red_init();   /* Red's mailbox messages (rspq is up) */
 #ifdef N64_RSPDSP
   snesdsp_rsp_init();
 #endif

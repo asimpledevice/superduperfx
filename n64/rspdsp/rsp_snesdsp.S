@@ -115,11 +115,15 @@ Run_loop:
 Run_done:
     jal Out_Flush
     nop
-    move ra, s3                     # DMAOut returns straight to rspq
     move s0, s7
     li s4, %lo(DSP)
-    j DMAOut
+    jal DMAOut                      # synchronous: the block is in RDRAM after it
     li t0, DMA_SIZE(RSPDSP_STATE_SIZE, 1)
+    # Tell the CPU (Red's mailbox doorbell): the word the CPU chose.
+    lw t1, %lo(DSP + RSPDSP_P_DONE_MSG)
+    RSPQ_MailboxPost t1, t0
+    jr s3
+    nop
 
 ########################################################################
 # Logged writes

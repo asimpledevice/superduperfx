@@ -26,9 +26,10 @@
 #error "run_flags.h: the run flags live in a VR4300 FPU register"
 #endif
 
-/* Flag bits. */
-#define RUN_FLAG_SWITCH   0x1u   /* the running thread should yield at its next safe point */
-#define RUN_FLAG_DOORBELL 0x2u   /* a mailbox message arrived (diagnostics) */
+/* Flag bits: requests, honoured at the next safe point. */
+#define RUN_FLAG_WANT_GREEN 0x1u   /* Blue should yield to Green (Green has work) */
+#define RUN_FLAG_DOORBELL   0x2u   /* a mailbox message arrived (diagnostics) */
+#define RUN_FLAG_WANT_BLUE  0x4u   /* Green should hand the CPU back to Blue (what it waited for is ready) */
 
 static inline __attribute__((always_inline)) uint32_t run_flags(void) {
   uint64_t v;

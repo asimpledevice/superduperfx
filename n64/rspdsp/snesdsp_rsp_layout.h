@@ -68,6 +68,7 @@
 #define RSPDSP_P_ARAM       (RSPDSP_G + 0x38)  /* u32 RDRAM address */
 #define RSPDSP_P_LOG        (RSPDSP_G + 0x3c)  /* u32 RDRAM address */
 #define RSPDSP_P_OUT        (RSPDSP_G + 0x40)  /* u32 RDRAM address */
+#define RSPDSP_P_DONE_MSG   (RSPDSP_G + 0x44)  /* u32 mailbox word posted when the batch is done */
 /* Coefficients split for exact vector multiplies: for a coefficient k
  * scaled to K = k << (16 - shift), u = K & 0xffff (unsigned) and
  * c = K >> 16 (signed), so VMUDM(s, u) + VMADH(s, c) leaves exactly

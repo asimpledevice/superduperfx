@@ -2491,9 +2491,28 @@ RDRAM for bulk data and jobs.
   449, JM2 1,311, state hashes identical to the Blue builds. The check costs
   nothing measurable (ares frame times within noise).
 
-Next: Green's side (a safe point in the frame driver that yields to Blue),
-the doorbell handler setting `RUN_FLAG_SWITCH` from Red's messages, and
-Green service work that is independent of emulated state.
+- **Two directed requests** replace the one switch flag:
+  `RUN_FLAG_WANT_GREEN` (Blue yields at its next block entry) and
+  `RUN_FLAG_WANT_BLUE` (Green's service returns at its next safe point,
+  `blue_green_should_return`). Green clears WANT_BLUE when Blue resumes.
+- **First real message: S-DSP batch done.** `n64/src/red.c` dispatches the up
+  words by type (`red.h`: top byte type, low 24 bits payload). Each S-DSP
+  launch numbers its batch and puts `RED_MSG(RED_MSG_DSP_DONE, seq)` in the
+  batch block; the overlay posts it after its last DMA. The join waits for
+  that number instead of an rspq syncpoint: Blue publishes the batch it
+  waits for (`g_red_blue_waits`) and yields to Green until the doorbell sets
+  WANT_BLUE; Green spins on the number. A doorbell that does not come within
+  50 ms falls back to `rspq_wait` (counted; none seen).
+- ares, per 60 frames: about 250 messages (4 batches a frame) in SMW and JM2,
+  SMW 2,304 and JM2 3,595 Blue yields while waiting (Green's service is
+  still empty, so each returns at once), no fallbacks. State hashes
+  identical to the Blue builds.
+- A bug found on the way: a 32-bit tick start compared with libdragon's
+  64-bit `get_ticks()` timed out at once after ~91 s of uptime.
+
+Next (to discuss): separate Blue and Green (give Green independent work:
+draw frame N while Blue runs N+1, which needs a VRAM/OAM/WRAM snapshot), or
+start the Yellow overlays on Red.
 
 ## Next steps
 

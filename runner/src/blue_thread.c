@@ -141,8 +141,9 @@ static int enter_blue(void) {
     s_on_blue = 0;
     if (!s_yield) break;
     s_yield = 0;
-    run_flags_clear(RUN_FLAG_SWITCH);
+    run_flags_clear(RUN_FLAG_WANT_GREEN);
     if (s_green_service) s_green_service();
+    run_flags_clear(RUN_FLAG_WANT_BLUE);   /* Blue runs now */
   }
   s_state = s_done ? GF_IDLE : GF_PAUSED;
   return s_result;

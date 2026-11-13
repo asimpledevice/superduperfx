@@ -41,12 +41,15 @@ int blue_is_current(void);
 int blue_pause(uint32_t resume_pc24, uint16_t resume_s);
 
 /* Yield (Blue, at a safe point, when the run flags ask for a switch): Green
- * clears RUN_FLAG_SWITCH, runs its service and switches straight back; the
+ * clears RUN_FLAG_WANT_GREEN, runs its service and switches back; the
  * driver does not see it. The service must not touch emulated state (the
  * 65816's run is mid-flight), so a yield never changes results; it is where
  * Green's independent work goes. Defined with the run flags (run_flags.h). */
 void blue_yield(void);
 void blue_set_green_service(void (*service)(void));
+/* Green's safe point, for its service: stop and hand the CPU back to Blue
+ * (RUN_FLAG_WANT_BLUE: what Blue waits for is ready). */
+static inline int blue_green_should_return(void) { return (run_flags() & RUN_FLAG_WANT_BLUE) != 0; }
 
 /* Optional: the host stack the guest runs on, [lo, top) (default: 256 KB
  * from malloc). A host that places its stack for the data cache gives the

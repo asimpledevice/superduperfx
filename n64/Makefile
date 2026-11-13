@@ -35,7 +35,7 @@ RUNNER_SRCS = \
 	snes/cx4.c
 
 HOST_SRCS = n64_host.c n64_platform.c n64_compat.c n64_stubs.c \
-	n64_ppu_build.c n64_ppu_draw.c
+	n64_ppu_build.c n64_ppu_draw.c red.c
 
 OBJS = $(addprefix $(BUILD_DIR)/runner/,$(RUNNER_SRCS:.c=.o)) \
        $(addprefix $(BUILD_DIR)/,$(HOST_SRCS:.c=.o))

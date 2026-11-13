@@ -633,6 +633,11 @@ static int host_main(void) {
                        (unsigned long)g_snesdsp_rsp_reject[0], (unsigned long)g_snesdsp_rsp_reject[1],
                        (unsigned long)g_snesdsp_rsp_reject[2], (unsigned long)g_snesdsp_rsp_reject[3]);
       memset(g_snesdsp_rsp_reject, 0, sizeof g_snesdsp_rsp_reject);
+      extern uint32_t g_snesdsp_rsp_blue_yields, g_snesdsp_rsp_fallbacks, g_red_messages;
+      n64_platform_log("[red] 60 frames: %lu messages; S-DSP waits: %lu Blue yields, %lu fallbacks\n",
+                       (unsigned long)g_red_messages, (unsigned long)g_snesdsp_rsp_blue_yields,
+                       (unsigned long)g_snesdsp_rsp_fallbacks);
+      g_red_messages = g_snesdsp_rsp_blue_yields = g_snesdsp_rsp_fallbacks = 0;
       n64_platform_log("[rspdsp] launch parts per frame: view %lu us, pack %lu us, submit %lu us\n",
                        (unsigned long)(g_snesdsp_rsp_view_ticks / 60 / 47),
                        (unsigned long)(g_snesdsp_rsp_pack_ticks / 60 / 47),

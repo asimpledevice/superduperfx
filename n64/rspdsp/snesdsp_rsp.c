@@ -8,6 +8,7 @@
 
 #include "snesdsp_rsp.h"
 #include "blue_thread.h"
+#include "../src/red.h"
 #include "dsp.h"
 #include "apu_dsp_batch.h"
 
@@ -434,14 +435,16 @@ static struct {
   uint8_t *aram;
   uint32_t samples, nops;
   uint16_t esa, index, remain, delay;
-  rspq_syncpoint_t sync;
+  uint32_t seq;   /* this batch's number: Red posts RED_MSG_DSP_DONE with it */
 } s_flight;
+static uint32_t s_seq;
 uint32_t g_snesdsp_rsp_async, g_snesdsp_rsp_joins, g_snesdsp_rsp_join_wait;
 uint32_t g_snesdsp_rsp_launch_ticks, g_snesdsp_rsp_join_ticks, g_snesdsp_rsp_pages;
 uint32_t g_snesdsp_rsp_join_wait_blue;   /* the part of join_wait spent on the Blue thread */
 uint32_t g_snesdsp_rsp_decode_ticks, g_snesdsp_rsp_log_entries;   /* launch: log decode, entries */
 uint32_t g_snesdsp_rsp_view_ticks, g_snesdsp_rsp_pack_ticks, g_snesdsp_rsp_submit_ticks;
 uint32_t g_snesdsp_rsp_reject[4];
+uint32_t g_snesdsp_rsp_blue_yields, g_snesdsp_rsp_fallbacks;
 
 static bool launch(Dsp *dsp, uint8_t *aram, const ApuDspLogEntry *log, uint32_t n,
                    uint32_t samples, const uint8_t *marks, uint8_t *fresh);
@@ -510,14 +513,16 @@ static bool launch(Dsp *dsp, uint8_t *aram, const ApuDspLogEntry *log, uint32_t 
   *(uint32_t *)(s_block.bytes + RSPDSP_P_ARAM) = PhysicalAddr(s_view);
   *(uint32_t *)(s_block.bytes + RSPDSP_P_LOG) = PhysicalAddr(s_ops.op);
   *(uint32_t *)(s_block.bytes + RSPDSP_P_OUT) = PhysicalAddr(s_out.s);
+  s_seq = (s_seq + 1) & 0xffffffu;
+  *(uint32_t *)(s_block.bytes + RSPDSP_P_DONE_MSG) = RED_MSG(RED_MSG_DSP_DONE, s_seq);
   data_cache_hit_writeback_invalidate(&s_block, sizeof s_block);
   data_cache_hit_writeback_invalidate(s_ops.op, (nops + 32) * sizeof(Op));
   /* Only the samples this batch writes; the CPU never writes s_out. */
   data_cache_hit_invalidate(&s_out, (samples * 4 + 15) & ~15u);
   rspq_write(s_overlay_id, 0, PhysicalAddr(&s_block), 0);
-  s_flight.sync = rspq_syncpoint_new();
   rspq_flush();
   g_snesdsp_rsp_submit_ticks += get_ticks() - ts;
+  s_flight.seq = s_seq;
   s_flight.active = true;
   s_flight.dsp = dsp;
   s_flight.aram = aram;
@@ -536,7 +541,24 @@ void snesdsp_rsp_apu_join(void) {
   if (!s_flight.active) return;
   const uint32_t tj = get_ticks();
   const uint32_t t0 = get_ticks();
-  rspq_syncpoint_wait(s_flight.sync);
+  /* Red rings when the batch is done (RED_MSG_DSP_DONE). Blue hands the CPU
+   * to Green meanwhile; Green's service returns once the doorbell asks for
+   * Blue (RUN_FLAG_WANT_BLUE). A doorbell that never comes (50 ms) falls
+   * back to rspq_wait and is counted. */
+  if (!red_dsp_done(s_flight.seq)) {
+#if SNESRECOMP_BLUE_THREAD
+    if (blue_is_current()) {
+      g_red_blue_waits = s_flight.seq | 0x80000000u;
+      while (!red_dsp_done(s_flight.seq) && (uint32_t)get_ticks() - t0 < TICKS_FROM_MS(50)) {
+        blue_yield();
+        g_snesdsp_rsp_blue_yields++;
+      }
+      g_red_blue_waits = 0;
+    }
+#endif
+    while (!red_dsp_done(s_flight.seq) && (uint32_t)get_ticks() - t0 < TICKS_FROM_MS(50)) {}
+    if (!red_dsp_done(s_flight.seq)) { g_snesdsp_rsp_fallbacks++; rspq_wait(); }
+  }
   g_snesdsp_rsp_join_wait += get_ticks() - t0;   /* time the CPU waited */
   if (blue_is_current()) g_snesdsp_rsp_join_wait_blue += get_ticks() - t0;
   g_snesdsp_rsp_joins++;

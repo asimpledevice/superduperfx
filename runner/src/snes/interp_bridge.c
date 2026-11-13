@@ -1289,7 +1289,7 @@ int interp_bridge_lle_deadline_pause(CpuState *cpu, uint32_t resume_pc24) {
     /* A block entry is Blue's safe point: honour a switch request (Red's
      * doorbell sets the run flag) by yielding to Green, which runs its
      * service and hands the CPU straight back (blue_thread.h). */
-    if (__builtin_expect(run_flags() & RUN_FLAG_SWITCH, 0) && blue_is_current()) blue_yield();
+    if (__builtin_expect(run_flags() & RUN_FLAG_WANT_GREEN, 0) && blue_is_current()) blue_yield();
 #endif
     if (!interp_bridge_lle_master_deadline_reached(cpu)) return 0;
 #if SNESRECOMP_BLUE_THREAD
