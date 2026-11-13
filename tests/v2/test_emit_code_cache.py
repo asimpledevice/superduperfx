@@ -95,7 +95,6 @@ static int run(void) {
   
   memset(&g_cpu, 0, sizeof g_cpu);
   memset(g_ram, 0, sizeof g_ram);
-  g_cpu.ram = g_ram;
   cpu_set_S(0x01FF); cpu_set_m_flag(1); cpu_set_x_flag(1); cpu_set_P(0x30);
   g_tc_valid = 0; g_recomp_stack_top = 0;
   cpu_push_jsr_return_frame(&g_cpu);
@@ -118,7 +117,7 @@ int main(void) {
   {
     
     memset(&g_cpu, 0, sizeof g_cpu);
-    g_cpu.ram = g_ram; cpu_set_S(0x01FF); cpu_set_m_flag(1); cpu_set_x_flag(0); cpu_set_P(0x20);
+    cpu_set_S(0x01FF); cpu_set_m_flag(1); cpu_set_x_flag(0); cpu_set_P(0x20);
     g_tc_valid = 0; g_recomp_stack_top = 0;
     cpu_push_jsr_return_frame(&g_cpu);
     bank_00_8010_M1X0(&g_cpu, 2);

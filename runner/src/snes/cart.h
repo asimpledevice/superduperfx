@@ -26,7 +26,10 @@ struct Cart {
   uint32_t romImageSize;
   uint8_t* ram;
   uint32_t ramSize;
-  const uint64_t* masterClock;
+  /* Reads the clock coprocessors catch up to; NULL reads the beam's
+   * (snes->beamMasterLast). The runtime installs the CPU's coprocessor clock,
+   * which is a register, not memory (cpu_regs.h). */
+  uint64_t (*masterClock)(void);
   uint32_t cpuBusAddress;
   SuperFx* superfx;
   Cx4* cx4;
@@ -109,7 +112,7 @@ static inline bool cart_is_sdd1_window(const Cart* cart, uint8_t bank,
 }
 
 void cart_sync_coprocessors(Cart *cart, uint64_t master_clock);
-void cart_set_master_clock_source(Cart *cart, const uint64_t *master_clock);
+void cart_set_master_clock_source(Cart *cart, uint64_t (*master_clock)(void));
 void cart_note_cpu_bus(Cart *cart, uint8_t bank, uint16_t address);
 
 // TODO: how to handle reset & load? (especially where to init ram)

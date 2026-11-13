@@ -50,8 +50,8 @@ def test_wide_immediate_becomes_a_rom_word_read():
     assert '= 0x40;' not in live
     assert 'cpu_read16(cpu, 0x00, (uint16)(0x8001))' in live
     # The cycle charge comes from the opcode and does not move.
-    charge = [l for l in folded.splitlines() if 'cpu->cycles +=' in l]
-    assert charge == [l for l in live.splitlines() if 'cpu->cycles +=' in l]
+    charge = [l for l in folded.splitlines() if 'g_master_cycles +=' in l]
+    assert charge == [l for l in live.splitlines() if 'g_master_cycles +=' in l]
 
 
 def test_narrow_immediate_becomes_a_rom_byte_read():
@@ -146,7 +146,6 @@ static void call(RecompEntryFn fn) {
   
   memset(&g_cpu, 0, sizeof g_cpu);
   memset(g_ram, 0, sizeof g_ram);
-  g_cpu.ram = g_ram;
   cpu_set_S(0x01FF); cpu_set_m_flag(1); cpu_set_x_flag(1); cpu_set_P(0x30);
   g_tc_valid = 0; g_recomp_stack_top = 0;
   cpu_push_jsr_return_frame(&g_cpu);
@@ -277,7 +276,6 @@ int main(void) {{
     
     memset(&g_cpu, 0, sizeof g_cpu);
     memset(g_ram, 0, sizeof g_ram);
-    g_cpu.ram = g_ram;
     cpu_set_S(0x01FF); cpu_set_m_flag({m}); cpu_set_x_flag({x});
     cpu_set_P({(m << 5) | (x << 4)}); cpu_set_DB(0x7E);
     cpu_set_{reg}(0x35);

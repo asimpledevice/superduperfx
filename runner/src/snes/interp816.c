@@ -137,7 +137,7 @@ uint32_t g_interp816_cur_pc = 0;
 
 
 /* Always-on interpreter execution tally: instructions and guest cycles
- * actually run by the 65816 interpreter tier. Divided by g_cpu.master_cycles
+ * actually run by the 65816 interpreter tier. Divided by g_master_cycles
  * (total guest cycles, AOT+interp) this gives the mode-independent fraction
  * of execution that is NOT statically recompiled. Read via interp816_*_total. */
 uint64_t snesrecomp_host_now_ns(void) {
@@ -169,9 +169,8 @@ uint64_t interp816_cycles_total(void) { return s_interp816_cycles; }
  * routine against the cfg symbol map while being immune to the aliasing a
  * hashed-PC sampler suffers from.
  *
- * Cycles, not instructions, is the headline: it is the same unit
- * interp_stats divides by (g_cpu.cycles), so a page's share here is directly
- * comparable to the whole-run interpreted share. Instructions are kept beside
+ * Cycles, not instructions, is the headline: interp_stats reports the same
+ * unit, so a page's share here compares directly with the whole-run total. Instructions are kept beside
  * it because a page that is all long-cycle opcodes and a page that is a tight
  * two-cycle loop want different fixes. */
 /* SNESRECOMP_INTERP_PAGE_MAP=0 drops the map (1 MiB of counters) for

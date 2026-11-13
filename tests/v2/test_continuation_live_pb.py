@@ -36,7 +36,7 @@ def test_emitted_wait_and_deadline_continuations_keep_live_bank(tmp_path):
     else:
         entry += '  assert(0); return 0;\n}\n'
     # Execute an actual generated charge, including the live FastROM condition.
-    charge = re.search(r'cpu->master_cycles \+= (\d+) \* ([^;]+);', generated)
+    charge = re.search(r'g_master_cycles \+= (\d+) \* ([^;]+);', generated)
     assert charge
     cycles = int(charge[1])
     source = r'''
@@ -45,7 +45,8 @@ def test_emitted_wait_and_deadline_continuations_keep_live_bank(tmp_path):
 typedef uint32_t uint32;
 typedef uint16_t uint16;
 typedef int RecompReturn;
-typedef struct { uint8_t PB; uint16_t S; uint64_t master_cycles; } CpuState;
+typedef struct { uint8_t PB; uint16_t S; } CpuState;
+static uint64_t g_master_cycles;   /* cpu_regs.h: a register, not a field */
 /* Accessors over this mock state (runner/src/cpu_regs.h shape). */
 #define cpu_PB() (cpu->PB)
 #define cpu_set_PB(v) ((void)(cpu->PB = (uint8_t)(v)))
@@ -76,16 +77,16 @@ static void charge(CpuState *cpu) {
 int main(void) {
     for (unsigned bank = 0; bank <= 0x80; bank += 0x80) {
         for (deadline = 0; deadline < 2; deadline++) {
-            CpuState cpu = {bank, 0x1ffc, 0};
+            CpuState cpu = {bank, 0x1ffc};
             assert(Wait_M0X0(&cpu, 0) == 99);
             assert(resume == ((bank << 16) | 0x8000));
             assert(cpu.S == 0x1ffc && cpu.PB == bank && depth == 0);
             for (g_memsel = 0; g_memsel < 2; g_memsel++) {
                 g_code_speed[1] = g_memsel ? 6 : 8;
-                cpu.master_cycles = 0;
+                g_master_cycles = 0;
                 charge(&cpu);
                 const unsigned expected_speed = (bank == 0x80 && g_memsel) ? 6 : 8;
-''' + f'                assert(cpu.master_cycles == {cycles} * expected_speed);\n' + r'''
+''' + f'                assert(g_master_cycles == {cycles} * expected_speed);\n' + r'''
             }
         }
     }

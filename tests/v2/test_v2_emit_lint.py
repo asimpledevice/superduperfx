@@ -43,7 +43,6 @@ CANONICAL = {
     'D',                 # direct page register
     'DB', 'PB',          # data bank, program bank
     'P',                 # canonical processor flags byte
-    'ram',               # pointer into runtime g_ram[] WRAM
 }
 
 # Shadow fields kept in sync with cpu->P via cpu_p_to_mirrors /

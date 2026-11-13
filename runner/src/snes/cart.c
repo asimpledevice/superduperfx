@@ -31,7 +31,6 @@ Cart* cart_init(Snes* snes) {
   cart->romSize = 0;
   cart->ram = NULL;
   cart->ramSize = 0;
-  cart->masterClock = &snes->beamMasterLast;
   return cart;
 }
 
@@ -142,7 +141,7 @@ void cart_sync_coprocessors(Cart *cart, uint64_t master_clock) {
   }
 }
 
-void cart_set_master_clock_source(Cart *cart, const uint64_t *master_clock) {
+void cart_set_master_clock_source(Cart *cart, uint64_t (*master_clock)(void)) {
   if (cart) cart->masterClock = master_clock;
 }
 
@@ -152,7 +151,9 @@ void cart_note_cpu_bus(Cart *cart, uint8_t bank, uint16_t address) {
 }
 
 static uint64_t cart_master_clock(const Cart *cart) {
-  return cart && cart->masterClock ? *cart->masterClock : 0;
+  if (!cart) return 0;
+  if (cart->masterClock) return cart->masterClock();
+  return cart->snes ? cart->snes->beamMasterLast : 0;
 }
 
 uint8_t *cart_getRomPtr(Cart *cart, uint8_t bank, uint16_t adr) {

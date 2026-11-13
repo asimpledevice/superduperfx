@@ -2713,8 +2713,7 @@ def _emit_break(op: Break) -> List[str]:
             f"  cpu_write8(cpu, 0x00, (uint16)(_s - 1), 0x{ret >> 8:02x});",
             f"  cpu_write8(cpu, 0x00, (uint16)(_s - 2), 0x{ret & 0xFF:02x});",
             "  cpu_write8(cpu, 0x00, (uint16)(_s - 3), (uint8)cpu_P());",
-            "  cpu->cycles += 7;",
-            "  cpu->master_cycles += 7 * 8; }",
+            "  g_master_cycles += 7 * 8; }",
         ]
     if not op.tier_to_lle:
         return ["/* COP: software interrupt */" if op.cop
@@ -2785,8 +2784,7 @@ def _emit_blockmove(op: BlockMove) -> List[str]:
         f"      if (interp_bridge_lle_deadline_pause(cpu, {_transfer_target_expr(_CURRENT_SOURCE_PC24, False)})) {{",
         f"        return interp_bridge_lle_yield_unwind(cpu, {_transfer_target_expr(_CURRENT_SOURCE_PC24, False)});",
         "      }",
-        "      cpu->cycles += 7;",
-        f"      cpu->master_cycles += 7 * {speed_expr};",
+        f"      g_master_cycles += 7 * {speed_expr};",
         "    }",
         "  } while (cpu_A() != 0xFFFF);",
         "}",

@@ -16,7 +16,7 @@
  *
  * and the emitter's other fixed sequences, each in the order it writes them:
  *
- *   cpu_charge(cpu, n)          = cycles += n; master_cycles += n * speed
+ *   cpu_charge(cpu, n)          = g_master_cycles += n * speed
  *   cpu_charge_dl(cpu)          = if (D & 0xFF) cpu_charge(cpu, 1)
  *   cpu_charge_page(cpu, k, i)  = if ((k & 0xFF00) != ((k + i) & 0xFF00)) cpu_charge(cpu, 1)
  *   cpu_sync_p_nz(cpu)          = P's N and Z bits from the flag mirrors
@@ -129,8 +129,7 @@ extern uint16_t g_cpu_entry_s[];
 extern const char *g_last_recomp_func;
 
 void cpu_charge(CpuState *cpu, uint32 n) {
-  cpu->cycles += n;
-  cpu->master_cycles += n * (uint32)g_code_speed[cpu_PB() >> 7];
+  g_master_cycles += n * (uint32)g_code_speed[cpu_PB() >> 7];
 }
 void cpu_charge_dl(CpuState *cpu) {
   if (cpu_D() & 0xFF) cpu_charge(cpu, 1u);
@@ -147,16 +146,15 @@ int recomp_block_enter(CpuState *cpu, uint32 pc16) {
 }
 int recomp_block_enter_charge(CpuState *cpu, uint32 pc16, uint32 n) {
   if (recomp_block_enter(cpu, pc16)) return 1;
-  cpu->coprocessor_master_cycles = cpu->master_cycles;
+  g_coprocessor_master_cycles = g_master_cycles;
   cpu_charge(cpu, n);
   return 0;
 }
 /* The same for code whose region speed is fixed: master = n * that speed. */
 int recomp_block_enter_charge_c(CpuState *cpu, uint32 pc16, uint32 n, uint32 master) {
   if (recomp_block_enter(cpu, pc16)) return 1;
-  cpu->coprocessor_master_cycles = cpu->master_cycles;
-  cpu->cycles += n;
-  cpu->master_cycles += master;
+  g_coprocessor_master_cycles = g_master_cycles;
+  g_master_cycles += master;
   return 0;
 }
 void recomp_enter(const char *name, uint32 hrv) {

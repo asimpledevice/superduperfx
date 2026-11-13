@@ -163,7 +163,7 @@ static void run_one(const OpTest *op, const St *st, Interp816 *ip) {
 
     /* recomp side */
     memset(&g_cpu, 0, sizeof g_cpu);
-    g_cpu.ram = RAM; cpu_set_A(st->a); cpu_set_X(xv); cpu_set_Y(yv);
+    cpu_set_A(st->a); cpu_set_X(xv); cpu_set_Y(yv);
     cpu_set_S(st->s); cpu_set_D(st->d); cpu_set_DB(st->db); cpu_set_PB(0);
     cpu_set_m_flag(op->m); cpu_set_x_flag(op->x); cpu_set_emulation(0);
     g_cpu._flag_C = st->C; g_cpu._flag_Z = st->Z; g_cpu._flag_V = st->V;

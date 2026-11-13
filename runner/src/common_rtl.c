@@ -194,13 +194,13 @@ int g_interp_apu_driving = 0;
 
 
 // Axis-5 off-cue: APU pacing now derives from the recompiler's region-weighted
-// MASTER-clock accumulator (g_cpu.master_cycles) instead of the +256-per-touch
+// MASTER-clock accumulator (g_master_cycles) instead of the +256-per-touch
 // synthetic estimate. g_apu_last_sync_master is the master-clock count at the
 // last APU sync; rtl_accumulate_apu_catchup() converts the delta to SPC cycles.
 uint64_t g_apu_last_sync_master = 0;
 /* Production's frame loop is the stable guest-time ruler: one frame is
  * 357368 SNES master cycles and 17088 SPC cycles in this runtime's 60 Hz
- * model. g_cpu.master_cycles supplies only the within-frame position because
+ * model. g_master_cycles supplies only the within-frame position because
  * its total per frame varies with recompilation coverage. */
 static uint64_t g_apu_frame_start_master;
 static RtlApuFrameClock g_apu_frame_clock;
@@ -248,8 +248,8 @@ static void rtl_sync_apu_frame_boundary(void);
 
 static uint64_t rtl_apu_guest_cycle_at(bool clamp) {
   if (g_extended_frame_timing)
-    return rtl_apu_clock_now(&g_apu_frame_clock, g_cpu.master_cycles);
-  uint64_t within = g_cpu.master_cycles - g_apu_frame_start_master;
+    return rtl_apu_clock_now(&g_apu_frame_clock, g_master_cycles);
+  uint64_t within = g_master_cycles - g_apu_frame_start_master;
   if (clamp && within >= RTL_MASTER_CYCLES_PER_FRAME)
     within = RTL_MASTER_CYCLES_PER_FRAME - 1;
   return (uint64_t)snes_frame_counter * RTL_APU_CYCLES_PER_FRAME +
@@ -467,14 +467,14 @@ void rtl_reset_host_pacing(void) {
   snes_frame_counter = 0;
   g_apu_frame_time_valid = false;
   g_apu_frame_clock = (RtlApuFrameClock){0};
-  g_apu_frame_start_master = g_cpu.master_cycles;
+  g_apu_frame_start_master = g_master_cycles;
   g_main_cpu_cycles_estimate = 0;
   g_apu_pace_cycles_estimate = 0;
   g_apu_last_sync_cycles = 0;
   // master_cycles is monotonic across soft reset (RtlReset doesn't re-init
   // g_cpu); anchor the sync pointer to its current value so the first post-reset
   // catch-up sees a zero delta rather than the whole run's accumulated cycles.
-  g_apu_last_sync_master = g_cpu.master_cycles;
+  g_apu_last_sync_master = g_master_cycles;
   snes_mod_audio_stop_all();
 
   /* The DRAM refresh tax carries a SUB-SCANLINE remainder across frames, and
@@ -492,7 +492,7 @@ void rtl_reset_host_pacing(void) {
    * Anchored to now and zeroed, which is the state a first boot starts from.
    * This same carry has bitten before: it was the rollback replay divergence
    * that had to be found by diffing .data and .bss. */
-  snes_refresh_state_set(0u, g_cpu.master_cycles);
+  snes_refresh_state_set(0u, g_master_cycles);
 }
 
 static uint64_t s_state_generation;
@@ -519,7 +519,7 @@ void RtlReset(int mode) {
   ++s_state_generation;
   rtl_reset_host_pacing();
   snes_reset(g_snes, true);
-  g_snes->beamMasterLast = g_cpu.master_cycles;
+  g_snes->beamMasterLast = g_master_cycles;
   SnesEnterNativeMode();
   ppu_reset(g_ppu);
   if (!(mode & 1))
@@ -806,9 +806,9 @@ bool RtlRunFrame(uint32 inputs) {
   /* Establish the guest timestamp origin before any frame code can touch an
    * APU port. Host turbo changes how quickly frames arrive, not their guest
    * duration. */
-  g_apu_frame_start_master = g_cpu.master_cycles;
+  g_apu_frame_start_master = g_master_cycles;
   g_apu_frame_time_valid = true;
-  rtl_apu_clock_begin(&g_apu_frame_clock, g_cpu.master_cycles);
+  rtl_apu_clock_begin(&g_apu_frame_clock, g_master_cycles);
   WatchdogFrameStart();
   // Watchdog guard: WatchdogCheck() (called per-block in v2 gen) longjmps
   // here when a frame exceeds 5s, so an infinite loop in recompiled code
@@ -1063,7 +1063,7 @@ bool RtlLoadSnapshotFromMemory(const void *data, size_t size) {
     rtl_reset_audio_delivery();
   RtlApuUnlock();
   if (memory.error) return false;
-  g_snes->beamMasterLast = g_cpu.master_cycles;
+  g_snes->beamMasterLast = g_master_cycles;
   if(!s_rollback_load) snes_mod_audio_stop_all();
   PpuResetWidescreenOamHistory(g_snes->ppu);
   if (g_rtl_game_info && g_rtl_game_info->on_state_loaded)
@@ -1077,7 +1077,7 @@ bool RtlLoadSnapshotFromMemory(const void *data, size_t size) {
  */
 
 #define RTL_RB_RESIDUE_MAGIC 0x53524252u /* 'RBRS' */
-#define RTL_RB_RESIDUE_VERSION 10u  /* 10: CpuState lost m_flag/x_flag (9: host_return_valid) */
+#define RTL_RB_RESIDUE_VERSION 11u  /* 11: clocks/open bus as saved copies, no ram, no cycles; 10: no m/x; 9: no hrv */
 
 typedef struct RtlRollbackResidue {
   uint32 magic;
@@ -1261,9 +1261,7 @@ static void rtl_rb_residue_capture(RtlRollbackResidue *r) {
 }
 
 static void rtl_rb_residue_apply(const RtlRollbackResidue *r) {
-  uint8 *ram_ptr = g_cpu.ram;
   g_cpu = r->cpu;
-  g_cpu.ram = ram_ptr; /* host pointer, not simulation state */
   cpu_regs_load(&r->cpu);
   apu_port_sched_restore(g_snes->apu, &r->apu_port);
   g_snes->beamMasterLast = r->beam_master_last;
@@ -1363,7 +1361,6 @@ bool RtlExecutionStateValid(const void *data, size_t size) {
   const uint8 *raw = (const uint8 *)&r.apu_port;
   if (raw[offsetof(ApuPortSched, timeValid)] > 1 ||
       r.magic != RTL_RB_RESIDUE_MAGIC || r.version != RTL_RB_RESIDUE_VERSION ||
-      r.cpu.ram != NULL ||
       r.cpu.reg_emulation > 1 || r.cpu._flag_N > 1 || r.cpu._flag_V > 1 ||
       r.cpu._flag_Z > 1 || r.cpu._flag_C > 1 || r.cpu._flag_I > 1 ||
       r.cpu._flag_D > 1 ||
@@ -1383,7 +1380,6 @@ bool RtlExecutionStateValid(const void *data, size_t size) {
 void RtlSaveExecutionState(SaveLoadInfo *sli) {
   RtlRollbackResidue r;
   rtl_rb_residue_capture(&r);
-  r.cpu.ram = NULL; /* Never persist a process address. */
   uint32 size = sizeof(r);
   sli->func(sli, &size, sizeof(size));
   sli->func(sli, &r, sizeof(r));
@@ -1669,14 +1665,14 @@ void WriteReg(uint16 reg, uint8 value) {
    * same clock. It is bounded work: register accesses are rare next to RAM, and
    * frequent syncing keeps each delta small. */
   if (g_snes)
-    snes_sync_master_clock(g_snes, g_cpu.master_cycles);
+    snes_sync_master_clock(g_snes, g_master_cycles);
   // Direct dispatch — bypass emulator bus
   // MSU-1 ($2000-$2007). Inert unless a pack is armed, so the open-bus
   // default (no-op + log) is preserved byte-for-byte when disabled.
   if (g_snes && cart_has_sa1(g_snes->cart) &&
       ((reg >= 0x2200 && reg < 0x2400) ||
        (reg >= 0x3000 && reg < 0x3800))) {
-    cart_sync_coprocessors(g_snes->cart, g_cpu.master_cycles);
+    cart_sync_coprocessors(g_snes->cart, g_master_cycles);
     cart_write(g_snes->cart, 0, reg, value);
     debug_server_on_reg_write(reg, value);
     return;
@@ -1691,7 +1687,7 @@ void WriteReg(uint16 reg, uint8 value) {
     /* AOT code reaches the GSU through this direct-register fast path rather
      * than the normal CPU bus.  Bring the coprocessor up to the CPU's current
      * master clock before either side observes or changes its registers. */
-    cart_sync_coprocessors(g_snes->cart, g_cpu.master_cycles);
+    cart_sync_coprocessors(g_snes->cart, g_master_cycles);
     cart_write(g_snes->cart, 0, reg, value);
   } else if (reg >= 0x2100 && reg < 0x2140) {
     ppu_write(g_ppu, reg & 0xff, value);   /* journals itself */
@@ -1726,7 +1722,7 @@ void WriteReg(uint16 reg, uint8 value) {
      * $4804-$4807 MMC selects were silently dropped and the chip could
      * never activate (Star Ocean's boot hung in the SPC700 upload feeding
      * it raw compressed data). */
-    cart_sync_coprocessors(g_snes->cart, g_cpu.master_cycles);
+    cart_sync_coprocessors(g_snes->cart, g_master_cycles);
     cart_write(g_snes->cart, 0, reg, value);
   }
   debug_server_on_reg_write(reg, value);
@@ -1739,7 +1735,7 @@ uint8 ReadRegOpenBus(uint16 reg, uint8 open_bus) {
   if (g_snes && cart_has_sa1(g_snes->cart) &&
       ((reg >= 0x2200 && reg < 0x2400) ||
        (reg >= 0x3000 && reg < 0x3800))) {
-    cart_sync_coprocessors(g_snes->cart, g_cpu.master_cycles);
+    cart_sync_coprocessors(g_snes->cart, g_master_cycles);
     return sa1_cpu_read(g_snes->cart->sa1, 0, reg, open_bus);
   }
   if (reg >= 0x2000 && reg < 0x2008) {
@@ -1747,9 +1743,9 @@ uint8 ReadRegOpenBus(uint16 reg, uint8 open_bus) {
   }
   if (reg == 0x2137 ||
       (reg == 0x4212 && g_snes && g_snes->cpuReadClocked))
-    snes_sync_master_clock(g_snes, g_cpu.master_cycles);
+    snes_sync_master_clock(g_snes, g_master_cycles);
   if (reg >= 0x3000 && reg < 0x3300 && g_snes->cart->type == CART_SUPERFX) {
-    cart_sync_coprocessors(g_snes->cart, g_cpu.master_cycles);
+    cart_sync_coprocessors(g_snes->cart, g_master_cycles);
     return cart_read(g_snes->cart, 0, reg);
   }
   if (reg >= 0x2100 && reg < 0x2140) {
@@ -1777,14 +1773,14 @@ uint8 ReadRegOpenBus(uint16 reg, uint8 open_bus) {
              g_snes->cart->type == CART_SDD1) {
     /* S-DD1 register reads: mirror the write path so ioRead (bsnes)
      * semantics apply under the interpreter instead of returning open bus. */
-    cart_sync_coprocessors(g_snes->cart, g_cpu.master_cycles);
+    cart_sync_coprocessors(g_snes->cart, g_master_cycles);
     return cart_read(g_snes->cart, 0, reg);
   }
   return open_bus;
 }
 
 uint8 ReadReg(uint16 reg) {
-  return ReadRegOpenBus(reg, g_cpu.open_bus);
+  return ReadRegOpenBus(reg, g_open_bus);
 }
 
 uint16 ReadRegWord(uint16 reg) {
@@ -1803,13 +1799,13 @@ uint16 ReadRegWord(uint16 reg) {
     RtlApuUnlock();
     lo = rtl_apu_port_observers_read(reg, lo);
     hi = rtl_apu_port_observers_read(reg + 1, hi);
-    g_cpu.open_bus = hi;
+    g_open_bus = hi;
     return (uint16_t)lo | ((uint16_t)hi << 8);
   }
   uint8_t lo = ReadReg(reg);
-  g_cpu.open_bus = lo;
+  g_open_bus = lo;
   uint8_t hi = ReadReg(reg + 1);
-  g_cpu.open_bus = hi;
+  g_open_bus = hi;
   return (uint16_t)lo | ((uint16_t)hi << 8);
 }
 
@@ -1876,7 +1872,7 @@ void rtl_accumulate_apu_catchup(void) {
    * an APU-port access inside interpreted code doesn't double-count. */
   if (g_interp_apu_driving) return;
   // NOTE (Axis-5 off-cue experiment, 2026-06-28): pacing the SPC from the
-  // recompiler's region-weighted MASTER-clock accumulator (g_cpu.master_cycles,
+  // recompiler's region-weighted MASTER-clock accumulator (g_master_cycles,
   // = sum of CPU cycles x code-region speed) was tried here in place of the
   // +256/touch estimate below. Measured A/B vs the bsnes oracle REGRESSED it:
   // SMW drift -4013 -> -5900 ppm, onset match 53% -> 29%. Root: master_cycles
@@ -1884,7 +1880,7 @@ void rtl_accumulate_apu_catchup(void) {
   // frames host-driven (not by counting 357368 master clocks/frame), so its
   // per-frame execution-cycle total over-counts real elapsed time and the SPC
   // over-advances (music runs fast). The accumulator stays emitted as inert
-  // Axis-5 infra (companion to cpu->cycles); a correct off-cue cure must pace by
+  // Axis-5 infra (master clock); a correct off-cue cure must pace by
   // WALL time / consumer rate, not accumulated execution cycles -- see
   // docs/validation/accuracy-history.md. Reverted to the known-good touch estimate:
   uint64_t delta = g_apu_pace_cycles_estimate - g_apu_last_sync_cycles;
@@ -1910,7 +1906,7 @@ void rtl_accumulate_apu_catchup(void) {
   g_snes->apuCatchupCycles += (int64_t)delta * SNES_APU_CATCHUP_PER_TOUCH_MASTER;
   // Keep the master sync pointer current so the (now inert) accumulator's delta
   // never balloons if a future change re-enables master-clock pacing.
-  g_apu_last_sync_master = g_cpu.master_cycles;
+  g_apu_last_sync_master = g_master_cycles;
 
   // Real-time baseline when nothing is draining the DSP output ring
   // (EnableAudio=0, headless runs, the pre-callback boot window, a
@@ -2171,7 +2167,7 @@ static bool RtlUploadSpcImageFromDpInternal(CpuState *cpu,
   // Resync the master pointer too: an IPL-phase upload zeroes apuCatchupCycles,
   // so the next catch-up must start its delta from here, not replay the master
   // cycles burned during the upload spin.
-  g_apu_last_sync_master = g_cpu.master_cycles;
+  g_apu_last_sync_master = g_master_cycles;
   RtlApuUnlock();
 
   if (update_cpu_result) {
@@ -2233,7 +2229,7 @@ static void rtl_sync_apu_frame_boundary(void) {
    * boundary after the completed frame; adding its stale within-frame master
    * offset here would count the frame body twice. */
   uint64_t boundary = g_extended_frame_timing
-      ? rtl_apu_clock_finish(&g_apu_frame_clock, g_cpu.master_cycles)
+      ? rtl_apu_clock_finish(&g_apu_frame_clock, g_master_cycles)
       : (uint64_t)snes_frame_counter * RTL_APU_CYCLES_PER_FRAME;
   /* An NMI-disabled loader can consume many video periods in one host
    * iteration (SM's unpause restoration takes 42-44 on the original ROM).

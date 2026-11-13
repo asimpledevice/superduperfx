@@ -103,18 +103,36 @@ static inline __attribute__((always_inline)) void cpu_set_x_flag(uint32_t v) {
   cpu_set_P((uint8)((cpu_P() & ~0x10u) | ((uint8)v ? 0x10u : 0u)));
 }
 
-/* Copy the registers from their home into c's reg_* fields, and back. */
+/* The master clocks: plain 64-bit lvalues (no narrowing), so code uses them
+ * as variables. CPUFPU=1: GCC global register variables in $f26/$f27. */
+#if SNESRECOMP_CPU_REGS_FPU
+register uint64_t g_fpu_master_cycles __asm__(FPU_MASTER_CYCLES);
+register uint64_t g_fpu_coprocessor_master_cycles __asm__(FPU_COPROCESSOR_MASTER_CYCLES);
+#define g_master_cycles g_fpu_master_cycles
+#define g_coprocessor_master_cycles g_fpu_coprocessor_master_cycles
+#else
+#define g_master_cycles (g_cpu.reg_master_cycles)
+#define g_coprocessor_master_cycles (g_cpu.reg_coprocessor_master_cycles)
+#endif
+
+/* Copy the CPU state from its homes into c's reg_* fields, and back. */
 static inline void cpu_regs_store(struct CpuState *c) {
   c->reg_A = cpu_A(); c->reg_X = cpu_X(); c->reg_Y = cpu_Y();
   c->reg_S = cpu_S(); c->reg_D = cpu_D();
   c->reg_DB = cpu_DB(); c->reg_PB = cpu_PB(); c->reg_P = cpu_P();
   c->reg_emulation = cpu_emulation();
+  c->reg_open_bus = g_open_bus;
+  c->reg_master_cycles = g_master_cycles;
+  c->reg_coprocessor_master_cycles = g_coprocessor_master_cycles;
 }
 static inline void cpu_regs_load(const struct CpuState *c) {
   cpu_set_A(c->reg_A); cpu_set_X(c->reg_X); cpu_set_Y(c->reg_Y);
   cpu_set_S(c->reg_S); cpu_set_D(c->reg_D);
   cpu_set_DB(c->reg_DB); cpu_set_PB(c->reg_PB); cpu_set_P(c->reg_P);
   cpu_set_emulation(c->reg_emulation);
+  g_open_bus = c->reg_open_bus;
+  g_master_cycles = c->reg_master_cycles;
+  g_coprocessor_master_cycles = c->reg_coprocessor_master_cycles;
 }
 
 #endif

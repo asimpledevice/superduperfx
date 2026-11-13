@@ -35,7 +35,7 @@ int main(void) {
  for(int e=0;e<2;e++)for(unsigned p=0;p<256;p++) {
   if(e && (p&0x30)!=0x30)continue;
   memset(&g_cpu,0,sizeof g_cpu);memset(g_ram,0,sizeof g_ram);
-  g_cpu.ram=g_ram;cpu_set_S(0x1f0);cpu_set_P(p);cpu_set_PB(0xab);cpu_set_emulation(e);cpu_p_to_mirrors(&g_cpu);
+  cpu_set_S(0x1f0);cpu_set_P(p);cpu_set_PB(0xab);cpu_set_emulation(e);cpu_p_to_mirrors(&g_cpu);
   unsigned pc=(p&1)?0:0xcdef;
   if(p&1)cpu_push_interrupt_frame(&g_cpu);else cpu_push_interrupt_frame_at(&g_cpu,0xabcdef);
   uint8 frame[4];memcpy(frame,g_ram+0x1ed,4);

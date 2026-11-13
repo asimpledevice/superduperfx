@@ -97,7 +97,7 @@ def test_hook_is_observational_and_sits_between_deadline_and_charge():
     # hook reports it; the compiled call must come after that exit ...
     assert src.index('interp_bridge_lle_yield_unwind', entry) < src.index(call)
     # ... and before anything of the instruction is charged or run.
-    assert src.index(call) < src.index('cpu->cycles +=', entry)
+    assert src.index(call) < src.index('g_master_cycles +=', entry)
     assert src.index(call) < src.index('cpu_write8', entry)
 
 
@@ -106,7 +106,7 @@ def test_a_fall_through_into_the_hooked_pc_starts_a_hooked_block():
     label = src.index('  L_8304_M1X1:')
     call = src.index('HostSaw(cpu, 0x008304u);')
     assert src.index('interp_bridge_lle_yield_unwind', label) < call
-    assert call < src.index('cpu->cycles +=', label)
+    assert call < src.index('g_master_cycles +=', label)
 
 
 def test_no_hook_no_code():
@@ -136,7 +136,7 @@ void HostSaw(const CpuState *cpu, uint32 pc24) {
     g_hook_pc[g_hooks] = pc24;
     g_hook_a[g_hooks] = cpu_A();
     g_hook_s[g_hooks] = cpu_S();
-    g_hook_counter[g_hooks] = cpu->ram[pc24 == 0x008000u ? 0x40 :
+    g_hook_counter[g_hooks] = g_ram[pc24 == 0x008000u ? 0x40 :
                                        pc24 == 0x008100u ? 0x41 : 0x42];
   }
   g_hooks++;
@@ -163,7 +163,6 @@ RecompReturn bank_00_8100_M1X0(CpuState *cpu, uint32 _hrv_in) { return wrong_wid
 static void prepare(CpuState *cpu, int deadline_at) {
   memset(cpu, 0, sizeof *cpu);
   memset(g_ram, 0, sizeof g_ram);
-  cpu->ram = g_ram;
   cpu_set_S(0x01FF); cpu_set_m_flag(1); cpu_set_x_flag(1); cpu_set_P(0x30);
   cpu_set_A(0x77);
   g_tc_valid = 0; g_recomp_stack_top = 0;

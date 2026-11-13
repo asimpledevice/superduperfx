@@ -307,17 +307,13 @@ void interp_tier2_stats(int *sites, unsigned long long *clean,
 void Tier2CoverageDumpJson(FILE *f);
 
 /* ── Interpreted vs AOT share of guest CPU execution (always-on) ───────────
- * Both tiers charge the same bus-cycle unit to g_cpu.cycles: generated C per
- * block, the interpreter per opcode (interp816_cycles_total()). Their ratio is
- * the share of guest execution the interpreter carried since boot. The master
- * clock is a different unit (DMA/HDMA/idle time advance it too) and is
- * reported only for context. One computation serves the debug server's
- * interp_stats and the post-mortem report, so a release run's exit report and
- * a live query cannot disagree about what was measured. */
+ * The interpreter's own instruction and bus-cycle counts
+ * (interp816_cycles_total()) and the master clock. There is no total bus-cycle
+ * count for compiled code any more (CpuState.cycles was removed: only this
+ * report read it), so no interpreted share is computed. */
 typedef struct {
-    uint64_t interp_insns, interp_cycles, cpu_cycles, master_cycles;
+    uint64_t interp_insns, interp_cycles, master_cycles;
     int frame;
-    double interp_cycle_pct, aot_cycle_pct;
 } InterpExecutionShare;
 void InterpExecutionShareGet(InterpExecutionShare *out);
 /* Post-mortem section "execution_share", with the trailing comma the other

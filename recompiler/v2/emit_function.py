@@ -157,11 +157,11 @@ def _block_speed(bank: int, pc: int):
 
 def _dynamic_charge_lines(insn, speed_expr: str = "8") -> List[str]:
     """Runtime-only per-instruction cycle charges (Axis-2 step C dynamics),
-    emitted as conditional `cpu->cycles += 1;` statements just before the
-    instruction's effect. Branch-taken is charged at the terminator instead.
+    emitted as conditional master-clock charges just before the instruction's
+    effect. Branch-taken is charged at the terminator instead.
 
-    Each +1 CPU-cycle charge also adds `speed_expr` master clocks (Axis-5), so
-    the master-clock accumulator stays region-weighted-consistent with `cycles`.
+    Each +1 CPU-cycle charge adds `speed_expr` master clocks (Axis-5): the
+    code region's access speed.
 
     Covered: D.l != 0 (any DP mode); index page-cross for abs,X / abs,Y READS
     (the base is the static operand; the index is the live register). NOT yet
@@ -175,20 +175,20 @@ def _dynamic_charge_lines(insn, speed_expr: str = "8") -> List[str]:
     out: List[str] = []
     if 'dp' in charges:
         out.append(
-            f"if (cpu_D() & 0xFF) {{ cpu->cycles += 1; "
-            f"cpu->master_cycles += {speed_expr}; }}  /* D.l != 0 */")
+            f"if (cpu_D() & 0xFF) {{ "
+            f"g_master_cycles += {speed_expr}; }}  /* D.l != 0 */")
     if 'xcross' in charges:
         mode = getattr(insn, 'mode', None)
         base = getattr(insn, 'operand', 0) & 0xFFFF
         if mode == _MODE_ABS_X:
             out.append(
                 f"if ((0x{base:04X} & 0xFF00) != ((0x{base:04X} + cpu_X()) & 0xFF00))"
-                f" {{ cpu->cycles += 1; cpu->master_cycles += {speed_expr}; }}"
+                f" {{ g_master_cycles += {speed_expr}; }}"
                 f"  /* abs,X read page-cross */")
         elif mode == _MODE_ABS_Y:
             out.append(
                 f"if ((0x{base:04X} & 0xFF00) != ((0x{base:04X} + cpu_Y()) & 0xFF00))"
-                f" {{ cpu->cycles += 1; cpu->master_cycles += {speed_expr}; }}"
+                f" {{ g_master_cycles += {speed_expr}; }}"
                 f"  /* abs,Y read page-cross */")
         # INDIR_Y (dp),Y: effective pointer is loaded at runtime from DP — not
         # reconstructable from the static operand; left as a measured residual.
@@ -1595,8 +1595,8 @@ def emit_function(rom: bytes, bank: int, start: int,
                         # the emulation-only page-cross +1 is omitted (SNES game
                         # code runs e=0).
                         lines.append(
-                            f"if ({pred}) {{ cpu->cycles += 1; "
-                            f"cpu->master_cycles += {_blk_spd_expr}; {target_stmt} }}")
+                            f"if ({pred}) {{ "
+                            f"g_master_cycles += {_blk_spd_expr}; {target_stmt} }}")
                     if fall is not None:
                         lines.append(_goto_or_return(fall, source_pc24=blk_pc24)
                                      + " /* fall-through */")
@@ -2327,18 +2327,17 @@ def emit_function(rom: bytes, bank: int, start: int,
         # firmware consume a word before the CPU has written it.
         if not merged:
             src.append(
-                '    cpu->coprocessor_master_cycles = cpu->master_cycles;')
+                '    g_coprocessor_master_cycles = g_master_cycles;')
         # Axis-2: charge this block's static 65816 CPU cycles as one constant
         # add (recompiler/snes_cycles.py). Near-free. Runtime-only modifiers
         # (D.l/page-cross/branch-taken) are charged dynamically in block_lines.
         # Axis-5: also charge the region-weighted MASTER clocks (CPU cycles x
-        # code-region speed) into cpu->master_cycles, which paces the SPC700.
+        # code-region speed) into g_master_cycles, which paces the SPC700.
         if _cyc_const and not merged:
-            src.append(f'    cpu->cycles += {_cyc_const};')
             if _spd_const is not None:
-                src.append(f'    cpu->master_cycles += {_cyc_const * _spd_const};')
+                src.append(f'    g_master_cycles += {_cyc_const * _spd_const};')
             else:
-                src.append(f'    cpu->master_cycles += {_cyc_const} * {_spd_expr};')
+                src.append(f'    g_master_cycles += {_cyc_const} * {_spd_expr};')
         for ln in block_lines[key]:
             # Inject a stack-auditor pop before any return so the shadow
             # stack stays balanced. An LLE yield unwind is NOT a return: the

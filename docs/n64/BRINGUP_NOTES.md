@@ -2342,6 +2342,34 @@ MSU playback test.
   (gap 1.5%).
 - State hashes identical to step 3a (SMW 53, Pitfall 12, JM2 25 frames).
 
+### g_cpu: clocks in FPU registers; cycles, ram and open_bus out (2026-11-13)
+
+- `master_cycles` and `coprocessor_master_cycles` are `g_master_cycles` and
+  `g_coprocessor_master_cycles` (cpu_regs.h): 64-bit register variables in
+  `$f26`/`$f27` with CPUFPU=1 (`SDFX_FPU_SHARED` includes them), the
+  `reg_` fields of `g_cpu` otherwise. The emitter writes them directly:
+  `g_master_cycles += N * <speed>;` per block and per dynamic charge, and
+  `g_coprocessor_master_cycles = g_master_cycles;` where it latched before.
+- `cycles` (CPU cycles, nothing read it except tests) is gone. The master
+  clock is the only clock; tests that compared CPU cycles in bank $00 compare
+  `master / 8`.
+- The cartridge read the coprocessor clock through a pointer; a register has
+  no address, so `cart_set_master_clock_source` takes a reader function
+  (NULL reads the beam clock, as before).
+- `ram` is gone: WRAM is always `g_ram`, and `cpu_state_init(cpu)` lost its
+  argument. Test harnesses that gave the CPU a flat 16 MB bus now route WRAM
+  (banks $7E/$7F and the low-page mirror) to `g_ram`, as the hardware does
+  (`tests/interp816/bridge_test.c`, `bus_at`).
+- `open_bus` is the bus latch `g_open_bus` (cpu_state.c), not CPU state.
+- `CpuState` holds only the registers' saved copies (`cpu_regs_store`/
+  `cpu_regs_load`), E, the six flag mirrors, and the saved clocks and latch.
+  Rollback residue version 11.
+- JM2 bank $80 (-Os) is unchanged (FPU 70,065, struct 69,021): lean
+  emission charges through out-of-line `cpu_charge`, which loses its
+  `cycles` add.
+- State hashes identical to step 3a (SMW 53, Pitfall 12, JM2 25 frames). C and
+  Python tests pass.
+
 ## Next steps
 
 1. Audio: check the RSP DSP by ear on hardware (output arrives later than

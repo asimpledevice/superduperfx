@@ -173,22 +173,21 @@ way must end the same way the generated RTS does.
 
 The caller has already charged the `JSR`/`JSL`/`JMP` instruction itself in its
 block. The stub charges nothing. To keep frame timing identical, the helper
-adds what the replaced instructions (including the final RTS/RTL, 6 cycles
-each) would have charged on the path taken:
+adds the master clocks the replaced instructions (including the final RTS/RTL,
+6 CPU cycles each) would have charged on the path taken:
 
 ```c
-cpu->cycles        += cpu_cycles;     /* bus cycles   */
-cpu->master_cycles += master_cycles;  /* master clock */
+g_master_cycles += master_cycles;  /* CPU cycles x region speed */
 ```
 
 `recompiler/snes_cycles.py` is the authority (`instr_cpu_cycles`,
-`instr_master_cycles`, `region_speed`). `master_cycles` paces the APU, the LLE
+`instr_master_cycles`, `region_speed`). `g_master_cycles` paces the APU, the LLE
 scheduler's frame deadline, and coprocessors. Charging nothing is not a crash,
 but the frame boundary moves and bit-exact comparison with the plain build is
 lost. The stub also never checks `interp_bridge_lle_master_deadline_reached`.
 A helper that runs for a long time inside the LLE scheduler should yield
 through `interp_bridge_lle_yield_unwind` as generated blocks do. Any coprocessor
-access needs `cpu->coprocessor_master_cycles` latched first.
+access needs `g_coprocessor_master_cycles` latched first.
 
 ### State
 
@@ -251,8 +250,8 @@ RecompReturn HleMaxA(CpuState *cpu, uint32 hrv) {
   cpu->_flag_Z = r == 0;
   cpu->_flag_N = (r & 0x80) != 0;
   cpu_mirrors_to_p(cpu);
-  cpu->cycles += 17;                    /* the replaced path, incl. RTS */
-  cpu->master_cycles += 17 * 8;         /* SlowROM bank $00 */
+  g_master_cycles += 17 * 8;            /* the replaced path, incl. RTS:
+                                           17 cycles in SlowROM bank $00 */
   cpu->S = (uint16)(cpu->S + 2);        /* the original's RTS */
   return RECOMP_RETURN_NORMAL;
 }

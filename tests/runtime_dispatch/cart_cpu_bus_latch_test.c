@@ -150,10 +150,11 @@ RecompReturn interp_tier_run_call_frame(CpuState *cpu, uint32 target_pc24,
     return RECOMP_RETURN_NORMAL;
 }
 
-static void reset_cpu(CpuState *cpu, uint8 *ram) {
+static void reset_cpu(CpuState *cpu) {
     memset(cpu, 0, sizeof(*cpu));
-    memset(ram, 0, 0x20000);
-    cpu->ram = ram;
+    memset(g_ram, 0, sizeof g_ram);
+    g_open_bus = 0;
+    g_master_cycles = 0;
     g_sram = NULL;
     g_sram_size = 0;
 }
@@ -162,39 +163,37 @@ static void exercise_non_sa1(void) {
     Snes snes;
     Cart cart;
     CpuState cpu;
-    uint8 ram[0x20000];
 
     memset(&snes, 0, sizeof(snes));
     memset(&cart, 0, sizeof(cart));
-    reset_cpu(&cpu, ram);
+    reset_cpu(&cpu);
     g_snes = &snes;
     snes.cart = &cart;
     cart.type = CART_LOROM;
     cart.cpuBusAddress = 0x00abcdefu;
 
-    ram[0x1234] = 0x5a;
+    g_ram[0x1234] = 0x5a;
     check_int("non-SA1 read8 value", cpu_read8(&cpu, 0x7e, 0x1234), 0x5a);
-    check_int("non-SA1 read8 open_bus", cpu.open_bus, 0x5a);
+    check_int("non-SA1 read8 open_bus", g_open_bus, 0x5a);
     cpu_write8(&cpu, 0x7e, 0x1235, 0x66);
-    check_int("non-SA1 write8 RAM", ram[0x1235], 0x66);
-    ram[0x1240] = 0x34;
-    ram[0x1241] = 0x12;
+    check_int("non-SA1 write8 RAM", g_ram[0x1235], 0x66);
+    g_ram[0x1240] = 0x34;
+    g_ram[0x1241] = 0x12;
     check_int("non-SA1 read16 value", cpu_read16(&cpu, 0x7e, 0x1240),
               0x1234);
     cpu_write16(&cpu, 0x7e, 0x1242, 0x89ab);
-    check_int("non-SA1 write16 low", ram[0x1242], 0xab);
-    check_int("non-SA1 write16 high", ram[0x1243], 0x89);
+    check_int("non-SA1 write16 low", g_ram[0x1242], 0xab);
+    check_int("non-SA1 write16 high", g_ram[0x1243], 0x89);
 }
 
 static void exercise_sa1(void) {
     Snes snes;
     Cart cart;
     CpuState cpu;
-    uint8 ram[0x20000];
 
     memset(&snes, 0, sizeof(snes));
     memset(&cart, 0, sizeof(cart));
-    reset_cpu(&cpu, ram);
+    reset_cpu(&cpu);
     g_snes = &snes;
     snes.cart = &cart;
     cart.type = CART_SA1;
@@ -232,8 +231,8 @@ static void exercise_plain_rom(void) {
     Snes snes = {0};
     Cart cart = {0};
     CpuState cpu;
-    uint8 ram[0x20000], byte = 0x96, value = 0x33;
-    reset_cpu(&cpu, ram);
+    uint8 byte = 0x96, value = 0x33;
+    reset_cpu(&cpu);
     g_snes = &snes;
     snes.cart = &cart;
     g_mapped_rom = &byte;
@@ -242,7 +241,7 @@ static void exercise_plain_rom(void) {
         cart.type = types[i];
         check_int("plain ROM claimed", cpu_read8_plain_rom(&cpu, 0x80, 0x8000, &value), 1);
         check_int("plain ROM value", value, 0x96);
-        check_int("plain ROM open bus", cpu.open_bus, 0x96);
+        check_int("plain ROM open bus", g_open_bus, 0x96);
         check_u32("plain ROM cartridge address", cart.cpuBusAddress, 0x808000);
         /* No cached pointer or copied bytes: a live content change is visible. */
         byte = 0xa7;
@@ -254,10 +253,10 @@ static void exercise_plain_rom(void) {
                          CART_DSP1_HIROM, CART_SDD1};
     for (unsigned i = 0; i < sizeof(slow); ++i) {
         cart.type = slow[i];
-        cpu.open_bus = 0x4d; cart.cpuBusAddress = 0xabcdef; value = 0x33;
+        g_open_bus = 0x4d; cart.cpuBusAddress = 0xabcdef; value = 0x33;
         check_int("coprocessor read unclaimed", cpu_read8_plain_rom(&cpu, 0x80, 0xffc0, &value), 0);
         check_int("unclaimed read keeps output", value, 0x33);
-        check_int("unclaimed read keeps open bus", cpu.open_bus, 0x4d);
+        check_int("unclaimed read keeps open bus", g_open_bus, 0x4d);
         check_u32("unclaimed read keeps cart latch", cart.cpuBusAddress, 0xabcdef);
     }
     cart.type = CART_LOROM;
@@ -273,15 +272,14 @@ static void exercise_clocked_register_reads(void) {
     Snes snes = {0};
     Cart cart = {0};
     CpuState cpu;
-    uint8 ram[0x20000];
-    reset_cpu(&cpu, ram);
+    reset_cpu(&cpu);
     g_snes = &snes; snes.cart = &cart;
     g_expected_read_clocked = 1; g_register_reads = 0;
     cpu_read8_paced(&cpu, 0x00, 0x4212);
     check_int("paced byte restores raw scope", snes.cpuReadClocked, 0);
     cpu_read16_paced(&cpu, 0x80, 0x4211);
     check_int("paced word restores raw scope", snes.cpuReadClocked, 0);
-    check_int("paced byte/word bus clocks", cpu.master_cycles, 18);
+    check_int("paced byte/word bus clocks", g_master_cycles, 18);
     snes_set_cpu_read_clocked(&snes, true);
     cpu_read8_paced(&cpu, 0x00, 0x4212);
     check_int("paced read preserves enclosing scope", snes.cpuReadClocked, 1);

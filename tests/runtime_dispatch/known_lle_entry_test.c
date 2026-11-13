@@ -133,13 +133,12 @@ int main(void) {
     /* The runtime's one CPU state: the register accessors read g_cpu. */
     Snes snes;
     Cart cart;
-    uint8 ram[0x20000];
     uint8 sram[0x8000];
     int fails = 0;
 
     memset(&snes, 0, sizeof snes);
     memset(&cart, 0, sizeof cart);
-    memset(ram, 0, sizeof ram);
+    memset(g_ram, 0, sizeof g_ram);
     memset(sram, 0, sizeof sram);
     snes.cart = &cart;
     cart.rom = g_test_rom;
@@ -149,7 +148,7 @@ int main(void) {
     g_snes = &snes;
     g_sram = sram;
     g_sram_size = (int)sizeof sram;
-    cpu_state_init(&g_cpu, ram);
+    cpu_state_init(&g_cpu);
 
     cart.type = CART_SA1;
     cart.sa1 = sa1_create(g_test_rom, sizeof g_test_rom, sram, sizeof sram);
@@ -169,16 +168,16 @@ int main(void) {
 
     /* SMK indexes $7F:5000 by $FA78, carrying into unmapped $80:4A78.
      * Its final operand byte leaves $7F on the data bus. */
-    g_cpu.open_bus = 0x7f;
+    g_open_bus = 0x7f;
     fails += check(cpu_read16(&g_cpu, 0x80, 0x4a78) == 0x7f7f,
                    "unmapped word read retains the CPU data bus");
-    fails += check(g_cpu.open_bus == 0x7f,
+    fails += check(g_open_bus == 0x7f,
                    "unmapped word read leaves its high byte on the bus");
     cpu_write8(&g_cpu, 0x7e, 0x1234, 0xa5);
-    fails += check(g_cpu.open_bus == 0xa5,
+    fails += check(g_open_bus == 0xa5,
                    "byte write drives the CPU data bus");
     cpu_write16(&g_cpu, 0x7e, 0x1234, 0x5aa5);
-    fails += check(g_cpu.open_bus == 0x5a,
+    fails += check(g_open_bus == 0x5a,
                    "word write leaves its high byte on the CPU data bus");
 
     /* $F0:0000-$7FFF is LoROM SRAM but full-address HiROM ROM. The runtime
@@ -247,17 +246,17 @@ int main(void) {
     fails += check(cart_getRomPtr(&cart, 0x20, 0x6000) == NULL,
                    "converted SMK keeps the DSP-1 SRAM window");
 
-    cpu_state_init(&g_cpu, ram);
+    cpu_state_init(&g_cpu);
     cpu_set_S(0x01f0);
     cpu_set_emulation(false);
     cpu_set_P(0x34);
     cpu_p_to_mirrors(&g_cpu);
     cpu_push_interrupt_frame_at(&g_cpu, 0xabcdef);
     fails += check(cpu_S() == 0x01ec, "native interrupt frame consumes four bytes");
-    fails += check(ram[0x01f0] == 0xab && ram[0x01ef] == 0xcd &&
-                       ram[0x01ee] == 0xef,
+    fails += check(g_ram[0x01f0] == 0xab && g_ram[0x01ef] == 0xcd &&
+                       g_ram[0x01ee] == 0xef,
                    "interrupt frame preserves supplied 24-bit return PC");
-    fails += check(ram[0x01ed] == 0x34,
+    fails += check(g_ram[0x01ed] == 0x34,
                    "interrupt frame materializes processor status");
 
     memset(&g_cpu, 0, sizeof g_cpu);
@@ -359,9 +358,9 @@ int main(void) {
     fails += check(cpu_dispatch_has_entry(&g_cpu, 0x008100u),
                    "default program restores stock dispatch");
 
-    cpu_state_init(&g_cpu, ram);
+    cpu_state_init(&g_cpu);
     cart.type = CART_LOROM;
-    g_cpu.open_bus = 0xa5;
+    g_open_bus = 0xa5;
     fails += check(cpu_read8(&g_cpu, 0x1e, 0x7f99) == 0xa5,
                    "unmapped LoROM byte preserves open bus");
     fails += check(cpu_read16(&g_cpu, 0x9e, 0x7f99) == 0xa5a5,
@@ -369,7 +368,7 @@ int main(void) {
     g_test_rom[0xf0000] = 0x3c;
     fails += check(cpu_read16(&g_cpu, 0x1e, 0x7fff) == 0x3ca5,
                    "LoROM open bus to ROM word crosses mapping boundary");
-    fails += check(g_cpu.open_bus == 0x3c, "word high byte updates latch");
+    fails += check(g_open_bus == 0x3c, "word high byte updates latch");
 
     if (fails) return 1;
     puts("known_lle_entry_test: PASS");

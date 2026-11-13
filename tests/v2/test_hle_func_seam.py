@@ -222,6 +222,7 @@ _HARNESS = r'''
 #include "common_cpu_infra.h"
 
 uint8 g_ram[0x20000];
+uint8 g_open_bus;
 uint8 g_memsel;
 const char *g_last_recomp_func = "";
 int g_recomp_stack_top;
@@ -344,7 +345,6 @@ static RecompReturn run(CpuState *cpu, RecompEntryFn fn,
                         int mode) {
   memset(cpu, 0, sizeof *cpu);
   memset(g_ram, 0, sizeof g_ram);
-  cpu->ram = g_ram;
   cpu_set_S(0x01FF); cpu_set_m_flag(1); cpu_set_x_flag(1); cpu_set_P(0x30);
   g_mode = mode; g_helper_calls = 0; g_other_exits = 0; g_other_target = 0;
   g_tc_valid = 0; g_recomp_stack_top = 0;

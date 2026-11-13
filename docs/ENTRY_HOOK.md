@@ -40,7 +40,7 @@ mirror using the cartridge mapping, and the callback receives the actual
 ## The callback is observational
 
 The callback may read anything: registers, flags, widths, the stack and guest
-memory through `cpu->ram`. It must not change CPU state, guest memory, MMIO or
+memory (`g_ram`). It must not change CPU state, guest memory, MMIO or
 the clocks, and must not call bus accessors (`cpu_read8` and friends can have
 side effects on MMIO, and they take a non-const `CpuState *`).
 
@@ -100,8 +100,8 @@ deadline check and before the block's static cycle charge:
       return interp_bridge_lle_yield_unwind(cpu, ...0x9437u);
     }
     HostSawSpriteList(cpu, 0x009437u);
-    cpu->coprocessor_master_cycles = cpu->master_cycles;
-    cpu->cycles += ...;
+    g_coprocessor_master_cycles = g_master_cycles;
+    g_master_cycles += ...;
 ```
 
 Nothing of the instruction has run or been charged when the hook sees the

@@ -70,10 +70,10 @@ def _call_end(s: str, start: int) -> int:
 
 
 _SPD = r'\(uint32\)g_code_speed\[cpu_PB\(\) >> 7\]'
-# A charge of N CPU cycles at the code-region speed, on one line (dynamic
-# charges) or two (a block's static charge when it is not merged).
-_CHARGE1 = re.compile(r'cpu->cycles \+= 1; cpu->master_cycles \+= ' + _SPD + ';')
-_CHARGEN = re.compile(r'cpu->cycles \+= (\d+);(\s*)cpu->master_cycles \+= (\d+) \* ' + _SPD + ';')
+# A charge of one or N CPU cycles at the code-region speed (dynamic charges,
+# and a block's static charge when it is not merged).
+_CHARGE1 = re.compile(r'g_master_cycles \+= ' + _SPD + ';')
+_CHARGEN = re.compile(r'g_master_cycles \+= (\d+) \* ' + _SPD + ';')
 _CHARGE_DL = re.compile(r'if \(cpu_D\(\) & 0xFF\) \{ cpu_charge\(cpu, 1u\); \}')
 _CHARGE_PAGE = re.compile(r'if \(\((0x[0-9a-fA-F]+) & 0x[fF]{2}00\) != \(\(\1 \+ cpu_([XY])\(\)\) & 0x[fF]{2}00\)\) '
                           r'\{ cpu_charge\(cpu, 1u\); \}')
@@ -83,8 +83,7 @@ _SYNC_P_NZ = ('cpu_set_P((uint8)((cpu_P() & ~0x82) | (cpu->_flag_Z ? 0x02 : 0) |
 
 def _charges(src: str) -> str:
     src = _CHARGE1.sub('cpu_charge(cpu, 1u);', src)
-    src = _CHARGEN.sub(lambda m: (f'cpu_charge(cpu, {m.group(1)}u);' if m.group(1) == m.group(3)
-                                  else m.group(0)), src)
+    src = _CHARGEN.sub(lambda m: f'cpu_charge(cpu, {m.group(1)}u);', src)
     src = _CHARGE_DL.sub('cpu_charge_dl(cpu);', src)
     src = _CHARGE_PAGE.sub(lambda m: f'cpu_charge_page(cpu, {m.group(1)}u, cpu_{m.group(2)}());', src)
     return src.replace(_SYNC_P_NZ, 'cpu_sync_p_nz(cpu);')

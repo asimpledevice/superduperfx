@@ -61,8 +61,7 @@ if (cpu->emulation) {
   cpu_write8(cpu, 0x00, (uint16)(_s - 1), 0x80);
   cpu_write8(cpu, 0x00, (uint16)(_s - 2), 0x04);
   cpu_write8(cpu, 0x00, (uint16)(_s - 3), (uint8)cpu->P);
-  cpu->cycles += 7;
-  cpu->master_cycles += 7 * 8; }
+  g_master_cycles += 7 * 8; }
 goto L_8004_M1X1; /* implicit fall-through */
 ```
 

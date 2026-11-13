@@ -42,7 +42,7 @@ def test_blocks_share_one_yield_exit(lean):
     for pc in _BLOCKS:
         assert re.search(rf'recomp_block_enter_charge\(cpu, 0x{pc:04x}u, \d+u\), 0\)\) '
                          rf'\{{ _yield_pc = 0x{pc:04x}u; goto _lle_yield; \}}', src), pc
-    assert 'coprocessor_master_cycles' not in src and 'cpu->cycles +=' not in src
+    assert 'coprocessor_master_cycles' not in src and 'g_master_cycles +=' not in src
     # The function-entry check keeps its own deadline call and resume PC.
     assert re.search(r'interp_bridge_lle_deadline_pause\(cpu, \(\(\(uint32\)cpu_PB\(\) << 16\) '
                      r'\| 0x8000u\)\), 0\)\) \{ _yield_pc = 0x8000u; goto _lle_yield; \}', src)
@@ -70,7 +70,6 @@ int main(void) {
     
     memset(&g_cpu, 0, sizeof g_cpu);
     memset(g_ram, 0, sizeof g_ram);
-    g_cpu.ram = g_ram;
     cpu_set_S(0x01FF); cpu_set_m_flag(1); cpu_set_x_flag(1); cpu_set_P(0x30);
     g_tc_valid = 0; g_recomp_stack_top = 0; g_other_exits = 0; g_other_target = 0;
     g_ram[0x10] = 1;      /* BEQ not taken: all three blocks run, $40 gets 6 */
@@ -174,14 +173,12 @@ static void run(int which, RecompEntryFn fn) {
   
   memset(&g_cpu, 0, sizeof g_cpu);
   for (unsigned i = 0; i < sizeof g_ram; i++) g_ram[i] = (uint8)(i * 7 + 3);
-  g_cpu.ram = g_ram;
   cpu_set_S(0x01FF); cpu_set_m_flag(1); cpu_set_x_flag(1); cpu_set_P(0x30);
   cpu_set_X(0xF3); cpu_set_Y(5); cpu_set_D(0x0101); cpu_set_DB(0x7E); cpu_set_PB(g_pb);
   g_tc_valid = 0; g_recomp_stack_top = 0; g_other_exits = 0;
   cpu_push_jsr_return_frame(&g_cpu);
   fn(&g_cpu, 2);
   memcpy(ram_after[which], g_ram, sizeof g_ram);
-  g_cpu.ram = NULL;
   cpu_after[which] = g_cpu; cpu_regs_store(&cpu_after[which]);
 }
 int main(void) {
@@ -195,13 +192,12 @@ int main(void) {
     run(1, Lean_M1X1);
     if (memcmp(ram_after[0], ram_after[1], sizeof ram_after[0])) { printf("ram differs %d\n", c); return 1; }
     if (memcmp(&cpu_after[0], &cpu_after[1], sizeof cpu_after[0])) {
-      printf("cpu differs %d: cycles %llu/%llu master %llu/%llu P %02x/%02x\n", c,
-             (unsigned long long)cpu_after[0].cycles, (unsigned long long)cpu_after[1].cycles,
-             (unsigned long long)cpu_after[0].master_cycles, (unsigned long long)cpu_after[1].master_cycles,
+      printf("cpu differs %d: master %llu/%llu P %02x/%02x\n", c,
+             (unsigned long long)cpu_after[0].reg_master_cycles, (unsigned long long)cpu_after[1].reg_master_cycles,
              cpu_after[0].reg_P, cpu_after[1].reg_P);
       return 1;
     }
-    if (cpu_after[0].master_cycles == 0) { puts("no charge"); return 1; }
+    if (cpu_after[0].reg_master_cycles == 0) { puts("no charge"); return 1; }
     if (g_other_exits) { puts("unexpected exit"); return 1; }
   }
   puts("ok");
@@ -277,7 +273,6 @@ static Out run(RecompEntryFn fn, int hrv, int pattern) {
   
   memset(&g_cpu, 0, sizeof g_cpu);
   memset(g_ram, 0, sizeof g_ram);
-  g_cpu.ram = g_ram;
   cpu_set_S(0x01F0); cpu_set_m_flag(1); cpu_set_x_flag(1); cpu_set_P(0x30); cpu_set_PB(0x00); cpu_set_A(0x77);
   for (int i = 0; i < 16; i++)   /* the stack above S: equal or distinct bytes */
     g_ram[0x01F0 + i - 4] = pattern ? (uint8)(0x31 + 0x11 * i) : 0x80;

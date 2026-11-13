@@ -12,7 +12,7 @@
  * + struct-packed return types (RetAY, RetY, PairU16, HdmaPtrs, etc.).
  *
  * v2 hand-written runtime bodies (NMI/IRQ entry, PPU/DMA orchestration,
- * etc.) keep working because `cpu->ram` aliases `g_ram` and existing
+ * etc.) keep working because `g_ram` aliases `g_ram` and existing
  * `g_ram[addr]` reads/writes from those bodies see the same bytes the
  * recompiled code sees.
  *
@@ -128,42 +128,17 @@ typedef struct CpuState {
     uint8  _flag_I;
     uint8  _flag_D;
 
-    /* Last value driven on the CPU data bus. Unmapped reads return this
-     * latch, and every byte read or written replaces it. */
-    uint8  open_bus;
-
-    /* RAM. Points at the runtime's `g_ram[]` 128KB region — same bytes
-     * the existing hand-written runtime reads/writes. v2 codegen will
-     * issue cpu_readN / cpu_writeN against this pointer so DB / D / S
-     * / PB-relative addressing all resolve through the cpu_ helpers. */
-    uint8 *ram;
-
-    /* Axis-2 cycle accounting (docs/validation/accuracy-history.md). Cumulative 65816
-     * CPU (bus) cycles, charged by the v2 emitter as a per-block integer
-     * constant (recompiler/snes_cycles.py is the authority; the interp816
-     * reference + bsnes hook validate it). One add per block — near-free, the
-     * "cheap inline accounting" of the anchors-not-lockstep model. Nothing
-     * reads it yet, so adding it is behavior-identical; once validated against
-     * bsnes it can drive APU pacing (Axis 5 off-cue) and H/V derivation. */
-    uint64_t cycles;
-
-    /* Axis-5 off-cue: cumulative SNES MASTER clocks (21.47727 MHz), the
-     * region-weighted companion to `cycles`. Each block charges its CPU-cycle
-     * contribution multiplied by the code region's access speed (6 fast /
-     * 8 slow / 12 xslow; memsel-aware for $80-FF), per recompiler/snes_cycles.py
-     * region_speed(). Unlike `cycles` (bus cycles, validated vs bsnes), this is
-     * elapsed *time* in master clocks — the correct unit to pace the SPC700,
-     * which runs in its own clock domain. rtl_accumulate_apu_catchup() converts
-     * the per-touch delta to SPC cycles (x 1.024MHz / 21.477MHz), REPLACING the
-     * old +256-main-cycles-per-APU-touch synthetic estimate (the off-cue root).
-     * Charged in the same one-add-per-block spot as `cycles` (near-free). */
-    uint64_t master_cycles;
-
-    /* Master-clock timestamp visible to cartridge coprocessors during the
-     * current generated basic block. Generated blocks latch this before
-     * applying their aggregate cycle charge, so a device cannot execute to
-     * the end of the block before observing a CPU bus access inside it. */
-    uint64_t coprocessor_master_cycles;
+    /* Saved copies, for code that keeps a CpuState record (the rollback
+     * residue): cpu_regs_store/cpu_regs_load fill them. The live values are
+     * g_open_bus (the data bus latch: unmapped reads return it, every byte
+     * read or written replaces it), g_master_cycles (elapsed SNES master
+     * clocks, charged per block at the code region's speed; it paces the
+     * SPC700) and g_coprocessor_master_cycles (the master clock a cartridge
+     * coprocessor sees during the current block, latched before the block's
+     * charge). See cpu_regs.h. WRAM is g_ram. */
+    uint8  reg_open_bus;
+    uint64_t reg_master_cycles;
+    uint64_t reg_coprocessor_master_cycles;
 } CpuState;
 
 /* The 65816 registers (A..PB, P and its m/x/E bits) are reached only through
@@ -172,6 +147,8 @@ typedef struct CpuState {
  * named reg_* so that a direct access fails to compile; a saved copy of the
  * state (rollback) is the one place they are named. */
 extern struct CpuState g_cpu;
+extern uint8 g_ram[0x20000];   /* WRAM (common_rtl.c) */
+extern uint8 g_open_bus;       /* the CPU data bus latch (cpu_state.c) */
 #include "cpu_regs.h"
 
 /* NB: NLR pending-skip state is intentionally NOT a CpuState field.
@@ -516,9 +493,9 @@ static inline uint32 cpu_push_jsl_return_frame(CpuState *cpu) {
 /* ── Initialisation ─────────────────────────────────────────────────────── */
 
 /* Initialise `cpu` to a 65816 reset state: emulation=1, P=0x34
- * (M=X=I=1, others clear), S=0x01FF, D=0, DB=PB=0, A/B/X/Y zero.
- * Caller supplies the ram pointer (typically &g_ram[0]). */
-void cpu_state_init(CpuState *cpu, uint8 *ram);
+ * (M=X=I=1, others clear), S=0x01FF, D=0, DB=PB=0, A/B/X/Y zero, and
+ * the clocks and open bus to zero. WRAM is g_ram. */
+void cpu_state_init(CpuState *cpu);
 
 /* The singleton runtime CpuState. Defined alongside g_ram in
  * common_rtl.c. v2-recompiled code passes &g_cpu when it doesn't

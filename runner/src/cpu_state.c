@@ -49,6 +49,7 @@ extern Snes *g_snes;
 #define SNESRECOMP_HOT_BSS
 #endif
 SNESRECOMP_HOT_BSS CpuState g_cpu;
+uint8 g_open_bus;   /* the CPU data bus latch (cpu_state.h) */
 static CpuStageWindowStoreHook g_stage_window_store_hook;
 
 void cpu_set_stage_window_store_hook(CpuStageWindowStoreHook hook) {
@@ -406,12 +407,12 @@ static void cpu_hw_log(uint16 addr, int is_read, uint16 val) {
 #endif
 
 static uint8 cpu_latch_read8(CpuState *cpu, uint8 value) {
-    cpu->open_bus = value;
+    g_open_bus = value;
     return value;
 }
 
 static uint16 cpu_latch_read16(CpuState *cpu, uint16 value) {
-    cpu->open_bus = (uint8)(value >> 8);
+    g_open_bus = (uint8)(value >> 8);
     return value;
 }
 
@@ -437,11 +438,11 @@ uint8 cpu_read8(CpuState *cpu, uint32 bank_arg, uint32 addr_arg) { uint8 bank = 
     if (g_snes && g_snes->cart)
         cart_note_cpu_bus(g_snes->cart, bank, addr);
     int off = cpu_wram_offset(bank, addr);
-    if (off >= 0) return cpu_latch_read8(cpu, cpu->ram[off]);
+    if (off >= 0) return cpu_latch_read8(cpu, g_ram[off]);
     if (is_hw_reg(bank, addr)) {
         cpu_pace_cycles(addr);
         cpu_hw_log(addr, 1, 0);
-        return cpu_latch_read8(cpu, ReadRegOpenBus(addr, cpu->open_bus));
+        return cpu_latch_read8(cpu, ReadRegOpenBus(addr, g_open_bus));
     }
     if (g_snes && g_snes->cart && g_snes->cart->type == CART_SUPERFX)
         return cpu_latch_read8(cpu, cart_read(g_snes->cart, bank, addr));
@@ -462,7 +463,7 @@ uint8 cpu_read8(CpuState *cpu, uint32 bank_arg, uint32 addr_arg) { uint8 bank = 
      * fetching unused vehicle graphics. Keep RomPtr's pointer guard intact. */
     if (g_snes && g_snes->cart && g_snes->cart->type == CART_LOROM &&
         (bank & 0x7f) < 0x40 && addr >= 0x6000 && addr < 0x8000)
-        return cpu->open_bus;
+        return g_open_bus;
     /* ROM read. RomPtr requires the global g_rom pointer to be live. */
     return cpu_latch_read8(cpu, *RomPtr(((uint32)bank << 16) | addr));
 }
@@ -478,10 +479,10 @@ uint16 cpu_read16(CpuState *cpu, uint32 bank_arg, uint32 addr_arg) { uint8 bank 
          * $00:1FFF -> $00:2000 crosses from WRAM into an I/O register. */
         uint16 hi_addr = (uint16)(addr + 1);
         int hi_off = cpu_wram_offset(bank, hi_addr);
-        uint8 lo = cpu->ram[off];
-        cpu->open_bus = lo;
+        uint8 lo = g_ram[off];
+        g_open_bus = lo;
         uint8 hi = (hi_off >= 0)
-            ? cpu->ram[hi_off]
+            ? g_ram[hi_off]
             : cpu_read8(cpu, bank, hi_addr);
         return cpu_latch_read16(cpu, (uint16)lo | ((uint16)hi << 8));
     }
@@ -492,20 +493,20 @@ uint16 cpu_read16(CpuState *cpu, uint32 bank_arg, uint32 addr_arg) { uint8 bank 
         cpu_hw_log(addr, 1, 0);
         if (addr >= 0x2140 && addr <= 0x217F)
             return cpu_latch_read16(cpu, ReadRegWord(addr));
-        lo = ReadRegOpenBus(addr, cpu->open_bus);
-        cpu->open_bus = lo;
-        hi = ReadRegOpenBus((uint16)(addr + 1), cpu->open_bus);
+        lo = ReadRegOpenBus(addr, g_open_bus);
+        g_open_bus = lo;
+        hi = ReadRegOpenBus((uint16)(addr + 1), g_open_bus);
         return cpu_latch_read16(cpu, (uint16)lo | ((uint16)hi << 8));
     }
     if (g_snes && g_snes->cart && g_snes->cart->type == CART_SUPERFX) {
         uint8 lo = cart_read(g_snes->cart, bank, addr);
-        cpu->open_bus = lo;
+        g_open_bus = lo;
         uint8 hi = cart_read(g_snes->cart, bank, (uint16)(addr + 1));
         return cpu_latch_read16(cpu, (uint16)lo | ((uint16)hi << 8));
     }
     if (g_snes && g_snes->cart && g_snes->cart->type == CART_SA1) {
         uint8 lo = cart_read(g_snes->cart, bank, addr);
-        cpu->open_bus = lo;
+        g_open_bus = lo;
         uint8 hi = cart_read(g_snes->cart, bank, (uint16)(addr + 1));
         return cpu_latch_read16(cpu, (uint16)lo | ((uint16)hi << 8));
     }
@@ -515,7 +516,7 @@ uint16 cpu_read16(CpuState *cpu, uint32 bank_arg, uint32 addr_arg) { uint8 bank 
     if (g_snes && cart_is_cx4_window(g_snes->cart, bank, addr)) {
         uint16 hi_addr = (uint16)(addr + 1);
         uint8 lo = cart_read(g_snes->cart, bank, addr);
-        cpu->open_bus = lo;
+        g_open_bus = lo;
         uint8 hi = cart_is_cx4_window(g_snes->cart, bank, hi_addr)
             ? cart_read(g_snes->cart, bank, hi_addr)
             : cpu_read8(cpu, bank, hi_addr);
@@ -524,7 +525,7 @@ uint16 cpu_read16(CpuState *cpu, uint32 bank_arg, uint32 addr_arg) { uint8 bank 
     if (g_snes && cart_is_dsp1_window(g_snes->cart, bank, addr)) {
         uint16 hi_addr = (uint16)(addr + 1);
         uint8 lo = cart_read(g_snes->cart, bank, addr);
-        cpu->open_bus = lo;
+        g_open_bus = lo;
         uint8 hi = cart_is_dsp1_window(g_snes->cart, bank, hi_addr)
             ? cart_read(g_snes->cart, bank, hi_addr)
             : cpu_read8(cpu, bank, hi_addr);
@@ -538,7 +539,7 @@ uint16 cpu_read16(CpuState *cpu, uint32 bank_arg, uint32 addr_arg) { uint8 bank 
          * same routing logic. */
         int sram_hi = cpu_sram_offset(bank, (uint16)(addr + 1));
         uint8 lo = g_sram[sram_lo];
-        cpu->open_bus = lo;
+        g_open_bus = lo;
         uint8 hi = (sram_hi >= 0)
             ? g_sram[sram_hi]
             : cpu_read8(cpu, bank, (uint16)(addr + 1));
@@ -560,7 +561,7 @@ uint16 cpu_read16(CpuState *cpu, uint32 bank_arg, uint32 addr_arg) { uint8 bank 
 void cpu_write8(CpuState *cpu, uint32 bank_arg, uint32 addr_arg, uint32 v_arg) { uint8 bank = (uint8)bank_arg; uint16 addr = (uint16)addr_arg; uint8 v = (uint8)v_arg;
     if (g_snes && g_snes->cart)
         cart_note_cpu_bus(g_snes->cart, bank, addr);
-    cpu->open_bus = v;
+    g_open_bus = v;
     if (g_wlog_active) wlog_note(bank, addr, v, 1);
     if (g_wlog_addr_enabled) {
         if (g_wlog_addr_enabled < 0) wlog_addr_lazy();
@@ -568,8 +569,8 @@ void cpu_write8(CpuState *cpu, uint32 bank_arg, uint32 addr_arg, uint32 v_arg) {
     }
     int off = cpu_wram_offset(bank, addr);
     if (off >= 0) {
-        uint8 old = cpu->ram[off];
-        cpu->ram[off] = v;
+        uint8 old = g_ram[off];
+        g_ram[off] = v;
         /* Optional title hook for game-specific stage-window tracking. */
         if (g_stage_window_store_hook) {
             if (off >= 0x1E72 && off <= 0x1E79)
@@ -613,7 +614,7 @@ void cpu_write8(CpuState *cpu, uint32 bank_arg, uint32 addr_arg, uint32 v_arg) {
 void cpu_write16(CpuState *cpu, uint32 bank_arg, uint32 addr_arg, uint32 v_arg) { uint8 bank = (uint8)bank_arg; uint16 addr = (uint16)addr_arg; uint16 v = (uint16)v_arg;
     if (g_snes && g_snes->cart)
         cart_note_cpu_bus(g_snes->cart, bank, addr);
-    cpu->open_bus = (uint8)v;
+    g_open_bus = (uint8)v;
     if (g_wlog_active) wlog_note(bank, addr, v, 2);
     if (g_wlog_addr_enabled) {
         if (g_wlog_addr_enabled < 0) wlog_addr_lazy();
@@ -633,11 +634,11 @@ void cpu_write16(CpuState *cpu, uint32 bank_arg, uint32 addr_arg, uint32 v_arg) 
         }
     }
     if (off >= 0 && off + 1 < 0x20000) {
-        uint16 old = (uint16)cpu->ram[off]
-                   | ((uint16)cpu->ram[off + 1] << 8);
-        cpu->ram[off]     = (uint8)(v & 0xFF);
-        cpu->ram[off + 1] = (uint8)(v >> 8);
-        cpu->open_bus = (uint8)(v >> 8);
+        uint16 old = (uint16)g_ram[off]
+                   | ((uint16)g_ram[off + 1] << 8);
+        g_ram[off]     = (uint8)(v & 0xFF);
+        g_ram[off + 1] = (uint8)(v >> 8);
+        g_open_bus = (uint8)(v >> 8);
         if (g_stage_window_store_hook) {
             if ((off >= 0x1E72 && off <= 0x1E79) ||
                 (off + 1 >= 0x1E72 && off + 1 <= 0x1E79)) {
@@ -659,19 +660,19 @@ void cpu_write16(CpuState *cpu, uint32 bank_arg, uint32 addr_arg, uint32 v_arg) 
         cpu_pace_cycles_word(addr);
         cpu_hw_log(addr, 0, v);
         WriteRegWord(addr, v);
-        cpu->open_bus = (uint8)(v >> 8);
+        g_open_bus = (uint8)(v >> 8);
         return;
     }
     if (g_snes && g_snes->cart && g_snes->cart->type == CART_SUPERFX) {
         cart_write(g_snes->cart, bank, addr, (uint8)v);
         cart_write(g_snes->cart, bank, (uint16)(addr + 1), (uint8)(v >> 8));
-        cpu->open_bus = (uint8)(v >> 8);
+        g_open_bus = (uint8)(v >> 8);
         return;
     }
     if (g_snes && g_snes->cart && g_snes->cart->type == CART_SA1) {
         cart_write(g_snes->cart, bank, addr, (uint8)v);
         cart_write(g_snes->cart, bank, (uint16)(addr + 1), (uint8)(v >> 8));
-        cpu->open_bus = (uint8)(v >> 8);
+        g_open_bus = (uint8)(v >> 8);
         return;
     }
     /* Cx4 window. Low byte then high byte, matching the guest's bus order —
@@ -684,7 +685,7 @@ void cpu_write16(CpuState *cpu, uint32 bank_arg, uint32 addr_arg, uint32 v_arg) 
             cart_write(g_snes->cart, bank, hi_addr, (uint8)(v >> 8));
         else
             cpu_write8(cpu, bank, hi_addr, (uint8)(v >> 8));
-        cpu->open_bus = (uint8)(v >> 8);
+        g_open_bus = (uint8)(v >> 8);
         return;
     }
     if (g_snes && cart_is_dsp1_window(g_snes->cart, bank, addr)) {
@@ -694,7 +695,7 @@ void cpu_write16(CpuState *cpu, uint32 bank_arg, uint32 addr_arg, uint32 v_arg) 
             cart_write(g_snes->cart, bank, hi_addr, (uint8)(v >> 8));
         else
             cpu_write8(cpu, bank, hi_addr, (uint8)(v >> 8));
-        cpu->open_bus = (uint8)(v >> 8);
+        g_open_bus = (uint8)(v >> 8);
         return;
     }
     int sram_lo = cpu_sram_offset(bank, addr);
@@ -703,11 +704,11 @@ void cpu_write16(CpuState *cpu, uint32 bank_arg, uint32 addr_arg, uint32 v_arg) 
         int sram_hi = cpu_sram_offset(bank, (uint16)(addr + 1));
         if (sram_hi >= 0) g_sram[sram_hi] = (uint8)(v >> 8);
         else cpu_write8(cpu, bank, (uint16)(addr + 1), (uint8)(v >> 8));
-        cpu->open_bus = (uint8)(v >> 8);
+        g_open_bus = (uint8)(v >> 8);
         return;
     }
     /* ROM / unmapped write: drop. */
-    cpu->open_bus = (uint8)(v >> 8);
+    g_open_bus = (uint8)(v >> 8);
 }
 
 /* ── Region-paced AOT bus (2026-08-31) ────────────────────────────────────
@@ -722,7 +723,7 @@ void cpu_write16(CpuState *cpu, uint32 bank_arg, uint32 addr_arg, uint32 v_arg) 
  * a region boundary, e.g. $00:1FFF->$00:2000). */
 uint8_t cpu_read8_paced(CpuState *cpu, uint8_t bank, uint16_t addr) {
     uint32_t _sp = cpu_region_speed(((uint32_t)bank << 16) | addr);
-    cpu->master_cycles += _sp;
+    g_master_cycles += _sp;
     {
         static int _pl = -1;
         if (_pl < 0) _pl = getenv("SNESRECOMP_PACELOG") ? 1 : 0;
@@ -744,7 +745,7 @@ uint8_t cpu_read8_paced(CpuState *cpu, uint8_t bank, uint16_t addr) {
 uint16_t cpu_read16_paced(CpuState *cpu, uint8_t bank, uint16_t addr) {
     uint32_t _sp = cpu_region_speed(((uint32_t)bank << 16) | addr) +
         cpu_region_speed(((uint32_t)bank << 16) | (uint16_t)(addr + 1));
-    cpu->master_cycles += _sp;
+    g_master_cycles += _sp;
     {
         static int _pl = -1;
         if (_pl < 0) _pl = getenv("SNESRECOMP_PACELOG") ? 1 : 0;
@@ -765,7 +766,7 @@ uint16_t cpu_read16_paced(CpuState *cpu, uint8_t bank, uint16_t addr) {
 
 void cpu_write8_paced(CpuState *cpu, uint8_t bank, uint16_t addr, uint8_t v) {
     uint32_t _sp = cpu_region_speed(((uint32_t)bank << 16) | addr);
-    cpu->master_cycles += _sp;
+    g_master_cycles += _sp;
     {
         static int _pl = -1;
         if (_pl < 0) _pl = getenv("SNESRECOMP_PACELOG") ? 1 : 0;
@@ -781,7 +782,7 @@ void cpu_write8_paced(CpuState *cpu, uint8_t bank, uint16_t addr, uint8_t v) {
 void cpu_write16_paced(CpuState *cpu, uint8_t bank, uint16_t addr, uint16_t v) {
     uint32_t _sp = cpu_region_speed(((uint32_t)bank << 16) | addr) +
         cpu_region_speed(((uint32_t)bank << 16) | (uint16_t)(addr + 1));
-    cpu->master_cycles += _sp;
+    g_master_cycles += _sp;
     {
         static int _pl = -1;
         if (_pl < 0) _pl = getenv("SNESRECOMP_PACELOG") ? 1 : 0;
@@ -1332,7 +1333,7 @@ uint8 cpu_dispatch_inline_arg_bytes(uint32 pc24) {
     return 0;
 }
 
-void cpu_state_init(CpuState *cpu, uint8 *ram) {
+void cpu_state_init(CpuState *cpu) {
     cpu_set_A(0);
     /* No cpu->B init — B is derived from (A >> 8) and has no separate state. */
     cpu_set_X(0);
@@ -1352,11 +1353,9 @@ void cpu_state_init(CpuState *cpu, uint8 *ram) {
     cpu->_flag_C = 0;
     cpu->_flag_I = 1;
     cpu->_flag_D = 0;
-    cpu->open_bus = 0;
-    cpu->cycles = 0;
-    cpu->master_cycles = 0;
-    cpu->coprocessor_master_cycles = 0;
-    cpu->ram = ram;
+    g_open_bus = 0;
+    g_master_cycles = 0;
+    g_coprocessor_master_cycles = 0;
     /* NLR pending-skip is NOT on CpuState — it's a function-local in
      * each emitted v2 function. See cpu_state.h for design rationale. */
 }

@@ -176,7 +176,6 @@ static void compiled(RecompEntryFn fn, uint8 p, Outcome *o) {
   memset(&g_cpu, 0, sizeof g_cpu);
   memset(g_ram, 0, sizeof g_ram);
   g_ram[0x40] = g_ram[0x41] = 0xFF;
-  g_cpu.ram = g_ram;
   cpu_set_S(0x01FF); cpu_set_P(p); cpu_p_to_mirrors(&g_cpu);
   g_tc_valid = 0; g_recomp_stack_top = 0; g_other_exits = 0;
   cpu_push_jsr_return_frame(&g_cpu);            /* S = $01FD at the BRK */
@@ -185,8 +184,8 @@ static void compiled(RecompEntryFn fn, uint8 p, Outcome *o) {
   o->p = cpu_P(); o->pb = cpu_PB(); o->s = cpu_S();
   memcpy(o->stack, &g_ram[0x01FA], 4);
   memcpy(o->zp, &g_ram[0x40], 2);
-  o->cycles = g_cpu.cycles;
-  CHECK(g_cpu.master_cycles == g_cpu.cycles * 8);  /* all of it in bank $00 */
+  CHECK(g_master_cycles % 8 == 0);  /* all of it in bank $00: 8 per CPU cycle */
+  o->cycles = g_master_cycles / 8;
   CHECK(g_other_exits == 0);
 }
 
@@ -253,7 +252,6 @@ int main(void) {
     
     memset(&g_cpu, 0, sizeof g_cpu);
     memset(g_ram, 0, sizeof g_ram);
-    g_cpu.ram = g_ram;
     cpu_set_S(0x01FF); cpu_set_P(0x30); cpu_p_to_mirrors(&g_cpu); cpu_set_emulation(1);
     g_tc_valid = 0; g_recomp_stack_top = 0; g_other_exits = 0;
     cpu_push_jsr_return_frame(&g_cpu);

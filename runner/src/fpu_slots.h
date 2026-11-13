@@ -42,6 +42,10 @@
 #define FPU_CPU_P "$f24"
 #define FPU_CPU_E "$f25"   /* the emulation bit, 0 or 1 */
 
-/* Free: $f26-$f31. */
+/* The master clocks (64-bit; cpu_regs.h g_master_cycles). */
+#define FPU_MASTER_CYCLES "$f26"
+#define FPU_COPROCESSOR_MASTER_CYCLES "$f27"
+
+/* Free: $f28-$f31. */
 
 #endif

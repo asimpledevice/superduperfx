@@ -20,12 +20,12 @@ def test_indirect_indexed_execution_matches_interpreter(tmp_path):
     if not cc:
         pytest.skip("C compiler required")
     support = _HARNESS.split("/* The C helpers.")[0]
-    support = support.replace("uint8 g_ram[0x20000];", "uint8 g_ram[0x1000000];\nstatic unsigned ptr_reads; static uint16 ptr_at;")
+    support = support.replace("uint8 g_ram[0x20000];", "uint8 g_ram[0x20000];\n/* The whole 24-bit bus, flat. */\nstatic uint8 bus[0x1000000];\nstatic unsigned ptr_reads; static uint16 ptr_at;")
     support = support.replace("(void)cpu; (void)bank; return g_ram[addr];",
         "if (!bank && (addr==ptr_at || addr==(uint16)(ptr_at+1))) ptr_reads++; "
-        "return cpu->open_bus=g_ram[((uint32)bank<<16)|addr];")
+        "return g_open_bus=bus[((uint32)bank<<16)|addr];")
     support = support.replace("(void)cpu; (void)bank; g_ram[addr] = v;",
-        "g_ram[((uint32)bank<<16)|addr]=v; cpu->open_bus=v;")
+        "bus[((uint32)bank<<16)|addr]=v; g_open_bus=v;")
     emitted = ""
     calls = []
     for stack in (0, 1):
@@ -44,17 +44,17 @@ int interp816_opcode_hook(uint32_t pc) { (void)pc; return 0; }
 static uint8_t rd(void *p,uint32_t a) { return cpu_read8(p,a>>16,(uint16)a); }
 static void wr(void *p,uint32_t a,uint8_t v) { cpu_write8(p,a>>16,(uint16)a,v); }
 static void prepare(CpuState *c,int opcode,int stack,int m,int x,int db,int ptr,int y) {
- memset(c,0,sizeof *c); memset(g_ram,0,sizeof g_ram);
- c->ram=g_ram;cpu_set_A(0x1234);cpu_set_S(0x1ff);cpu_set_D(0x100);cpu_set_DB(db);cpu_set_Y(y);
+ memset(c,0,sizeof *c); memset(bus,0,sizeof bus);
+ cpu_set_A(0x1234);cpu_set_S(0x1ff);cpu_set_D(0x100);cpu_set_DB(db);cpu_set_Y(y);
  cpu_set_P((m?0x20:0)|(x?0x10:0));cpu_p_to_mirrors(c);
  cpu_push_jsr_return_frame(c);
- g_ram[0x8000]=opcode;g_ram[0x8001]=stack?0x10:0;g_ram[0x8002]=0x60;
+ bus[0x8000]=opcode;bus[0x8001]=stack?0x10:0;bus[0x8002]=0x60;
  ptr_at=stack?(uint16)(cpu_S()+0x10):cpu_D();
- g_ram[ptr_at]=ptr;g_ram[(uint16)(ptr_at+1)]=ptr>>8;
+ bus[ptr_at]=ptr;bus[(uint16)(ptr_at+1)]=ptr>>8;
  uint32 wrong=((uint32)db<<16)|(uint16)(ptr+y);
  uint32 correct=(((uint32)db<<16)+ptr+y)&0xffffff;
- g_ram[wrong]=0x11;g_ram[(wrong+1)&0xffffff]=0x22;
- g_ram[correct]=0xab;g_ram[(correct+1)&0xffffff]=0x4c;
+ bus[wrong]=0x11;bus[(wrong+1)&0xffffff]=0x22;
+ bus[correct]=0xab;bus[(correct+1)&0xffffff]=0x4c;
  g_other_exits=g_tc_valid=g_recomp_stack_top=ptr_reads=0;
 }
 static int check(RecompEntryFn fn,int opcode,int stack,int store,int m,int x) {
@@ -68,7 +68,7 @@ static int check(RecompEntryFn fn,int opcode,int stack,int store,int m,int x) {
   CpuState native,memory;prepare(&g_cpu,opcode,stack,m,x,db,ptr,y);
   fn(&g_cpu, 2);cpu_mirrors_to_p(&g_cpu);native=g_cpu;cpu_regs_store(&native);
   unsigned reads=ptr_reads,exits=g_other_exits;
-  uint8 data[]={g_ram[address],g_ram[(address+1)&0xffffff],g_ram[wrong]};
+  uint8 data[]={bus[address],bus[(address+1)&0xffffff],bus[wrong]};
   prepare(&g_cpu,opcode,stack,m,x,db,ptr,y);memory=g_cpu;cpu_regs_store(&memory);
   Interp816 ref;memset(&ref,0,sizeof ref);ref.mem=&memory;ref.read=rd;ref.write=wr;
   ref.a=memory.reg_A;ref.x=memory.reg_X;ref.y=memory.reg_Y;ref.sp=memory.reg_S;ref.dp=memory.reg_D;ref.db=db;ref.pc=0x8000;
@@ -76,9 +76,9 @@ static int check(RecompEntryFn fn,int opcode,int stack,int store,int m,int x) {
   unsigned steps=0;while(ref.pc!=1 && steps++<8)interp816_runOpcode(&ref);
   if(native.reg_A!=ref.a || native.reg_P!=interp816_getFlags(&ref) || native.reg_S!=ref.sp ||
      ref.pc!=1 || exits || reads!=2 || ptr_reads!=2 ||
-     data[0]!=g_ram[address] || data[1]!=g_ram[(address+1)&0xffffff] || data[2]!=g_ram[wrong]) {
+     data[0]!=bus[address] || data[1]!=bus[(address+1)&0xffffff] || data[2]!=bus[wrong]) {
    fprintf(stderr,"op=%02x m=%d x=%d db=%02x ptr=%04x: A=%04x/%04x P=%02x/%02x reads=%u/%u data=%02x/%02x\n",
-      opcode,m,x,db,ptr,native.reg_A,ref.a,native.reg_P,interp816_getFlags(&ref),reads,ptr_reads,data[0],g_ram[address]);fails++;
+      opcode,m,x,db,ptr,native.reg_A,ref.a,native.reg_P,interp816_getFlags(&ref),reads,ptr_reads,data[0],bus[address]);fails++;
   }
  }
  return fails;

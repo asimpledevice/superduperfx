@@ -62,7 +62,7 @@ bool snes_loadRom(Snes *snes, const uint8_t *data, int length) {
   (void)snes; (void)data; (void)length; return false;
 }
 void snes_reset(Snes *snes, bool hard) { (void)snes; (void)hard; }
-void cart_set_master_clock_source(Cart *cart, const uint64_t *master_clock) {
+void cart_set_master_clock_source(Cart *cart, uint64_t (*master_clock)(void)) {
   (void)cart; (void)master_clock;
 }
 void audio_trace_set_beam_probe(void (*probe)(uint16_t *, uint16_t *)) {
@@ -70,9 +70,8 @@ void audio_trace_set_beam_probe(void (*probe)(uint16_t *, uint16_t *)) {
 }
 void ppu_reset(Ppu *ppu) { (void)ppu; }
 void dma_reset(Dma *dma) { (void)dma; }
-void cpu_state_init(CpuState *cpu, uint8_t *ram) {
+void cpu_state_init(CpuState *cpu) {
   (void)cpu;
-  (void)ram;
 }
 void rtl_reset_host_pacing(void) {}
 /* This stack-diagnostics harness has no isolated guest timeline. */

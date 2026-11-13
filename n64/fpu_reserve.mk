@@ -20,7 +20,7 @@ SDFX_FPU_OWNERS := save_fpu_regs end_interrupt finalize_exception_frame end_exce
 # that includes cpu_regs.h may read and write. Code compiled without that
 # header cannot name them (-ffixed), so the check lets every function use
 # them in those builds only.
-SDFX_FPU_SHARED := 17 18 19 20 21 22 23 24 25
+SDFX_FPU_SHARED := 17 18 19 20 21 22 23 24 25 26 27
 
 # For scripts: make -s -f n64/fpu_reserve.mk print-fixed
 .PHONY: print-fixed print-reserved

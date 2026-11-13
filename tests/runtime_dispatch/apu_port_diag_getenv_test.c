@@ -195,7 +195,7 @@ int main(int argc, char **argv) {
     memset(&g_cpu, 0, sizeof(g_cpu));
     memset(&g_test_snes, 0, sizeof(g_test_snes));
     memset(g_ram, 0, sizeof(g_ram));
-    g_cpu.master_cycles = 12345;
+    g_master_cycles = 12345;
 
     const int is_apu_port = mode_is_apu_port(g_mode);
     interp_bridge_test_apu_port_diag_probe(&g_cpu, is_apu_port);

@@ -87,8 +87,8 @@ static bool irq_wanted(void) {
 /* Master clocks the CPU has spent that the beam has not walked yet: the walk
  * stops one clock past an IRQ latch and owes the rest. */
 static uint64_t beam_debt(void) {
-  return g_cpu.master_cycles > g_snes->beamMasterLast
-             ? g_cpu.master_cycles - g_snes->beamMasterLast
+  return g_master_cycles > g_snes->beamMasterLast
+             ? g_master_cycles - g_snes->beamMasterLast
              : 0;
 }
 
@@ -99,10 +99,10 @@ static uint64_t beam_debt(void) {
 #endif
 
 static void advance_parked(uint64_t until) {
-  g_cpu.master_cycles = until;
+  g_master_cycles = until;
   snes_refresh_exempt();
-  snes_sync_master_clock(g_snes, g_cpu.master_cycles);
-  cart_sync_coprocessors(g_snes->cart, g_cpu.master_cycles);
+  snes_sync_master_clock(g_snes, g_master_cycles);
+  cart_sync_coprocessors(g_snes->cart, g_master_cycles);
 }
 
 static void run_interrupt(uint32_t vector, uint64_t deadline) {
@@ -163,7 +163,7 @@ void snes_beam_frame_driver_run_frame(void) {
   /* Run out the field, taking each interrupt at the beam position it latches
    * at -- not from the render walk afterwards, where the beam is parked at
    * V=225 and a handler that reads OPVCT sees the wrong line. */
-  while (g_cpu.master_cycles < frame_end && slices++ < BFD_MAX_SLICES_PER_FIELD) {
+  while (g_master_cycles < frame_end && slices++ < BFD_MAX_SLICES_PER_FIELD) {
     uint64_t next;
     uint32_t to_irq;
 
@@ -190,7 +190,7 @@ void snes_beam_frame_driver_run_frame(void) {
      * instruction, and the next delivery stacked a second interrupt frame on
      * top: Doom's bottom split DMAs from line 199 across V=225 (the forced-
      * blank borders exist to give it that time), so this was every field. */
-    if (g_cpu.master_cycles >= frame_end)
+    if (g_master_cycles >= frame_end)
       break;
     if (irq_wanted()) {
       s_wai_halted = false;
@@ -200,8 +200,8 @@ void snes_beam_frame_driver_run_frame(void) {
     /* Pay the beam what it owes first: those clocks can latch the next
      * split. */
     if (beam_debt()) {
-      snes_sync_master_clock(g_snes, g_cpu.master_cycles);
-      cart_sync_coprocessors(g_snes->cart, g_cpu.master_cycles);
+      snes_sync_master_clock(g_snes, g_master_cycles);
+      cart_sync_coprocessors(g_snes->cart, g_master_cycles);
       continue;
     }
     /* Parked on a poll or halted on WAI with field time left: hardware time
@@ -229,7 +229,7 @@ void snes_beam_frame_driver_run_frame(void) {
       to_irq += 1;
     if (to_irq == 0 || to_irq > BFD_MASTER_CYCLES_PER_LINE)
       to_irq = BFD_MASTER_CYCLES_PER_LINE;
-    next = g_cpu.master_cycles + to_irq;
+    next = g_master_cycles + to_irq;
     if (next > frame_end)
       next = frame_end;
     advance_parked(next);
@@ -240,7 +240,7 @@ void snes_beam_frame_driver_run_frame(void) {
    * raster journal (ppu_rasterFieldBoundary). */
   {
     int walk = 0;
-    if (g_cpu.master_cycles < frame_end) /* slices exhausted */
+    if (g_master_cycles < frame_end) /* slices exhausted */
       advance_parked(frame_end);
     while (g_snes->beamMasterLast < frame_end && walk++ < 1200) {
       uint64_t before = g_snes->beamMasterLast;
@@ -249,7 +249,7 @@ void snes_beam_frame_driver_run_frame(void) {
       if (g_snes->beamMasterLast == before)
         break;
     }
-    cart_sync_coprocessors(g_snes->cart, g_cpu.master_cycles);
+    cart_sync_coprocessors(g_snes->cart, g_master_cycles);
   }
 }
 

@@ -76,7 +76,7 @@ static void apply_boot_policy(void) {
 }
 
 void snes_generic_frame_driver_run_frame(void) {
-    const uint64_t frame_end = g_cpu.master_cycles + GFD_MASTER_CYCLES_PER_FRAME;
+    const uint64_t frame_end = g_master_cycles + GFD_MASTER_CYCLES_PER_FRAME;
     const int booting = (s_resume_pc == 0);
     int slice;
 
@@ -100,7 +100,7 @@ void snes_generic_frame_driver_run_frame(void) {
      * frame -- on HVBJOY, on a DMA-complete flag, on its own state machine --
      * and each park needs either an interrupt or simply more time. */
     for (slice = 0; slice < GFD_MAX_SLICES_PER_FRAME; slice++) {
-        if (g_cpu.master_cycles >= frame_end) break;
+        if (g_master_cycles >= frame_end) break;
         interp_bridge_set_master_deadline(frame_end);
         interp_bridge_run_until_quiescent(&g_cpu, s_resume_pc);
         interp_bridge_set_master_deadline(0);

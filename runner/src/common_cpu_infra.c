@@ -63,8 +63,8 @@ const char *rtl_game_title(void) {
 }
 
 static void rtl_snes_charge_master_cycles(Snes *snes, uint64_t clocks) {
-  g_cpu.master_cycles += clocks;
-  snes_sync_master_clock(snes, g_cpu.master_cycles);
+  g_master_cycles += clocks;
+  snes_sync_master_clock(snes, g_master_cycles);
 }
 
 void RtlRegisterGame(const RtlGameInfo *info) {
@@ -80,6 +80,12 @@ void RtlRegisterGame(const RtlGameInfo *info) {
 }
 
 /* The audio trace's port ring stamps each event with the beam position. */
+/* Coprocessors catch up to the CPU's clock; it lives in a register
+ * (cpu_regs.h), so the cartridge reads it through this function. */
+static uint64_t cpu_coprocessor_clock(void) {
+  return g_coprocessor_master_cycles;
+}
+
 static void snes_beam_probe_for_audio_trace(uint16_t *vpos, uint16_t *hpos) {
   *vpos = g_snes ? g_snes->vPos : 0;
   *hpos = g_snes ? g_snes->hPos : 0;
@@ -921,9 +927,9 @@ void WatchdogFrameStart(void) {
 uint64_t g_refresh_charged_upto;
 uint64_t g_refresh_phase;
 #define s_refresh_phase g_refresh_phase
-void snes_refresh_exempt(void) { g_refresh_charged_upto = g_cpu.master_cycles; }
+void snes_refresh_exempt(void) { g_refresh_charged_upto = g_master_cycles; }
 void snes_refresh_charge(void) {
-  uint64_t m = g_cpu.master_cycles;
+  uint64_t m = g_master_cycles;
   if (g_refresh_charged_upto == 0 || m < g_refresh_charged_upto) {
     g_refresh_charged_upto = m;
     return;
@@ -940,9 +946,9 @@ void snes_refresh_charge(void) {
   }
   if (lines) {
     s_refresh_phase -= lines * 1364u;
-    g_cpu.master_cycles += 40u * lines;
+    g_master_cycles += 40u * lines;
   }
-  g_refresh_charged_upto = g_cpu.master_cycles;
+  g_refresh_charged_upto = g_master_cycles;
 }
 
 /*
@@ -1065,18 +1071,10 @@ Snes *SnesInit(const uint8 *data, int data_size) {
   g_snes = snes_init(g_ram);
   snes_set_master_clock_charge_hook(rtl_snes_charge_master_cycles);
   snes_set_wram_write_log_hook(wlog_addr_note_direct);
-  /* The CpuState's WRAM pointer is host state, not simulation state: no reset
-   * path sets it, and a CpuState that never had it dereferences NULL on the
-   * first guest stack push (interp816_pushByte -> cpu_write8 -> cpu->ram[off])
-   * or the first WRAM read. Every port used to wire this itself from its
-   * initialize hook -- Endless Duel and Metal Warriors do -- and every port
-   * that did not crashed on frame 1 (a fresh scaffold: SIGSEGV in cpu_read8
-   * with rax = 0). The machine is being built here; the pointer belongs here.
-   * A port's own cpu_state_init() in its initialize hook, below, is harmless
-   * -- same call, same moment, before snes_reset(). */
-  cpu_state_init(&g_cpu, g_ram);
-  cart_set_master_clock_source(g_snes->cart,
-                               &g_cpu.coprocessor_master_cycles);
+  /* The CPU's reset state, before snes_reset(). A port's own cpu_state_init()
+   * in its initialize hook, below, is harmless: same call, same moment. */
+  cpu_state_init(&g_cpu);
+  cart_set_master_clock_source(g_snes->cart, cpu_coprocessor_clock);
   g_snes_cpu = g_snes->cpu;
   g_dma = g_snes->dma;
   g_ppu = g_snes->ppu;
@@ -1132,7 +1130,7 @@ Snes *SnesInit(const uint8 *data, int data_size) {
      * other way into a fresh machine and has to agree with it: two entry
      * points must not disagree about what "cold boot" means. */
     rtl_reset_host_pacing();
-    g_snes->beamMasterLast = g_cpu.master_cycles;
+    g_snes->beamMasterLast = g_master_cycles;
     SnesEnterNativeMode();
   } else {
     g_snes->cart->ramSize = 2048;

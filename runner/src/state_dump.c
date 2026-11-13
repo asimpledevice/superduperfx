@@ -241,7 +241,7 @@ int snes_state_dump(const char *dir, const char *tag, const uint8_t *pixels,
                "\"master_clock\": %llu, \"vpos\": %u, \"hpos\": %u}\n",
             frame, pixels ? height : 0, g_snes_ppu_dbg_layer_mask,
             g_snes && g_snes->cart ? g_snes->cart->ramSize : 0,
-            (unsigned long long)g_cpu.master_cycles,
+            (unsigned long long)g_master_cycles,
             g_snes ? (unsigned)g_snes->vPos : 0u,
             g_snes ? (unsigned)g_snes->hPos : 0u);
     fclose(f);

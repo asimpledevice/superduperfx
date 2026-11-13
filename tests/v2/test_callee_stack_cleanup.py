@@ -18,7 +18,7 @@ _RUNTIME = r'''
 #include "cpu_trace.h"
 #include "common_cpu_infra.h"
 
-uint8 g_ram[0x20000], g_memsel;
+uint8 g_ram[0x20000], g_open_bus, g_memsel;
 CpuState g_cpu;
 const char *g_last_recomp_func;
 int g_recomp_stack_top;
@@ -91,7 +91,7 @@ static int check(RecompEntryFn fn, unsigned frame,
                  unsigned cleanup, uint16 entry, int skip, int rewrite) {
   memset(&g_cpu, 0, sizeof g_cpu);
   memset(g_ram, 0, sizeof g_ram);
-  g_cpu.ram = g_ram; cpu_set_S(entry);
+  cpu_set_S(entry);
   cpu_write16(&g_cpu, 0, (uint16)(entry + 1), 0x1234);
   cpu_write16(&g_cpu, 0, (uint16)(entry + frame + 1), 0xabcd);
   other_exits = 0; ancestor_skip = skip;

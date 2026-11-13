@@ -58,7 +58,7 @@ static void prepare(CpuState *cpu, const uint8 *code, unsigned length,
                     unsigned m, unsigned x) {
   memset(cpu, 0, sizeof *cpu); memset(g_ram, 0, sizeof g_ram);
   memcpy(g_ram + 0x8000, code, length);
-  cpu->ram = g_ram; cpu_set_S(0x01ff);
+  cpu_set_S(0x01ff);
   cpu_set_P((m << 5) | (x << 4)); cpu_p_to_mirrors(cpu);
   cpu_push_jsr_return_frame(cpu);
   g_other_exits = 0; g_tc_valid = 0; g_recomp_stack_top = 0;
@@ -80,11 +80,12 @@ static int check(const char *name, RecompEntryFn fn,
   uint64 cycles = 0;
   for (unsigned n = 0; n < 32 && reference.pc != 1; ++n)
     cycles += interp816_runOpcode(&reference);
-  if (reference.pc != 1 || native.cycles != cycles || native.reg_S != reference.sp ||
+  if (reference.pc != 1 || native.reg_master_cycles != cycles * 8 || native.reg_S != reference.sp ||
       native.reg_A != reference.a || native.reg_X != reference.x || native.reg_Y != reference.y ||
       native.reg_P != interp816_getFlags(&reference)) {
+    /* Bank $00 code: 8 master clocks per CPU cycle. */
     fprintf(stderr, "%s CPU cycles native=%llu interpreter=%llu S=%04x/%04x\n",
-            name, (unsigned long long)native.cycles, (unsigned long long)cycles,
+            name, (unsigned long long)(native.reg_master_cycles / 8), (unsigned long long)cycles,
             native.reg_S, reference.sp);
     return 1;
   }

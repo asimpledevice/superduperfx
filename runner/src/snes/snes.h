@@ -158,7 +158,7 @@ static inline bool snes_set_cpu_read_clocked(Snes *snes, bool clocked) {
 }
 /* A host that drives the beam itself (its own per-opcode hPos/vPos walk)
  * must install this: a $420B DMA's guest time is charged through it, and the
- * default (SnesInit installs one) advances g_cpu.master_cycles and syncs the
+ * default (SnesInit installs one) advances g_master_cycles and syncs the
  * beam, which on such a host moves hPos/vPos behind its back -- the lines
  * crossed never get their HDMA step, the frame-end crossing is never counted
  * and the APU never gets the time. Such a host must also set

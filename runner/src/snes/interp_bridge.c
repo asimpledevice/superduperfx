@@ -116,7 +116,7 @@ static void bridge_apu_flush(CpuState *cpu) {
          * Star Ocean's name-entry music transfer writes data to $2140-$2143
          * and polls for a response; without this sync the SPC is frozen. */
         RtlApuLock();
-        g_apu_last_sync_master = cpu->master_cycles;
+        g_apu_last_sync_master = g_master_cycles;
         rtl_sync_apu_to_cpu_locked();
         RtlApuUnlock();
         s_apu_pending_master = 0;
@@ -129,7 +129,7 @@ static void bridge_apu_flush(CpuState *cpu) {
     { static bool s_was_ready;
       if (bridge_apu_guest_time_ready()) {
         RtlApuLock();
-        g_apu_last_sync_master = cpu->master_cycles;
+        g_apu_last_sync_master = g_master_cycles;
         rtl_sync_apu_to_cpu_locked();
         RtlApuUnlock();
         s_apu_pending_master = 0;
@@ -143,7 +143,7 @@ static void bridge_apu_flush(CpuState *cpu) {
 #endif
     RtlApuLock();
     g_snes->apuCatchupCycles += (int64_t)s_apu_pending_master * SNES_APU_CATCHUP_PER_GUEST_MASTER;
-    g_apu_last_sync_master = cpu->master_cycles;
+    g_apu_last_sync_master = g_master_cycles;
     snes_catchupApu(g_snes);
     /* After the relative catch-up, resync the SPC to the absolute guest clock.
      * snes_catchupApu advances portClock proportionally to master cycles, but
@@ -171,7 +171,7 @@ void interp_bridge_flush_apu_pending(void) {
         /* Also when nothing is pending: compiled code may have run since the
          * last catch-up, and the SPC must stand at guest time here. */
         RtlApuLock();
-        g_apu_last_sync_master = g_cpu.master_cycles;
+        g_apu_last_sync_master = g_master_cycles;
         rtl_sync_apu_to_cpu_locked();
         RtlApuUnlock();
         s_apu_pending_master = 0;
@@ -372,8 +372,8 @@ static uint64_t s_beam_next_event;
 static inline void bridge_beam_catchup(const CpuState *cpu) {
 #if SNESRECOMP_LAZY_BEAM
     s_beam_next_event = 0;
-    if (g_snes && cpu->master_cycles != g_snes->beamMasterLast)
-        snes_sync_master_clock(g_snes, cpu->master_cycles);
+    if (g_snes && g_master_cycles != g_snes->beamMasterLast)
+        snes_sync_master_clock(g_snes, g_master_cycles);
 #else
     (void)cpu;
 #endif
@@ -381,12 +381,12 @@ static inline void bridge_beam_catchup(const CpuState *cpu) {
 static inline void bridge_beam_after_step(const CpuState *cpu) {
     if (!g_snes) return;
 #if SNESRECOMP_LAZY_BEAM
-    if (cpu->master_cycles < s_beam_next_event) return;
-    snes_sync_master_clock(g_snes, cpu->master_cycles);
+    if (g_master_cycles < s_beam_next_event) return;
+    snes_sync_master_clock(g_snes, g_master_cycles);
     s_beam_next_event = g_snes->beamMasterLast +
                         snes_master_clocks_to_next_beam_event(g_snes);
 #else
-    snes_sync_master_clock(g_snes, cpu->master_cycles);
+    snes_sync_master_clock(g_snes, g_master_cycles);
 #endif
 }
 
@@ -409,7 +409,7 @@ static uint8_t bridge_bus_read(void *mem, uint32_t adr) {
             value = page[adr & 0x1FFFu];
             if (g_snes && g_snes->cart)
                 g_snes->cart->cpuBusAddress = adr & 0xFFFFFFu;
-            cpu->open_bus = value;
+            g_open_bus = value;
             /* SNESRECOMP_WRAM_POLL_QUIESCENT=1: a read of the low-WRAM mirror
              * is not "continuous". On the plain carts the fast map covers,
              * WRAM changes only through a CPU write (write epoch), an
@@ -518,7 +518,7 @@ static void bridge_bus_write(void *mem, uint32_t adr, uint8_t val) {
     if (is_apu_port && bridge_apu_port_diag_enabled()) {
         static unsigned reports;
         if(reports++<131072) fprintf(stderr,"[apu_port] write $%04X=%02X master=%llu\n",
-          (unsigned)(uint16_t)adr,val,(unsigned long long)cpu->master_cycles);
+          (unsigned)(uint16_t)adr,val,(unsigned long long)g_master_cycles);
     }
     if (is_apu_port) bridge_apu_flush(cpu);
     cpu_write8(cpu, (uint8)((adr >> 16) & 0xFF), (uint16)(adr & 0xFFFF), val);
@@ -576,7 +576,7 @@ static bool bridge_bus_read_word(void *mem, uint32_t adrl, uint32_t adrh,
         static uint16_t last=0xffff; static unsigned reports;
         if (*out!=last && reports++<256) {
             fprintf(stderr,"[apu_port] read $2140=%04X pc-master=%llu pending=%llu\n",
-                    *out,(unsigned long long)cpu->master_cycles,
+                    *out,(unsigned long long)g_master_cycles,
                     (unsigned long long)s_apu_pending_master);
             last=*out;
         }
@@ -606,7 +606,7 @@ static bool bridge_bus_write_word(void *mem, uint32_t adrl, uint32_t adrh,
     if (is_apu_port && bridge_apu_port_diag_enabled()) {
         static unsigned reports;
         if(reports++<131072) fprintf(stderr,"[apu_port] writew $%04X=%04X master=%llu\n",
-          (unsigned)(uint16_t)adrl,val,(unsigned long long)cpu->master_cycles);
+          (unsigned)(uint16_t)adrl,val,(unsigned long long)g_master_cycles);
     }
     if (is_apu_port) bridge_apu_flush(cpu);
     cpu_write16(cpu, (uint8)((adrl >> 16) & 0xFF), (uint16)(adrl & 0xFFFF), val);
@@ -1174,7 +1174,7 @@ int interp_bridge_lle_master_deadline_reached(const CpuState *cpu) {
      * the two depth guards is zero -- the guards are file-static and invisible
      * from outside. Rate-limited to a handful of lines. */
     if (cpu && s_lle_master_deadline != 0 &&
-        cpu->master_cycles >= s_lle_master_deadline &&
+        g_master_cycles >= s_lle_master_deadline &&
         !(s_lle_sched_depth > 0 && s_interp_bounce_owner_depth > 0)) {
         static int diag_n = -1;
         if (diag_n < 0) diag_n = getenv("SNESRECOMP_DEADLINE_DIAG") ? 0 : 1000;
@@ -1185,14 +1185,14 @@ int interp_bridge_lle_master_deadline_reached(const CpuState *cpu) {
                     "sched_depth=%d bounce_owner_depth=%d master=%llu "
                     "deadline=%llu\n",
                     s_lle_sched_depth, s_interp_bounce_owner_depth,
-                    (unsigned long long)cpu->master_cycles,
+                    (unsigned long long)g_master_cycles,
                     (unsigned long long)s_lle_master_deadline);
         }
     }
     const int reached =
         cpu && s_lle_sched_depth > 0 && s_interp_bounce_owner_depth > 0 &&
         s_lle_master_deadline != 0 &&
-        cpu->master_cycles >= s_lle_master_deadline;
+        g_master_cycles >= s_lle_master_deadline;
     if (reached) {
         s_lle_next_unwind_is_deadline = 1;
         static int fired = -1;
@@ -1202,7 +1202,7 @@ int interp_bridge_lle_master_deadline_reached(const CpuState *cpu) {
             fprintf(stderr, "[deadline_diag] FIRED master=%llu deadline=%llu "
                     "sched=%d bounce=%d S=%04X X=%04X Y=%04X "
                     "DB=%02X D=%04X PB=%02X m=%u x=%u\n",
-                    (unsigned long long)cpu->master_cycles,
+                    (unsigned long long)g_master_cycles,
                     (unsigned long long)s_lle_master_deadline,
                     s_lle_sched_depth, s_interp_bounce_owner_depth,
                     (unsigned)cpu_S(), (unsigned)cpu_X(), (unsigned)cpu_Y(),
@@ -1900,7 +1900,7 @@ static BRIDGE_COLD int bridge_so_d9_wait(CpuState *cpu, Interp816 *in, int auto_
                 return BRIDGE_COLD_RETURN_1;
             }
             if (auto_quiescent && s_lle_master_deadline &&
-                cpu->master_cycles >= s_lle_master_deadline) {
+                g_master_cycles >= s_lle_master_deadline) {
                 lle_resume_set(((uint32_t)in->k << 16) | in->pc, INTERP_RESUME_SITE_D9_DEADLINE, in->sp);
                 sync_interp_to_cpu(in, cpu);
                 bridge_apu_flush(cpu);
@@ -1908,34 +1908,31 @@ static BRIDGE_COLD int bridge_so_d9_wait(CpuState *cpu, Interp816 *in, int auto_
             }
             if (in->pc == 0x84B4u) {
                 if (in->z) {
-                    cpu->cycles += 3u;
-                    cpu->master_cycles += 18u;
+                    g_master_cycles += 18u;
                     in->pc = 0x84B2u;
                 } else {
-                    cpu->cycles += 2u;
-                    cpu->master_cycles += 12u;
+                    g_master_cycles += 12u;
                     in->pc = 0x84B5u;
                 }
-                if (g_snes) snes_sync_master_clock(g_snes, cpu->master_cycles);
+                if (g_snes) snes_sync_master_clock(g_snes, g_master_cycles);
                 if (g_snes && g_snes->cart)
-                    cart_sync_coprocessors(g_snes->cart, cpu->master_cycles);
-                cpu->coprocessor_master_cycles = cpu->master_cycles;
+                    cart_sync_coprocessors(g_snes->cart, g_master_cycles);
+                g_coprocessor_master_cycles = g_master_cycles;
                 if (in->pc == 0x84B5u) break;
                 continue;
             }
 
-            cpu->cycles += 3u;
-            cpu->master_cycles += 18u;
+            g_master_cycles += 18u;
             {
-                const uint8_t v = (uint8_t)cpu->ram[0x00D9u];
+                const uint8_t v = (uint8_t)g_ram[0x00D9u];
                 in->a = (uint16_t)((in->a & 0xFF00u) | v);
                 in->z = (v == 0);
                 in->n = (v & 0x80u) != 0;
             }
-            if (g_snes) snes_sync_master_clock(g_snes, cpu->master_cycles);
+            if (g_snes) snes_sync_master_clock(g_snes, g_master_cycles);
             if (g_snes && g_snes->cart)
-                cart_sync_coprocessors(g_snes->cart, cpu->master_cycles);
-            cpu->coprocessor_master_cycles = cpu->master_cycles;
+                cart_sync_coprocessors(g_snes->cart, g_master_cycles);
+            g_coprocessor_master_cycles = g_master_cycles;
             if (auto_quiescent && !in->i && g_snes && g_snes->inIrq) {
                 lle_resume_set(0xC084B4u, INTERP_RESUME_SITE_D9_IRQ, in->sp);
                 sync_interp_to_cpu(in, cpu);
@@ -1943,27 +1940,25 @@ static BRIDGE_COLD int bridge_so_d9_wait(CpuState *cpu, Interp816 *in, int auto_
                 return BRIDGE_COLD_RETURN_1;
             }
             if (auto_quiescent && s_lle_master_deadline &&
-                cpu->master_cycles >= s_lle_master_deadline) {
+                g_master_cycles >= s_lle_master_deadline) {
                 lle_resume_set(0xC084B4u, INTERP_RESUME_SITE_D9_DEADLINE, in->sp);
                 sync_interp_to_cpu(in, cpu);
                 bridge_apu_flush(cpu);
                 return BRIDGE_COLD_RETURN_1;
             }
             if (in->z) {
-                cpu->cycles += 3u;
-                cpu->master_cycles += 18u;
-                if (g_snes) snes_sync_master_clock(g_snes, cpu->master_cycles);
+                g_master_cycles += 18u;
+                if (g_snes) snes_sync_master_clock(g_snes, g_master_cycles);
                 if (g_snes && g_snes->cart)
-                    cart_sync_coprocessors(g_snes->cart, cpu->master_cycles);
-                cpu->coprocessor_master_cycles = cpu->master_cycles;
+                    cart_sync_coprocessors(g_snes->cart, g_master_cycles);
+                g_coprocessor_master_cycles = g_master_cycles;
             } else {
-                cpu->cycles += 2u;
-                cpu->master_cycles += 12u;
+                g_master_cycles += 12u;
                 in->pc = 0x84B5u;
-                if (g_snes) snes_sync_master_clock(g_snes, cpu->master_cycles);
+                if (g_snes) snes_sync_master_clock(g_snes, g_master_cycles);
                 if (g_snes && g_snes->cart)
-                    cart_sync_coprocessors(g_snes->cart, cpu->master_cycles);
-                cpu->coprocessor_master_cycles = cpu->master_cycles;
+                    cart_sync_coprocessors(g_snes->cart, g_master_cycles);
+                g_coprocessor_master_cycles = g_master_cycles;
                 break;
             }
         }
@@ -2023,8 +2018,8 @@ static BRIDGE_COLD void bridge_vblank_ff(CpuState *cpu, uint32_t pc_before) {
     if (s_vff_log) {
         fprintf(stderr, "[VFF] entry f=%d pc=%06X m=%llu intra=%llu v=%u h=%u beamML=%llu apu_pend=%llu\n",
                 snes_frame_counter, (unsigned)pc_before,
-                (unsigned long long)cpu->master_cycles,
-                (unsigned long long)(cpu->master_cycles % 357368u),
+                (unsigned long long)g_master_cycles,
+                (unsigned long long)(g_master_cycles % 357368u),
                 g_snes->vPos, g_snes->hPos,
                 (unsigned long long)g_snes->beamMasterLast,
                 (unsigned long long)s_apu_pending_master);
@@ -2063,40 +2058,40 @@ static BRIDGE_COLD void bridge_vblank_ff(CpuState *cpu, uint32_t pc_before) {
                     if (!(g_snes->vIrqEnabled && g_snes->vTimer > v &&
                           g_snes->vTimer <= 224u)) {
                         const uint64_t d = 225u * 1364u -
-                            (cpu->master_cycles % 357368u);
+                            (g_master_cycles % 357368u);
                         if (d >= step)
-                            target = cpu->master_cycles +
+                            target = g_master_cycles +
                                      step * ((d + step - 1u) / step);
                     } else {
                         const uint64_t trig =
                             (uint64_t)g_snes->vTimer * 1364u;
                         const uint64_t pos =
-                            cpu->master_cycles % 357368u;
+                            g_master_cycles % 357368u;
                         if (trig > pos) {
                             const uint64_t d = trig - pos;
                             const uint64_t k = (d - 1u) / step;
                             if (k >= 1u)
-                                target = cpu->master_cycles + step * k;
+                                target = g_master_cycles + step * k;
                         }
                     }
                 } else if (is_bmi && v >= 225u && v <= 261u) {
                     if (!(g_snes->vIrqEnabled && g_snes->vTimer >= v &&
                           g_snes->vTimer <= 261u)) {
                         const uint64_t d = 357368u -
-                            (cpu->master_cycles % 357368u);
+                            (g_master_cycles % 357368u);
                         if (d >= step)
-                            target = cpu->master_cycles +
+                            target = g_master_cycles +
                                      step * (d / step);
                     }
                 }
-                if (target > cpu->master_cycles) {
-                    const uint64_t skip = target - cpu->master_cycles;
+                if (target > g_master_cycles) {
+                    const uint64_t skip = target - g_master_cycles;
                     if (s_vff_log) {
                         fprintf(stderr, "[VFF] fire f=%d pc=%06X m=%llu v=%u h=%u d=%llu target=%llu skip=%llu\n",
                                 snes_frame_counter, (unsigned)pc_before,
-                                (unsigned long long)cpu->master_cycles,
+                                (unsigned long long)g_master_cycles,
                                 g_snes->vPos, g_snes->hPos,
-                                (unsigned long long)(target - cpu->master_cycles),
+                                (unsigned long long)(target - g_master_cycles),
                                 (unsigned long long)target,
                                 (unsigned long long)skip);
                     }
@@ -2122,7 +2117,7 @@ static BRIDGE_COLD void bridge_vblank_ff(CpuState *cpu, uint32_t pc_before) {
                         s_apu_pending_master += _rest;
                         if (!_chunk) break;
                     }
-                    cpu->master_cycles = target;
+                    g_master_cycles = target;
                     snes_sync_master_clock(g_snes, target);
                 }
             }
@@ -2168,18 +2163,17 @@ static BRIDGE_COLD int bridge_idle_replay(CpuState *cpu, Interp816 *in,
                  * each step, in its order: the step cap, then
                  * the deadline. */
                 if (steps + j >= step_cap) { capped = 1; break; }
-                if (cpu->master_cycles >= s_lle_master_deadline)
+                if (g_master_cycles >= s_lle_master_deadline)
                     break;
                 g_interp_bridge_steps++;
-                cpu->cycles += idle_cost[e].cyc;
-                cpu->master_cycles += idle_cost[e].master;
+                g_master_cycles += idle_cost[e].master;
                 snes_refresh_charge();
-                cpu->open_bus = idle_cost[e].open_bus;
+                g_open_bus = idle_cost[e].open_bus;
                 if (apu_pending) {
                     s_apu_pending_master += idle_cost[e].master;
                     if (s_apu_pending_master >= bridge_bounce_flush_thresh()) {
-                        cpu->coprocessor_master_cycles = cpu->master_cycles;
-                        snes_sync_master_clock(g_snes, cpu->master_cycles);
+                        g_coprocessor_master_cycles = g_master_cycles;
+                        snes_sync_master_clock(g_snes, g_master_cycles);
                         bridge_apu_flush(cpu);
                     }
                 }
@@ -2190,10 +2184,10 @@ static BRIDGE_COLD int bridge_idle_replay(CpuState *cpu, Interp816 *in,
             in->c = at->c; in->z = at->z; in->v = at->v; in->n = at->n;
             in->i = at->i; in->d = at->d; in->mf = at->mf;
             in->xf = at->xf; in->e = at->e;
-            cpu->coprocessor_master_cycles = cpu->master_cycles;
-            snes_sync_master_clock(g_snes, cpu->master_cycles);
+            g_coprocessor_master_cycles = g_master_cycles;
+            snes_sync_master_clock(g_snes, g_master_cycles);
             if (g_snes->cart)
-                cart_sync_coprocessors(g_snes->cart, cpu->master_cycles);
+                cart_sync_coprocessors(g_snes->cart, g_master_cycles);
             if (capped)
                 return BRIDGE_COLD_STEP_CAP;
             lle_resume_set(at->pc, INTERP_RESUME_SITE_DEADLINE, in->sp);
@@ -2694,7 +2688,7 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
          * after a compiled body samples the deadline and IRQs 40 master
          * clocks early per owed line. A no-op when the previous step was
          * interpreted. */
-        snes_refresh_charge_inline(g_cpu.master_cycles);
+        snes_refresh_charge_inline(g_master_cycles);
 #ifdef SNESRECOMP_INTERP_PROFILE
         g_interp_total_steps++;
         interp_hist_init();
@@ -2765,7 +2759,7 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
             return 1;
         }
         if (auto_quiescent && s_lle_master_deadline &&
-            cpu->master_cycles >= s_lle_master_deadline) {
+            g_master_cycles >= s_lle_master_deadline) {
             lle_resume_set(pc_before, INTERP_RESUME_SITE_DEADLINE, in.sp);
             sync_interp_to_cpu(&in,cpu);
             bridge_apu_flush(cpu);
@@ -3059,7 +3053,7 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
                     double _ms = 1000.0 * (double)(_now - _rl_last) / CLOCKS_PER_SEC;
                     fprintf(stderr, "[rate] step=%ld pc=$%06X m=%llu 8192 steps in %.1f ms (%.0f ns/step)\n",
                             (long)steps, (unsigned)pc_before,
-                            (unsigned long long)cpu->master_cycles, _ms,
+                            (unsigned long long)g_master_cycles, _ms,
                             _ms * 1e6 / 8192.0);
                 }
                 _rl_last = _now;
@@ -3200,7 +3194,7 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
         g_interp_wlog_pc24 = pc_before & 0xFFFFFFu;
         if (wlog_state_sync)
             sync_interp_to_cpu(&in, cpu);
-        cpu->coprocessor_master_cycles = cpu->master_cycles;
+        g_coprocessor_master_cycles = g_master_cycles;
         if (SNESRECOMP_INTERP_DIAG && s_interp_pctrace && steps < 4)
             fprintf(stderr, "[pctrace] step=%ld pre-runOpcode pc=%06X\n",
                     steps, (unsigned)pc_before);
@@ -3241,15 +3235,14 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
                                ? (unsigned)_cyc - s_interp_bus_cycles : 0;
             uint64_t _master = s_interp_bus_master + (uint64_t)_internal * 6u;
             g_interp_bridge_steps++;
-            cpu->cycles        += (uint64_t)_cyc;
-            cpu->master_cycles += _master;
+            g_master_cycles += _master;
             /* DRAM refresh tax — shared watermark with the AOT tier's
              * WatchdogCheck charge; see common_cpu_infra.c. */
-            snes_refresh_charge_inline(g_cpu.master_cycles);
-            cpu->coprocessor_master_cycles = cpu->master_cycles;
+            snes_refresh_charge_inline(g_master_cycles);
+            g_coprocessor_master_cycles = g_master_cycles;
             bridge_beam_after_step(cpu);
             if (has_coprocessor)
-                cart_sync_coprocessors(g_snes->cart, cpu->master_cycles);
+                cart_sync_coprocessors(g_snes->cart, g_master_cycles);
             {
                 /* Guest-time APU, batched (see bridge_apu_flush): accumulate;
                  * convert on APU-port access / ~4096 master / exits. */
@@ -3263,7 +3256,7 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
             }
             idle_cost[steps & 63].master = _master;
             idle_cost[steps & 63].cyc = (uint8_t)_cyc;
-            idle_cost[steps & 63].open_bus = cpu->open_bus;
+            idle_cost[steps & 63].open_bus = g_open_bus;
         }
 
         /* Env-gated per-instruction cycle watch (SNESRECOMP_CYC_WATCH="lo-hi"
@@ -3376,7 +3369,7 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
                 const uint8_t fs = tail_frames[j].size;
                 const uint32_t r = tail_frames[j].ret_pc24;
                 const uint16_t pushed = (uint16_t)((r & 0xFFFFu) - 1u);
-                const uint8_t *st = cpu->ram + in.sp + 1u;   /* bank 0 stack page in WRAM */
+                const uint8_t *st = g_ram + in.sp + 1u;   /* bank 0 stack page in WRAM */
                 if (fs && st[0] == (uint8_t)pushed && st[1] == (uint8_t)(pushed >> 8) &&
                     (fs == 2 || st[2] == (uint8_t)(r >> 16)))
                     tail_j = j;
@@ -4504,30 +4497,18 @@ void InterpExecutionShareGet(InterpExecutionShare *out) {
     extern int snes_frame_counter;
     out->interp_insns = interp816_insns_total();
     out->interp_cycles = interp816_cycles_total();
-    out->cpu_cycles = g_cpu.cycles;
-    out->master_cycles = g_cpu.master_cycles;
+    out->master_cycles = g_master_cycles;
     out->frame = snes_frame_counter;
-    double pct = out->cpu_cycles
-        ? 100.0 * (double)out->interp_cycles / (double)out->cpu_cycles : 0.0;
-    /* The interpreter's bus-cycle rounding can put it a hair over the total;
-     * a headline above 100% is a sub-percent accounting artifact. */
-    if (pct > 100.0) pct = 100.0;
-    out->interp_cycle_pct = pct;
-    out->aot_cycle_pct = out->cpu_cycles ? 100.0 - pct : 0.0;
 }
 
 void InterpExecutionShareDumpJson(FILE *f) {
     InterpExecutionShare s;
     InterpExecutionShareGet(&s);
     fprintf(f, "  \"execution_share\": {\"frame\": %d, \"interp_insns\": %llu, "
-               "\"interp_cycles\": %llu, \"cpu_cycles\": %llu, "
-               "\"master_cycles\": %llu, \"interp_cycle_pct\": %.4f, "
-               "\"aot_cycle_pct\": %.4f},\n",
+               "\"interp_cycles\": %llu, \"master_cycles\": %llu},\n",
             s.frame, (unsigned long long)s.interp_insns,
             (unsigned long long)s.interp_cycles,
-            (unsigned long long)s.cpu_cycles,
-            (unsigned long long)s.master_cycles,
-            s.interp_cycle_pct, s.aot_cycle_pct);
+            (unsigned long long)s.master_cycles);
 }
 
 void Tier2CoverageDumpJson(FILE *f) {

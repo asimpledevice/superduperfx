@@ -1,4 +1,4 @@
-/* Reuse the established flat-RAM bridge fixture, replacing only the fake
+/* Reuse the established flat-bus bridge fixture (WRAM in g_ram, bus_at), replacing only the fake
  * interrupt scope and AOT entry. The production interpreter and bridge are
  * linked unchanged; no commercial ROM or generated game code is required. */
 #define main unused_bridge_fixture_main
@@ -31,16 +31,16 @@ RecompReturn cpu_dispatch_pc_paired(CpuState *cpu, uint32 pc24,
 }
 
 static void prepare_interrupt(void) {
-    memset(RAM, 0, MEMSZ);
+    bus_clear();
     init_cpu();
     cpu_set_emulation(0);
     cpu_set_S(0x01FB);
     cpu_mirrors_to_p(&g_cpu);
     /* Native NMI frame: P, PC.lo, PC.hi, PB; RTI resumes at $00:9000. */
-    RAM[0x01FC] = cpu_P();
-    RAM[0x01FD] = 0x00;
-    RAM[0x01FE] = 0x90;
-    RAM[0x01FF] = 0x00;
+    (*bus_at(0x01FC)) = cpu_P();
+    (*bus_at(0x01FD)) = 0x00;
+    (*bus_at(0x01FE)) = 0x90;
+    (*bus_at(0x01FF)) = 0x00;
     g_aot_called = 0;
     interrupt_depth = 0;
     bounce_result = RECOMP_RETURN_NORMAL;
@@ -58,17 +58,17 @@ int main(void) {
         prepare_interrupt();
         load(0x8200, suffix, sizeof suffix);
         load(0x8300, continuation, sizeof continuation);
-        if (frame_size == 3) RAM[cpu_S()] = 0x00, cpu_set_S(cpu_S() - 1);
-        RAM[cpu_S()] = 0x82, cpu_set_S(cpu_S() - 1);
-        RAM[cpu_S()] = 0xFF, cpu_set_S(cpu_S() - 1);  /* RTS/RTL -> $8300 */
+        if (frame_size == 3) (*bus_at(cpu_S())) = 0x00, cpu_set_S(cpu_S() - 1);
+        (*bus_at(cpu_S())) = 0x82, cpu_set_S(cpu_S() - 1);
+        (*bus_at(cpu_S())) = 0xFF, cpu_set_S(cpu_S() - 1);  /* RTS/RTL -> $8300 */
         cpu_interrupt_context_enter();
         RecompReturn result = interp_tier_dispatch_tail(
             &g_cpu, 0x008200, 0x008100, cpu_S(), (uint8)frame_size);
         printf("direct AOT NMI subroutine, frame=%d\n", frame_size);
         CHECK(result == RECOMP_RETURN_NORMAL, "return=%d", result);
         CHECK(cpu_S() == 0x01FB, "subroutine S=%04X expected 01FB", cpu_S());
-        CHECK(RAM[0x10] == 1, "suffix did not run once");
-        CHECK(RAM[0x11] == 0, "subroutine consumed NMI continuation");
+        CHECK((*bus_at(0x10)) == 1, "suffix did not run once");
+        CHECK((*bus_at(0x11)) == 0, "subroutine consumed NMI continuation");
         CHECK(interrupt_depth == 1, "interrupt scope was not preserved");
         cpu_interrupt_context_leave();
 
@@ -87,15 +87,15 @@ int main(void) {
         CHECK(bounce_result == RECOMP_RETURN_LLE_UNWIND_BASE,
               "tail resumed compiled caller instead of unwinding: %d", bounce_result);
         CHECK(g_aot_called == 1, "AOT calls=%d expected 1", g_aot_called);
-        CHECK(RAM[0x10] == 1 && RAM[0x11] == 1,
-              "suffix/continuation counts=%d/%d expected 1/1", RAM[0x10], RAM[0x11]);
+        CHECK((*bus_at(0x10)) == 1 && (*bus_at(0x11)) == 1,
+              "suffix/continuation counts=%d/%d expected 1/1", (*bus_at(0x10)), (*bus_at(0x11)));
         CHECK(cpu_S() == 0x01FF, "NMI S=%04X expected 01FF", cpu_S());
         CHECK(interrupt_depth == 0, "interrupt scope leaked");
     }
 
     /* An interrupt root with no paired subroutine frame still exits by RTI. */
     prepare_interrupt();
-    RAM[0x8200] = 0x40;
+    (*bus_at(0x8200)) = 0x40;
     cpu_interrupt_context_enter();
     RecompReturn result = interp_tier_dispatch_tail(
         &g_cpu, 0x008200, 0x008100, cpu_S(), 0);

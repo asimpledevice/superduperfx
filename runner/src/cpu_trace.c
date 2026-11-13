@@ -1247,7 +1247,7 @@ void cpu_trace_block(CpuState *cpu, uint32_t pc24) {
             snes_frame_counter <= ab_hi)
             fprintf(stderr, "[aotblk] f=%d pc=$%06X master=%llu\n",
                     snes_frame_counter, pc24,
-                    (unsigned long long)cpu->master_cycles);
+                    (unsigned long long)g_master_cycles);
     }
     /* Investigation: block-boundary DB shadow. Catches EVERY DB change
      * (inline PLBs bypass cpu_trace_db_change), reporting the block where it
