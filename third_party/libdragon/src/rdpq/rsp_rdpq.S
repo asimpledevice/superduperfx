@@ -744,6 +744,9 @@ reset_end:
 
     .func RDPQCmd_TriangleData
 RDPQCmd_TriangleData:
+#if RDPQ_TRIANGLE_REFERENCE
+    assert RDPQ_ASSERT_INVALID_CMD_TRI
+#else
     sw a1, %lo(RDPQ_TRI_DATA0) + 0(a0)  # X/Y
     sw a2, %lo(RDPQ_TRI_DATA0) + 4(a0)  # Z
     sw a3, %lo(RDPQ_TRI_DATA0) + 8(a0)  # RGBA
@@ -759,6 +762,7 @@ RDPQCmd_TriangleData:
     sw t1, %lo(RDPQ_TRI_DATA0) + 16(a0)  # W
     jr ra
     sw t2, %lo(RDPQ_TRI_DATA0) + 20(a0)  # INV_W 
+#endif /* RDPQ_TRIANGLE_REFERENCE */
     .endfunc
 
     .func RDPQCmd_Triangle
@@ -905,6 +909,9 @@ autotmem_lowerlimit:
 
     .func RDPQCmd_ClearZBuffer
 RDPQCmd_ClearZBuffer:
+#if !RDPQ_RSP_CLEAR_Z
+    assert RDPQ_ASSERT_ZCLEAR_INVALID_BUFFER
+#else
     # Prepare the fill value in $v01
     mtc2 a3, $v01.e0
     vor $v01, vzero, $v01.e0
@@ -939,14 +946,14 @@ RDPQCmd_ClearZBuffer:
     li t2, DMA_IN
     jal_and_j ClearZBuf_DMEM_Backup, RSPQ_Loop
 
-    .endfunc
-
 ClearZBuf_DMEM_Backup:
     # Backup the used DMEM area
     li s4, 0
     move s0, a2
     j DMAExec
     addiu t0, t7, -1
+#endif /* RDPQ_RSP_CLEAR_Z */
+    .endfunc
 
 
 

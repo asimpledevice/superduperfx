@@ -219,6 +219,19 @@ buffer stay as they are (rdpq untouched), and a small ring carries control.
 - Validation: the 10,000-case random comparison against `spc.c`, then state
   hashes identical to the C core in SMW, Pitfall and JM2.
 
+**Phase G: Red feeds the RDP** (graphics Yellow lane; after or between the
+APU phases).
+- Log the renderer's exact RDP command stream; its modes are few and static,
+  so the fixups rdpq's overlay applies (other modes, combiners, auto-TMEM,
+  exclusive bounds, scissor) become constant blocks built at start.
+- A Red command runs an RDP list (DP_START/DP_END), replacing rdpq's
+  dynamic buffers; the BG overlay writes its lines straight into the list
+  as texture rectangles, so the PPU stage and the RDP feed are one RSP
+  pipeline and the CPU never touches those commands.
+- rdpq's RSP overlay is no longer loaded (rdpq stays on the CPU side at most,
+  for attach). Step taken already: rdpq without its RSP triangle engine
+  (1,360 bytes of IMEM free instead of 36).
+
 **Phase 5: the S-DSP chained behind the SPC.**
 - S-DSP batches as queued commands consuming the SPC's log; the CPU joins
   only where it needs DSP state. The S-DSP overlay keeps its state between

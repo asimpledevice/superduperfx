@@ -2564,6 +2564,20 @@ RDRAM queue keeps rdpq's stream; a small DMEM ring carries control.
   from the spin count (SMW title 70-87%, JM2 95-97%) agree with the halted
   samples before; an idle turn is about 47 RSP cycles in ares.
 
+**rdpq without RSP triangles (owner decision, option C).** SuperDuperFX
+draws no triangles: the renderer uses rectangles, texture and TLUT uploads,
+modes, scissor and attach. libdragon's own switch `RDPQ_TRIANGLE_REFERENCE`
+is now 1: `rdpq_triangle` takes the CPU path (its commands still pass
+through the RSP for mode fixups), the RSP triangle command and
+`rdpq_triangle_rsp` assert, and the linker drops the engine.
+`RDPQ_RSP_CLEAR_Z` 0 does the same for the RSP Z-buffer clear
+(`rdpq_clear_z` uses the RDP). rdpq's IMEM free: 36 -> 1,360 bytes.
+Triangles stay possible: the CPU path, or a Yellow overlay of its own (a
+Super FX HLE would bring its own setup). libdragon's GL pipeline (36 bytes
+free, unused here) and mixer (112 bytes, 24 of DMEM) are now the overlays
+that limit Red's kernel growth. Long term, Red feeds the RDP itself and
+rdpq's overlay goes (RED_DESIGN.md, Phase G).
+
 ## Next steps
 
 1. Audio: check the RSP DSP by ear on hardware (output arrives later than

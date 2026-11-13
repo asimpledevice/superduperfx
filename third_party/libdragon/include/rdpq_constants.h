@@ -38,7 +38,18 @@
 #define RDPQ_BLOCK_MIN_SIZE   64    ///< RDPQ block minimum size (in 32-bit words)
 #define RDPQ_BLOCK_MAX_SIZE   4192  ///< RDPQ block minimum size (in 32-bit words)
 
-/** @brief Set to 1 for the reference implementation of RDPQ_TRIANGLE (on CPU) */
-#define RDPQ_TRIANGLE_REFERENCE    0
+/** @brief Set to 1 for the reference implementation of RDPQ_TRIANGLE (on CPU)
+ *
+ * SuperDuperFX: 1. rdpq's RSP triangle engine (~1.2 KB of rsp_rdpq's IMEM)
+ * is not built: rdpq_triangle uses the CPU path, whose commands still pass
+ * through the RSP for mode fixups (RDPQCmd_PassthroughTriangle). Nothing in
+ * SuperDuperFX draws triangles; the room goes to Red's kernel, which shares
+ * IMEM with every overlay. rdpq_triangle_rsp asserts. */
+#define RDPQ_TRIANGLE_REFERENCE    1
+
+/** @brief Clear Z buffers with the RSP (RDPQCmd_ClearZBuffer)
+ *
+ * SuperDuperFX: 0, for the same reason; rdpq_clear_z clears with the RDP. */
+#define RDPQ_RSP_CLEAR_Z           0
 
 #endif

@@ -10,6 +10,7 @@
 #include "rdpq_rect.h"
 #include "rdpq_attach.h"
 #include "rdpq_internal.h"
+#include "rdpq_constants.h"
 #include "rspq.h"
 #include "display.h"
 #include "debug.h"
@@ -51,8 +52,9 @@ static bool __rdpq_clear_z_with_rsp(const surface_t *surf_z, uint16_t zvalue)
     }
 
     // If RSP size is 0, it means that we cannot represent the current size with
-    // a single RSP DMA command. In this case, we fall back to the normal RDP clear
-    if (last_rspsize == 0)
+    // a single RSP DMA command. In this case, we fall back to the normal RDP clear.
+    // SuperDuperFX: the RSP clear is not built (RDPQ_RSP_CLEAR_Z).
+    if (last_rspsize == 0 || !RDPQ_RSP_CLEAR_Z)
         return false;
 
     // We need a RDP fence here because the RDP might be drawing to the Z buffer

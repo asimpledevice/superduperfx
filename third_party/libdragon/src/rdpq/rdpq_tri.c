@@ -466,6 +466,9 @@ void rdpq_triangle_cpu(const rdpq_trifmt_t *fmt, const float *v1, const float *v
 /** @brief RDP triangle primitive assembled on the RSP */
 void rdpq_triangle_rsp(const rdpq_trifmt_t *fmt, const float *v1, const float *v2, const float *v3, fm_mat3_t *mtx)
 {
+#if RDPQ_TRIANGLE_REFERENCE
+    assertf(0, "rdpq_triangle_rsp: the RSP triangle engine is not built (RDPQ_TRIANGLE_REFERENCE); use rdpq_triangle_cpu");
+#endif
     uint32_t res = AUTOSYNC_PIPE;
     if (fmt->tex_offset >= 0) {
         // FIXME: this can be using multiple tiles depending on color combiner and texture
