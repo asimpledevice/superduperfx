@@ -2290,6 +2290,16 @@ struct build's retrained layout against the committed one is SMW -7.5%,
 Pitfall -63%, JM2 +38% (held out). One seed's layout is not a reliable
 basis for a per-game verdict.
 
+**Default: CPUFPU=1 (owner decision, 2026-11-13).** About at parity, not
+clearly worse, and it moves the 65816 registers out of memory. Instruction
+counts, JM2 bank $80 (struct / FPU): 17,406 / 17,882 (+2.7%). Reads are
+one-for-one (1,291 MFC1 for 644 LHU + 617 LBU), as are writes (283 MTC1 for
+149 SH + 131 SB). The difference: +289 ANDI (narrowing a 16-bit result
+before MTC1, where SH truncated for free; a byte of A, which LBU read
+directly; masks GCC re-adds because the read barrier hides the range),
++54 NOP (MFC1 hazard slots GCC could not fill), and about +130 from register
+pressure (MOVE/ADDIU, SW/LW spills).
+
 ## Next steps
 
 1. Audio: check the RSP DSP by ear on hardware (output arrives later than
