@@ -618,18 +618,18 @@ static int host_main(void) {
 #endif
 #ifdef N64_PHASE0
     if (frame % 60 == 59) {
-      extern void n64_phase0_take(uint32_t *, uint32_t *, uint32_t *, uint32_t *);
+      extern void n64_phase0_take(uint32_t *, uint32_t *, uint32_t *);
       extern uint32_t g_bgrsp_cmds, g_apu_port_writes, g_apu_catchups, g_apu_port_burst_max;
-      uint32_t samples, idle, words, wait;
-      n64_phase0_take(&samples, &idle, &words, &wait);
+      uint32_t idle, words, wait;
+      n64_phase0_take(&idle, &words, &wait);
       snprintf(s_p0_line, sizeof s_p0_line, "q%lu w%lu i%lu p%lu/%lu",
                (unsigned long)(words / 60), (unsigned long)(wait / 60 / 47),
-               (unsigned long)(samples ? idle * 100 / samples : 0),
+               (unsigned long)idle,
                (unsigned long)(g_apu_port_writes / 60), (unsigned long)g_apu_port_burst_max);
       n64_platform_log("[phase0] per frame: rspq %lu words, BG %lu cmds, CPU waited %lu us for a queue buffer; "
                        "RSP idle %lu%%; APU port writes %lu, SPC runs %lu, max writes between runs %lu (60 frames)\n",
                        (unsigned long)(words / 60), (unsigned long)(g_bgrsp_cmds / 60),
-                       (unsigned long)(wait / 60 / 47), (unsigned long)(samples ? idle * 100 / samples : 0),
+                       (unsigned long)(wait / 60 / 47), (unsigned long)idle,
                        (unsigned long)(g_apu_port_writes / 60), (unsigned long)(g_apu_catchups / 60),
                        (unsigned long)g_apu_port_burst_max);
       g_bgrsp_cmds = g_apu_port_writes = g_apu_catchups = g_apu_port_burst_max = 0;

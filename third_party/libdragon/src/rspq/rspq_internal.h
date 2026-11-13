@@ -210,6 +210,11 @@ typedef struct rsp_queue_s {
     uint32_t mailbox_down;               ///< Mailbox: CPU to RSP (rsp_queue.inc RSPQ_MAILBOX_DOWN)
     uint32_t mailbox_up;                 ///< Mailbox: RSP to CPU, rung with SIG0
     uint32_t mailbox_reserved[2];        ///< Mailbox: reserved for the block boxes
+    uint32_t ring[RSPQ_RING_SIZE/4];     ///< Command ring (rsp_queue.inc RSPQ_RING)
+    uint32_t ring_head;                  ///< Command ring: CPU's publish index
+    uint32_t ring_tail;                  ///< Command ring: Red's consume index
+    uint32_t ring_saved_gp;              ///< Command ring: RDRAM stream position while ring commands run
+    uint32_t idle_spins;                 ///< Turns of Red's idle spin (rspq_idle_spins)
     uint32_t cmds[RSPQ_DMEM_BUFFER_SIZE/4]; ///< RSPQ command buffer
     rspq_rdp_mode_t rdp_mode;            ///< RDP current render mode definition
     uint64_t rdp_scissor_rect;           ///< Current RDP scissor rectangle

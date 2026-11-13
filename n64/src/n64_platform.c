@@ -34,20 +34,29 @@ static volatile unsigned s_prof_n;
 static timer_link_t *s_prof_timer;
 
 #ifdef N64_PHASE0
-/* Red sizing (docs/n64/RED_DESIGN.md, phase 0): RSP idle time, sampled
- * every 50 us from a timer interrupt (halted = idle). */
-static volatile uint32_t s_p0_samples, s_p0_idle;
-static void p0_tick(int ovfl) {
-  (void)ovfl;
-  s_p0_samples++;
-  if (*SP_STATUS & SP_STATUS_HALTED) s_p0_idle++;
+/* Red sizing (docs/n64/RED_DESIGN.md, phase 0). RSP idle time: Red spins
+ * instead of halting and counts the turns (rspq_idle_spins); the rate with
+ * nothing queued, measured at start, is 100% idle. */
+static uint32_t s_p0_full_spins, s_p0_full_ticks;   /* the 100% rate */
+static uint32_t s_p0_spins_last, s_p0_ticks_last;
+static void p0_calibrate(void) {
+  rspq_wait();
+  const uint32_t s0 = rspq_idle_spins(), t0 = TICKS_READ();
+  while (TICKS_READ() - t0 < TICKS_FROM_MS(4)) {}
+  s_p0_full_spins = rspq_idle_spins() - s0;
+  s_p0_full_ticks = TICKS_READ() - t0;
+  s_p0_spins_last = rspq_idle_spins();
+  s_p0_ticks_last = TICKS_READ();
+  debugf("[phase0] Red idle spin: %lu turns in %lu ticks\n",
+         (unsigned long)s_p0_full_spins, (unsigned long)s_p0_full_ticks);
 }
-void n64_phase0_take(uint32_t *samples, uint32_t *idle, uint32_t *words, uint32_t *wait_ticks) {
+void n64_phase0_take(uint32_t *idle_pct, uint32_t *words, uint32_t *wait_ticks) {
   static uint32_t s_words_last;
-  disable_interrupts();
-  *samples = s_p0_samples; *idle = s_p0_idle;
-  s_p0_samples = s_p0_idle = 0;
-  enable_interrupts();
+  const uint32_t sp = rspq_idle_spins(), tk = TICKS_READ();
+  const uint64_t ds = sp - s_p0_spins_last, dt = tk - s_p0_ticks_last;
+  s_p0_spins_last = sp; s_p0_ticks_last = tk;
+  *idle_pct = (dt && s_p0_full_spins)
+      ? (uint32_t)(ds * s_p0_full_ticks * 100u / (dt * s_p0_full_spins)) : 0;
   const uint32_t w = rspq_words_written();
   *words = w - s_words_last;
   s_words_last = w;
@@ -124,7 +133,7 @@ void n64_platform_init(void) {
 #endif
   timer_init();
 #ifdef N64_PHASE0
-  new_timer(TICKS_FROM_US(50), TF_CONTINUOUS, p0_tick);
+  p0_calibrate();
 #endif
   dfs_init(DFS_DEFAULT_LOCATION);
   debugf("[n64] snesrecomp interpreter-only host, expansion pak: %s\n",

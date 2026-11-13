@@ -9,11 +9,14 @@ RSPQ_BeginOverlayHeader
     RSPQ_DefineCommand RedACmd_Post, 8      # post a1 (a0: the command word)
     RSPQ_DefineCommand RedACmd_Serve, 4     # answer a0 (24 bits) new down words with down + 1
     RSPQ_DefineCommand RedACmd_Echo, 4      # post the down word
+    RSPQ_DefineCommand RedACmd_Add, 4       # SUM += a0's low 24 bits
+    RSPQ_DefineCommand RedACmd_Report, 4    # post SUM
+    RSPQ_DefineCommand RedACmd_Busy, 4      # spin a0's low 24 bits iterations
 RSPQ_EndOverlayHeader
 
 RSPQ_BeginSavedState
     .align 3
-SAVED_UNUSED: .ds.b 8
+SUM: .long 0, 0
 RSPQ_EndSavedState
 
     .text
@@ -47,5 +50,27 @@ RedACmd_Serve:
 RedACmd_Echo:
     lw t1, %lo(RSPQ_MAILBOX_DOWN)
     RSPQ_MailboxPost t1, t0
+    j RSPQ_Loop
+    nop
+
+RedACmd_Add:
+    sll a0, 8
+    srl a0, 8
+    lw t1, %lo(SUM)
+    addu t1, a0
+    j RSPQ_Loop
+    sw t1, %lo(SUM)
+
+RedACmd_Report:
+    lw t1, %lo(SUM)
+    RSPQ_MailboxPost t1, t0
+    j RSPQ_Loop
+    nop
+
+RedACmd_Busy:
+    sll a0, 8
+    srl a0, 8
+1:  bgtz a0, 1b
+    addiu a0, -1
     j RSPQ_Loop
     nop

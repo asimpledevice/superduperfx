@@ -12,6 +12,12 @@
 #include "dsp.h"
 #include "apu_dsp_batch.h"
 
+/* Launch batches through Red's DMEM command ring (no flush, no fetch DMA;
+ * a batch depends on nothing queued in RDRAM). 0: through the RDRAM queue. */
+#ifndef RSPDSP_RING
+#define RSPDSP_RING 1
+#endif
+
 DEFINE_RSP_UCODE(rsp_snesdsp);
 
 enum { kMaxSamples = 1024, kMaxOps = 4096 };
@@ -519,8 +525,13 @@ static bool launch(Dsp *dsp, uint8_t *aram, const ApuDspLogEntry *log, uint32_t 
   data_cache_hit_writeback_invalidate(s_ops.op, (nops + 32) * sizeof(Op));
   /* Only the samples this batch writes; the CPU never writes s_out. */
   data_cache_hit_invalidate(&s_out, (samples * 4 + 15) & ~15u);
+#if RSPDSP_RING
+  const uint32_t cmd[2] = {s_overlay_id | PhysicalAddr(&s_block), 0};
+  rspq_ring_write(cmd, 2);
+#else
   rspq_write(s_overlay_id, 0, PhysicalAddr(&s_block), 0);
   rspq_flush();
+#endif
   g_snesdsp_rsp_submit_ticks += get_ticks() - ts;
   s_flight.seq = s_seq;
   s_flight.active = true;
@@ -544,7 +555,7 @@ void snesdsp_rsp_apu_join(void) {
   /* Red rings when the batch is done (RED_MSG_DSP_DONE). Blue hands the CPU
    * to Green meanwhile; Green's service returns once the doorbell asks for
    * Blue (RUN_FLAG_WANT_BLUE). A doorbell that never comes (50 ms) falls
-   * back to rspq_wait and is counted. */
+   * back to waiting for the RSP and is counted. */
   if (!red_dsp_done(s_flight.seq)) {
 #if SNESRECOMP_BLUE_THREAD
     if (blue_is_current()) {
@@ -557,7 +568,14 @@ void snesdsp_rsp_apu_join(void) {
     }
 #endif
     while (!red_dsp_done(s_flight.seq) && (uint32_t)get_ticks() - t0 < TICKS_FROM_MS(50)) {}
-    if (!red_dsp_done(s_flight.seq)) { g_snesdsp_rsp_fallbacks++; rspq_wait(); }
+    if (!red_dsp_done(s_flight.seq)) {
+      g_snesdsp_rsp_fallbacks++;
+#if RSPDSP_RING
+      rspq_ring_wait();
+#else
+      rspq_wait();
+#endif
+    }
   }
   g_snesdsp_rsp_join_wait += get_ticks() - t0;   /* time the CPU waited */
   if (blue_is_current()) g_snesdsp_rsp_join_wait_blue += get_ticks() - t0;

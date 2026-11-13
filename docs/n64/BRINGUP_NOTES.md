@@ -2514,6 +2514,56 @@ Next (to discuss): separate Blue and Green (give Green independent work:
 draw frame N while Blue runs N+1, which needs a VRAM/OAM/WRAM snapshot), or
 start the Yellow overlays on Red.
 
+### Red phase 1: the DMEM command ring (2026-11-13)
+
+Plan: `docs/n64/RED_DESIGN.md`. Phase 0's numbers settled the split: the
+RDRAM queue keeps rdpq's stream; a small DMEM ring carries control.
+
+- **Ring** in rspq's resident DMEM (`rsp_queue.inc` `RSPQ_RING`, 32 bytes,
+  then the head, tail, saved stream position and idle counter words).
+  `rspq_ring_write(words, n)` writes a command (rspq format, up to 6 words)
+  and publishes it by writing the head; no flush, no wakeup, no fetch DMA. A
+  command never wraps: the CPU pads the ring's end with no-op commands
+  (WRITE_STATUS with no bits) and starts over. One word stays free, so head
+  = tail means empty. `rspq_ring_wait` waits until Red has run them all
+  (`rspq_wait` covers only the RDRAM stream).
+- **Red** checks the ring at the top of `RSPQ_Loop`, between any two RDRAM
+  commands: it saves the stream's position and runs ring commands with the
+  buffer pointer aimed into the ring, below `RSPQ_DMEM_BUFFER`, so it is
+  negative exactly while a ring command runs, and every overlay's
+  gp-relative argument loads work unchanged. Ring commands skip the highpri
+  check (a highpri switch saves the stream position; it waits until the ring
+  is empty). Semantics: a ring command runs ahead of anything still queued
+  in RDRAM, so it must not depend on queued work, and it must not move the
+  stream (no Jump, Call, or 0 words).
+- **Red spins instead of halting** when the lowpri queue is empty: through
+  `RSPQ_Loop`, which checks the ring and highpri requests. The highpri queue
+  still halts at its end (`rspq_wait` in highpri relies on it); a highpri
+  request always comes with SIG_MORE. Each idle turn counts in DMEM
+  (`rspq_idle_spins`); Phase 0's idle share now comes from that count
+  against the rate measured at start with nothing queued (halted samples
+  would read 0%).
+- **Budget.** Every resident byte and instruction comes out of every
+  overlay. Red's additions: 16 instructions and 48 bytes of DMEM. libdragon's
+  overlays had been packed to the byte beside stock rspq: the ULC audio codec
+  (wav64 level 2) and H.264 (with lspr3 sprites) no longer fit and are not
+  built (nothing in SuperDuperFX uses them; level 2 asserts). Left: rdpq and
+  GL's pipeline 36 bytes of IMEM, the mixer 24 bytes of DMEM. rdpq's IMEM is
+  the binding limit for Phase 2's kernel growth.
+- **First user: S-DSP launches** go through the ring (`RSPDSP_RING`, default
+  1; 0 restores the RDRAM queue). The join's fallback waits on the ring.
+- `n64/redtest` v2 adds ring tests, all passing in ares: 2,000 ring posts
+  (946 CPU cycles to the run flag on average; the RDRAM queue's 788 in the
+  same run: ares does not model the CPU/RSP interplay closely, so the
+  hardware run decides); 375 ring command pairs for both overlays,
+  interleaved with a 6,000-command RDRAM stream, with both sums exact;
+  20,000 back-to-back ring commands of 1-3 words (every wrap position),
+  200-450 cycles each between runs; 50 highpri sequences that run and end.
+- Emulator state hashes identical to the Blue builds (SMW 42, Pitfall 4,
+  JM2 19 compared frames), no join fallbacks. Phase 0 builds: idle shares
+  from the spin count (SMW title 70-87%, JM2 95-97%) agree with the halted
+  samples before; an idle turn is about 47 RSP cycles in ares.
+
 ## Next steps
 
 1. Audio: check the RSP DSP by ear on hardware (output arrives later than

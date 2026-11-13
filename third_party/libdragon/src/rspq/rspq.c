@@ -235,6 +235,10 @@ _Static_assert(RSPQ_DMEM_BUFFER_SIZE >= (RSPQ_MAX_COMMAND_SIZE + 2) * 4);
 // Check that the maximum command size is actually supported by the 
 // internal command descriptor format.
 _Static_assert(RSPQ_MAX_COMMAND_SIZE * 4 <= RSPQ_DESCRIPTOR_MAX_SIZE);
+/** Red's ring: a power of two (index arithmetic), and below the command
+ *  buffer, so the RSP's buffer pointer is negative while a ring command runs. */
+_Static_assert((RSPQ_RING_SIZE & (RSPQ_RING_SIZE - 1)) == 0);
+_Static_assert(offsetof(rsp_queue_t, ring) + RSPQ_RING_SIZE < offsetof(rsp_queue_t, cmds));
 /// @endcond
 
 /** @brief Smaller version of rspq_write that writes to an arbitrary pointer */
@@ -528,6 +532,63 @@ uint32_t rspq_mailbox_up(void)
     return *RSPQ_MAILBOX_UP_PTR;
 }
 
+/** @brief The command ring in DMEM (rsp_queue.inc RSPQ_RING). */
+#define RSPQ_RING_FIELD(f) ((volatile uint32_t *)SP_DMEM + offsetof(rsp_queue_t, f) / 4)
+/** @brief The CPU's copy of the ring head (it is the only writer). */
+static uint32_t rspq_ring_head;
+uint32_t rspq_ring_commands, rspq_ring_wait_ticks;
+
+void rspq_ring_write(const uint32_t *words, unsigned n)
+{
+    const uint32_t size = n * 4;
+    assertf(n >= 1 && size <= RSPQ_RING_SIZE - 8, "rspq_ring_write: %u words", n);
+    assertf(words[0] != 0, "rspq_ring_write: command word 0");
+    volatile uint32_t *ring = RSPQ_RING_FIELD(ring);
+
+    disable_interrupts();
+    const uint32_t head = rspq_ring_head;
+    /* A command never wraps: if it does not fit before the end, no-ops pad
+       the ring's end and the command goes at the start. */
+    const bool wrap = head + size > RSPQ_RING_SIZE;
+    const uint32_t start = wrap ? 0 : head;
+    const uint32_t need = wrap ? RSPQ_RING_SIZE - head + size : size;
+    uint32_t next = start + size;
+    if (next == RSPQ_RING_SIZE) next = 0;
+
+    /* Room: one word stays free, so head == tail only when empty. */
+    uint32_t t0 = 0;
+    for (bool waited = false;; waited = true) {
+        const uint32_t tail = *RSPQ_RING_FIELD(ring_tail);
+        const uint32_t used = (head - tail) & (RSPQ_RING_SIZE - 1);
+        if (need <= RSPQ_RING_SIZE - 4 - used) {
+            if (waited) rspq_ring_wait_ticks += TICKS_READ() - t0;
+            break;
+        }
+        if (!waited) t0 = TICKS_READ();
+    }
+
+    if (wrap)
+        for (uint32_t i = head / 4; i < RSPQ_RING_SIZE / 4; i++) ring[i] = RSPQ_RING_PAD_WORD;
+    for (unsigned i = 0; i < n; i++) ring[start / 4 + i] = words[i];
+    /* Publish: the RSP ignores the slots until the head moves past them. */
+    MEMORY_BARRIER();
+    *RSPQ_RING_FIELD(ring_head) = next;
+    rspq_ring_head = next;
+    rspq_ring_commands++;
+    enable_interrupts();
+}
+
+uint32_t rspq_idle_spins(void)
+{
+    return *RSPQ_RING_FIELD(idle_spins);
+}
+
+void rspq_ring_wait(void)
+{
+    /* Red writes the tail after each command has run. */
+    while (*RSPQ_RING_FIELD(ring_tail) != rspq_ring_head) {}
+}
+
 static void rspq_sp_interrupt(void) 
 {
     uint32_t status = *SP_STATUS;
@@ -712,7 +773,8 @@ static void rspq_start(void)
     rsp_wait();
     rsp_load(&rsp_queue);
 
-    // Load data with initialized overlays into DMEM
+    // Load data with initialized overlays into DMEM (the ring starts empty)
+    rspq_ring_head = 0;
     data_cache_hit_writeback(&rspq_data, sizeof(rsp_queue_t));
     rsp_load_data(&rspq_data, sizeof(rsp_queue_t), 0);
 

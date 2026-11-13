@@ -724,15 +724,49 @@ void rspq_wait(void);
  * flight at a time). Not available while the rdpq validator, which also uses
  * SIG0, is enabled.
  */
-/** @brief Words written to the queue so far (lowpri; counters for sizing). */
-uint32_t rspq_words_written(void);
-/** @brief CPU ticks spent waiting for the RSP to free a queue buffer. */
-extern uint32_t rspq_buffer_wait_ticks;
 void rspq_mailbox_set_handler(void (*handler)(uint32_t up));
 /** @brief Write the down box (the RSP sees it at its next poll). */
 void rspq_mailbox_send(uint32_t word);
 /** @brief Read the up box (34 CPU cycles: prefer the doorbell). */
 uint32_t rspq_mailbox_up(void);
+
+/**
+ * @brief Command ring (SuperDuperFX "Red"): write one command straight into
+ *        rspq's resident DMEM.
+ *
+ * The command (same format as #rspq_write: the first word holds the overlay
+ * id and command index, and is never 0) runs at the RSP's next command
+ * boundary, ahead of any command still queued in RDRAM: use it only for
+ * commands that do not depend on queued work, and never for Jump, Call or
+ * other commands that move the RDRAM stream. No flush or wakeup is needed:
+ * when out of work, the RSP spins on the ring instead of halting. Waits if the
+ * ring is full. Not for use from interrupts.
+ *
+ * @param words  The command's words
+ * @param n      Number of words (1 to RSPQ_RING_SIZE/4 - 2)
+ */
+void rspq_ring_write(const uint32_t *words, unsigned n);
+
+/**
+ * @brief Wait until every command written to the ring has run (#rspq_wait
+ *        covers only the RDRAM stream). A command's asynchronous DMA may
+ *        still be in flight.
+ */
+void rspq_ring_wait(void);
+
+/**
+ * @brief Turns of Red's idle spin so far (wraps). Each turn takes the same
+ *        RSP time, so the count over an interval, against the rate measured
+ *        while the RSP has nothing to do, gives its idle share.
+ */
+uint32_t rspq_idle_spins(void);
+
+/** @brief Words written to the queue so far (lowpri; counters for sizing). */
+uint32_t rspq_words_written(void);
+/** @brief CPU ticks spent waiting for the RSP to free a queue buffer. */
+extern uint32_t rspq_buffer_wait_ticks;
+/** @brief Commands written to the ring, and CPU ticks spent waiting for room. */
+extern uint32_t rspq_ring_commands, rspq_ring_wait_ticks;
 
 /**
  * @brief Create a syncpoint in the queue.

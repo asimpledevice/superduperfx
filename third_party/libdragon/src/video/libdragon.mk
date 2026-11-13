@@ -1,3 +1,7 @@
+# SuperDuperFX: no H.264 (h264_codec, and lspr3 sprites in the main
+# Makefile). Its two RSP overlays fill IMEM next to stock rspq (8 bytes
+# spare) and cannot fit beside Red's resident kernel; nothing in SuperDuperFX
+# uses them.
 LIBDRAGON_OBJS += \
 	$(BUILD_DIR)/video/video.o \
 	$(BUILD_DIR)/video/video_sync.o \
@@ -6,8 +10,4 @@ LIBDRAGON_OBJS += \
 	$(BUILD_DIR)/video/yuv.o \
 	$(BUILD_DIR)/video/rsp_yuv.o \
 	$(BUILD_DIR)/video/rsp_mpeg1.o \
-	$(BUILD_DIR)/video/h264_decoder.o \
-	$(BUILD_DIR)/video/h264.o \
-	$(BUILD_DIR)/video/rsph264_inter.o \
-	$(BUILD_DIR)/video/rsph264_intra.o \
 	$(BUILD_DIR)/video/subtitles.o

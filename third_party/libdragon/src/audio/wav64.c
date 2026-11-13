@@ -391,11 +391,10 @@ void wav64_close(wav64_t *wav)
 /** @brief Initialize wav64 compression level 2 */
 void __wav64_init_compression_lvl2(void)
 {
-	algos[WAV64_FORMAT_ULC] = (wav64_compression_t){
-		.init = wav64_ulc_init,
-		.get_bitrate = wav64_ulc_get_bitrate,
-		.adjust_seek = wav64_ulc_adjust_seek,
-	};
+	// SuperDuperFX: the ULC codec is not built. Its RSP overlay filled IMEM
+	// and DMEM next to stock rspq and no longer fits beside Red's resident
+	// mailbox and command ring (see src/audio/libdragon.mk).
+	assertf(0, "wav64 compression level 2 (ULC) is not available in this libdragon build");
 }
 
 /** @brief Initialize wav64 compression level 3 */

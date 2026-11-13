@@ -347,6 +347,24 @@ RSPQ_MAILBOX_DOWN:            .long 0
 RSPQ_MAILBOX_UP:              .long 0
 RSPQ_MAILBOX_RESERVED:        .long 0, 0
 
+# Command ring (SuperDuperFX "Red"): commands the CPU writes straight into
+# DMEM (rspq_ring_write), for commands that do not depend on work still
+# queued in RDRAM. The CPU writes a command's words, then publishes them by
+# writing RSPQ_RING_HEAD; Red writes RSPQ_RING_TAIL as it consumes them
+# (byte offsets into RSPQ_RING). A command never wraps: the CPU pads the
+# ring's end with no-op commands (RSPQ_RING_PAD_WORD) and starts it over. Red runs ring commands with
+# rspq_dmem_buf_ptr pointing into the ring, below RSPQ_DMEM_BUFFER, so it is
+# negative exactly while a ring command runs (the index words after the ring
+# keep it negative at the ring's end), and every gp-relative command load
+# works. Every byte here comes out of every overlay's DMEM (libdragon's mixer
+# has 16 bytes to spare), hence the small ring: it carries control commands
+# of up to 6 words; bulk goes through RDRAM.
+RSPQ_RING:                    .ds.b RSPQ_RING_SIZE
+RSPQ_RING_HEAD:               .long 0
+RSPQ_RING_TAIL:               .long 0
+RSPQ_RING_SAVED_GP:           .long 0     # the RDRAM stream's position meanwhile
+RSPQ_IDLE_SPINS:              .long 0     # turns of the idle spin (rspq_idle_spins)
+
     .align 3
 RSPQ_DMEM_BUFFER:             .ds.b RSPQ_DMEM_BUFFER_SIZE
 
@@ -449,13 +467,20 @@ _start:
 RSPQCmd_WaitNewInput:
     # Check if new commands were added in the display list (SIG_MORE)
     mfc0 t0, COP0_SP_STATUS
-    andi t0, SP_STATUS_SIG_MORE
-    bnez t0, wakeup
-    li t0, SP_WSTATUS_CLEAR_SIG_MORE
-
+    andi t1, t0, SP_STATUS_SIG_MORE
+    bnez t1, wakeup
+    # Red spins instead of halting: back through RSPQ_Loop, which checks the
+    # ring and highpri requests and runs this 0-byte command again. The
+    # highpri queue still halts at its end, as rspq_wait expects.
+    andi t1, t0, SP_STATUS_SIG_HIGHPRI_RUNNING
+    lw t2, %lo(RSPQ_IDLE_SPINS)
+    addiu t2, 1
+    beqz t1, RSPQ_Loop
+    sw t2, %lo(RSPQ_IDLE_SPINS)
     # No new commands yet, go to sleep
     break
 wakeup:
+    li t0, SP_WSTATUS_CLEAR_SIG_MORE
     mtc0 t0, COP0_SP_STATUS
 
 rspq_fetch_buffer:
@@ -493,6 +518,13 @@ rspq_fetch_buffer_with_ptr:
 
     .func RSPQ_Loop
 RSPQ_Loop:
+    # Red's command ring first: a negative gp means a ring command just ran.
+    # (The store in the delay slot is harmless when the ring is empty.)
+    bltz rspq_dmem_buf_ptr, rspq_ring_done
+    lw t0, %lo(RSPQ_RING_HEAD)
+    lw t1, %lo(RSPQ_RING_TAIL)
+    bne t0, t1, rspq_ring_next
+    sw rspq_dmem_buf_ptr, %lo(RSPQ_RING_SAVED_GP)
     #define ovl_index t4
     #define cmd_index t5    // referenced in rspq_assert_invalid_overlay
     #define cmd_desc  t6
@@ -525,6 +557,9 @@ RSPQ_Loop:
     andi t2, SP_STATUS_SIG_HIGHPRI_REQUESTED | SP_STATUS_SIG_HIGHPRI_RUNNING
     beq t2, t0, rspq_switch_highpri
 
+    # Ring commands enter here with a0 loaded: a highpri switch saves the
+    # RDRAM stream's position, so it waits until the ring is empty.
+rspq_dispatch_a0:
     # Index into overlay table
     srl ovl_id, a0, 28
 
@@ -612,6 +647,21 @@ rspq_execute_command:
     jr cmd_desc
     li ra, %lo(RSPQ_Loop)
 
+
+    # Ring commands (see RSPQ_RING). t1 = tail; the RDRAM stream's gp is
+    # saved in RSPQ_RING_SAVED_GP. After a command, gp is its end: that is
+    # the new tail. Then back to RSPQ_Loop with the RDRAM stream's gp, which
+    # takes the next ring command if there is one.
+rspq_ring_next:
+    lw a0, %lo(RSPQ_RING)(t1)
+    j rspq_dispatch_a0
+    addiu rspq_dmem_buf_ptr, t1, RSPQ_RING - RSPQ_DMEM_BUFFER
+rspq_ring_done:
+    addiu t1, rspq_dmem_buf_ptr, RSPQ_DMEM_BUFFER - RSPQ_RING
+    andi t1, RSPQ_RING_SIZE - 1
+    sw t1, %lo(RSPQ_RING_TAIL)
+    j RSPQ_Loop
+    lw rspq_dmem_buf_ptr, %lo(RSPQ_RING_SAVED_GP)
 
 rspq_load_overlay:
 #if RSPQ_PROFILE

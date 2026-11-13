@@ -32,6 +32,7 @@ libdragon: libdragon.a libdragonsys.a gen-version
 
 libdragonsys.a: $(BUILD_DIR)/system.o
 
+# SuperDuperFX: no lspr3 (H.264-intra sprites); see src/video/libdragon.mk.
 LIBDRAGON_OBJS += \
 	$(BUILD_DIR)/accounting.o \
 	$(BUILD_DIR)/profile.o \
@@ -75,7 +76,6 @@ LIBDRAGON_OBJS += \
 	$(BUILD_DIR)/rsp_crash.o \
 	$(BUILD_DIR)/inspector.o \
 	$(BUILD_DIR)/sprite.o \
-	$(BUILD_DIR)/lspr3.o \
 	$(BUILD_DIR)/lspr1.o \
 	$(BUILD_DIR)/rsp_lspr1.o \
 	$(BUILD_DIR)/dma.o \

@@ -14,6 +14,8 @@
 #define RSPQ_DRAM_HIGHPRI_BUFFER_SIZE  0x200   ///< Size of each RSPQ RDRAM buffer for highpri queue (in 32-bit words)
 
 #define RSPQ_DMEM_BUFFER_SIZE          0x100   ///< Size of the RSPQ DMEM buffer (in bytes)
+#define RSPQ_RING_SIZE                 0x20    ///< Size of Red's DMEM command ring (bytes; SuperDuperFX)
+#define RSPQ_RING_PAD_WORD             0x06000000 ///< Ring padding: WRITE_STATUS with no bits (a no-op)
 
 #define RSPQ_OVERLAY_ID_BITS           4                            ///< Number of overlay ID bits (0-F)
 #define RSPQ_OVERLAY_ID_SHIFT          (32 - RSPQ_OVERLAY_ID_BITS)  ///< Shift to isolate overlay ID bits

@@ -1,8 +1,9 @@
 # Red: communication model and the APU on the RSP
 
 Status: design (2026-11-13). Owner direction from the discussion in
-`BRINGUP_NOTES.md` ("Red step 1"). Nothing here is built yet except the
-one-word mailbox, the doorbell and the run flags (step 1).
+`BRINGUP_NOTES.md` ("Red step 1"). Built so far: the one-word mailbox, the
+doorbell and the run flags (step 1), the Phase 0 counters, and Phase 1's
+DMEM command ring with Red spinning instead of halting ("Red phase 1").
 
 Colours: **Blue** and **Green** are the CPU's two threads (the 65816;
 everything else). **Red** is the RSP kernel (rspq, extended). **Yellow** are
@@ -26,8 +27,8 @@ is never borrowed by an overlay.
 
 | Region | Size | Writer | Purpose |
 |---|---|---|---|
-| Command ring | 256 B (today's DMEM command buffer) | CPU | commands to Red and the overlays |
-| Ring indices | 8 B | CPU head, Red tail | lock-free single producer, single consumer |
+| Command ring | 32 B (built; beside rspq's 256 B fetch buffer, which stays for the RDRAM stream) | CPU | control commands to Red and the overlays |
+| Ring indices, saved stream position, idle counter | 16 B | CPU head, Red the rest | lock-free single producer, single consumer |
 | Port ring (APU) | 16-32 entries x 8 B | CPU | timestamped 65816 -> SPC port writes |
 | Port ring indices | 8 B | CPU head, SPC tail | |
 | Horizon | 4 B | CPU | how far in emulated time the SPC may run |
@@ -179,16 +180,19 @@ per frame and per horizon, RSP idle time. Hardware photos of `hwtest` v3 and
 `redtest` v1.
 
 **Phase 1: Red's DMEM command ring** (`third_party/libdragon` rspq, the
-kernel).
-- Ring and indices in Red's resident DMEM, replacing the DMEM fetch buffer.
-- CPU side: rspq's write path (`rspq_write` and the macros rdpq uses) writes
-  the ring and publishes the head; on full, spill to an RDRAM list and post
-  one jump; wake Red if halted.
-- RSP side: dispatch from the ring, tail index, wrap-around; Jump/Call to
-  RDRAM lists unchanged; blocks unchanged.
-- rdpq keeps working: its command stream, its RDP buffers, its blocks.
-- Test: `n64/redtest` grows ring tests (wrap, spill, interleaved overlays,
-  rdpq traffic); the emulator's hashes unchanged.
+kernel). Built as a second lane rather than a replacement: Phase 0 showed
+rdpq's stream is nearly all the traffic, so the RDRAM queue and its fetch
+buffer stay as they are (rdpq untouched), and a small ring carries control.
+- `rspq_ring_write` / `rspq_ring_wait`; Red takes ring commands between any
+  two RDRAM commands, ahead of queued work; the ring's end is padded with
+  no-ops, so a command never wraps.
+- Red spins on the ring and the RDRAM queue instead of halting (the highpri
+  queue still halts), counting idle turns for the idle share.
+- First user: the S-DSP launch.
+- Budget found: libdragon's overlays were packed beside stock rspq; ULC and
+  H.264 are no longer built, and rdpq has 36 bytes of IMEM left, the limit
+  for Phase 2. Phase 2's kernel code may have to move out of the common
+  part (e.g. into a Red overlay that rdpq never shares IMEM with).
 
 **Phase 2: Red services.**
 - The borrow/return macros and the resident/borrowable split; the SPC
