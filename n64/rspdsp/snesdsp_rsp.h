@@ -43,7 +43,8 @@ bool snesdsp_rsp_apu_batch(struct Dsp *dsp, uint8_t *aram, const struct ApuDspLo
 
 /* Asynchronous runtime hooks (see apu_dsp_batch.h). */
 bool snesdsp_rsp_apu_launch(struct Dsp *dsp, uint8_t *aram, const struct ApuDspLogEntry *log,
-                            uint32_t n, uint32_t samples, const uint8_t *pageMarks);
+                            uint32_t n, uint32_t samples, const uint8_t *pageMarks,
+                            uint8_t *viewFresh);
 void snesdsp_rsp_apu_join(void);
 
 /* Conversion between the C DSP and the RSP block (exposed for tests). */

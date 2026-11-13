@@ -95,3 +95,4 @@ static uint32_t s_state_generation;
 /* RtlSaveSnapshot settles a deferred DSP first. This test builds the eager
  * DSP (SNESRECOMP_APU_DEFER_DSP 0), where apu.c defines it as a no-op too. */
 void apu_dspSync(Apu *apu) { (void)apu; }
+void apu_dspViewStale(Apu *apu) { (void)apu; }

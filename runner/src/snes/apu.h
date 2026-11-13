@@ -53,6 +53,8 @@ typedef struct Timer {
 #endif
 #define APU_DSP_WATCH_LOG 1u
 #define APU_DSP_WATCH_SYNC 2u
+/* APU_DSP_SYNC_ECHO_REG is no longer used (FLG/ESA/EDL/DIR writes are
+ * logged); it keeps the other reasons' numbers. */
 enum { APU_DSP_SYNC_HOST, APU_DSP_SYNC_REG_READ, APU_DSP_SYNC_ECHO_READ,
        APU_DSP_SYNC_ECHO_REG, APU_DSP_SYNC_LOG_FULL, APU_DSP_SYNC_FULL_BATCH,
        APU_DSP_SYNC_FRAME, APU_DSP_SYNC_REASONS };
@@ -105,12 +107,11 @@ struct Apu {
    * ENVX, OUTX and ENDX change only by writes, so reads of them are answered
    * here without catching up a deferred (or in-flight) DSP. */
   uint8_t dspRegs[0x80];
-  /* A batch running elsewhere (SNESRECOMP_DSP_LAUNCH_HOOK), and its echo
-   * window, [lo, lo + len) modulo 64 KB, which the SPC must not touch
-   * unjoined. */
+  /* A batch running elsewhere (SNESRECOMP_DSP_LAUNCH_HOOK), and the pages
+   * it may write (its echo windows, a bit per page), which the SPC must not
+   * touch unjoined. */
   bool dspInFlight;
-  uint16_t dspFlightEchoLo;
-  uint32_t dspFlightEchoLen;
+  uint8_t dspFlightWrite[32];
 #endif
 };
 
@@ -158,8 +159,13 @@ void apu_dspJoinNow(Apu* apu);
 #define SNESRECOMP_DSP_HOST_ASYNC 0
 #endif
 void apu_dspFrameSync(Apu* apu);
+/* ARAM changed outside the SPC's writes: no page of the batch view is
+ * current (no-op without an asynchronous batch host). */
+void apu_dspViewStale(Apu* apu);
 #if SNESRECOMP_APU_DEFER_DSP
 void apu_dspLogRam(Apu* apu, uint16_t adr, uint8_t val);
+/* The slow path of an SPC ARAM write (apu_dsp_watch.h). */
+void apu_dspWriteSlow(Apu* apu, uint16_t adr, uint8_t val);
 void apu_dspEchoRead(Apu* apu);
 extern uint32_t g_apu_dsp_verify_mismatches;
 extern uint32_t g_apu_dsp_sync_count[APU_DSP_SYNC_REASONS];

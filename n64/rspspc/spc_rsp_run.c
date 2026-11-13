@@ -154,6 +154,7 @@ static void run_apu(Apu *apu, uint32_t clocks) {
     memset(s_blk.sync, 0, 32);
 #endif
     const int exit = spc_rsp_exec(&s_blk, apu->ram);
+    apu_dspViewStale(apu);  /* the RSP's SPC wrote ARAM without the write checks */
     from_block(apu, &s_blk);
     /* A trap re-runs the instruction in C: undo its timer reads' clears. */
     if (exit == SPCEXIT_TRAP && s_blk.undoFp && s_blk.undoFp == (uint32_t)(s_blk.budget - (int32_t)s_blk.used))

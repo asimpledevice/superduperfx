@@ -2091,6 +2091,7 @@ static bool RtlUploadSpcImageFromDpInternal(CpuState *cpu,
   }
   apu_clearPortQueue(g_snes->apu);
   apu_dspSync(g_snes->apu);  /* the upload below writes ARAM directly */
+  apu_dspViewStale(g_snes->apu);
   for (;;) {
     uint16_t n = (uint16_t)p[0] | ((uint16_t)p[1] << 8);
     uint16_t target = (uint16_t)p[2] | ((uint16_t)p[3] << 8);

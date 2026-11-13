@@ -65,6 +65,7 @@ void apu_reset(Apu* apu) {
   memcpy(apu->dspRegs, apu->dsp->ram, sizeof(apu->dspRegs));
 #endif
   memset(apu->ram, 0, sizeof(apu->ram));
+  apu_dspViewStale(apu);
   apu->dspAdr = 0;
   apu->cycles = 0;
   apu->timerSyncCycle = 0;
@@ -265,6 +266,7 @@ uint32_t g_apu_dsp_sync_samples[APU_DSP_SYNC_REASONS];
  * 2 ARAM write on an unwatched page (verify builds only; page-watch
  * tracking would not have logged it). */
 static void apu_dspRevert(Apu* apu, uint32_t n, bool narrow) {
+  apu_dspViewStale(apu);  /* the C DSP writes ARAM itself (echo) */
   for (uint32_t i = n; i-- > 0;) {
     const ApuDspLogEntry *e = &apu->dspLog[i];
     if (e->isReg == 0 || (e->isReg == 2 && !narrow)) apu->ram[e->adr] = e->old;
@@ -272,6 +274,7 @@ static void apu_dspRevert(Apu* apu, uint32_t n, bool narrow) {
 }
 
 static void apu_dspForward(Apu* apu, uint32_t pending, uint32_t n, bool narrow) {
+  apu_dspViewStale(apu);
   uint32_t i = 0;
   for (uint32_t k = 0; k <= pending; k++) {
     for (; i < n && apu->dspLog[i].tag == k; i++) {
@@ -292,6 +295,7 @@ uint32_t g_apu_dsp_verify_mismatches;
 
 static void apu_dspMark(Apu* apu, uint16_t start, uint32_t len, uint8_t bits);
 static void apu_dspMarkDirEntry(Apu* apu, uint8_t srcn);
+static void apu_dspMarkRegWindows(Apu* apu);
 #define APU_DSP_BRR_SPAN (65u * 9u)
 
 uint32_t g_apu_dsp_join_why[8];
@@ -303,7 +307,7 @@ static inline void apu_dspJoin(Apu* apu) {
   g_apu_dsp_join_why[s_join_why & 7]++;
   SNESRECOMP_DSP_JOIN_HOOK();
   apu->dspInFlight = false;
-  apu->dspFlightEchoLen = 0;
+  memset(apu->dspFlightWrite, 0, sizeof apu->dspFlightWrite);
   if (!apu->dspPending) {  /* marks left for the flight; none owed now */
     memset(apu->spc->dspWatchLog, 0, sizeof(apu->spc->dspWatchLog));
     memset(apu->spc->dspWatchSync, 0, sizeof(apu->spc->dspWatchSync));
@@ -337,8 +341,9 @@ static void apu_dspMarkAfterLaunch(Apu* apu, uint32_t n) {
   if (current > loop) loop = current;
   apu_dspMark(apu, d->echoBufferAdr, loop * 4u,
               APU_DSP_WATCH_LOG | (d->echoWrites ? APU_DSP_WATCH_SYNC : 0u));
-  apu->dspFlightEchoLo = d->echoBufferAdr;
-  apu->dspFlightEchoLen = d->echoWrites ? loop * 4u : 0u;
+  apu_dspMarkRegWindows(apu);
+  /* The flight's own echo pages: SPC writes there join first. */
+  for (int i = 0; i < 32; i++) apu->spc->dspWatchLog[i] |= apu->dspFlightWrite[i];
 }
 #endif
 
@@ -360,8 +365,9 @@ static void apu_dspSyncFor(Apu* apu, unsigned reason) {
   const bool aramEndReachable = APU_DSP_PAGE_BIT(apu->spc->dspWatchLog, 0xff00u) != 0;
   (void)aramEndReachable;
 #ifdef SNESRECOMP_DSP_LAUNCH_HOOK
-  uint8_t marks[sizeof(apu->spc->dspWatchLog)];
+  uint8_t marks[sizeof(apu->spc->dspWatchLog)], writes[sizeof(apu->spc->dspWatchSync)];
   memcpy(marks, apu->spc->dspWatchLog, sizeof marks);
+  memcpy(writes, apu->spc->dspWatchSync, sizeof writes);
 #endif
   memset(apu->spc->dspWatchLog, 0, sizeof(apu->spc->dspWatchLog));  /* nothing owed now */
   memset(apu->spc->dspWatchSync, 0, sizeof(apu->spc->dspWatchSync));
@@ -383,8 +389,10 @@ static void apu_dspSyncFor(Apu* apu, unsigned reason) {
               (unsigned)pending);
   }
 #elif defined(SNESRECOMP_DSP_LAUNCH_HOOK)
-  if (SNESRECOMP_DSP_LAUNCH_HOOK(apu->dsp, apu->ram, apu->dspLog, n, pending, marks)) {
+  if (SNESRECOMP_DSP_LAUNCH_HOOK(apu->dsp, apu->ram, apu->dspLog, n, pending, marks,
+                                 apu->spc->dspViewFresh)) {
     apu->dspInFlight = true;
+    memcpy(apu->dspFlightWrite, writes, sizeof writes);
     apu_dspMarkAfterLaunch(apu, n);
     /* Only full batches run in the background; other syncs want results. */
     if (reason != APU_DSP_SYNC_FULL_BATCH && reason != APU_DSP_SYNC_LOG_FULL &&
@@ -429,18 +437,52 @@ static void apu_dspMark(Apu* apu, uint16_t start, uint32_t len, uint8_t bits) {
 
 /* Sample data reachable through one directory entry: its start (key-on) and
  * loop addresses, as the entry reads now. */
-static void apu_dspMarkDirEntry(Apu* apu, uint8_t srcn) {
-  const uint16_t e = (uint16_t)(apu->dsp->dirPage + 4u * srcn);
+static void apu_dspMarkDirEntryAt(Apu* apu, uint16_t dir, uint8_t srcn) {
+  const uint16_t e = (uint16_t)(dir + 4u * srcn);
   const uint8_t *r = apu->ram;
   apu_dspMark(apu, (uint16_t)(r[e] | (r[(uint16_t)(e + 1)] << 8)), APU_DSP_BRR_SPAN, APU_DSP_WATCH_LOG);
   apu_dspMark(apu, (uint16_t)(r[(uint16_t)(e + 2)] | (r[(uint16_t)(e + 3)] << 8)), APU_DSP_BRR_SPAN,
               APU_DSP_WATCH_LOG);
 }
+/* The directory as the Dsp has it, and as the register file has it: they
+ * differ while a DIR write is logged, or a batch is in flight. */
+static void apu_dspMarkDirEntry(Apu* apu, uint8_t srcn) {
+  const uint16_t dsp_dir = apu->dsp->dirPage, reg_dir = (uint16_t)(apu->dspRegs[0x5d] << 8);
+  apu_dspMarkDirEntryAt(apu, dsp_dir, srcn);
+  if (reg_dir != dsp_dir) apu_dspMarkDirEntryAt(apu, reg_dir, srcn);
+}
+
+/* FLG, ESA, EDL and DIR writes are logged like any register write, so a
+ * batch may see the echo window and the directory move. Marks cover every
+ * place they can be: the echo window at the Dsp's ESA and the register
+ * file's, over the longest loop either EDL or the loop in progress gives
+ * (the DSP takes a new EDL when its loop ends), written when either FLG
+ * allows echo writes; the directory and every voice's entry under either
+ * DIR, for either SRCN. Called when such a write is logged, and with every
+ * batch's marks. */
+static void apu_dspMarkRegWindows(Apu* apu) {
+  const Dsp *d = apu->dsp;
+  const uint8_t *r = apu->dspRegs;
+  uint32_t loop = d->echoDelay, edl = (r[0x7d] & 0xfu) * 512u;
+  const uint32_t current = (uint32_t)d->echoBufferIndex + d->echoRemain;
+  if (current > loop) loop = current;
+  if (edl > loop) loop = edl;
+  const uint8_t bits = APU_DSP_WATCH_LOG |
+                       ((d->echoWrites || !(r[0x6c] & 0x20)) ? APU_DSP_WATCH_SYNC : 0u);
+  apu_dspMark(apu, d->echoBufferAdr, loop * 4u, bits);
+  apu_dspMark(apu, (uint16_t)(r[0x6d] << 8), loop * 4u, bits);
+  const uint16_t reg_dir = (uint16_t)(r[0x5d] << 8);
+  apu_dspMark(apu, reg_dir, 0x400u, APU_DSP_WATCH_LOG);
+  for (int v = 0; v < 8; v++) {
+    apu_dspMarkDirEntry(apu, d->channel[v].srcn);
+    apu_dspMarkDirEntry(apu, r[v * 16 + 4]);
+  }
+}
 
 /* Mark every ARAM page the DSP can read (log SPC writes there) or write
- * (sync before SPC reads there) during the batch. FLG, ESA, EDL and DIR
- * writes sync first, so the echo window and directory stay fixed; SRCN and
- * directory writes extend the marks when they make new data reachable. */
+ * (sync before SPC reads there) during the batch. SRCN, directory, FLG, ESA,
+ * EDL and DIR writes extend the marks when they make new pages reachable
+ * (apu_dspMarkRegWindows). */
 static void apu_dspStartBatch(Apu* apu) {
   const Dsp *d = apu->dsp;
   uint32_t loop = d->echoDelay;
@@ -453,11 +495,12 @@ static void apu_dspStartBatch(Apu* apu) {
     apu_dspMark(apu, d->channel[v].decodeOffset, APU_DSP_BRR_SPAN, APU_DSP_WATCH_LOG);
     apu_dspMarkDirEntry(apu, d->channel[v].srcn);
   }
+  apu_dspMarkRegWindows(apu);
 }
 
 /* An SPC write to a page the DSP may read during the batch. */
 void apu_dspLogRam(Apu* apu, uint16_t adr, uint8_t val) {
-  if (apu->dspInFlight && (uint16_t)(adr - apu->dspFlightEchoLo) < apu->dspFlightEchoLen)
+  if (apu->dspInFlight && APU_DSP_PAGE_BIT(apu->dspFlightWrite, adr))
     { s_join_why = 7; apu_dspJoin(apu); }  /* the batch's echo bytes come first */
   if (!apu->dspPending) {  /* marks kept for a flight; nothing owed */
     apu->ram[adr] = val;
@@ -475,6 +518,20 @@ void apu_dspLogRam(Apu* apu, uint16_t adr, uint8_t val) {
   apu->ram[adr] = val;
   const uint16_t rel = (uint16_t)(adr - apu->dsp->dirPage);
   if (rel < 0x400u) apu_dspMarkDirEntry(apu, (uint8_t)(rel >> 2));
+  const uint16_t rel_reg = (uint16_t)(adr - (apu->dspRegs[0x5d] << 8));
+  if (rel_reg < 0x400u && rel_reg != rel) apu_dspMarkDirEntry(apu, (uint8_t)(rel_reg >> 2));
+}
+
+void apu_dspWriteSlow(Apu* apu, uint16_t adr, uint8_t val) {
+#ifdef SNESRECOMP_DSP_LAUNCH_HOOK
+  apu->spc->dspViewFresh[adr >> 11] &= (uint8_t)~(1u << ((adr >> 8) & 7));
+  if (!APU_DSP_PAGE_BIT(apu->spc->dspWatchLog, adr)) { apu->ram[adr] = val; return; }
+#endif
+  apu_dspLogRam(apu, adr, val);
+}
+
+void apu_dspViewStale(Apu* apu) {
+  memset(apu->spc->dspViewFresh, 0, sizeof apu->spc->dspViewFresh);
 }
 
 static inline void apu_dspEdge(Apu* apu) {
@@ -484,6 +541,7 @@ static inline void apu_dspEdge(Apu* apu) {
 #else
 void apu_dspSync(Apu* apu) { (void)apu; }
 void apu_dspFrameSync(Apu* apu) { (void)apu; }
+void apu_dspViewStale(Apu* apu) { (void)apu; }
 #endif
 
 #if SNESRECOMP_APU_NATIVE
@@ -496,6 +554,7 @@ void apu_saveload(Apu *apu, SaveLoadInfo *sli) {
   apu_native_timers_sync(apu);  /* a save must see current timers */
 #endif
   sli->func(sli, apu->ram, offsetof(Apu, pad) + 6 - offsetof(Apu, ram));
+  apu_dspViewStale(apu);  /* a load replaced ARAM */
   apu->timerSyncCycle = apu->cycles;  /* after a load, timers match cycles */
   dsp_saveload(apu->dsp, sli);
 #if SNESRECOMP_APU_DEFER_DSP
@@ -736,15 +795,16 @@ void apu_cpuWrite(Apu* apu, uint16_t adr, uint8_t val) {
       if(!apu->dspPending) apu_dspJoin(apu);  /* direct write: Dsp must be current */
       if(apu->dspAdr < 0x80 && apu->dspPending) {
         const uint8_t r = apu->dspAdr;
-        if(r == 0x6c || r == 0x6d || r == 0x7d || r == 0x5d || apu->dspLogN == APU_DSP_LOG_LEN) {
-          /* FLG/ESA/EDL move the echo window, DIR the directory */
-          apu_dspSyncFor(apu, apu->dspLogN == APU_DSP_LOG_LEN ? APU_DSP_SYNC_LOG_FULL
-                                                              : APU_DSP_SYNC_ECHO_REG);
+        if(apu->dspLogN == APU_DSP_LOG_LEN) {
+          apu_dspSyncFor(apu, APU_DSP_SYNC_LOG_FULL);
+          apu_dspJoin(apu);  /* the write below goes to the Dsp directly */
         } else {
           ApuDspLogEntry *e = &apu->dspLog[apu->dspLogN++];
           e->adr = r; e->val = val; e->old = 0;
           e->tag = (uint16_t)apu->dspPending; e->isReg = 1;
           if((r & 0xf) == 4) apu_dspMarkDirEntry(apu, val);  /* new SRCN */
+          /* FLG/ESA/EDL move the echo window, DIR the directory */
+          if(r == 0x6c || r == 0x6d || r == 0x7d || r == 0x5d) apu_dspMarkRegWindows(apu);
           break;
         }
       }

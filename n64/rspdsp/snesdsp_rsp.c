@@ -432,16 +432,16 @@ uint32_t g_snesdsp_rsp_launch_ticks, g_snesdsp_rsp_join_ticks, g_snesdsp_rsp_pag
 uint32_t g_snesdsp_rsp_join_wait_blue;   /* the part of join_wait spent on the Blue thread */
 
 static bool launch(Dsp *dsp, uint8_t *aram, const ApuDspLogEntry *log, uint32_t n,
-                   uint32_t samples, const uint8_t *marks);
+                   uint32_t samples, const uint8_t *marks, uint8_t *fresh);
 bool snesdsp_rsp_apu_launch(Dsp *dsp, uint8_t *aram, const ApuDspLogEntry *log, uint32_t n,
-                            uint32_t samples, const uint8_t *marks) {
+                            uint32_t samples, const uint8_t *marks, uint8_t *fresh) {
   const uint32_t t0 = get_ticks();
-  const bool ok = launch(dsp, aram, log, n, samples, marks);
+  const bool ok = launch(dsp, aram, log, n, samples, marks, fresh);
   g_snesdsp_rsp_launch_ticks += get_ticks() - t0;
   return ok;
 }
 static bool launch(Dsp *dsp, uint8_t *aram, const ApuDspLogEntry *log, uint32_t n,
-                   uint32_t samples, const uint8_t *marks) {
+                   uint32_t samples, const uint8_t *marks, uint8_t *fresh) {
   if ((marks[31] & 0x80) || ((uintptr_t)aram & 7) || !batch_ok(dsp, samples, false))
     return false;  /* page $FF */
   shadow_from(dsp);
@@ -449,19 +449,29 @@ static bool launch(Dsp *dsp, uint8_t *aram, const ApuDspLogEntry *log, uint32_t 
   for (uint32_t i = 0; i < n; i++)
     if (!decode(&o, end, log[i].tag, log[i].isReg == 1, log[i].adr, log[i].val, false))
       return false;
-  /* Pages go to the view through the uncached segment: no write-allocate
-   * misses, and nothing to write back. The view is never read cached
-   * outside the echo copy-back, which invalidates first. */
+  /* The view keeps its pages between batches: a marked page is copied only
+   * when ARAM's page changed since (fresh bit clear). Pages go to the view
+   * through the uncached segment: no write-allocate misses, and nothing to
+   * write back. The view is never read cached outside the echo copy-back,
+   * which invalidates first. Pages the undo below touches differ from ARAM
+   * afterwards, so they lose their bit; echo pages the batch writes match
+   * ARAM again after the join's copy-back. */
   uint8_t *uview = UncachedAddr(s_view);
-  for (unsigned p = 0; p < 256; p++)
-    if (marks[p >> 3] & (1u << (p & 7))) {
+  for (unsigned p = 0; p < 256; p++) {
+    const uint8_t bit = (uint8_t)(1u << (p & 7));
+    if ((marks[p >> 3] & bit) && !(fresh[p >> 3] & bit)) {
       const uint64_t *src = (const uint64_t *)(aram + p * 256);
       uint64_t *dst = (uint64_t *)(uview + p * 256);
       for (int i = 0; i < 32; i++) dst[i] = src[i];
+      fresh[p >> 3] |= bit;
       g_snesdsp_rsp_pages++;
     }
+  }
   for (uint32_t i = n; i-- > 0;)
-    if (!log[i].isReg) uview[log[i].adr] = log[i].old;
+    if (!log[i].isReg) {
+      uview[log[i].adr] = log[i].old;
+      fresh[log[i].adr >> 11] &= (uint8_t)~(1u << ((log[i].adr >> 8) & 7));
+    }
 
   const uint32_t nops = (uint32_t)(o - s_ops.op);
   memset(o, 0, 32 * sizeof *o);
@@ -511,14 +521,28 @@ void snesdsp_rsp_apu_join(void) {
     dsp->sampleBuffer[w * 2 + 1] = s_out.s[i * 2 + 1];
     dsp->sampleWrite++;
   }
-  if (s_flight.echoWrites) {
-    uint32_t index = s_flight.index, remain = s_flight.remain;
+  /* The echo bytes the batch wrote, sample by sample as dsp.c writes them:
+   * FLG, ESA and EDL writes logged in the batch (ops tagged k apply before
+   * sample k) move the window and switch the writes. */
+  {
+    uint32_t index = s_flight.index, remain = s_flight.remain, k = 0;
+    uint16_t esa = s_flight.esa, delay = s_flight.delay;
+    bool writes = s_flight.echoWrites;
+    const Op *op = s_ops.op;
     for (uint32_t i = 0; i < s_flight.samples; i++) {
-      const uint16_t adr = (uint16_t)(s_flight.esa + index * 4);
-      memcpy(s_flight.aram + adr, (const uint8_t *)UncachedAddr(s_view) + adr, 4);
+      for (; k < s_flight.nops && op[k].tag <= i; k++) {
+        if (op[k].kind != RSPDSP_LOG_HALF) continue;
+        if (op[k].adr == RSPDSP_ECHOADR) esa = op[k].val;
+        else if (op[k].adr == RSPDSP_ECHODELAY) delay = op[k].val;
+        else if (op[k].adr == RSPDSP_ECHOWRITES) writes = op[k].val != 0;
+      }
+      if (writes) {
+        const uint16_t adr = (uint16_t)(esa + index * 4);
+        memcpy(s_flight.aram + adr, (const uint8_t *)UncachedAddr(s_view) + adr, 4);
+      }
       index = (index + 1) & 0xffff;
       remain = (remain - 1) & 0xffff;
-      if (!remain) { remain = s_flight.delay; index = 0; }
+      if (!remain) { remain = delay; index = 0; }
     }
   }
   s_flight.active = false;

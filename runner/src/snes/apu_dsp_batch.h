@@ -35,12 +35,15 @@ bool SNESRECOMP_DSP_BATCH_HOOK(Dsp *dsp, uint8_t *aram, const ApuDspLogEntry *lo
  * returns at once (or returns false, having changed nothing, for the C DSP).
  * Unlike the synchronous hook it gets ARAM as it is now, with `log` holding
  * the values each logged write replaced; pageMarks (32 bytes, bit per page)
- * are the pages the batch can read. Until SNESRECOMP_DSP_JOIN_HOOK returns,
+ * are the pages the batch can read. viewFresh (32 bytes) is the host's to
+ * keep: it sets a page's bit when its own copy of the page equals ARAM, and
+ * the runtime clears the bit whenever ARAM's page changes otherwise. Until SNESRECOMP_DSP_JOIN_HOOK returns,
  * the Dsp still shows the batch's start state; the runtime joins before
  * anything can observe the DSP or the echo bytes it writes back. */
 #ifdef SNESRECOMP_DSP_LAUNCH_HOOK
 bool SNESRECOMP_DSP_LAUNCH_HOOK(Dsp *dsp, uint8_t *aram, const ApuDspLogEntry *log,
-                                uint32_t n, uint32_t samples, const uint8_t *pageMarks);
+                                uint32_t n, uint32_t samples, const uint8_t *pageMarks,
+                                uint8_t *viewFresh);
 void SNESRECOMP_DSP_JOIN_HOOK(void);
 #endif
 
