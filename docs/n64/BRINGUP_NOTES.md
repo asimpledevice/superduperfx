@@ -2269,6 +2269,27 @@ the fixed runtime layout (`icache_order.ld`) shifts with every size change.
 A verdict needs the engine layout retrained (icache_trg.py, best of seeds
 0-7 on SMW + Pitfall, JM2 held out) for each variant.
 
+**Retrained layouts (2026-11-13).** Each variant's engine layout trained on
+its own SMW + Pitfall traces (icache_trg.py, seeds 0-7, best by geometric
+mean on the training games; struct seed 2, FPU seed 1). Hashes identical
+to step 3a in all three games. ares, 60-frame windows:
+
+| Game | Struct | FPU | Change |
+|---|---|---|---|
+| SMW | 1,705,631 | 1,886,227 | +10.6% |
+| Pitfall | 2,652,182 | 2,401,777 | -9.4% |
+| Joe & Mac 2 (held out) | 14,513,257 | 12,761,574 | -12.1% |
+
+Generated code (code cache): SMW 385,591 / 407,001 (+5.6%), JM2 13,776 /
+13,969. Across all eight seeds (icsim on the traced part of the window):
+SMW best 1,216,602 / 1,214,353, median 1,275,436 / 1,299,824; Pitfall best
+145,904 / 65,499, median 268,449 / 206,690. So FPU registers are about at
+parity: a small, repeatable cost in SMW's generated code, a gain in
+Pitfall. Layout choice moves totals far more than either variant: the
+struct build's retrained layout against the committed one is SMW -7.5%,
+Pitfall -63%, JM2 +38% (held out). One seed's layout is not a reliable
+basis for a per-game verdict.
+
 ## Next steps
 
 1. Audio: check the RSP DSP by ear on hardware (output arrives later than
