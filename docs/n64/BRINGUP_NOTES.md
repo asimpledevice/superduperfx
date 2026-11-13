@@ -2091,6 +2091,34 @@ placement is organised, not which hot items share a line.
   An EverDrive test should settle whether it works during a run, and
   what it costs next to uncached RDRAM.
 
+**Hardware results** (`n64/hwtest`, v1, EverDrive 64 X7, 2026-11-13):
+
+- The CPU can read and write DMEM while the RSP runs. Single words are
+  atomic (a counter never read backwards over 200,000 reads); the 2 KB
+  guard area stayed intact; RSP DMA under CPU DMEM traffic was clean.
+- CPU cycles per access: DMEM read 34, write 10; uncached RDRAM read 41,
+  write 17; cached RDRAM read 7; `SP_STATUS` read 20; semaphore take and
+  release 28; a locked increment of a DMEM counter 73.
+- CPU traffic slows the RSP: 2% under reads, 9% under writes (loop passes
+  per ms 3606 idle, 3613 reads, 3350 writes).
+- Round trip (CPU writes a word, the RSP echoes it): 78 cycles average, 120
+  maximum.
+- The semaphore is a test-and-set lock (reads 0,1,1,0) and gave mutual
+  exclusion over 200,000 increments from each side.
+- The SIG bits carry a byte in one write, both ways, with no errors.
+- Doorbell, RSP to CPU: 74 cycles polled; 302 / 314 / 432 (min / avg / max)
+  through the SP interrupt, about 3.3 us.
+- A multi-word record rewritten back to back (every ~0.26 us) is torn on
+  every CPU read (6 DMEM reads take ~2.2 us), so a reader under a sequence
+  counter retried forever; it accepted no torn record. v1 counted that as a
+  failure; v2 also runs the counter paced (an update every ~20 us), where
+  reads must succeed. ares does not model the DMEM access time and passed v1.
+
+So the mailbox goes in DMEM. A one-word message needs no protocol; a
+longer one a sequence counter (the writer must not rewrite faster than the
+reader reads), a double buffer or the semaphore. The interrupt doorbell
+suits coarse thread switches; short waits should poll `SP_STATUS`.
+
 **Pinned:**
 
 1. **Mailbox.** A few words of DMEM (or RDRAM, if DMEM access during a
