@@ -702,6 +702,15 @@ static int host_main(void) {
                        (unsigned long)(g_spc_rsp_hook_ticks / 60 / 47), (unsigned long)(g_spc_rsp_exec_ticks / 60 / 47),
                        (unsigned long)(g_spc_rsp_cycles / 60), (unsigned long)(g_spc_rsp_c_cycles / 60));
       g_spc_rsp_exec_ticks = g_spc_rsp_hook_ticks = g_spc_rsp_cycles = g_spc_rsp_c_cycles = 0;
+      extern uint32_t g_spc_rsp_prof[5], g_spc_rsp_collects, g_spc_rsp_wait_ticks;
+      n64_platform_log("[rspspc] glue per frame: plan %lu us, pack %lu, collect %lu, C steps %lu, wait %lu; "
+                       "synchronous runs %lu us; %lu runs\n",
+                       (unsigned long)(g_spc_rsp_prof[0] / 60 / 47), (unsigned long)(g_spc_rsp_prof[1] / 60 / 47),
+                       (unsigned long)(g_spc_rsp_prof[2] / 60 / 47), (unsigned long)(g_spc_rsp_prof[3] / 60 / 47),
+                       (unsigned long)(g_spc_rsp_wait_ticks / 60 / 47), (unsigned long)(g_spc_rsp_prof[4] / 60 / 47),
+                       (unsigned long)(g_spc_rsp_collects / 60));
+      for (int i = 0; i < 5; i++) g_spc_rsp_prof[i] = 0;
+      g_spc_rsp_collects = g_spc_rsp_wait_ticks = 0;
     }
 #endif
 #if defined(N64_RSPDSP) && !defined(N64_STATE_HASH)

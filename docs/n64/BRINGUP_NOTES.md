@@ -2763,6 +2763,27 @@ borrowed IMEM.
   in the SPC glue 60.4 -> 41.6 ms, SPC cycles run in C 132 -> 22. SMW
   unchanged (82.7 ms; it used few of these opcodes).
 
+**Where the CPU's time in the SPC glue goes** (timing builds, ares, per
+frame; `[rspspc] glue per frame`):
+
+| | SMW | JM2 |
+|---|---|---|
+| planning runs | 0.3 ms | 0.6 ms |
+| packing the block | 0.4 ms | 0.9 ms |
+| collecting results | 1.5 ms | 2.2 ms |
+| C steps (DSP batch edges, S-DSP launches) | 3.3 ms | 4.7 ms |
+| waiting for the RSP in synchronous runs | 31.5 ms | 29.7 ms |
+
+Nearly all of it is synchronous runs: the frame boundary (the SPC brought
+exactly to guest time; the audio pump then wants samples up to it), port
+reads and uploads, which run the owed cycles while the CPU waits. The lane
+does not keep the SPC near guest time in between: its doorbell is serviced
+only at the interpreter's block entries (compiled code has none), so in SMW
+most of a frame's SPC work is still owed at the frame boundary. Keeping the
+state on the RSP would save the packing and collecting (2-3 ms); the wait
+needs the frame boundary and the audio pump to stop forcing a sync, and the
+lane fed between catch-ups.
+
 ## Next steps
 
 1. Audio: check the RSP DSP by ear on hardware (output arrives later than

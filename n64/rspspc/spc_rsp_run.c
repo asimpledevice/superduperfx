@@ -93,6 +93,12 @@ uint8_t *spc_rsp_dsp_regs(Apu *apu) {
 
 extern uint32_t g_spc_rsp_hook_ticks;
 uint32_t g_spc_rsp_lane_posts, g_spc_rsp_lane_busy, g_spc_rsp_lane_joins;
+/* Where the CPU's time in the glue goes (ticks): 0 planning, 1 posting
+ * (packing; the cache flush is g_spc_rsp_exec_ticks), 2 collecting (without
+ * the wait), 3 C steps (DSP batch edges, traps), 4 synchronous runs. */
+uint32_t g_spc_rsp_prof[5], g_spc_rsp_collects;
+#define PROF_BEGIN() const uint32_t pt0 = spc_rsp_ticks()
+#define PROF_END(i) (g_spc_rsp_prof[i] += spc_rsp_ticks() - pt0)
 #ifdef SPC_RSP_TRAP_STATS
 uint32_t g_spc_rsp_trap_op[256], g_spc_rsp_trap_opnd[256];   /* opcode, first operand byte */
 /* Cycles run in C, by why: 0 a DSP edge, 1 an echo page in $0000-$01FF,
@@ -123,7 +129,14 @@ static void sync_pages(Apu *apu, uint8_t out[32]) {
 /* The next run from the current state for at most `clocks` cycles: its
  * length, or 0 when the next cycle must run in C (a DSP edge the C path
  * takes, or a state the RSP cannot run). Applies the port writes due now. */
+static uint32_t plan_(Apu *apu, uint32_t clocks);
 static uint32_t plan(Apu *apu, uint32_t clocks) {
+  PROF_BEGIN();
+  const uint32_t n = plan_(apu, clocks);
+  PROF_END(0);
+  return n;
+}
+static uint32_t plan_(Apu *apu, uint32_t clocks) {
   uint32_t n = clocks < SPC_RSP_MAX_RUN ? clocks : SPC_RSP_MAX_RUN;
   /* CPU port writes: those due now apply before the next instruction, as
    * in apu_runCycles_native, and the run stops at the next one's cycle. */
@@ -169,11 +182,14 @@ static uint32_t plan(Apu *apu, uint32_t clocks) {
 }
 
 static void c_step(Apu *apu) {
+  PROF_BEGIN();
   apu_runCyclesC(apu, 1);
+  PROF_END(3);
   g_spc_rsp_c_cycles++;
 }
 
 static void post(Apu *apu, uint32_t n) {
+  PROF_BEGIN();
   to_block(apu, &s_blk);
   s_blk.budget = (int32_t)n;
 #if SNESRECOMP_APU_DEFER_DSP
@@ -191,6 +207,7 @@ static void post(Apu *apu, uint32_t n) {
   memset(s_run.tags, 0, sizeof s_run.tags);       /* all line slots empty */
   memset(s_run.wpages, 0, sizeof s_run.wpages);
   s_run.pad[0] = 0xff;                            /* SPCRUN_MOD: no paged module loaded */
+  PROF_END(1);
   spc_rsp_post(&s_blk, apu->ram);
 }
 
@@ -220,6 +237,8 @@ static void mark_written(Apu *apu) {
 static uint32_t collect(Apu *apu) {
   s_fl.active = false;
   const int exit = spc_rsp_wait(&s_blk);
+  PROF_BEGIN();
+  g_spc_rsp_collects++;
   mark_written(apu);
   from_block(apu, &s_blk);
   /* A trap re-runs the instruction in C: undo its timer reads' clears. */
@@ -232,6 +251,7 @@ static uint32_t collect(Apu *apu) {
   apu->dspPending = s_fl.p + edges_in(s_fl.c0, s_blk.used);
 #endif
   g_spc_rsp_runs++;
+  PROF_END(2);
   uint32_t adv = s_blk.used;
   if (exit == SPCEXIT_TRAP) {  /* one instruction in C, its carry back to the RSP */
 #ifdef SPC_RSP_TRAP_STATS
@@ -274,7 +294,9 @@ void spc_rsp_run_apu(Apu *apu, uint32_t clocks) {
     g_spc_rsp_c_cycles += clocks;
     apu_runCyclesC(apu, clocks);
   } else {
+    PROF_BEGIN();
     run_apu(apu, clocks);
+    PROF_END(4);
   }
   s_in_apu--;
   g_spc_rsp_hook_ticks += spc_rsp_ticks() - t0;
