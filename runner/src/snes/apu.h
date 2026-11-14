@@ -199,6 +199,9 @@ bool apu_runUntilPortQueueEmpty(Apu* apu, uint32_t max_cycles);
 /* Advance the live SPC to a guest timestamp using the same mapping as queued
  * CPU writes. This is the fast-forward coupling point: game frames and SPC
  * state advance together even when the host audio device cannot play them. */
+/* The SPC cycle (portClock time) that guest cycle `guest_cycle` maps to;
+ * false if guest time is not anchored yet. */
+bool apu_guestTarget(const Apu* apu, uint64_t guest_cycle, uint64_t *target);
 bool apu_runToGuestCycle(Apu* apu, uint64_t guest_cycle,
                          uint32_t max_cycles);
 /* HLE for a declared live transfer protocol: wait for the driver-ready AA/BB

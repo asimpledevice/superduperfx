@@ -69,6 +69,13 @@ ifneq ($(RSPDSP),1)
 $(error RSPSPC=1 needs RSPDSP=1)
 endif
 N64_CFLAGS += -DSNESRECOMP_APU_RUN_HOOK=spc_rsp_run_apu -DN64_RSPSPC=1 -Irspspc
+# RSPSPC_ASYNC=1: the bridge's catch-ups post runs without waiting; readers
+# of APU state collect the run in flight first (rspspc/spc_rsp_run.c lane).
+RSPSPC_ASYNC ?= 1
+ifeq ($(RSPSPC_ASYNC),1)
+N64_CFLAGS += -DSPC_RSP_ASYNC=1 -DSNESRECOMP_APU_ADVANCE_HOOK=spc_rsp_lane_advance \
+	-DSNESRECOMP_APU_JOIN_HOOK=spc_rsp_lane_join
+endif
 OBJS += $(BUILD_DIR)/rspspc/spc_rsp.o $(BUILD_DIR)/rspspc/spc_rsp_run.o \
 	$(BUILD_DIR)/rsp_spc.o $(BUILD_DIR)/rsp_spc_ext.o
 $(BUILD_DIR)/rspspc/%.o: rspspc/%.c

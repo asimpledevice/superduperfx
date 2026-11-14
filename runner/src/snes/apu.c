@@ -181,15 +181,21 @@ bool apu_runUntilPortQueueEmpty(Apu* apu, uint32_t max_cycles) {
   return true;
 }
 
+bool apu_guestTarget(const Apu* apu, uint64_t guest_cycle, uint64_t *target) {
+  if (!apu->portTimeValid || guest_cycle < apu->portGuestAnchor)
+    return false;
+  uint64_t t = apu->portTargetAnchor + (guest_cycle - apu->portGuestAnchor);
+  if (t < apu->portLastTarget)
+    t = apu->portLastTarget;
+  *target = t;
+  return true;
+}
+
 bool apu_runToGuestCycle(Apu* apu, uint64_t guest_cycle,
                          uint32_t max_cycles) {
-  if (!apu->portTimeValid || guest_cycle < apu->portGuestAnchor)
+  uint64_t target;
+  if (!apu_guestTarget(apu, guest_cycle, &target))
     return true;
-
-  uint64_t target = apu->portTargetAnchor +
-                    (guest_cycle - apu->portGuestAnchor);
-  if (target < apu->portLastTarget)
-    target = apu->portLastTarget;
 
   for (;;) {
     /* Bus writes at the boundary precede that cycle's SPC work. Drain them
@@ -421,8 +427,17 @@ static void apu_dspSyncFor(Apu* apu, unsigned reason) {
   apu->dspLogN = 0;
 }
 
-void apu_dspSync(Apu* apu) { apu_dspSyncFor(apu, APU_DSP_SYNC_HOST); }
+/* SNESRECOMP_APU_JOIN_HOOK: an SPC core that runs asynchronously (n64/rspspc
+ * lane) hands its state back before anything outside the SPC reads it. */
+#ifdef SNESRECOMP_APU_JOIN_HOOK
+void SNESRECOMP_APU_JOIN_HOOK(Apu* apu);
+#define APU_JOIN(apu) SNESRECOMP_APU_JOIN_HOOK(apu)
+#else
+#define APU_JOIN(apu) ((void)0)
+#endif
+void apu_dspSync(Apu* apu) { APU_JOIN(apu); apu_dspSyncFor(apu, APU_DSP_SYNC_HOST); }
 void apu_dspFrameSync(Apu* apu) {
+  APU_JOIN(apu);
   apu_dspSyncFor(apu, SNESRECOMP_DSP_HOST_ASYNC ? APU_DSP_SYNC_FRAME : APU_DSP_SYNC_HOST);
 }
 void apu_dspEchoRead(Apu* apu) { apu_dspSyncFor(apu, APU_DSP_SYNC_ECHO_READ); }

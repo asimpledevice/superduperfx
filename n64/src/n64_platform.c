@@ -127,6 +127,10 @@ void n64_platform_init(void) {
 #endif
 #ifdef N64_RSPSPC
   spc_rsp_init();
+#if SPC_RSP_ASYNC
+  { extern void blue_set_green_service(void (*)(void));
+    blue_set_green_service(spc_rsp_lane_pump); }   /* the SPC lane's doorbell */
+#endif
 #endif
 #ifdef N64PPU_RDP_VALIDATE
   rdpq_debug_start();

@@ -115,10 +115,8 @@ static void bridge_apu_flush(CpuState *cpu) {
          * by RtlApuWrite are never drained and the SPC never processes them.
          * Star Ocean's name-entry music transfer writes data to $2140-$2143
          * and polls for a response; without this sync the SPC is frozen. */
-        RtlApuLock();
         g_apu_last_sync_master = g_master_cycles;
-        rtl_sync_apu_to_cpu_locked();
-        RtlApuUnlock();
+        rtl_advance_apu_to_cpu();
         s_apu_pending_master = 0;
         return;
     }
@@ -128,10 +126,8 @@ static void bridge_apu_flush(CpuState *cpu) {
      * bridge flushes no longer changes what the SPC does. */
     { static bool s_was_ready;
       if (bridge_apu_guest_time_ready()) {
-        RtlApuLock();
         g_apu_last_sync_master = g_master_cycles;
-        rtl_sync_apu_to_cpu_locked();
-        RtlApuUnlock();
+        rtl_advance_apu_to_cpu();
         s_apu_pending_master = 0;
         s_was_ready = true;
         return;

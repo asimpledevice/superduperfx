@@ -66,6 +66,7 @@ void rtl_accumulate_apu_catchup(void);
 /* Caller holds RtlApuLock. Before the first frame, retain bootstrap synthetic
  * pacing; afterward synchronize reads to the authoritative guest timestamp. */
 void rtl_sync_apu_to_cpu_locked(void);
+void rtl_advance_apu_to_cpu(void);   /* catch up without reading the result (may not wait) */
 
 
 // Axis-7 determinism per-frame WRAM fingerprint ring (common_rtl.c).

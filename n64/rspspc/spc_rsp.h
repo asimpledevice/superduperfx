@@ -32,11 +32,32 @@ uint32_t spc_rsp_ticks(void);   /* CPU timer (TICKS_READ) */
 void *spc_rsp_raw_log(void);
 /* One RSP run over the 64 KB of ARAM (8-byte aligned). Returns SPCEXIT_*. */
 int spc_rsp_exec(SpcRspBlock *b, uint8_t *aram);
+/* The same in two halves: post the run, and later collect it (waits if the
+ * RSP has not finished). Between them the CPU must not touch the block, the
+ * raw log or ARAM. */
+#include <stdbool.h>
+void spc_rsp_post(SpcRspBlock *b, uint8_t *aram);
+bool spc_rsp_done(void);
+int spc_rsp_wait(SpcRspBlock *b);
+extern uint32_t g_spc_rsp_wait_ticks;
 
 struct Apu;
 /* As apu_runCycles(apu, clocks), with the SPC on the RSP; opcodes and
  * accesses the RSP leaves to the CPU run in C. */
 void spc_rsp_run_apu(struct Apu *apu, uint32_t clocks);
+/* Asynchronous runs (SPC_RSP_ASYNC): bring the SPC toward APU cycle
+ * `target` (portClock time) without waiting: collect the run in flight if it
+ * has finished, then post the next one. Nothing happens while a run is still
+ * going, or when less than SPC_RSP_MIN_RUN cycles are owed. */
+void spc_rsp_lane_advance(struct Apu *apu, uint64_t target);
+/* Collect the run in flight, if any (every reader of SPC state calls this
+ * first: RtlApuLock, apu_dspSync). */
+void spc_rsp_lane_join(struct Apu *apu);
+/* Green's service (blue_set_green_service): collect a finished run and post
+ * the next toward the CPU's current time. */
+void spc_rsp_lane_pump(void);
+void spc_rsp_arm_doorbell(void);
+extern uint32_t g_spc_rsp_lane_pumps;
 /* The DSP register file the SPC reads back (the host provides it). */
 uint8_t *spc_rsp_dsp_regs(struct Apu *apu);
 

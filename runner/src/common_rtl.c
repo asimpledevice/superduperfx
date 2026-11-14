@@ -2053,6 +2053,26 @@ void rtl_sync_apu_to_cpu_locked(void) {
 #endif
 }
 
+/* The bridge's catch-ups: the SPC should reach the CPU's time, but nothing
+ * reads its state now. With an asynchronous SPC core
+ * (SNESRECOMP_APU_ADVANCE_HOOK, n64/rspspc) that posts the run without
+ * waiting; readers join through RtlApuLock and apu_dspSync. Otherwise, the
+ * same synchronous catch-up as before. */
+void rtl_advance_apu_to_cpu(void) {
+#ifdef SNESRECOMP_APU_ADVANCE_HOOK
+  if (g_apu_frame_time_valid) {
+    void SNESRECOMP_APU_ADVANCE_HOOK(Apu* apu, uint64_t target);
+    uint64_t target;
+    if (apu_guestTarget(g_snes->apu, rtl_apu_guest_cycle(), &target))
+      SNESRECOMP_APU_ADVANCE_HOOK(g_snes->apu, target);
+    return;
+  }
+#endif
+  RtlApuLock();
+  rtl_sync_apu_to_cpu_locked();
+  RtlApuUnlock();
+}
+
 static bool RtlUploadSpcImageFromDpInternal(CpuState *cpu,
                                             bool update_cpu_result,
                                             bool live_transfer) {

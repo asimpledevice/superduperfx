@@ -141,8 +141,17 @@ void NORETURN Die(const char *error) {
 }
 
 /* Single-threaded host: the APU is only touched from the guest thread. */
+#if SPC_RSP_ASYNC
+/* Every reader of APU state takes this lock first: with the SPC running
+ * asynchronously on the RSP, it collects the run in flight. */
+void spc_rsp_lane_hold(struct Apu *apu);
+void spc_rsp_lane_release(void);
+void RtlApuLock(void) { spc_rsp_lane_hold(g_snes->apu); }
+void RtlApuUnlock(void) { spc_rsp_lane_release(); }
+#else
 void RtlApuLock(void) {}
 void RtlApuUnlock(void) {}
+#endif
 
 void MkDir(const char *s) { (void)s; }
 void ChangeWindowScale(int scale_step) { (void)scale_step; }
@@ -600,6 +609,35 @@ static int host_main(void) {
           n64_platform_log("[rspspc] %lu runs, %lu traps; %lu cycles on the RSP, %lu in C\n",
                            (unsigned long)g_spc_rsp_runs, (unsigned long)g_spc_rsp_traps,
                            (unsigned long)g_spc_rsp_cycles, (unsigned long)g_spc_rsp_c_cycles); }
+        { extern uint32_t g_spc_rsp_lane_posts, g_spc_rsp_lane_busy, g_spc_rsp_lane_joins, g_spc_rsp_lane_pumps,
+                          g_spc_rsp_wait_ticks, g_spc_rsp_hook_ticks, g_spc_rsp_exec_ticks;
+          n64_platform_log("[rspspc] lane: %lu posted, %lu doorbell pumps, %lu catch-ups found it busy, %lu joins; CPU in the glue %lu us, "
+                           "posting %lu us, waiting %lu us (totals)\n",
+                           (unsigned long)g_spc_rsp_lane_posts, (unsigned long)g_spc_rsp_lane_pumps, (unsigned long)g_spc_rsp_lane_busy,
+                           (unsigned long)g_spc_rsp_lane_joins, (unsigned long)(g_spc_rsp_hook_ticks / 47),
+                           (unsigned long)(g_spc_rsp_exec_ticks / 47), (unsigned long)(g_spc_rsp_wait_ticks / 47)); }
+#ifdef SPC_RSP_TRAP_STATS
+        { extern uint32_t g_spc_rsp_trap_op[256], g_spc_rsp_trap_opnd[256];
+          char b[160]; int o = 0;
+          for (int k = 0; k < 2; k++) {
+            const uint32_t *h = k ? g_spc_rsp_trap_opnd : g_spc_rsp_trap_op;
+            o += snprintf(b + o, sizeof b - o, k ? " | operands" : "traps by opcode");
+            for (int t = 0; t < 5; t++) {   /* the five largest */
+              int m = 0;
+              for (int i = 1; i < 256; i++) if (h[i] > h[m]) m = i;
+              if (!h[m]) break;
+              o += snprintf(b + o, sizeof b - o, " %02x:%lu", m, (unsigned long)h[m]);
+              ((uint32_t *)h)[m] = 0;
+            }
+          }
+          for (int i = 0; i < 256; i++) g_spc_rsp_trap_op[i] = g_spc_rsp_trap_opnd[i] = 0;
+          n64_platform_log("[rspspc] %s\n", b);
+          extern uint32_t g_spc_rsp_c_why[5];
+          n64_platform_log("[rspspc] C cycles: edges %lu, echo in pages 0-1 %lu, directory %lu, log room %lu, short calls %lu\n",
+                           (unsigned long)g_spc_rsp_c_why[0], (unsigned long)g_spc_rsp_c_why[1], (unsigned long)g_spc_rsp_c_why[2],
+                           (unsigned long)g_spc_rsp_c_why[3], (unsigned long)g_spc_rsp_c_why[4]);
+          for (int i = 0; i < 5; i++) g_spc_rsp_c_why[i] = 0; }
+#endif
 #endif
       }
     }

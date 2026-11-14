@@ -509,9 +509,15 @@ static void rspq_chain_free(uint32_t *first_chunk, int size)
     }
 }
 
-/** @brief RSP interrupt handler, used for syncpoints. */
 /** @brief Mailbox doorbell handler (rspq_mailbox_set_handler), or NULL. */
 static void (*rspq_mailbox_handler)(uint32_t up);
+/** @brief Called from the SP interrupt after each syncpoint (rspq_set_syncpoint_hook), or NULL. */
+static void (*rspq_syncpoint_hook)(void);
+
+void rspq_set_syncpoint_hook(void (*hook)(void))
+{
+    rspq_syncpoint_hook = hook;
+}
 
 /** @brief The mailbox words in DMEM, by their place in the rspq state. */
 #define RSPQ_MAILBOX_DOWN_PTR ((volatile uint32_t *)SP_DMEM + offsetof(rsp_queue_t, mailbox_down) / 4)
@@ -601,6 +607,7 @@ static void rspq_sp_interrupt(void)
         ++__rspq_syncpoints_done[0];
         // writeback to memory; this is required for RDPQCmd_SyncFull to fetch the correct value 
         data_cache_hit_writeback(&__rspq_syncpoints_done[0], 4);
+        if (rspq_syncpoint_hook) rspq_syncpoint_hook();
     }
     if (status & SP_STATUS_SIG0) {
         wstatus |= SP_WSTATUS_CLEAR_SIG0;

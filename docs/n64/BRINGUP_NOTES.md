@@ -2627,6 +2627,55 @@ waiting. The CPU joins where it needs SPC state: a port read the SPC has
 not reached, a DSP batch edge (today's glue runs that cycle in C), a trap,
 a state save.
 
+### Asynchronous SPC, step A (2026-11-14, opt-in)
+
+`RSPSPC=1` now runs the SPC on the RSP asynchronously (`RSPSPC_ASYNC=1`,
+the default with RSPSPC; 0 restores the synchronous runs). Off by default
+until measured on hardware.
+
+- **The lane** (`n64/rspspc/spc_rsp_run.c`): at most one run in flight.
+  `spc_rsp_lane_advance(target)` collects a finished run and posts the next
+  toward the target (the same chunking as before: port-write cycles, DSP
+  batch edges, log room), and returns at once if the run is still going or
+  less than 256 cycles are owed. `spc_rsp_lane_join` collects the run in
+  flight.
+- **Who waits:** the bridge's catch-ups only advance
+  (`rtl_advance_apu_to_cpu`). Every reader of APU state joins first:
+  `RtlApuLock` (a no-op on N64 before; port reads and writes, uploads,
+  audio, frame boundaries all take it) and `apu_dspSync`/`apu_dspFrameSync`
+  (`SNESRECOMP_APU_JOIN_HOOK`). Port reads, frame boundaries and uploads then
+  run the SPC to time synchronously, as before.
+- **Doorbell:** the run's rspq syncpoint (new `rspq_set_syncpoint_hook`)
+  sets `RUN_FLAG_WANT_GREEN` when the run finishes; Blue yields at its next
+  block entry and Green's service (`spc_rsp_lane_pump`) collects and posts
+  the next, so the RSP is not left idle until the next catch-up.
+- **Re-entry guard.** Blue also yields inside the S-DSP join's wait loop,
+  which can be inside the SPC lane (its plan joins the S-DSP). The first
+  doorbell version let Green's pump re-enter the SPC's state there and
+  changed results (SMW from frame 180, JM2 from 840). The pump now does
+  nothing while Blue is inside APU code (the lane, a synchronous run, the
+  APU lock, or an S-DSP wait), and it only continues toward the last
+  catch-up's target.
+- **Correct:** state hashes identical to the C core (SMW 49, Pitfall 11, JM2
+  24 compared frames; with the doorbell, SMW 49 and JM2 24).
+
+**Not faster yet** (ares, same frame ranges, run time per frame):
+
+| | C SPC | RSP, synchronous | RSP, asynchronous | + doorbell |
+|---|---|---|---|---|
+| SMW | 79.4 ms | 89.8 | 85.0 | 86.0 |
+| JM2 | 179.5 ms | 212.0 | 212.5 | 214.6 |
+
+Why, from the counters (SMW, per frame): the CPU spends 38 ms in the SPC
+glue but waits for the RSP only 3.4 ms of it. The S-DSP suffers instead:
+its join wait grows from 0.7 to 12 ms (its batches queue behind long SPC
+runs on the one RSP) and its ARAM view is recopied (about 150 pages, 1.5
+ms, because each SPC run marks it stale). JM2 and Pitfall also trap often
+on opcodes the RSP core leaves to the CPU (picked from SMW's profile): DBNZ
+Y ($FE, about 165 a frame in JM2), ROR dp ($6B), NOTC ($ED); and Pitfall's
+sample directory at page 0 keeps whole stretches in C. ares's CPU/RSP
+timing is loose: hardware decides how much of this is real.
+
 ## Next steps
 
 1. Audio: check the RSP DSP by ear on hardware (output arrives later than

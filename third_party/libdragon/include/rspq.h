@@ -725,6 +725,13 @@ void rspq_wait(void);
  * SIG0, is enabled.
  */
 void rspq_mailbox_set_handler(void (*handler)(uint32_t up));
+/**
+ * @brief Call `hook` from the SP interrupt each time a syncpoint is reached
+ *        (SuperDuperFX: a doorbell for work waiting on a syncpoint; the hook
+ *        runs in interrupt context, after the count is updated, so
+ *        #rspq_syncpoint_check is already true for that syncpoint).
+ */
+void rspq_set_syncpoint_hook(void (*hook)(void));
 /** @brief Write the down box (the RSP sees it at its next poll). */
 void rspq_mailbox_send(uint32_t word);
 /** @brief Read the up box (34 CPU cycles: prefer the doorbell). */
