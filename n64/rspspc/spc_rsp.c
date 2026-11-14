@@ -8,6 +8,15 @@
 
 DEFINE_RSP_UCODE(rsp_spc);
 DEFINE_RSP_UCODE(rsp_spc_ext);   /* runs in the rspq IMEM it borrows (rsp_spc_ext.S) */
+/* Paged modules (rsp_spc_m<k>.S), each linked at EXT_SLOT. */
+DEFINE_RSP_UCODE(rsp_spc_m0);
+DEFINE_RSP_UCODE(rsp_spc_m1);
+DEFINE_RSP_UCODE(rsp_spc_m2);
+DEFINE_RSP_UCODE(rsp_spc_m3);
+DEFINE_RSP_UCODE(rsp_spc_m4);
+DEFINE_RSP_UCODE(rsp_spc_m6);
+DEFINE_RSP_UCODE(rsp_spc_m7);
+DEFINE_RSP_UCODE(rsp_spc_m8);
 
 _Static_assert(sizeof(SpcRspBlock) == SPCST_SIZE, "SpcRspState");
 _Static_assert(offsetof(SpcRspBlock, psw) == SPCST_PSW && offsetof(SpcRspBlock, aram) == SPCST_ARAM &&
@@ -24,7 +33,8 @@ _Static_assert(offsetof(SpcRspBlock, psw) == SPCST_PSW && offsetof(SpcRspBlock, 
 static uint32_t s_ovl;
 static uint8_t *s_ext;   /* rsp_spc_ext's code, then the save area for rspq's IMEM */
 #define EXT_SAVE_OFS 0x300   /* then rspq's IMEM, then its borrowed DMEM at 0x600 (rsp_spc.S) */
-#define EXT_BUF_SIZE 0x840
+#define EXT_BUF_SIZE (EXT_MOD_OFS + EXT_MODS * EXT_MOD_SIZE)   /* then the paged modules */
+_Static_assert(EXT_MOD_OFS >= 0x840, "after rspq's DMEM save area");
 
 #if SPC_RSP_ASYNC
 static void on_syncpoint(void);
@@ -39,6 +49,14 @@ void spc_rsp_init(void) {
   s_ext = memalign(16, EXT_BUF_SIZE);
   memset(s_ext, 0, EXT_BUF_SIZE);
   memcpy(s_ext, rsp_spc_ext.code, n);
+  const rsp_ucode_t *mods[EXT_MODS] = {&rsp_spc_m0, &rsp_spc_m1, &rsp_spc_m2, &rsp_spc_m3,
+                                       &rsp_spc_m4, NULL, &rsp_spc_m6, &rsp_spc_m7, &rsp_spc_m8};
+  for (int k = 0; k < EXT_MODS; k++) {
+    if (!mods[k]) continue;
+    const size_t m = (size_t)((uint8_t *)mods[k]->code_end - (uint8_t *)mods[k]->code);
+    assertf(m > EXT_SLOT && m <= EXT_SLOT + EXT_MOD_SIZE, "rsp_spc_m%d: %u bytes", k, (unsigned)m);
+    memcpy(s_ext + EXT_MOD_OFS + k * EXT_MOD_SIZE, (uint8_t *)mods[k]->code + EXT_SLOT, m - EXT_SLOT);
+  }
   data_cache_hit_writeback_invalidate(s_ext, EXT_BUF_SIZE);
 }
 

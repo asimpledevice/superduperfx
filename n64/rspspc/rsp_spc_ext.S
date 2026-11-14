@@ -22,13 +22,39 @@ ext_begin:
     nop
     j x_tsync                       # 0x08
     nop
-    j x_f1                          # 0x10
-    nop
-    j x_div                         # 0x18
-    nop
+    j x_page_id                     # 0x10 $F1 writes: module 8
+    li t0, 8
+    j x_page_id                     # 0x18 DIV (also through OP_PG6): module 6
+    li t0, 6
     j x_mul                         # 0x20
     nop
     j x_wmark                       # 0x28
+    nop
+    j x_page_op                     # 0x30 an OP_PG<k> operation
+    nop
+
+# Paged modules (spc_rsp_layout.h EXT_SLOT): bring module t0 into the slot
+# unless it is there, then enter it. Keeps every register but t0-t2, s0,
+# s4 and $1 (ra is kept in DMEM across the load).
+x_page_op:                          # t6 = OP_PG0 + 4 k
+    addiu t0, t6, -(C_OP_PG0 - C__start)
+    srl t0, t0, 2
+    li t1, 5                        # OP_PG5: MUL, resident
+    beq t0, t1, x_mul
+x_page_id:
+    lbu t1, %lo(C_ST + SPCRUN_MOD)
+    beq t0, t1, 1f
+    sw ra, %lo(C_ST + SPCRUN_RA)
+    sb t0, %lo(C_ST + SPCRUN_MOD)
+    sll t1, t0, 8                   # EXT_MOD_SIZE 0x100
+    lw s0, %lo(C_EXTBUF)
+    addu s0, s0, t1
+    addiu s0, s0, EXT_MOD_OFS
+    li s4, 0x1000 + EXT_SLOT
+    jal C_SDmaIn
+    li t0, DMA_SIZE(EXT_MOD_SIZE, 1)
+    lw ra, %lo(C_ST + SPCRUN_RA)
+1:  j EXT_SLOT
     nop
 
 x_wmark:                            # line t2 written back: mark its page
@@ -42,40 +68,6 @@ x_wmark:                            # line t2 written back: mark its page
     jr ra
     sb t0, %lo(C_ST + SPCRUN_WPAGES)(s0)
 
-x_f1:                               # $F1: timer enables, port clears, IPL ROM
-    move t8, ra
-    jal x_tsync_now
-    nop
-    move ra, t8
-    li s4, %lo(C_ST + SPCST_TIMERS)
-    li t2, 1
-7:  lbu t0, 4(s4)                   # enabled before
-    and t1, a1, t2
-    sltu t1, zero, t1
-    bnez t0, 8f
-    sb t1, 4(s4)
-    beqz t1, 8f
-    nop
-    sb zero, 1(s4)                  # newly enabled: divider and counter reset
-    sb zero, 3(s4)
-8:  addiu s4, s4, 8
-    sll t2, t2, 1
-    li t0, 8
-    bne t2, t0, 7b
-    nop
-    andi t0, a1, 0x10
-    beqz t0, 9f
-    andi t0, a1, 0x20
-    sh zero, %lo(C_ST + SPCST_INPORTS)
-9:  beqz t0, 9f
-    srl t0, a1, 7
-    sh zero, %lo(C_ST + SPCST_INPORTS + 2)
-9:  j C_wr_zp
-    sb t0, %lo(C_ST + SPCST_ROMREADABLE)
-
-# Timers, as apu_native_timer: bring all three to cycle t2 (tsync) or to the
-# start of the instruction in progress (tsync_now). Uses t0-t2, t9, v0, s0,
-# s4, k0.
 x_tsync_now:
     lw t2, %lo(C_END)
     subu t2, t2, fp
@@ -147,53 +139,6 @@ tm_next:
 # VRCP gives R ~ 2^31 / x; R16 = R >> 15; q = (ya * R16) >> 16 (VMUDL) is the
 # quotient or one less (checked for every ya and x: n64/rspspc/vdiv_model.c),
 # so one remainder check (VMUDN gives the low 16 bits of q * x) finishes it.
-x_div:
-    andi t3, s7, 0xb7               # V and H recomputed
-    andi t0, s2, 0xf
-    andi t1, s3, 0xf
-    sltu t0, t1, t0                 # (y & f) < (x & f)
-    xori t0, t0, 1
-    sll t0, t0, 3                   # H = (x & f) <= (y & f)
-    or t3, t3, t0
-    sll t2, s3, 8
-    or t2, t2, s1                   # ya
-    bnez s2, 1f
-    nop
-    li t4, 0xffff                   # x = 0: quotient $FFFF, remainder a
-    b 3f
-    move t5, s1
-1:  mtc2 s2, $v02.e0
-    vrcp $v03.e0, $v02.e0           # R, low half
-    vrcph $v04.e0, $v02.e0          # R, high half
-    mtc2 t2, $v06.e0
-    mfc2 t0, $v03.e0
-    mfc2 t1, $v04.e0
-    srl t0, t0, 15
-    andi t0, t0, 1
-    sll t1, t1, 1
-    or t0, t0, t1                   # R16 = R >> 15
-    mtc2 t0, $v05.e0
-    vmudl $v07, $v06, $v05, e(0)    # q = (ya * R16) >> 16
-    vmudn $v08, $v07, $v02, e(0)    # q * x, low 16 bits
-    mfc2 t4, $v07.e0
-    mfc2 t1, $v08.e0
-    andi t4, t4, 0xffff
-    subu t5, t2, t1
-    andi t5, t5, 0xffff             # remainder (or remainder + x)
-    sltu t0, t5, s2
-    bnez t0, 3f
-    nop
-    addiu t4, t4, 1
-    subu t5, t5, s2
-3:  sltiu t0, t4, 0x100
-    xori t0, t0, 1
-    sll t0, t0, 6                   # V = quotient > $FF
-    or s7, t3, t0
-    andi s1, t4, 0xff
-    andi s3, t5, 0xff
-    j C_zn_loop
-    move v0, s1
-
 x_mul:                              # ya = y * a, on the vector unit
     mtc2 s1, $v01.e0
     mtc2 s3, $v02.e0

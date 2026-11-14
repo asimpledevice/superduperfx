@@ -2715,6 +2715,54 @@ register file's DIR differs from the Dsp's (the RSP knows one directory).
   and synchronous runs at port reads and frame boundaries. Hardware timing
   decides how much of that is ares.
 
+### Opcode paging: no SPC opcode traps to the CPU (2026-11-14)
+
+The SPC core left about 40 opcodes to the CPU (picked from SMW's profile, to
+fit IMEM); JM2 hit DBNZ Y about 165 times a frame. Now every opcode runs on
+the RSP: the rare ones in modules DMA'd on demand into a slot of the
+borrowed IMEM.
+- **Slot:** 256 bytes at IMEM 0x1C0, after the resident borrowed code
+  (`spc_rsp_layout.h` `EXT_SLOT`); the resident part made room by moving
+  `$F1` writes and DIV into modules. Modules are linked at the slot
+  (`.org EXT_SLOT`) and call the core (`C_*`) and the resident code (`X_*`,
+  `gen_syms.py --prefix`) directly; the C side copies each into the RDRAM
+  ext buffer (`EXT_MOD_OFS`).
+- **Dispatch:** the table maps a paged opcode to `OP_PG<k>`, keeping its
+  addressing mode; `OP_PG0`-`OP_PG7` are one word each and fall into one
+  stub, so the page routine (`x_page_op`) reads k from the handler address,
+  loads module k unless it is there (`SPCRUN_MOD`; the CPU sets 0xFF before
+  a run) and enters it; the module picks the operation by opcode.
+  `OP_PG5` is MUL, sent to its resident code (which freed its core stub).
+- **Modules:** 0 DBNZ Y, DBNZ dp, NOTC, CLRV, ROL, ROR, ROLA, RETI;
+  1 DECW, INCW, CMPW, JMP [!abs+X], MOV SP,X, SLEEP/STOP; 2 OR/AND/EOR/ADC/SBC
+  on two memory operands, MOV dp,dp, MOV A,(X)+, MOV (X)+,A, XCN; 3 TCALL,
+  BRK, PCALL; 4 OR1/AND1/EOR1/MOV1/NOT1; 6 DIV; 7 DAA, DAS, TSET1, TCLR1;
+  8 `$F1` writes.
+- **Rules** (a trap restores only PC, cycles, SP and PSW, and the C core
+  re-runs the whole instruction): checks that can trap come before the
+  instruction's first write; register changes after its last access that can
+  trap. A write to `$00F1` would page module 8 over the module making it, so
+  modules leave those to the CPU; INCW/DECW leave words on the I/O page to it
+  (a DSP-data write at `$F3` could trap after the `$F2` write). Only t3-t7
+  survive `rd`/`wr` (a line fill uses the rest); t4 (the instruction's
+  cycles, used to timestamp log entries) is kept around `adc8`.
+- **Room:** every module fits the 256-byte slot (module 2 exactly); the
+  resident borrowed code is 448 of 448 bytes; the core has 16 bytes free;
+  DMEM 2.
+- **Test:** the random comparison now covers every opcode on the RSP
+  (random programs are random bytes). A deliberately wrong NOTC failed 18 of
+  the first 500 cases. The first full run failed 5 of 2,000, all INCW/DECW on
+  `$F2` (the rule above); after the fix 2,000 of 2,000 pass. The 10,000
+  cases then found one more: DBNZ dp whose branch offset lies in the IPL ROM
+  (the offset's fetch traps after the write), now checked first (NOTC and
+  CLRV moved to module 3 for the room). After that fix: cases 0-2,000 and
+  8,000-10,000 pass (the failing one included); 0-6,800 had passed before it
+  (the fix changes only DBNZ dp).
+- Game hashes identical to the C core (SMW 49, Pitfall 7, JM2 22 frames).
+- ares, per frame: JM2 run time 243.6 -> 201.4 ms (C core 179.5), the CPU
+  in the SPC glue 60.4 -> 41.6 ms, SPC cycles run in C 132 -> 22. SMW
+  unchanged (82.7 ms; it used few of these opcodes).
+
 ## Next steps
 
 1. Audio: check the RSP DSP by ear on hardware (output arrives later than

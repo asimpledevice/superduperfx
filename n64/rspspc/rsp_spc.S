@@ -106,6 +106,7 @@ LINES:      .ds.b 2048              # 32 slots x 64 bytes
 #define EXT_DIV         0x1018
 #define EXT_MUL         0x1020
 #define EXT_WMARK       0x1028
+#define EXT_PAGE        0x1030
 
 SpcCmd_Run:
     sw ra, %lo(RET_RA)
@@ -990,19 +991,17 @@ OP_INCDEC:                          # decx incx deca inca decy incy
     addu v0, v0, t1
     b xr_st
     andi v0, v0, 0xff
-OP_DIV:                             # on the vector unit, in the borrowed IMEM
-    j ext_go
-    li t1, EXT_DIV
-OP_XCN:
-    srl t0, s1, 4
-    sll s1, s1, 4
-    or s1, s1, t0
-    andi s1, s1, 0xff
-    j zn_loop
-    move v0, s1
-OP_MUL:                             # on the vector unit, in the borrowed IMEM
-    j ext_go
-    li t1, EXT_MUL
+# Paged operations (rsp_spc_m<k>.S): the page routine takes the module from
+# the handler's address (t6 = OP_PG0 + 4 k), so these are one word each.
+OP_PG0: nop
+OP_PG1: nop
+OP_PG2: nop
+OP_PG3: nop
+OP_PG4: nop
+OP_PG5: nop                         # mul: resident (x_mul), not a module
+OP_PG6: nop                         # div
+OP_PG7: j ext_go
+    li t1, EXT_PAGE
 # Words (direct page): a2 low address, a3 high.
 OP_MOVW:
     jal rdw_dp

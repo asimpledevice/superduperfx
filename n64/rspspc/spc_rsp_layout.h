@@ -41,11 +41,22 @@
 #define SPCLOG_STAGE   0x100  /* 64-byte staging buffer for the raw log */
 #define SPCRUN_SP0     0x140  /* SP and PSW at the instruction's start */
 #define SPCRUN_PSW0    0x141
+#define SPCRUN_MOD     0x142  /* paged module in the slot (0xff none: the CPU sets it) */
+#define SPCRUN_RA      0x144  /* ra across a module load */
 #define SPCRUN_TAGS    0x150  /* 64 bytes: the line cache's tags (bit 15 dirty) */
 #define SPCRUN_WPAGES  0x190  /* 32 bytes: pages of dirty lines evicted during the run */
 #define SPCRUN_IO      0x1b0  /* bytes moved each way: the block and the run's
                                * area, so the CPU zeroes the tags and the page
                                * bits and reads which pages the run wrote */
+
+/* Paged modules (rsp_spc_m<k>.S): linked at EXT_SLOT in the borrowed IMEM,
+ * after the resident borrowed code (rsp_spc_ext.S); kept in the RDRAM ext
+ * buffer at EXT_MOD_OFS + k * EXT_MOD_SIZE and DMA'd into the slot when an
+ * operation needs one that is not there. */
+#define EXT_SLOT       0x1c0
+#define EXT_MOD_SIZE   0x100
+#define EXT_MOD_OFS    0x840
+#define EXT_MODS       9      /* 0-4, 7: opcodes the core has no room for, 6: DIV, 8: $F1 writes */
 
 #define SPCEXIT_BUDGET 0      /* the budget is used up */
 #define SPCEXIT_TRAP   1      /* stopped before an opcode the RSP leaves to the CPU */

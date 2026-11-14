@@ -46,13 +46,19 @@ $(BUILD_DIR)/rsp_spc_syms.inc: $(BUILD_DIR)/rsp_spc.o ../gen_syms.py
 	python3 ../gen_syms.py $(BUILD_DIR)/rsp_spc.elf $@ $(N64_NM)
 $(BUILD_DIR)/rsp_spc_ext.o: $(BUILD_DIR)/rsp_spc_syms.inc
 $(BUILD_DIR)/rsp_spc_ext.o: RSPASFLAGS += -I$(BUILD_DIR)
-$(BUILD_DIR)/ext.check: $(BUILD_DIR)/rsp_spc_ext.o $(BUILD_DIR)/rsp_spc.o
-	python3 ../gen_syms.py --check $(BUILD_DIR)/rsp_spc.elf $(BUILD_DIR)/rsp_spc_ext.elf $(N64_NM)
+# Paged modules (rsp_spc_m<k>.S): they call the resident borrowed code too.
+SPC_MODS = $(patsubst %,$(BUILD_DIR)/rsp_spc_m%.o,0 1 2 3 4 6 7 8)
+$(BUILD_DIR)/rsp_spc_ext_syms.inc: $(BUILD_DIR)/rsp_spc_ext.o ../gen_syms.py
+	python3 ../gen_syms.py --prefix X_ $(BUILD_DIR)/rsp_spc_ext.elf $@ $(N64_NM)
+$(SPC_MODS): $(BUILD_DIR)/rsp_spc_syms.inc $(BUILD_DIR)/rsp_spc_ext_syms.inc
+$(SPC_MODS): RSPASFLAGS += -I$(BUILD_DIR)
+$(BUILD_DIR)/ext.check: $(BUILD_DIR)/rsp_spc_ext.o $(BUILD_DIR)/rsp_spc.o $(SPC_MODS)
+	python3 ../gen_syms.py --check $(BUILD_DIR)/rsp_spc.elf $(BUILD_DIR)/rsp_spc_ext.elf $(N64_NM) $(SPC_MODS:.o=.elf)
 	@touch $@
 $(BUILD_DIR)/rsp_spc.o: $(BUILD_DIR)/rsp_spc_tables.inc
 $(BUILD_DIR)/rsp_spc.o: RSPASFLAGS += -I$(BUILD_DIR)
 
-$(BUILD_DIR)/rspspc_test.elf: $(BUILD_DIR)/n64_compat.o $(BUILD_DIR)/test_main.o $(BUILD_DIR)/test_ref.o $(BUILD_DIR)/spc_rsp_run.o $(BUILD_DIR)/spc_rsp.o $(BUILD_DIR)/rsp_spc.o $(BUILD_DIR)/rsp_spc_ext.o $(BUILD_DIR)/ext.check $(BUILD_DIR)/spc.o $(BUILD_DIR)/apu.o $(DSP_OBJS)
+$(BUILD_DIR)/rspspc_test.elf: $(BUILD_DIR)/n64_compat.o $(BUILD_DIR)/test_main.o $(BUILD_DIR)/test_ref.o $(BUILD_DIR)/spc_rsp_run.o $(BUILD_DIR)/spc_rsp.o $(BUILD_DIR)/rsp_spc.o $(BUILD_DIR)/rsp_spc_ext.o $(SPC_MODS) $(BUILD_DIR)/ext.check $(BUILD_DIR)/spc.o $(BUILD_DIR)/apu.o $(DSP_OBJS)
 
 rspspc_test.z64: N64_ROM_TITLE = "RSP SPC test"
 

@@ -77,7 +77,8 @@ N64_CFLAGS += -DSPC_RSP_ASYNC=1 -DSNESRECOMP_APU_ADVANCE_HOOK=spc_rsp_lane_advan
 	-DSNESRECOMP_APU_JOIN_HOOK=spc_rsp_lane_join
 endif
 OBJS += $(BUILD_DIR)/rspspc/spc_rsp.o $(BUILD_DIR)/rspspc/spc_rsp_run.o \
-	$(BUILD_DIR)/rsp_spc.o $(BUILD_DIR)/rsp_spc_ext.o
+	$(BUILD_DIR)/rsp_spc.o $(BUILD_DIR)/rsp_spc_ext.o $(SPC_MODS)
+SPC_MODS = $(patsubst %,$(BUILD_DIR)/rsp_spc_m%.o,0 1 2 3 4 6 7 8)
 $(BUILD_DIR)/rspspc/%.o: rspspc/%.c
 	@mkdir -p $(dir $@)
 	@echo "    [CC] $<"
@@ -95,7 +96,14 @@ $(BUILD_DIR)/rsp_spc_syms.inc: $(BUILD_DIR)/rsp_spc.o rspspc/gen_syms.py
 $(BUILD_DIR)/rsp_spc_ext.o: rspspc/rsp_spc_ext.S rspspc/spc_rsp_layout.h $(BUILD_DIR)/rsp_spc_syms.inc
 	@$(MAKE) --no-print-directory -f $(N64_INST)/include/n64.mk SOURCE_DIR=rspspc \
 		BUILD_DIR=$(BUILD_DIR) RSPASFLAGS="$(N64_RSPASFLAGS) -I$(abspath $(BUILD_DIR))" $@
-	python3 rspspc/gen_syms.py --check $(BUILD_DIR)/rsp_spc.elf $(BUILD_DIR)/rsp_spc_ext.elf $(N64_NM)
+# Paged modules (rsp_spc_m<k>.S), linked at the slot after the resident
+# borrowed code: they call it too (X_*). Checked to fit the slot.
+$(BUILD_DIR)/rsp_spc_ext_syms.inc: $(BUILD_DIR)/rsp_spc_ext.o rspspc/gen_syms.py
+	python3 rspspc/gen_syms.py --prefix X_ $(BUILD_DIR)/rsp_spc_ext.elf $@ $(N64_NM)
+$(BUILD_DIR)/rsp_spc_m%.o: rspspc/rsp_spc_m%.S rspspc/spc_rsp_layout.h $(BUILD_DIR)/rsp_spc_syms.inc $(BUILD_DIR)/rsp_spc_ext_syms.inc
+	@$(MAKE) --no-print-directory -f $(N64_INST)/include/n64.mk SOURCE_DIR=rspspc \
+		BUILD_DIR=$(BUILD_DIR) RSPASFLAGS="$(N64_RSPASFLAGS) -I$(abspath $(BUILD_DIR))" $@
+	python3 rspspc/gen_syms.py --check $(BUILD_DIR)/rsp_spc.elf $(BUILD_DIR)/rsp_spc_ext.elf $(N64_NM) $(@:.o=.elf)
 endif
 
 # ROMPAGING=1: the cartridge reads the SNES ROM through a TLB-mapped window

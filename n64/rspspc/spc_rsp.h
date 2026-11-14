@@ -30,7 +30,7 @@ typedef struct __attribute__((aligned(16))) {
 typedef struct __attribute__((aligned(16))) {
   SpcRspBlock b;
   uint8_t stage[64];
-  uint8_t sp0, psw0, pad[14];
+  uint8_t sp0, psw0, pad[14];      /* pad[0]: SPCRUN_MOD */
   uint16_t tags[32];               /* line number, bit 15 dirty */
   uint8_t wpages[32];              /* pages of dirty lines evicted during the run */
 } SpcRspRun;

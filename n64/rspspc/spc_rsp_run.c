@@ -190,6 +190,7 @@ static void post(Apu *apu, uint32_t n) {
   s_fl.active = true;
   memset(s_run.tags, 0, sizeof s_run.tags);       /* all line slots empty */
   memset(s_run.wpages, 0, sizeof s_run.wpages);
+  s_run.pad[0] = 0xff;                            /* SPCRUN_MOD: no paged module loaded */
   spc_rsp_post(&s_blk, apu->ram);
 }
 
