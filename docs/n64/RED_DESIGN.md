@@ -246,6 +246,68 @@ APU phases).
   for attach). Step taken already: rdpq without its RSP triangle engine
   (1,360 bytes of IMEM free instead of 36).
 
+## Independence: where the CPU waits on the RSP today (2026-11-14)
+
+The CPU posts work to the RSP and soon waits for it, everywhere:
+
+| Lane | Where the CPU waits | Why |
+|---|---|---|
+| BG lines | `n64_bgrsp_wait` mid-frame | the RSP's flags are needed to build the RDP commands |
+| BG lines | `n64_bgrsp_sync_vram` (`rspq_wait`) | queued jobs must finish with the old VRAM snapshot |
+| BG lines | `n64_bgrsp_release_vram` | the snapshot's DMA before VRAM changes |
+| rdpq | `rdpq_detach_wait` at frame end | the RDP finishes before the frame is shown |
+| rspq | queue buffer full | 50-60 us a frame in SMW |
+| S-DSP | before every RSP SPC run | the run may read what the batch changes |
+| S-DSP | `apu_dspSync` (audio pump, frame end, saves) | samples up to now |
+| S-DSP | log full; ENVX/OUTX/ENDX reads | the DSP must be current |
+| SPC | every APU lock (ports, audio pump) | the state lives on the CPU |
+| SPC | frame boundaries, uploads | the SPC brought exactly to guest time |
+| SPC | traps, DSP batch edges | one instruction or cycle runs in C |
+
+Three habits behind them: the CPU owns the state and the RSP borrows it per
+job; results are consumed right after they are posted; and waits are global
+(`rspq_wait` waits for every lane's work, so lanes block each other).
+
+The plan:
+1. Specific waits only: a per-job syncpoint or mailbox message, never
+   `rspq_wait` (quick, anywhere).
+2. Each Yellow lane owns its state on the RSP side (SPC, S-DSP; BG lines and
+   RDP lists in Phase G); the CPU sends timestamped inputs (port writes,
+   register writes, a horizon) and reads small outputs (ports, progress,
+   finished samples).
+3. Results consumed later: the audio pump takes the samples that are done
+   (the output buffer holds frames of slack) and never forces a sync;
+   graphics pipelines frames (the RSP and RDP draw frame N while the CPU
+   emulates N+1, from a PPU snapshot at the frame boundary).
+4. Syncs that must stay exact move off the CPU: ENVX/OUTX/ENDX and echo
+   reads become RSP-internal (the S-DSP runs up to now); a port read waits
+   only until the SPC's progress passes its cycle, with Blue yielding.
+
+Order: B2; global waits out; non-blocking audio pump; opcode paging; B3/B4
+(the two-overlay design below); frame pipelining and Phase G.
+
+## No traps to the CPU: two audio overlays on Red (2026-11-14)
+
+Every trap can go; what stays exact becomes a sync on the RSP:
+- Missing opcodes: rare handlers paged into a slot of the SPC overlay
+  (DMA'd on demand) instead of run in C.
+- IPL ROM reads: the 64-byte ROM in the SPC's DMEM. Opcode fetches from a
+  timer register: handled directly once no other trap needs undoing.
+- DSP register writes (FLG, ESA, EDL, DIR, SRCN, ENDX, writes with no batch
+  open) and sample-directory writes: the SPC logs every ARAM and DSP write
+  with its cycle; the S-DSP keeps a private ARAM copy and applies the log in
+  order, so it sees ARAM as it was at each sample. No page marks, no view
+  recopies (a few thousand 8-byte entries a frame).
+- ENVX/OUTX/ENDX reads and echo-area reads: a sync on the RSP: switch to the
+  S-DSP, run it to now, switch back.
+The shape: the SPC overlay (horizon, port queue, full log, paged handlers)
+and the S-DSP overlay (resident state and ARAM copy, echo into the shared
+ARAM) hand off through Red ("run this next", Phase 2's parked word); the
+CPU sets the horizon, queues port writes and reads ports and progress, and
+takes the full state only for saves. Costs: an overlay switch per batch and
+per sync (to be measured on hardware), the SPC's borrowed IMEM/DMEM returned
+before each handoff, IMEM care.
+
 **Step B (owner, 2026-11-14): the CPU out of the audio loop.** Measured
 after step A (the asynchronous SPC, `BRINGUP_NOTES.md`): S-DSP batches wait
 behind SPC runs, the S-DSP's ARAM view is recopied after every run, and
