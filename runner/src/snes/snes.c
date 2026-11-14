@@ -275,10 +275,6 @@ uint64_t apucyc_prof_calls = 0;
 double apucyc_prof_ms = 0.0;
 #endif
 
-/* Sizing counters (Red's port ring): catch-ups, and the most port writes
- * scheduled between two of them. */
-uint32_t g_apu_catchups, g_apu_port_burst_max;
-
 void snes_catchupApu(Snes* snes) {
   /* Upper cap is a guard against accumulator runaway after a long
    * stall; SPC runs at ~1 MHz so 10000 cycles is about 10 ms of real
@@ -323,6 +319,25 @@ void snes_catchup_stats(uint64_t *calls, uint64_t *cycles) {
   if (cycles) *cycles = s_catchup_cycles_total;
 }
 
+#ifdef N64_PHASE0
+/* Async SPC sizing (docs/n64/RED_DESIGN.md): CPU port reads, the SPC cycles
+ * each one makes the SPC run (bucketed), reads that see the same value as
+ * the port's last read, and SPC output-port changes (apu.c). */
+uint32_t g_apu_port_reads, g_apu_port_read_same, g_apu_outport_changes;
+uint32_t g_apu_port_read_gap[5];   /* SPC cycles run: <64, <256, <1024, <4096, more */
+uint64_t g_apu_port_read_cycles;
+void snes_p0_port_read(uint32_t cycles_before, uint8_t port, uint16_t v) {
+  extern Snes *g_snes;
+  static uint16_t s_last[4];
+  const uint32_t d = g_snes->apu->cycles - cycles_before;
+  g_apu_port_reads++;
+  g_apu_port_read_cycles += d;
+  g_apu_port_read_gap[d < 64 ? 0 : d < 256 ? 1 : d < 1024 ? 2 : d < 4096 ? 3 : 4]++;
+  if (s_last[port & 3] == v) g_apu_port_read_same++;
+  s_last[port & 3] = v;
+}
+#endif
+
 uint8_t snes_readBBus(Snes* snes, uint8_t adr) {
   if(adr < 0x40) {
     return ppu_read(g_ppu, adr);
@@ -331,8 +346,14 @@ uint8_t snes_readBBus(Snes* snes, uint8_t adr) {
     // APU port read ($2140-$217F). Synchronize the SPC to this exact guest
     // timestamp before observing its output-port state.
     RtlApuLock();
+#ifdef N64_PHASE0
+    const uint32_t p0c = snes->apu->cycles;
+#endif
     rtl_sync_apu_to_cpu_locked();
     uint8_t v = snes->apu->outPorts[adr & 0x3];
+#ifdef N64_PHASE0
+    snes_p0_port_read(p0c, adr, v);
+#endif
     v = rtl_apu_port_observers_read(0x2100 + adr, v);
     audio_trace_on_cpu_port_read((uint8_t)(adr & 0x3), v);
     RtlApuUnlock();

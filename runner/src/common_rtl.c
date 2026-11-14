@@ -1791,9 +1791,16 @@ uint16 ReadRegWord(uint16 reg) {
     void RtlApuLock(void); void RtlApuUnlock(void);
     extern Snes *g_snes;
     RtlApuLock();
+#ifdef N64_PHASE0
+    const uint32_t p0c = g_snes->apu->cycles;
+#endif
     rtl_sync_apu_to_cpu_locked();
     uint8_t lo = g_snes->apu->outPorts[(reg & 0x3)];
     uint8_t hi = g_snes->apu->outPorts[((reg + 1) & 0x3)];
+#ifdef N64_PHASE0
+    { void snes_p0_port_read(uint32_t, uint8_t, uint16_t);
+      snes_p0_port_read(p0c, reg, (uint16_t)(lo | hi << 8)); }   /* one read of the pair */
+#endif
     RtlApuUnlock();
     lo = rtl_apu_port_observers_read(reg, lo);
     hi = rtl_apu_port_observers_read(reg + 1, hi);

@@ -194,6 +194,20 @@ buffer stay as they are (rdpq untouched), and a small ring carries control.
   for Phase 2. Phase 2's kernel code may have to move out of the common
   part (e.g. into a Red overlay that rdpq never shares IMEM with).
 
+**Phase 2 scheduling: options kept for later** (owner, 2026-11-14: decide
+once the RSP is loaded and its idle time measured). All three share the
+overlay-side contract (bounded slices, a preempt check macro in the
+overlay, state in rspq's saved-state section, one overlay switch per
+resume):
+- A: a parked command word Red runs when idle, chosen by the CPU (about 4
+  kernel instructions; the CPU picks; no Red-side chaining).
+- B: a task table in the kernel, Red picks (30-50 kernel instructions;
+  chains SPC -> S-DSP by itself; needs libdragon's GL left unbuilt).
+- C: A plus a scheduler overlay that writes the parked word (policy without
+  kernel cost; one extra switch per decision).
+Two words, one writer each, for the parked command (CPU "requested", Red
+"current/done").
+
 **Phase 2: Red services.**
 - The borrow/return macros and the resident/borrowable split; the SPC
   overlay's own borrowing moves onto them (and its DMEM overflow is fixed by

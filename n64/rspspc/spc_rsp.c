@@ -23,8 +23,8 @@ _Static_assert(offsetof(SpcRspBlock, psw) == SPCST_PSW && offsetof(SpcRspBlock, 
 
 static uint32_t s_ovl;
 static uint8_t *s_ext;   /* rsp_spc_ext's code, then the save area for rspq's IMEM */
-#define EXT_SAVE_OFS 0x280   /* then rspq's IMEM (0x278 bytes), then its DMEM at 0x500 */
-#define EXT_BUF_SIZE 0x700
+#define EXT_SAVE_OFS 0x300   /* then rspq's IMEM, then its borrowed DMEM at 0x600 (rsp_spc.S) */
+#define EXT_BUF_SIZE 0x840
 
 void spc_rsp_init(void) {
   s_ovl = rspq_overlay_register(&rsp_spc);

@@ -2578,6 +2578,55 @@ free, unused here) and mixer (112 bytes, 24 of DMEM) are now the overlays
 that limit Red's kernel growth. Long term, Red feeds the RDP itself and
 rdpq's overlay goes (RED_DESIGN.md, Phase G).
 
+### The SPC overlay beside Red (2026-11-14)
+
+Owner direction: move emulation work from Green into Yellow overlays, the
+SPC700 first; the Phase 2 scheduling options wait until the RSP is loaded
+(RED_DESIGN.md keeps them).
+
+**Fitting again.** The SPC overlay (`n64/rspspc`) borrows rspq's IMEM and
+DMEM for a run. With Red's resident words that broke twice over: the
+overlay no longer fit (72 bytes of IMEM, 64 of DMEM over), and a CPU ring
+write (an S-DSP launch) during a run would have landed in the SPC's state
+block.
+- Red's resident words (mailbox, ring, indices, idle counter) now sit at the
+  start of rspq's DMEM, 0x08-0x47 (`RSPQ_RESIDENT_END`); the overlay borrows
+  from there to its own data, so the CPU may write them at any time.
+- The state block moves to DMEM 0x50 (`ST`), the run's scratch after it, and
+  the line cache's 64 tag bytes (cleared every run) join the borrowed area:
+  exactly the 64 bytes of DMEM the overlay was over.
+- IMEM: the core and its borrowed part had 4 bytes to spare between them
+  (the borrowed part grows with rspq's code, the core shrinks by as much),
+  so moving code would not help. Fifteen delay slots filled instead (calls
+  that end a handler become a jump with `ra` set in the slot, as the core
+  already did): 76 bytes. Borrowed part 620 of 704 bytes.
+- The RDRAM save area grows with rspq's code (`EXT_SAVE_OFS` 0x300,
+  `EXT_DSAVE_OFS` 0x600); `gen_syms.py --check` now also checks the save
+  areas and that the state block and scratch fit the borrowed DMEM.
+- Random comparison against `spc.c` (ares, three ranges of the 10,000
+  cases): 8,500 run, all passing (the last range stopped at its time
+  limit). The emulator builds' hashes and rendering are unchanged with
+  the resident words moved (SMW 41, Pitfall 4, JM2 18 compared frames);
+  redtest v2 still passes.
+
+**How the SPC is driven (Phase 0 counters, ares, per frame).**
+
+| | SMW title | Pitfall | JM2 |
+|---|---|---|---|
+| CPU port reads | 0-1 | 3,800-7,100 (all the same value) | 2 |
+| SPC cycles a port read made the SPC run | 0 | 0 | 0-2 |
+| SPC output-port changes | 0 | 0-3 | 0 |
+| CPU port writes | 0-3 | 0-7 | 1-2 |
+
+Port reads almost never run the SPC: it is already at the read's time.
+The SPC runs at the bridge's catch-up points (`interp_bridge`'s pending
+flush: "bring the SPC to the current guest time"), 5-9 a frame in SMW and
+about 86 in JM2, whose results nobody needs at once. So an asynchronous SPC
+can turn those catch-ups into jobs ("run to H") the CPU posts without
+waiting. The CPU joins where it needs SPC state: a port read the SPC has
+not reached, a DSP batch edge (today's glue runs that cycle in C), a trap,
+a state save.
+
 ## Next steps
 
 1. Audio: check the RSP DSP by ear on hardware (output arrives later than

@@ -632,6 +632,21 @@ static int host_main(void) {
                        (unsigned long)(wait / 60 / 47), (unsigned long)idle,
                        (unsigned long)(g_apu_port_writes / 60), (unsigned long)(g_apu_catchups / 60),
                        (unsigned long)g_apu_port_burst_max);
+      {
+        extern uint32_t g_apu_port_reads, g_apu_port_read_same, g_apu_outport_changes, g_apu_port_read_gap[5];
+        extern uint64_t g_apu_port_read_cycles;
+        n64_platform_log("[phase0] SPC per frame: CPU port reads %lu (same value %lu), SPC cycles per read %lu, "
+                         "runs <64:%lu <256:%lu <1k:%lu <4k:%lu more:%lu, SPC port changes %lu, CPU port writes %lu\n",
+                         (unsigned long)(g_apu_port_reads / 60), (unsigned long)(g_apu_port_read_same / 60),
+                         (unsigned long)(g_apu_port_reads ? g_apu_port_read_cycles / g_apu_port_reads : 0),
+                         (unsigned long)(g_apu_port_read_gap[0] / 60), (unsigned long)(g_apu_port_read_gap[1] / 60),
+                         (unsigned long)(g_apu_port_read_gap[2] / 60), (unsigned long)(g_apu_port_read_gap[3] / 60),
+                         (unsigned long)(g_apu_port_read_gap[4] / 60), (unsigned long)(g_apu_outport_changes / 60),
+                         (unsigned long)(g_apu_port_writes / 60));
+        g_apu_port_reads = g_apu_port_read_same = g_apu_outport_changes = 0;
+        g_apu_port_read_cycles = 0;
+        for (int i = 0; i < 5; i++) g_apu_port_read_gap[i] = 0;
+      }
       g_bgrsp_cmds = g_apu_port_writes = g_apu_catchups = g_apu_port_burst_max = 0;
     }
 #endif

@@ -324,6 +324,38 @@ _data_start:
 # Data for vector shift registers.
     .byte 0x80, 0x40, 0x20, 0x10, 0x08, 0x04, 0x02, 0x01
 
+# Red's resident words come first, right after the shift constants: an
+# overlay that borrows rspq's DMEM during a long run (the SPC700) borrows
+# everything after them (RSPQ_RESIDENT_END), so the CPU may write the
+# mailbox and the ring at any time.
+# Mailbox (SuperDuperFX "Red"): one-word boxes the CPU reads and writes in
+# DMEM while the RSP runs (safe: hardware-tested, see n64/hwtest). Down is
+# written only by the CPU, up only by the RSP; posting up rings SIG0 (and
+# the SP interrupt). Two words are reserved for the block boxes.
+RSPQ_MAILBOX_DOWN:            .long 0
+RSPQ_MAILBOX_UP:              .long 0
+RSPQ_MAILBOX_RESERVED:        .long 0, 0
+
+# Command ring (SuperDuperFX "Red"): commands the CPU writes straight into
+# DMEM (rspq_ring_write), for commands that do not depend on work still
+# queued in RDRAM. The CPU writes a command's words, then publishes them by
+# writing RSPQ_RING_HEAD; Red writes RSPQ_RING_TAIL as it consumes them
+# (byte offsets into RSPQ_RING). A command never wraps: the CPU pads the
+# ring's end with no-op commands (RSPQ_RING_PAD_WORD) and starts it over.
+# Red runs ring commands with rspq_dmem_buf_ptr pointing into the ring, below RSPQ_DMEM_BUFFER, so it is
+# negative exactly while a ring command runs (the index words after the ring
+# keep it negative at the ring's end), and every gp-relative command load
+# works. Every byte here comes out of every overlay's DMEM, hence the small
+# ring: it carries control commands
+# of up to 6 words; bulk goes through RDRAM.
+RSPQ_RING:                    .ds.b RSPQ_RING_SIZE
+RSPQ_RING_HEAD:               .long 0
+RSPQ_RING_TAIL:               .long 0
+RSPQ_RING_SAVED_GP:           .long 0     # the RDRAM stream's position meanwhile
+RSPQ_IDLE_SPINS:              .long 0     # turns of the idle spin (rspq_idle_spins)
+
+RSPQ_RESIDENT_END:
+
 # Overlay table. Contains packed pointer to overlay data segment in RDRAM 
 # and overlay data size
 RSPQ_OVERLAY_TABLE:           .ds.l RSPQ_MAX_OVERLAYS
@@ -338,32 +370,6 @@ RSPQ_POINTER_STACK:           .ds.l (RSPQ_MAX_BLOCK_NESTING_LEVEL+2)
 RSPQ_SCRATCH_MEM: # the following 32-bytes can be used by any overlay as temporary scratch-memory
     .ascii "Dragon RSP Queue"
     .ascii "Rasky & Snacchus"
-
-# Mailbox (SuperDuperFX "Red"): one-word boxes the CPU reads and writes in
-# DMEM while the RSP runs (safe: hardware-tested, see n64/hwtest). Down is
-# written only by the CPU, up only by the RSP; posting up rings SIG0 (and
-# the SP interrupt). Two words are reserved for the block boxes.
-RSPQ_MAILBOX_DOWN:            .long 0
-RSPQ_MAILBOX_UP:              .long 0
-RSPQ_MAILBOX_RESERVED:        .long 0, 0
-
-# Command ring (SuperDuperFX "Red"): commands the CPU writes straight into
-# DMEM (rspq_ring_write), for commands that do not depend on work still
-# queued in RDRAM. The CPU writes a command's words, then publishes them by
-# writing RSPQ_RING_HEAD; Red writes RSPQ_RING_TAIL as it consumes them
-# (byte offsets into RSPQ_RING). A command never wraps: the CPU pads the
-# ring's end with no-op commands (RSPQ_RING_PAD_WORD) and starts it over. Red runs ring commands with
-# rspq_dmem_buf_ptr pointing into the ring, below RSPQ_DMEM_BUFFER, so it is
-# negative exactly while a ring command runs (the index words after the ring
-# keep it negative at the ring's end), and every gp-relative command load
-# works. Every byte here comes out of every overlay's DMEM (libdragon's mixer
-# has 16 bytes to spare), hence the small ring: it carries control commands
-# of up to 6 words; bulk goes through RDRAM.
-RSPQ_RING:                    .ds.b RSPQ_RING_SIZE
-RSPQ_RING_HEAD:               .long 0
-RSPQ_RING_TAIL:               .long 0
-RSPQ_RING_SAVED_GP:           .long 0     # the RDRAM stream's position meanwhile
-RSPQ_IDLE_SPINS:              .long 0     # turns of the idle spin (rspq_idle_spins)
 
     .align 3
 RSPQ_DMEM_BUFFER:             .ds.b RSPQ_DMEM_BUFFER_SIZE

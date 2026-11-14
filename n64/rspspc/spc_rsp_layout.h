@@ -36,9 +36,13 @@
 /* Raw log entry (8 bytes, as ApuDspLogEntry but with the instruction's
  * cycle offset in the run where the sample tag goes; spc_rsp_run.c turns
  * it into the tag and keeps what the C core would have logged). */
-#define SPCLOG_STAGE   0x100  /* DMEM: 64-byte staging buffer (borrowed DMEM) */
-#define SPCRUN_SP0     0x140  /* DMEM: SP and PSW at the instruction's start */
+/* The run's scratch, after the block in borrowed DMEM (offsets from the
+ * block's DMEM address, ST in rsp_spc.S). */
+#define SPCLOG_STAGE   0x100  /* 64-byte staging buffer for the raw log */
+#define SPCRUN_SP0     0x140  /* SP and PSW at the instruction's start */
 #define SPCRUN_PSW0    0x141
+#define SPCRUN_TAGS    0x150  /* 64 bytes: the line cache's tags */
+#define SPCRUN_END     0x190
 
 #define SPCEXIT_BUDGET 0      /* the budget is used up */
 #define SPCEXIT_TRAP   1      /* stopped before an opcode the RSP leaves to the CPU */

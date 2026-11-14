@@ -80,8 +80,6 @@ PC0:        .ds.b 2                 # PC of the instruction in progress
 FP0:        .ds.b 4                 # fp before it (a trap rolls back to both)
 REGS:       .ds.b 8                 # psw a x y sp, for register families
     .align 4
-TAGS:       .ds.b 64                # line number per slot, bit 15 dirty; 0 empty
-    .align 4
 ZP:         .ds.b 0x200             # ARAM $0000-$01FF
     .align 4
 LINES:      .ds.b 2048              # 32 slots x 64 bytes
@@ -92,12 +90,16 @@ LINES:      .ds.b 2048              # 32 slots x 64 bytes
  * rspq does not run during a command. rsp_spc_ext.S is linked there and
  * starts with an entry table. */
 #define RSPQ_IMEM_SIZE  (_ovl_text_start - _start)
-#define EXT_SAVE_OFS    0x280           /* rspq IMEM save area after the code (spc_rsp.c) */
-#define EXT_DSAVE_OFS   0x500           /* rspq DMEM save area */
+#define EXT_SAVE_OFS    0x300           /* rspq IMEM save area after the code (spc_rsp.c) */
+#define EXT_DSAVE_OFS   0x600           /* rspq DMEM save area */
 /* The borrowed DMEM: rspq's, below the overlay's data (its command buffer
- * and state; untouched during a command). The state block lives there. */
-#define RSPQ_DMEM_SIZE  (_ovl_data_start - _data_start)
-    .set ST, 0
+ * and state; untouched during a command), except Red's resident words at
+ * its start (mailbox, command ring), which the CPU may write at any time.
+ * The state block lives there, then the run's scratch (spc_rsp_layout.h
+ * SPCRUN_*); gen_syms.py --check checks it all fits. */
+#define BORROW_DMEM_SIZE (_ovl_data_start - RSPQ_RESIDENT_END)
+    .set ST, 0x50                   /* above RSPQ_RESIDENT_END, 16-aligned */
+    .set TAGS, ST + SPCRUN_TAGS     /* line number per slot, bit 15 dirty; 0 empty */
 #define EXT_TSYNC_NOW   0x1000
 #define EXT_TSYNC       0x1008
 #define EXT_F1          0x1010
@@ -109,9 +111,9 @@ SpcCmd_Run:
     sw a1, %lo(EXTBUF)
     move s7, a0                     # state block (the DMA ignores the top byte: command id)
     addiu s0, a1, EXT_DSAVE_OFS     # rspq's DMEM out first, then the block in
-    li s4, 0
+    li s4, %lo(RSPQ_RESIDENT_END)
     jal SDmaOutA
-    li t0, DMA_SIZE(RSPQ_DMEM_SIZE, 1)
+    li t0, DMA_SIZE(BORROW_DMEM_SIZE, 1)
     move s0, s7
     li s4, %lo(ST)
     jal SDmaIn
@@ -158,11 +160,12 @@ SpcCmd_Run:
     sw zero, %lo(ST + SPCST_RAWN)   # raw log bytes so far (staging: the last RAWN & 63)
 
 loop:
+OP_NOP:                             # (also the NOP handler)
     blez fp, done
     sh s6, %lo(PC0)
     sw fp, %lo(FP0)
-    sb s5, SPCRUN_SP0               # a trap inside a store rolls these back too
-    sb s7, SPCRUN_PSW0
+    sb s5, ST + SPCRUN_SP0               # a trap inside a store rolls these back too
+    sb s7, ST + SPCRUN_PSW0
     move t4, zero                   # this instruction's cycles: none charged yet
     move a0, s6
     jal rd
@@ -284,11 +287,11 @@ log_put:
     lw s0, %lo(ST + SPCST_BUDGET)
     subu s0, s0, fp
     subu s0, s0, t4                 # cycle offset of this instruction in the run
-    sh t9, SPCLOG_STAGE + 0(s4)
-    sb a1, SPCLOG_STAGE + 2(s4)
-    sb v0, SPCLOG_STAGE + 3(s4)
-    sh s0, SPCLOG_STAGE + 4(s4)
-    sb t2, SPCLOG_STAGE + 6(s4)
+    sh t9, ST + SPCLOG_STAGE + 0(s4)
+    sb a1, ST + SPCLOG_STAGE + 2(s4)
+    sb v0, ST + SPCLOG_STAGE + 3(s4)
+    sh s0, ST + SPCLOG_STAGE + 4(s4)
+    sb t2, ST + SPCLOG_STAGE + 6(s4)
     addiu t0, t0, 8
     andi s4, t0, 63
     bnez s4, 1f
@@ -297,7 +300,7 @@ log_put:
     lw s0, %lo(ST + SPCST_RAWBUF)
     addu s0, s0, t0
     addiu s0, s0, -64
-    li s4, SPCLOG_STAGE
+    li s4, ST + SPCLOG_STAGE
     jal SDmaOut
     li t0, DMA_SIZE(64, 1)
     move ra, k0
@@ -394,16 +397,14 @@ wio_f3:
     b wr_zp
     move ra, t8
 wio_f1:                             # $F1: in the borrowed IMEM (rsp_spc_ext.S)
-    li t1, EXT_F1
     j ext_go
-    nop
+    li t1, EXT_F1
 
 # Code in the borrowed IMEM (rsp_spc_ext.S, loaded over rspq's code for the
 # run): wait for that load, then enter through the table at its start.
 tsync_now:                          # timers to the start of this instruction
-    li t1, EXT_TSYNC_NOW
     j ext_go
-    nop
+    li t1, EXT_TSYNC_NOW
 tsync:                              # timers to cycle t2
     li t1, EXT_TSYNC
 ext_go:
@@ -502,9 +503,8 @@ fetchw:                             # v0 = word at PC, PC += 2 (ra kept in v1)
     move v1, ra
     jal fetch
     nop
-    move t5, v0
     jal fetch
-    nop
+    move t5, v0
     sll v0, v0, 8
     jr v1
     or v0, v0, t5
@@ -584,9 +584,8 @@ M_IDX:
     andi a2, a2, 0xff
     or a2, a2, k1
     andi a3, a3, 0xff
-    or a3, a3, k1
     jal m_ptrw
-    nop
+    or a3, a3, k1
     jr t6
     move a2, t5
 M_IMM:
@@ -625,9 +624,8 @@ M_IDY:
     or a2, v0, k1
     addiu a3, v0, 1
     andi a3, a3, 0xff
-    or a3, a3, k1
     jal m_ptrw
-    nop
+    or a3, a3, k1
     b m_ab16
     addu a2, t5, s3
 m_ptrw:                             # t5 = [a2] | [a3] << 8 (ra kept in v1)
@@ -659,10 +657,9 @@ m2_rd:                              # t5 = [a3] (source), v0 = [a2] (ra kept in 
     jal rd
     move a0, a3
     move t5, v0
-    jal rd
+    move ra, v1
+    j rd
     move a0, a2
-    jr v1
-    nop
 
 #----------------------------------------------------------------------
 # Operations.
@@ -676,9 +673,6 @@ zn_loop:                            # Z and N from the byte v0, next opcode
     b loop
     or s7, s7, t0
 
-OP_NOP:
-    j loop
-    nop
 OP_OR:
     jal rd
     move a0, a2
@@ -756,10 +750,9 @@ movs_c:
     jal rd                          # the dummy read, as spc_movs
     move a0, a2
 wr_loop:                            # [a2] = a1, next opcode
-    jal wr
+    li ra, %lo(loop)
+    j wr
     move a0, a2
-    j loop
-    nop
 OP_MOVSX:
     b movs_c
     move a1, s2
@@ -915,9 +908,8 @@ OP_JMP:
     j loop
     move s6, a2
 OP_CALL:
-    srl a1, s6, 8
     jal push
-    nop
+    srl a1, s6, 8
     andi a1, s6, 0xff
     move s6, a2
     j push                          # returns to loop
@@ -925,9 +917,8 @@ OP_CALL:
 OP_RET:
     jal pull
     nop
-    move t5, v0
     jal pull
-    nop
+    move t5, v0
     sll v0, v0, 8
     j loop
     or s6, t5, v0
@@ -1000,9 +991,8 @@ OP_INCDEC:                          # decx incx deca inca decy incy
     b xr_st
     andi v0, v0, 0xff
 OP_DIV:                             # on the vector unit, in the borrowed IMEM
-    li t1, EXT_DIV
     j ext_go
-    nop
+    li t1, EXT_DIV
 OP_XCN:
     srl t0, s1, 4
     sll s1, s1, 4
@@ -1011,19 +1001,16 @@ OP_XCN:
     j zn_loop
     move v0, s1
 OP_MUL:                             # on the vector unit, in the borrowed IMEM
-    li t1, EXT_MUL
     j ext_go
-    nop
+    li t1, EXT_MUL
 # Words (direct page): a2 low address, a3 high.
 OP_MOVW:
     jal rdw_dp
     nop
     andi s1, t5, 0xff
     srl s3, t5, 8
-    jal zn16
-    nop
-    j loop
-    nop
+    j zn16
+    li ra, %lo(loop)
 OP_MOVWS:
     addiu a3, a2, 1
     andi a3, a3, 0xff
@@ -1034,10 +1021,9 @@ OP_MOVWS:
     jal wr
     move a0, a2
     move a1, s3
-    jal wr
+    li ra, %lo(loop)
+    j wr
     move a0, a3
-    j loop
-    nop
 OP_SUBW:
     jal rdw_dp
     nop
@@ -1074,17 +1060,15 @@ addw_c:                             # ya + t5 + t6, H as spc.c (always +1)
     andi t5, t4, 0xffff
     andi s1, t5, 0xff
     srl s3, t5, 8
-    jal zn16
-    nop
-    j loop
-    nop
+    j zn16
+    li ra, %lo(loop)
 
 # Left to the CPU: stop before this opcode.
 OP_TRAP:                            # also from an access the CPU must make
     lhu s6, %lo(PC0)
     lw fp, %lo(FP0)
-    lbu s5, SPCRUN_SP0
-    lbu s7, SPCRUN_PSW0
+    lbu s5, ST + SPCRUN_SP0
+    lbu s7, ST + SPCRUN_PSW0
     li t0, SPCEXIT_TRAP
     sw t0, %lo(ST + SPCST_EXIT)
 
@@ -1106,9 +1090,8 @@ done:
     sb t1, %lo(ST + SPCST_CCL)
     lw t2, %lo(ST + SPCST_CYCLES)
     addu t2, t2, t0
-    sw t2, %lo(ST + SPCST_CYCLES)
     jal tsync                       # timers current at the end, as apu_runCycles
-    nop
+    sw t2, %lo(ST + SPCST_CYCLES)
     lw s0, %lo(EXTBUF)              # rspq's IMEM back (nothing borrowed is
     addiu s0, s0, EXT_SAVE_OFS      # called after this), during the writebacks
     li s4, 0x1000
@@ -1120,7 +1103,7 @@ done:
     lw s0, %lo(ST + SPCST_RAWBUF)
     subu t1, t1, t0
     addu s0, s0, t1
-    li s4, SPCLOG_STAGE
+    li s4, ST + SPCLOG_STAGE
     jal SDmaOut
     addiu t0, t0, -1                # DMA_SIZE(bytes, 1)
 1:  li s5, 0                        # write back dirty lines
@@ -1149,9 +1132,9 @@ done:
     li t0, DMA_SIZE(SPCST_SIZE, 1)
     lw s0, %lo(EXTBUF)
     addiu s0, s0, EXT_DSAVE_OFS
-    li s4, 0
+    li s4, %lo(RSPQ_RESIDENT_END)
     jal SDmaIn                      # waits for every transfer: rspq whole again
-    li t0, DMA_SIZE(RSPQ_DMEM_SIZE, 1)
+    li t0, DMA_SIZE(BORROW_DMEM_SIZE, 1)
     lw ra, %lo(RET_RA)
     jr ra
     nop

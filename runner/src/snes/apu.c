@@ -111,8 +111,10 @@ uint32_t apu_portQueueDepth(const Apu* apu) {
 }
 
 /* Sizing counters (Red's port ring): writes scheduled, and the writes since
- * the last APU catch-up (snes_catchupApu keeps the largest such burst). */
+ * the last SPC run (apu_runCycles keeps the largest such burst). */
 uint32_t g_apu_port_writes, g_apu_port_burst;
+/* SPC runs (apu_runCycles), and the most port writes between two of them. */
+uint32_t g_apu_catchups, g_apu_port_burst_max;
 
 bool apu_schedulePortWrite(Apu* apu, uint8_t port, uint8_t val,
                            uint64_t guest_cycle) {
@@ -651,7 +653,6 @@ void SNESRECOMP_APU_RUN_HOOK(Apu* apu, uint32_t clocks);
 
 void apu_runCycles(Apu* apu, uint32_t clocks) {
   {  /* sizing counters: an SPC run is a horizon point for Red's port ring */
-    extern uint32_t g_apu_catchups, g_apu_port_burst_max;
     g_apu_catchups++;
     if (g_apu_port_burst > g_apu_port_burst_max) g_apu_port_burst_max = g_apu_port_burst;
     g_apu_port_burst = 0;
@@ -829,6 +830,9 @@ void apu_cpuWrite(Apu* apu, uint16_t adr, uint8_t val) {
     case 0xf6:
     case 0xf7: {
       audio_trace_on_spc_port_write((uint8_t)(adr - 0xf4), val);
+#ifdef N64_PHASE0
+      { extern uint32_t g_apu_outport_changes; if (apu->outPorts[adr - 0xf4] != val) g_apu_outport_changes++; }
+#endif
       apu->outPorts[adr - 0xf4] = val;
       break;
     }
