@@ -2676,6 +2676,25 @@ Y ($FE, about 165 a frame in JM2), ROR dp ($6B), NOTC ($ED); and Pitfall's
 sample directory at page 0 keeps whole stretches in C. ares's CPU/RSP
 timing is loose: hardware decides how much of this is real.
 
+### Step B1: the RSP run reports the pages it wrote (2026-11-14)
+
+The S-DSP reads ARAM from its own copy (the view), kept current page by
+page: the C SPC's write path clears a page's "fresh" bit. The RSP SPC
+writes through its line cache, so each run used to mark the whole view
+stale and the next launch recopied every page it reads.
+- The run's area (the line tags and a new 32-byte page bitmap) now travels
+  with the state block both ways (`SPCRUN_IO`, 0x1B0 bytes); the CPU zeroes
+  it before a run, which also replaces the core's tag clearing.
+- A dirty line evicted during the run marks its page (`x_wmark`, in the
+  borrowed IMEM, called from `fill`); the lines still dirty at the end are
+  in the tags; pages 0-1 go back whole and count as written.
+- After the run the CPU clears exactly those pages' bits (`mark_written`).
+- Hashes identical to the C core (SMW 47, Pitfall 6, JM2 20 frames); random
+  comparison 2,000 of 2,000.
+- ares, per frame: pages recopied 139 -> 0 (SMW) and 299 -> 0 (JM2); the
+  view's cost 1.5 -> 0.2 ms and 3.1 -> 0.2 ms. Frame time unchanged: the
+  S-DSP join wait (12-14 ms) now dominates, which B2-B4 address.
+
 ## Next steps
 
 1. Audio: check the RSP DSP by ear on hardware (output arrives later than

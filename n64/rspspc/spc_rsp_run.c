@@ -15,7 +15,8 @@ uint32_t g_spc_rsp_runs, g_spc_rsp_traps, g_spc_rsp_insns, g_spc_rsp_cycles, g_s
 /* Longest single RSP run: the timers' closed form divides 16-bit tick counts. */
 #define SPC_RSP_MAX_RUN (1u << 19)
 
-static SpcRspBlock s_blk;
+static SpcRspRun s_run;
+#define s_blk (s_run.b)
 
 static void to_block(Apu *apu, SpcRspBlock *b) {
   const Spc *s = apu->spc;
@@ -167,7 +168,30 @@ static void post(Apu *apu, uint32_t n) {
 #endif
   s_fl.c0 = apu->cycles;
   s_fl.active = true;
+  memset(s_run.tags, 0, sizeof s_run.tags);       /* all line slots empty */
+  memset(s_run.wpages, 0, sizeof s_run.wpages);
   spc_rsp_post(&s_blk, apu->ram);
+}
+
+/* The pages the run wrote are no longer current in the S-DSP's view of
+ * ARAM (the C core clears these bits in its write path): pages 0-1, which
+ * go back whole, those of the lines still dirty at the end, and those of
+ * dirty lines evicted during the run. */
+static void mark_written(Apu *apu) {
+#if SNESRECOMP_APU_DEFER_DSP
+  uint8_t *fresh = apu->spc->dspViewFresh;
+  fresh[0] &= (uint8_t)~3u;
+  for (int i = 0; i < 32; i++) {
+    const uint16_t t = s_run.tags[i];
+    if (t & 0x8000) {
+      const uint32_t page = (t & 0x7fffu) >> 2;
+      fresh[page >> 3] &= (uint8_t)~(1u << (page & 7));
+    }
+    fresh[i] &= (uint8_t)~s_run.wpages[i];
+  }
+#else
+  (void)apu;
+#endif
 }
 
 /* Collect the run in flight: its state back into the Apu, its log, and the
@@ -175,7 +199,7 @@ static void post(Apu *apu, uint32_t n) {
 static uint32_t collect(Apu *apu) {
   s_fl.active = false;
   const int exit = spc_rsp_wait(&s_blk);
-  apu_dspViewStale(apu);  /* the RSP's SPC wrote ARAM without the write checks */
+  mark_written(apu);
   from_block(apu, &s_blk);
   /* A trap re-runs the instruction in C: undo its timer reads' clears. */
   if (exit == SPCEXIT_TRAP && s_blk.undoFp && s_blk.undoFp == (uint32_t)(s_blk.budget - (int32_t)s_blk.used))

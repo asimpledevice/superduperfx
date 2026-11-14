@@ -246,6 +246,23 @@ APU phases).
   for attach). Step taken already: rdpq without its RSP triangle engine
   (1,360 bytes of IMEM free instead of 36).
 
+**Step B (owner, 2026-11-14): the CPU out of the audio loop.** Measured
+after step A (the asynchronous SPC, `BRINGUP_NOTES.md`): S-DSP batches wait
+behind SPC runs, the S-DSP's ARAM view is recopied after every run, and
+each batch edge stops the RSP for C work. In stages, each hash-identical
+against the C core:
+- B1: the RSP run reports the pages it wrote (its line tags and the dirty
+  lines it evicted), so only those leave the S-DSP's view.
+- B2: the S-DSP keeps its state on the RSP side between batches; the CPU
+  unpacks it only where it reads DSP state (ENVX/OUTX/ENDX, saves).
+- B3: the SPC writes its log in the S-DSP's operation format (sample tags,
+  watched pages), so the CPU no longer filters and decodes it.
+- B4: batch edges on the RSP: the SPC run continues past an edge and the
+  S-DSP batch follows it on the RSP without a CPU step; the batch-start page
+  marks (`apu_dspStartBatch`) move with it. This is where Red needs an
+  overlay to queue a follow-on command (Phase 2's parked word, or the
+  SPC overlay handing over directly).
+
 **Phase 5: the S-DSP chained behind the SPC.**
 - S-DSP batches as queued commands consuming the SPC's log; the CPU joins
   only where it needs DSP state. The S-DSP overlay keeps its state between

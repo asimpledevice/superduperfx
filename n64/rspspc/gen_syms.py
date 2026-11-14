@@ -22,7 +22,7 @@ if sys.argv[1] == "--check":   # the borrowed-IMEM code must fit what it borrows
     lo = lambda a: a & 0xfff
     if lo(core["_ovl_data_start"]) - lo(core["RSPQ_RESIDENT_END"]) > 0x240:
         sys.exit("rspq's borrowed DMEM outgrew the save area")
-    if lo(core["ST"]) < lo(core["RSPQ_RESIDENT_END"]) or lo(core["TAGS"]) + 64 > lo(core["_ovl_data_start"]):
+    if lo(core["ST"]) < lo(core["RSPQ_RESIDENT_END"]) or lo(core["ST"]) + 0x1b0 > lo(core["_ovl_data_start"]):
         sys.exit("rsp_spc: the state block and scratch do not fit the borrowed DMEM")
     sys.exit(0)
 nm = sys.argv[3] if len(sys.argv) > 3 else "mips64-elf-nm"

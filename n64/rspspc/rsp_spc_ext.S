@@ -28,6 +28,19 @@ ext_begin:
     nop
     j x_mul                         # 0x20
     nop
+    j x_wmark                       # 0x28
+    nop
+
+x_wmark:                            # line t2 written back: mark its page
+    srl s0, t2, 5                   # bitmap byte (page >> 3)
+    srl t0, t2, 2
+    andi t0, t0, 7
+    li t1, 1
+    sllv t1, t1, t0
+    lbu t0, %lo(C_ST + SPCRUN_WPAGES)(s0)
+    or t0, t0, t1
+    jr ra
+    sb t0, %lo(C_ST + SPCRUN_WPAGES)(s0)
 
 x_f1:                               # $F1: timer enables, port clears, IPL ROM
     move t8, ra

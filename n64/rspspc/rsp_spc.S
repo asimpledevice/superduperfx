@@ -105,6 +105,7 @@ LINES:      .ds.b 2048              # 32 slots x 64 bytes
 #define EXT_F1          0x1010
 #define EXT_DIV         0x1018
 #define EXT_MUL         0x1020
+#define EXT_WMARK       0x1028
 
 SpcCmd_Run:
     sw ra, %lo(RET_RA)
@@ -116,8 +117,8 @@ SpcCmd_Run:
     li t0, DMA_SIZE(BORROW_DMEM_SIZE, 1)
     move s0, s7
     li s4, %lo(ST)
-    jal SDmaIn
-    li t0, DMA_SIZE(SPCST_SIZE, 1)
+    jal SDmaIn                      # with the run's area: the tags and page bits zeroed
+    li t0, DMA_SIZE(SPCRUN_IO, 1)
     sw s7, %lo(ST + SPCST_USED)     # remember the block address (USED is output)
     lw s0, %lo(ST + SPCST_ARAM)
     li s4, %lo(ZP)
@@ -132,11 +133,6 @@ SpcCmd_Run:
     li s4, 0x1000
     jal SDmaInA
     li t0, DMA_SIZE(RSPQ_IMEM_SIZE, 1)
-    li t1, %lo(TAGS)                # all line slots empty (tag 0: lines 0-7 are ZP)
-    sqv $v00, 0x00, 0x00, t1
-    sqv $v00, 0x00, 0x10, t1
-    sqv $v00, 0x00, 0x20, t1
-    sqv $v00, 0x00, 0x30, t1
     lbu s1, %lo(ST + SPCST_A)
     lbu s2, %lo(ST + SPCST_X)
     lbu s3, %lo(ST + SPCST_Y)
@@ -402,6 +398,9 @@ wio_f1:                             # $F1: in the borrowed IMEM (rsp_spc_ext.S)
 
 # Code in the borrowed IMEM (rsp_spc_ext.S, loaded over rspq's code for the
 # run): wait for that load, then enter through the table at its start.
+wmark:                              # page of line t2 into SPCRUN_WPAGES (uses s0, t0, t1)
+    j ext_go
+    li t1, EXT_WMARK
 tsync_now:                          # timers to the start of this instruction
     j ext_go
     li t1, EXT_TSYNC_NOW
@@ -467,6 +466,7 @@ fill:
     beqz t0, 1f
     andi t2, t2, 0x7fff
     sll s4, t1, 5
+    jal wmark                       # a dirty line out: its page was written
     addiu s4, s4, %lo(LINES)
     sll t2, t2, 6
     lw s0, %lo(ST + SPCST_ARAM)
@@ -1128,8 +1128,8 @@ done:
     li t0, DMA_SIZE(0x200, 1)
     move s0, s7
     li s4, %lo(ST)
-    jal SDmaOutA                    # the block out, then rspq's DMEM back
-    li t0, DMA_SIZE(SPCST_SIZE, 1)
+    jal SDmaOutA                    # the block out (with the tags and page bits:
+    li t0, DMA_SIZE(SPCRUN_IO, 1)   # which pages the run wrote), then rspq's DMEM back
     lw s0, %lo(EXTBUF)
     addiu s0, s0, EXT_DSAVE_OFS
     li s4, %lo(RSPQ_RESIDENT_END)

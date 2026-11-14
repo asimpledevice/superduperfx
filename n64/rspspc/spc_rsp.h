@@ -25,6 +25,16 @@ typedef struct __attribute__((aligned(16))) {
   uint16_t dirPage, pad4;
 } SpcRspBlock;
 
+/* The block and the run's area after it (spc_rsp_layout.h SPCRUN_*), as the
+ * RSP moves them in and out (SPCRUN_IO bytes). */
+typedef struct __attribute__((aligned(16))) {
+  SpcRspBlock b;
+  uint8_t stage[64];
+  uint8_t sp0, psw0, pad[14];
+  uint16_t tags[32];               /* line number, bit 15 dirty */
+  uint8_t wpages[32];              /* pages of dirty lines evicted during the run */
+} SpcRspRun;
+
 void spc_rsp_init(void);
 uint32_t spc_rsp_ticks(void);   /* CPU timer (TICKS_READ) */
 /* The raw log buffer (SPC_RSP_RAW_BYTES; the CPU reads it after a run). */
