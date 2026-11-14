@@ -109,6 +109,17 @@ static struct {
   uint32_t c0, p;   /* apu->cycles and dspPending when posted */
 } s_fl;
 
+#if SNESRECOMP_APU_DEFER_DSP
+/* Pages the run must not touch without the C core: those the DSP may write
+ * (echo) while a batch is open, and those a batch in flight writes (its echo
+ * bytes come back to ARAM when it is joined). The RSP never caches them, so
+ * any access there traps. */
+static void sync_pages(Apu *apu, uint8_t out[32]) {
+  for (int i = 0; i < 32; i++)
+    out[i] = apu->spc->dspWatchSync[i] | (apu->dspInFlight ? apu->dspFlightWrite[i] : 0);
+}
+#endif
+
 /* The next run from the current state for at most `clocks` cycles: its
  * length, or 0 when the next cycle must run in C (a DSP edge the C path
  * takes, or a state the RSP cannot run). Applies the port writes due now. */
@@ -123,17 +134,26 @@ static uint32_t plan(Apu *apu, uint32_t clocks) {
     if (d < n) n = (uint32_t)d;
   }
 #if SNESRECOMP_APU_DEFER_DSP
-  apu_dspJoinNow(apu);
+  /* No join with an S-DSP batch in flight (step B2): as the C core does, the
+   * run only stops where the batch matters, its trap pages (sync_pages) hold
+   * the pages the batch may write, so any access there joins in C. */
   /* Sample edges the C path takes: a batch start (none pending) and the
    * edge that fills a batch. The RSP run stops just before. */
   const uint32_t c0 = apu->cycles, f = (32u - (c0 & 31u)) & 31u, p = apu->dspPending;
   const uint32_t special = p ? f + 32u * (APU_DSP_MAX_PENDING - p - 1u) : f;
   if (special < n) n = special;
   if (!n) C_WHY(0, 1);
-  if (p && (apu->spc->dspWatchSync[0] & 3)) { if (n) C_WHY(1, 1); n = 0; }   /* page 0/1 reads would need the DSP */
+  uint8_t sync[32];
+  sync_pages(apu, sync);
+  if (sync[0] & 3) { if (n) C_WHY(1, 1); n = 0; }   /* pages 0/1 stay in DMEM: no trap there */
   /* The RSP checks the sample directory at the RAM write after an I/O
-   * register write's effect: a directory over $00F0-$00FF stays in C. */
-  if (p && (apu->dsp->dirPage == 0 || apu->dsp->dirPage >= 0xfd00)) { if (n) C_WHY(2, 1); n = 0; }
+   * register write's effect: a directory over $00F0-$00FF stays in C. It
+   * knows one directory: while the register file's DIR differs from the
+   * Dsp's (a DIR write logged, or a batch in flight), runs stay in C. */
+  const uint16_t dir = apu->dsp->dirPage;
+  if ((p || apu->dspInFlight) &&
+      (dir == 0 || dir >= 0xfd00 || dir != (uint16_t)(spc_rsp_dsp_regs(apu)[0x5d] << 8)))
+    { if (n) C_WHY(2, 1); n = 0; }
   if (p) {
     /* Room for every write the run can log (at most 3 entries in 5 cycles:
      * MOVWS to $F2/$F3), in the RSP's buffer and in apu->dspLog. */
@@ -159,7 +179,7 @@ static void post(Apu *apu, uint32_t n) {
 #if SNESRECOMP_APU_DEFER_DSP
   const uint32_t p = apu->dspPending;
   s_blk.logging = p != 0;
-  memcpy(s_blk.sync, apu->spc->dspWatchSync, 32);
+  sync_pages(apu, s_blk.sync);
   s_blk.dirPage = apu->dsp->dirPage;
   s_fl.p = p;
 #else

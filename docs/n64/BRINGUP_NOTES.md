@@ -2695,6 +2695,26 @@ stale and the next launch recopied every page it reads.
   view's cost 1.5 -> 0.2 ms and 3.1 -> 0.2 ms. Frame time unchanged: the
   S-DSP join wait (12-14 ms) now dominates, which B2-B4 address.
 
+### Step B2: no S-DSP join before each RSP SPC run (2026-11-14)
+
+The RSP glue joined any S-DSP batch in flight before every SPC run, so the
+CPU sat through every batch. The C core never did: its page marks make an
+access join only when it touches what the batch changes. The RSP run now
+gets the same rule: its trap pages (`sync_pages`) are the pages the DSP may
+write while a batch is open plus the pages a batch in flight writes (its
+echo bytes come back to ARAM at the join). The RSP never caches those, so
+any access there traps and the C core joins. Runs stay in C while the
+register file's DIR differs from the Dsp's (the RSP knows one directory).
+- Hashes identical to the C core (SMW 48, Pitfall 5, JM2 20 frames).
+- ares, per frame: S-DSP join wait SMW 14.4 -> 0.004 ms, JM2 12.3 ->
+  0.007 ms; SMW run time 86.0 -> 82.6 ms (C core 79.4). JM2 stays slower
+  (traps: about 165 a frame, mostly DBNZ Y), the next item (opcode paging).
+- Left in SMW: the CPU spends about 36 ms a frame in the SPC glue but waits
+  for the RSP only about 3 ms: the rest is posting and collecting runs (the
+  state round trip, a whole-D-cache writeback per post), batch-edge C steps
+  and synchronous runs at port reads and frame boundaries. Hardware timing
+  decides how much of that is ares.
+
 ## Next steps
 
 1. Audio: check the RSP DSP by ear on hardware (output arrives later than
