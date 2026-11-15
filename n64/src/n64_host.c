@@ -82,6 +82,18 @@ static void draw_frame_rdp(bool software_every_line) {
 static void present_rdp_frame(uint32_t frame, const char *line) {
   n64_ppu_build_finish();
   const int diff = n64_ppu_draw_and_show(s_rdp_frame, line, N64_RENDER == 2);
+#ifdef N64PPU_WHY_LOG
+  { /* Software-PPU lines per reason (bits of N64PPU_WHY_*), every 60 frames. */
+    static uint32_t s_sw, s_rdp, s_why_or;
+    s_sw += s_rdp_frame->software_lines; s_rdp += s_rdp_frame->rdp_lines;
+    s_why_or |= s_rdp_frame->fallback_reasons;
+    if (frame % 60 == 59) {
+      n64_platform_log("[ppuwhy] 60 frames: rdp lines %lu, software lines %lu, reasons %03lx\n",
+                       (unsigned long)s_rdp, (unsigned long)s_sw, (unsigned long)s_why_or);
+      s_sw = s_rdp = s_why_or = 0;
+    }
+  }
+#endif
   if (N64_RENDER == 2 && (frame < 8 || frame % 30 == 0 || diff > 0))
     if (frame < 600 || frame % 30 == 0)
       n64_platform_log("[rdp] frame %lu: rdp %d sw %d black %d lines, why %02lx, diff %d px\n",
