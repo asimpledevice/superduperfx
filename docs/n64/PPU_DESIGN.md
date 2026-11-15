@@ -93,3 +93,36 @@ SMW PPU stage 16 ms + present 9 ms; JM2 230 ms + 27 ms.
    offset-per-tile (cheap with the tile cache), colour maths (blender for
    add/half-add, RSP line renderer for subtraction), mosaic, Mode 7,
    hi-res.
+
+## From bsnes (2026-11-15)
+
+bsnes has two PPUs: `sfc/ppu`, cycle-stepped like the two chips (the fetch
+slots per mode, sprite fetch in H-blank, mid-line effects work), and
+`sfc/ppu-fast`, a scanline renderer: each visible line copies all
+registers and CGRAM into a line record (`Line::cache`), and queued lines
+are rendered in batches, in parallel (`Line::flush`). Points that shape
+our design:
+
+- **Flush on write does not fit us.** ppu-fast avoids copying VRAM by
+  drawing the queued lines before any mid-frame VRAM or OAM write (lines
+  read them live). We draw a frame later on another processor, so we need
+  snapshots or dirty tracking instead (the pipeline's VRAM snapshot today;
+  a dirty-tracked tile cache in the plan).
+- **Priority as a depth test.** ppu-fast plots each layer with a priority
+  compare per pixel, so drawing order does not matter. The RDP has a
+  Z-buffer, and alpha compare can drop transparent texels so they write no
+  depth: SNES priorities could become depth values and layers be drawn in
+  any order (batched by texture). The cost is RDRAM traffic for Z reads and
+  writes; strict draw order (the plan) is cheaper. Keep as an option.
+- **Main and subscreen as two buffers.** ppu-fast composes the main
+  screen and the subscreen into separate arrays and combines them per
+  pixel for colour maths. For us: when a band needs layer colour maths,
+  draw its subscreen into its own buffer, then combine (RDP blender for add
+  and half-add; RSP or another RDP pass for subtraction).
+- **HD Mode 7 and perspective correction.** ppu-fast finds runs of Mode 7
+  lines whose per-line matrices (from HDMA) trace a perspective plane and
+  interpolates them to rebuild it smoothly at higher resolution. The N64
+  draws perspective-correct textured triangles in hardware, so such a plane
+  could be real geometry at full resolution. The catch is TMEM (the Mode 7
+  map is 1024x1024 at 8bpp), so the plane would be split into many small
+  triangles of a few tiles each. A later enhancement.
