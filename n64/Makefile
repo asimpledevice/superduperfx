@@ -34,7 +34,7 @@ RUNNER_SRCS = \
 	snes/superfx.c snes/interp816.c snes/tier2_capture.c snes/interp_bridge.c \
 	snes/cx4.c
 
-HOST_SRCS = n64_host.c n64_platform.c n64_compat.c n64_stubs.c \
+HOST_SRCS = n64_host.c n64_platform.c n64_compat.c n64_stubs.c n64_ppu_desc.c \
 	n64_ppu_build.c n64_ppu_draw.c red.c
 
 OBJS = $(addprefix $(BUILD_DIR)/runner/,$(RUNNER_SRCS:.c=.o)) \

@@ -54,6 +54,23 @@
 static N64PpuFrame *s_rdp_frame;
 static uint32_t *s_pixels;  /* defined below: the software PPU output */
 
+/* The frame description (n64_ppu_desc.c): bands of identical PPU state, the
+ * contract for drawing on the RSP (docs/n64/PPU_DESIGN.md, step 1). Built
+ * only with N64PPU_DESC=1 (or the check build) until something on the N64
+ * consumes it. */
+#if defined(N64PPU_DESC_CHECK) && !defined(N64PPU_DESC)
+#define N64PPU_DESC 1
+#endif
+#if N64PPU_DESC
+void n64_ppu_desc_begin(const struct Ppu *ppu);
+void n64_ppu_desc_line(const struct Ppu *ppu, int line);
+void n64_ppu_desc_end(const struct Ppu *ppu);
+#else
+#define n64_ppu_desc_begin(ppu) ((void)0)
+#define n64_ppu_desc_line(ppu, line) ((void)0)
+#define n64_ppu_desc_end(ppu) ((void)0)
+#endif
+
 /* The beam driver's raster replay (snes_beam_frame_driver_draw_ppu_frame),
  * with each line expanded for the RDP and the software PPU run only where
  * needed. */
@@ -63,17 +80,25 @@ static void draw_frame_rdp(bool software_every_line) {
   dma_initHdma(g_snes->dma);
   dma_doHdma(g_snes->dma);
   n64_ppu_build_begin(s_rdp_frame, s_pixels);
+#ifdef N64PPU_DESC_CHECK
+  { extern uint8_t *g_n64ppu_desc_live_pixels; extern size_t g_n64ppu_desc_live_pitch;
+    g_n64ppu_desc_live_pixels = software_every_line ? g_ppu->renderBuffer : NULL;
+    g_n64ppu_desc_live_pitch = g_ppu->renderPitch; }
+#endif
+  n64_ppu_desc_begin(g_ppu);
   for (int line = 1; line <= 224; line++) {
     uint8_t hdmaen;
     ppu_rasterApplyLine(g_ppu, line - 1);
     if (ppu_rasterTakeHdmaen(&hdmaen))
       dma_startDma(g_snes->dma, hdmaen, true);
+    n64_ppu_desc_line(g_ppu, line);
     const bool rdp_ok = n64_ppu_build_line(g_ppu, line);
     if (software_every_line || !rdp_ok) ppu_runLine(g_ppu, line);
     else ppu_runLineState(g_ppu, line);
     dma_doHdma(g_snes->dma);
   }
   n64_ppu_build_end();
+  n64_ppu_desc_end(g_ppu);
   ppu_rasterRenderEnd(g_ppu);
 }
 

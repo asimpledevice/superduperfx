@@ -211,3 +211,32 @@ framebuffer saves little CPU (the fill is one command); it is about RDP
 pixels and RDRAM traffic, which only hardware will show. The large cost
 is command generation, which is what the scene builder moves to the RSP
 (steps 3-4).
+
+## Step 1: the frame description (2026-11-15)
+
+`n64/include/n64_ppu_desc.h`, `n64/src/n64_ppu_desc.c`. Green's replay
+(`draw_frame_rdp`) calls `n64_ppu_desc_line` for each visible line after
+the journal and HDMA have produced its registers. Lines with identical
+registers and CGRAM merge into a band. A band is the line range, a CGRAM
+version, and the PPU's register block byte for byte (`N64PpuRegs`, the same
+X-macro list as the head of `struct Ppu`), so the description keeps the
+PPU's own semantics and the RSP derives everything else. The frame also
+records its CGRAM versions (copied when `cgramWriteCount` moves), its VRAM
+and OAM images, and flags for VRAM or OAM written while the frame was drawn
+(the game cannot do that during the picture, so a flag means something
+unusual) and for running out of CGRAM versions (32).
+
+Completeness check (`N64PPU_DESC_CHECK`, native harness with
+`N64_RENDER=2`): a scratch PPU copied from the live one when the replay
+starts is fed only from the description and drawn by the software PPU line
+by line; its pixels must equal the live software PPU's. Because the
+software PPU itself does the drawing, a pass means the description carries
+everything every feature needs, not only what the RDP path supports.
+`N64PPU_DESC_CHECK_BREAK` (every band drawn with the first band's
+registers) shows the check fails when it should (SMW: from frame 345).
+
+Results, 3,000 frames each (attract/boot): SMW, Pitfall and JM2 identical
+on every line. Bands per frame: SMW 2.6-3.7, Pitfall 1.0-1.2, JM2 1.3-4.2.
+None of the three changes CGRAM, VRAM or OAM while a frame is drawn (one
+CGRAM version per frame), so those paths are not exercised by these games;
+the flags will show the first game that does.

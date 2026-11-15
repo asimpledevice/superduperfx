@@ -20,7 +20,7 @@ for s in $SRCS; do
   OBJS+=("$o")
   while [ "$(jobs -r | wc -l)" -ge "$(nproc)" ]; do wait -n; done
 done
-for s in n64_host.c n64_stubs.c n64_ppu_build.c; do
+for s in n64_host.c n64_stubs.c n64_ppu_build.c n64_ppu_desc.c; do
   o="$OUT/$s.o"; gcc "${CFLAGS[@]}" -w -c "$N64/src/$s" -o "$o"; OBJS+=("$o")
 done
 gcc "${CFLAGS[@]}" -w -c "$HERE/linux_platform.c" -o "$OUT/linux_platform.o"; OBJS+=("$OUT/linux_platform.o")
