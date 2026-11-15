@@ -240,3 +240,14 @@ on every line. Bands per frame: SMW 2.6-3.7, Pitfall 1.0-1.2, JM2 1.3-4.2.
 None of the three changes CGRAM, VRAM or OAM while a frame is drawn (one
 CGRAM version per frame), so those paths are not exercised by these games;
 the flags will show the first game that does.
+
+### Present on hardware (EverDrive, SMW intro, 2026-11-15)
+
+The `N64_PRESENT_PROF` + `N64_PRESENT_RDPWAIT` build's on-screen line, per
+frame: CPU issuing RDP commands 12.9 ms (ares: ~7), waiting for `rspbg`
+3.6 ms (ares: ~1.8), audio pump 2.4 ms, **RDP pipeline busy 12.1 ms, TMEM
+busy 3.6 ms** (ares does not implement the RDP's counters and shows the
+RDP done ~20 us after the last command). The RDP's time is a real budget:
+today's plane compositing costs about 12 ms of RDP time a frame in SMW.
+The scene builder's design (fewer, larger texture loads; fewer overdraw
+passes) should be judged on hardware RDP time, not ares.
