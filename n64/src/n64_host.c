@@ -552,6 +552,19 @@ static int host_main(void) {
                        (unsigned long)(g_present_prof[1] / 60 / 47), (unsigned long)(g_present_prof[2] / 60 / 47),
                        (unsigned long)(g_present_prof[3] / 60 / 47), (unsigned long)(g_present_prof[4] / 60 / 47),
                        (unsigned long)(s_pp_audio / 60));
+      { /* On screen too (hardware has no log without USB), tenths of a ms:
+         * c commands, b BG wait, a audio, p RDP pipe busy, t TMEM busy. */
+        extern uint32_t g_present_rdp[3];
+        extern char g_present_line[48];
+        n64_platform_log("[present] RDP per frame (us): pipe busy %lu, TMEM busy %lu, command buffer busy %lu\n",
+                         (unsigned long)(g_present_rdp[0] / 60 / 62), (unsigned long)(g_present_rdp[1] / 60 / 62),
+                         (unsigned long)(g_present_rdp[2] / 60 / 62));
+        snprintf(g_present_line, 48, "c%lu b%lu a%lu p%lu t%lu",
+                 (unsigned long)(g_present_prof[1] / 60 / 4700), (unsigned long)(s_pp_finish / 60 / 100),
+                 (unsigned long)(s_pp_audio / 60 / 100), (unsigned long)(g_present_rdp[0] / 60 / 6250),
+                 (unsigned long)(g_present_rdp[1] / 60 / 6250));
+        for (int i = 0; i < 3; i++) g_present_rdp[i] = 0;
+      }
       s_pp_finish = s_pp_audio = 0;
       for (int i = 0; i < 5; i++) g_present_prof[i] = 0;
     }

@@ -156,6 +156,13 @@ static __attribute__((noinline)) int compare(const N64PpuFrame *f, const surface
  * builds only), 4 display_show. */
 uint32_t g_present_prof[5];
 #define PP_T() get_ticks()
+/* RDP counters (RCP clocks, 62.5 MHz) over the frame's commands, read after
+ * waiting for the RDP (N64_PRESENT_RDPWAIT): 0 pipeline busy, 1 TMEM busy,
+ * 2 command buffer busy. And a second status line the host formats. */
+uint32_t g_present_rdp[3];
+char g_present_line[48];
+#define DPC_STATUS_REG (*(volatile uint32_t *)0xA410000C)
+#define DPC_COUNTER(off) ((*(volatile uint32_t *)(0xA4100000 + (off))) & 0xffffff)
 #define PP_ADD(i, t) (g_present_prof[i] += get_ticks() - (t))
 #else
 #define PP_T() 0u
@@ -168,6 +175,10 @@ int n64_ppu_draw_and_show(const N64PpuFrame *f, const char *status, int compare_
   data_cache_hit_writeback((void *)f->tlut, sizeof(f->tlut[0]) * (size_t)f->tlut_count);
 
   rdpq_attach(fb, NULL);
+#if defined(N64_PRESENT_PROF) && defined(N64_PRESENT_RDPWAIT)
+  rspq_wait();                     /* nothing else on the RDP while counting */
+  DPC_STATUS_REG = 0x3c0;          /* clear the clock, command, pipe and TMEM counters */
+#endif
   rdpq_set_mode_fill(RGBA32(0, 0, 0, 255));
   rdpq_fill_rectangle(0, 0, fb->width, fb->height);
   for (int a = 0; a < N64PPU_LINES;) {
@@ -223,6 +234,11 @@ int n64_ppu_draw_and_show(const N64PpuFrame *f, const char *status, int compare_
 #ifdef N64_PRESENT_RDPWAIT
   rspq_wait();   /* measurement only: the RDP's drawing time */
   PP_ADD(3, pt); pt = PP_T();
+#ifdef N64_PRESENT_PROF
+  g_present_rdp[0] += DPC_COUNTER(0x18);
+  g_present_rdp[1] += DPC_COUNTER(0x1c);
+  g_present_rdp[2] += DPC_COUNTER(0x14);
+#endif
 #endif
   int mismatches = -1;
   if (compare_with_software) mismatches = compare(f, fb);
@@ -241,6 +257,13 @@ int n64_ppu_draw_and_show(const N64PpuFrame *f, const char *status, int compare_
     graphics_set_color(graphics_make_color(255, 255, 0, 255), 0);
     graphics_draw_text(fb, 24, N64_STATUS_Y, status);
   }
+#ifdef N64_PRESENT_PROF
+  if (g_present_line[0]) {
+    graphics_draw_box(fb, 16, N64_STATUS_Y + 10, fb->width - 32, 12, graphics_make_color(0, 0, 0, 255));
+    graphics_set_color(graphics_make_color(0, 255, 255, 255), 0);
+    graphics_draw_text(fb, 24, N64_STATUS_Y + 12, g_present_line);
+  }
+#endif
   PP_ADD(2, pt); pt = PP_T();
   display_show(fb);
   PP_ADD(4, pt);
