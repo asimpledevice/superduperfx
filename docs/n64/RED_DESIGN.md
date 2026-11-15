@@ -303,9 +303,16 @@ stays as the reference, and each is hash-identical to the C core.
   operation count) with a scan that applies decode's rules to the few
   registers they read. `RSPDSP_PREP=1`; `n64/rspdsp/preptest` compares the
   two decoders.
-- **2b. The view on the RSP.** Prep copies the marked stale pages into the
-  view by DMA and undoes the batch's writes from the log's old values. The
-  CPU passes the marks and keeps the fresh bits.
+- **2b. The view on the RSP: tried and dropped (2026-11-15).** Prep copied
+  the marked stale pages by DMA and undid the batch's writes. The random
+  test passed (300 of 300 against the CPU algorithm), but SMW and JM2
+  hashes differed from frame 300 (S-DSP output only). The CPU copies the
+  pages at launch; prep copies them when Red reaches the command, and by
+  then the SPC has written ARAM again (it runs on while the batch is in
+  flight). The undo reverts only the batch's own writes, so the later ones
+  leak into the view. A correct view on the RSP must be kept current by
+  applying every write in order, which is 2e. The CPU's view work is only
+  0.5 ms a frame (0.26 with the attempt), so it stays on the CPU until 2e.
 - **2c. S-DSP state stays on the RSP.** No pack or unpack per batch; the
   CPU reads the few fields it needs (marks, ENVX/OUTX/ENDX) from the block,
   as step 1a did for the SPC.

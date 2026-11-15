@@ -2918,6 +2918,11 @@ against step 3: SMW gameplay about 62 → 59 ms; JM2 gameplay 81 → 68 ms,
 JM2 loading 745 → 659 ms (the JM2 gain is larger than the decode saving;
 JM2 moves with layout, see step 3).
 
+Step 2b (the view on the RSP) was tried and dropped: the random test
+passed, but SMW and JM2 S-DSP output differed from frame 300. Prep copies
+ARAM pages later than the CPU did, after the SPC has written them again; see
+`RED_DESIGN.md`, "Step 2 in stages".
+
 ## Next steps
 
 1. Audio: check the RSP DSP by ear on hardware (output arrives later than
