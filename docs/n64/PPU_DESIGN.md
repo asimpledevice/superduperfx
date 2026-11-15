@@ -251,3 +251,39 @@ RDP done ~20 us after the last command). The RDP's time is a real budget:
 today's plane compositing costs about 12 ms of RDP time a frame in SMW.
 The scene builder's design (fewer, larger texture loads; fewer overdraw
 passes) should be judged on hardware RDP time, not ares.
+
+## Step 0 findings (2026-11-15)
+
+**SMW's world map is drawn entirely by the software PPU** (hardware status
+line: PPU stage 166 ms there against about 14 ms in a level). The native
+harness (`N64PPU_WHY_LOG`, scripted Start/A presses to game mode 0x0E)
+shows every overworld line falling back for one reason, layer colour math
+(`N64PPU_WHY_COLOR_MATH`; mosaic too during the fades). The registers:
+Mode 1 with BG3 priority (`bgmode 09`), main screen BG1+BG3+OBJ, subscreen
+BG2, `cgwsel 03` (add the subscreen), `cgadsub 30`: plain addition, no
+halving, for sprites (palettes 4-7) and the backdrop. So the first colour
+maths the scene builder needs is "main + subscreen BG2" for OBJ and the
+backdrop: the subscreen drawn into its own buffer and an additive combine
+(step 6), which becomes SMW's first feature after the basic scene.
+
+**Copy-mode flips (`n64/rdptest`, ares first; hardware pending).** 16x8
+textures, RGBA16, CI8 and CI4 (palettes 0 and 3), drawn with texture
+rectangles, read back and compared:
+
+| | none | H (DsDx < 0) | V (DtDy < 0) | HV |
+|---|---|---|---|---|
+| copy mode | exact | wrong | exact | wrong |
+| 1-cycle | exact | exact | exact | exact |
+
+In copy mode a negative DsDx gives scrambled columns in groups of four
+texels (copy mode fetches four texels a cycle), so horizontal flips need
+either flipped tile copies in the tile cache or 1-cycle mode (4x slower
+fill rate) for those tiles; vertical flips are free. To confirm on the
+EverDrive (ares uses parallel-RDP).
+
+**Transparency is the TLUT entry's alpha, not the index.** With CI4 and
+palette 3, texel 0 reads TLUT entry 48, which is opaque unless its alpha is
+0. For 4bpp layers the TLUT gives entries 16n alpha 0 (colour 0 of each
+palette); an 8bpp layer needs its own TLUT where only entry 0 is
+transparent, so a band mixing 4bpp and 8bpp layers (modes 3 and 4) reloads
+the TLUT between them.
