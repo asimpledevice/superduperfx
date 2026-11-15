@@ -2875,6 +2875,20 @@ That phase is S-DSP heavy (about 70 launches and 1,750 log entries a frame,
 the next thing to fix (a regression in one game is not offset by gains in
 another).
 
+It looks like code layout, not glue work. The window is a steady polling
+loop: about 5,200 CPU port reads a frame, nearly all seeing the same value,
+each catching the SPC up by about 2 cycles. The glue on that path costs
+about 1–2 µs a read, which is 5–10 ms a frame, not 100–200. Two builds of
+the same tree that differ only in logging counters (`N64_PHASE0`,
+`SPC_RSP_TRAP_STATS`) measure 606 and 745 ms in this window. The commit
+that only added the glue profile moved it by 70 ms. The engine's I-cache
+order (`icache_order.ld`) is trained on SMW and Pitfall with JM2 held out,
+and the SPC glue functions are not placed in it. Earlier, a retrained layout
+alone moved JM2 by 38% (see the FPU section). The default C-core build is
+unchanged by this commit (SMW and JM2 within noise of the C core run above).
+The fix is to retrain the engine layout with the asynchronous SPC build in
+the training traces. That waits for step 2, which changes the glue again.
+
 ## Next steps
 
 1. Audio: check the RSP DSP by ear on hardware (output arrives later than
