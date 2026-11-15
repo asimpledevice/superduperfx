@@ -86,7 +86,7 @@ static void draw(int x, int y, int flip) {
 }
 
 static int case_x(int copy, int flip) { return 8 + (copy * 4 + flip) * 24; }
-static int case_y(int f) { return 132 + f * 12; }
+static int case_y(int f) { return 182 + f * 10; }
 
 static char s_lines[24][48];
 static int s_nlines;
@@ -113,7 +113,7 @@ static void page_flips(void) {
   const uint16_t *px = UncachedAddr(fb->buffer);
   const int stride = fb->stride / 2;
   s_nlines = 0;
-  int fails = 0;
+  int fails = 0, ndetail = 0;
   for (int copy = 1; copy >= 0; copy--)
     for (int f = 0; f < K_N; f++) {
       char t[48];
@@ -131,30 +131,29 @@ static void page_flips(void) {
         o += snprintf(t + o, sizeof t - o, " %s%s", kFlipName[flip], bad ? "X" : "ok");
         if (bad) {   /* which source columns the first row showed */
           char d[64];
-          int q = snprintf(d, sizeof d, "  %s %s %s row0 cols:", copy ? "copy" : "1cyc", kFmtName[f],
-                           kFlipName[flip]);
+          int q = snprintf(d, sizeof d, "  %s %s %s:", copy ? "cpy" : "1cy", kFmtName[f], kFlipName[flip]);
           const int sy = flip & 2 ? TH - 1 : 0;
           for (int x = 0; x < TW && q < 60; x++) {
             const int got = decode(px[case_y(f) * stride + case_x(copy, flip) + x]);
             int col = -1;
             for (int c = 0; c < TW; c++)
               if (s_idx[f][sy][c] && s_idx[f][sy][c] == got) { col = c; break; }
-            q += snprintf(d + q, sizeof d - q, col < 0 ? " ." : " %x", col);
+            q += snprintf(d + q, sizeof d - q, col < 0 ? "." : "%x", col);
           }
           debugf("[rdptest] %s\n", d);
-          if (s_nlines < 22) { snprintf(s_lines[s_nlines++], 48, "%s", d + 2); }
+          if (ndetail++ < 8) snprintf(s_lines[s_nlines++], 48, "%s", d + 2);   /* the log has all */
         }
       }
       line(t);
     }
   {
     char t[48];
-    snprintf(t, sizeof t, "%d of 32 cases differ.  A: 256x240 page", fails);
+    snprintf(t, sizeof t, "%d of 32 differ. A: 256x240 page", fails);
     line(t);
   }
   graphics_set_color(graphics_make_color(255, 255, 255, 255), 0);
-  for (int i = 0; i < s_nlines; i++) graphics_draw_text(fb, 8, 8 + i * 10, s_lines[i]);
-  graphics_draw_text(fb, 8, 224, "copy:   none   H      V      HV");
+  for (int i = 0; i < s_nlines; i++) graphics_draw_text(fb, 8, 6 + i * 10, s_lines[i]);
+  graphics_draw_text(fb, 8, 224, "Left 4: 1-cycle. Right 4: copy");
   display_show(fb);
 }
 
