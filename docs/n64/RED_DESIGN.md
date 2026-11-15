@@ -246,6 +246,45 @@ APU phases).
   for attach). Step taken already: rdpq without its RSP triangle engine
   (1,360 bytes of IMEM free instead of 36).
 
+## The audio ownership model (owner, 2026-11-15)
+
+What the hardware couples: the 65816 and the SPC through the four ports each
+way; the SPC and the DSP through DSP register writes and ARAM (samples, the
+directory) forward, and ENVX/OUTX/ENDX and the echo buffer back; the DSP
+feeds audio out. One clock (a DSP sample every 32 SPC cycles). Data flows
+forward with timestamps, so each stage may trail the one before it; only
+the backward reads force a wait: a port read needs the SPC at that cycle,
+an ENVX/OUTX/ENDX or echo read needs the DSP at that cycle. In SMW and JM2
+those are 0-2 a frame.
+
+Everything else that waits today is ours: the CPU runs parts of the APU
+(packing state per run, C steps at batch edges, batch bookkeeping, traps),
+the frame boundary and the audio pump force the SPC and DSP current, Blue
+and Green both touch APU state, and `rspq_wait` couples lanes.
+
+The rule: one owner per piece.
+- **Blue** runs the 65816 and never touches APU state: it posts timestamped
+  port writes and the horizon; a port read waits only for the SPC's
+  published progress to pass its cycle, then reads the published ports
+  (yielding to Green meanwhile).
+- **Red/Yellow** own the SPC and the DSP on the RSP: state, batch
+  bookkeeping, the handoff between the two overlays, ENVX/echo syncs.
+- **Green** drives frames, the PPU and audio out; it takes finished samples
+  and never forces a sync.
+The CPU runs no APU code (save states excepted).
+
+Steps, each hash-identical to the C core:
+1. The SPC's state owned by the RSP: (a) lazy state on the CPU side (no
+   packing or unpacking per run); (b) an opcode handler cache (every handler
+   swappable, a handful of IMEM slots, FIFO eviction, the dispatch table
+   patched so hits cost nothing), which frees the IMEM for (c) the port
+   queue, the horizon and the published progress on the RSP.
+2. DSP bookkeeping on the RSP: the SPC logs every write (no page marks), the
+   S-DSP keeps its own ARAM copy and applies the log, Red hands off between
+   the two overlays, ENVX/echo syncs on the RSP.
+3. The audio pump takes finished samples only; the frame boundary stops
+   forcing a catch-up.
+
 ## Independence: where the CPU waits on the RSP today (2026-11-14)
 
 The CPU posts work to the RSP and soon waits for it, everywhere:
