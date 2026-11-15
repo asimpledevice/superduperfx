@@ -140,27 +140,9 @@ void NORETURN Die(const char *error) {
   n64_platform_fatal(error ? error : "(null)");
 }
 
-/* Green keeps the asynchronous SPC fed between frames (Blue is idle here):
- * a finished run is collected and the next posted toward the last target. */
-#if SPC_RSP_ASYNC
-void spc_rsp_lane_pump(void);
-#define GREEN_PUMP() spc_rsp_lane_pump()
-#else
-#define GREEN_PUMP() ((void)0)
-#endif
-
 /* Single-threaded host: the APU is only touched from the guest thread. */
-#if SPC_RSP_ASYNC
-/* Every reader of APU state takes this lock first: with the SPC running
- * asynchronously on the RSP, it collects the run in flight. */
-void spc_rsp_lane_hold(struct Apu *apu);
-void spc_rsp_lane_release(void);
-void RtlApuLock(void) { spc_rsp_lane_hold(g_snes->apu); }
-void RtlApuUnlock(void) { spc_rsp_lane_release(); }
-#else
 void RtlApuLock(void) {}
 void RtlApuUnlock(void) {}
-#endif
 
 void MkDir(const char *s) { (void)s; }
 void ChangeWindowScale(int scale_step) { (void)scale_step; }
@@ -496,7 +478,6 @@ static int host_main(void) {
     recomp_cache_poll();   /* background code-cache load (nothing to do without one) */
 #endif
     RtlRunFrame(inputs);
-    GREEN_PUMP();
     uint64_t t1 = n64_platform_time_us();
     n64_platform_set_phase(N64_PHASE_PRESENT);
 #if N64_PIPELINE
@@ -510,7 +491,6 @@ static int host_main(void) {
 #else
     n64_draw_ppu_frame();
 #endif
-    GREEN_PUMP();
     uint64_t t2 = n64_platform_time_us();
     n64_platform_set_phase(N64_PHASE_PRESENT);
 
@@ -540,7 +520,6 @@ static int host_main(void) {
     n64_platform_present(s_pixels, kSnesW, kSnesH, line);
 #endif
     n64_platform_audio_pump(render_audio);
-    GREEN_PUMP();
     uint64_t t3 = n64_platform_time_us() + (t1p - t1);   /* present: both parts */
 
     if (frame < 8 || frame % 50 == 0)
@@ -583,7 +562,6 @@ static int host_main(void) {
       /* Every DSP output sample, as produced (the frame end has synced a
        * deferred DSP), so builds with different DSP paths compare. */
       static uint32_t s_out_hash = 2166136261u, s_out_pos;
-      rtl_apu_finish_frame();    /* an asynchronous SPC: to the frame boundary first */
       apu_dspSync(g_snes->apu);  /* all samples so far, also with async batches */
       const Dsp *d = g_snes->apu->dsp;
       for (; s_out_pos != d->sampleWrite; ++s_out_pos) {
@@ -616,41 +594,6 @@ static int host_main(void) {
                            (unsigned long)g_apu_dsp_join_why[2], (unsigned long)g_apu_dsp_join_why[3],
                            (unsigned long)g_apu_dsp_join_why[4], (unsigned long)g_apu_dsp_join_why[5],
                            (unsigned long)g_apu_dsp_join_why[6], (unsigned long)g_apu_dsp_join_why[7]); }
-#endif
-#ifdef N64_RSPSPC
-        { extern uint32_t g_spc_rsp_runs, g_spc_rsp_traps, g_spc_rsp_cycles, g_spc_rsp_c_cycles;
-          n64_platform_log("[rspspc] %lu runs, %lu traps; %lu cycles on the RSP, %lu in C\n",
-                           (unsigned long)g_spc_rsp_runs, (unsigned long)g_spc_rsp_traps,
-                           (unsigned long)g_spc_rsp_cycles, (unsigned long)g_spc_rsp_c_cycles); }
-        { extern uint32_t g_spc_rsp_lane_posts, g_spc_rsp_lane_busy, g_spc_rsp_lane_joins, g_spc_rsp_lane_pumps,
-                          g_spc_rsp_wait_ticks, g_spc_rsp_hook_ticks, g_spc_rsp_exec_ticks;
-          n64_platform_log("[rspspc] lane: %lu posted, %lu doorbell pumps, %lu catch-ups found it busy, %lu joins; CPU in the glue %lu us, "
-                           "posting %lu us, waiting %lu us (totals)\n",
-                           (unsigned long)g_spc_rsp_lane_posts, (unsigned long)g_spc_rsp_lane_pumps, (unsigned long)g_spc_rsp_lane_busy,
-                           (unsigned long)g_spc_rsp_lane_joins, (unsigned long)(g_spc_rsp_hook_ticks / 47),
-                           (unsigned long)(g_spc_rsp_exec_ticks / 47), (unsigned long)(g_spc_rsp_wait_ticks / 47)); }
-#ifdef SPC_RSP_TRAP_STATS
-        { extern uint32_t g_spc_rsp_trap_op[256], g_spc_rsp_trap_opnd[256];
-          char b[160]; int o = 0;
-          for (int k = 0; k < 2; k++) {
-            const uint32_t *h = k ? g_spc_rsp_trap_opnd : g_spc_rsp_trap_op;
-            o += snprintf(b + o, sizeof b - o, k ? " | operands" : "traps by opcode");
-            for (int t = 0; t < 5; t++) {   /* the five largest */
-              int m = 0;
-              for (int i = 1; i < 256; i++) if (h[i] > h[m]) m = i;
-              if (!h[m]) break;
-              o += snprintf(b + o, sizeof b - o, " %02x:%lu", m, (unsigned long)h[m]);
-              ((uint32_t *)h)[m] = 0;
-            }
-          }
-          for (int i = 0; i < 256; i++) g_spc_rsp_trap_op[i] = g_spc_rsp_trap_opnd[i] = 0;
-          n64_platform_log("[rspspc] %s\n", b);
-          extern uint32_t g_spc_rsp_c_why[5];
-          n64_platform_log("[rspspc] C cycles: edges %lu, echo in pages 0-1 %lu, directory %lu, log room %lu, short calls %lu\n",
-                           (unsigned long)g_spc_rsp_c_why[0], (unsigned long)g_spc_rsp_c_why[1], (unsigned long)g_spc_rsp_c_why[2],
-                           (unsigned long)g_spc_rsp_c_why[3], (unsigned long)g_spc_rsp_c_why[4]);
-          for (int i = 0; i < 5; i++) g_spc_rsp_c_why[i] = 0; }
-#endif
 #endif
       }
     }
@@ -706,24 +649,6 @@ static int host_main(void) {
       n64_platform_log("[blue] %lu pauses, %lu resumed, %lu unwound, %lu yields\n",
                        (unsigned long)g_blue_pauses, (unsigned long)g_blue_resumes,
                        (unsigned long)g_blue_unwinds, (unsigned long)g_blue_yields);
-    }
-#endif
-#if defined(N64_RSPSPC) && !defined(N64_STATE_HASH)
-    if (frame % 60 == 59) {
-      extern uint32_t g_spc_rsp_exec_ticks, g_spc_rsp_hook_ticks, g_spc_rsp_cycles, g_spc_rsp_c_cycles;
-      n64_platform_log("[rspspc] per frame: SPC %lu us (waiting on the RSP %lu us); %lu cycles on the RSP, %lu in C\n",
-                       (unsigned long)(g_spc_rsp_hook_ticks / 60 / 47), (unsigned long)(g_spc_rsp_exec_ticks / 60 / 47),
-                       (unsigned long)(g_spc_rsp_cycles / 60), (unsigned long)(g_spc_rsp_c_cycles / 60));
-      g_spc_rsp_exec_ticks = g_spc_rsp_hook_ticks = g_spc_rsp_cycles = g_spc_rsp_c_cycles = 0;
-      extern uint32_t g_spc_rsp_prof[5], g_spc_rsp_collects, g_spc_rsp_wait_ticks;
-      n64_platform_log("[rspspc] glue per frame: plan %lu us, pack %lu, collect %lu, C steps %lu, wait %lu; "
-                       "synchronous runs %lu us; %lu runs\n",
-                       (unsigned long)(g_spc_rsp_prof[0] / 60 / 47), (unsigned long)(g_spc_rsp_prof[1] / 60 / 47),
-                       (unsigned long)(g_spc_rsp_prof[2] / 60 / 47), (unsigned long)(g_spc_rsp_prof[3] / 60 / 47),
-                       (unsigned long)(g_spc_rsp_wait_ticks / 60 / 47), (unsigned long)(g_spc_rsp_prof[4] / 60 / 47),
-                       (unsigned long)(g_spc_rsp_collects / 60));
-      for (int i = 0; i < 5; i++) g_spc_rsp_prof[i] = 0;
-      g_spc_rsp_collects = g_spc_rsp_wait_ticks = 0;
     }
 #endif
 #if defined(N64_RSPDSP) && !defined(N64_STATE_HASH)

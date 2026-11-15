@@ -71,52 +71,6 @@ $(BUILD_DIR)/rsp_snesdsp_prep.o: rspdsp/rsp_snesdsp_prep.S rspdsp/snesdsp_rsp_la
 endif
 endif
 
-# RSPSPC=1: the SPC700 runs on the RSP (n64/rspspc) in bulk runs, the C core
-# (spc.c, the LLE reference) taking single steps and what the RSP traps.
-# Needs the deferred DSP (RSPDSP=1). Off by default until checked on hardware.
-RSPSPC ?= 0
-ifeq ($(RSPSPC),1)
-ifneq ($(RSPDSP),1)
-$(error RSPSPC=1 needs RSPDSP=1)
-endif
-N64_CFLAGS += -DSNESRECOMP_APU_RUN_HOOK=spc_rsp_run_apu -DN64_RSPSPC=1 -Irspspc
-# RSPSPC_ASYNC=1: the bridge's catch-ups post runs without waiting; readers
-# of APU state collect the run in flight first (rspspc/spc_rsp_run.c lane).
-RSPSPC_ASYNC ?= 1
-ifeq ($(RSPSPC_ASYNC),1)
-N64_CFLAGS += -DSPC_RSP_ASYNC=1 -DSNESRECOMP_APU_ADVANCE_HOOK=spc_rsp_lane_advance \
-	-DSNESRECOMP_APU_JOIN_HOOK=spc_rsp_lane_join -DSNESRECOMP_APU_POLL_HOOK=spc_rsp_lane_poll
-endif
-OBJS += $(BUILD_DIR)/rspspc/spc_rsp.o $(BUILD_DIR)/rspspc/spc_rsp_run.o \
-	$(BUILD_DIR)/rsp_spc.o $(BUILD_DIR)/rsp_spc_ext.o $(SPC_MODS)
-SPC_MODS = $(patsubst %,$(BUILD_DIR)/rsp_spc_m%.o,0 1 2 3 4 6 7 8 9)
-$(BUILD_DIR)/rspspc/%.o: rspspc/%.c
-	@mkdir -p $(dir $@)
-	@echo "    [CC] $<"
-	$(CC) -c $(CFLAGS) -o $@ $<
-$(BUILD_DIR)/rspspc/spc_rsp_run.o: $(BUILD_DIR)/rsp_spc_tables.inc
-$(BUILD_DIR)/rsp_spc_tables.inc: rspspc/gen_tables.py $(RUNNER)/snes/spc.c
-	@mkdir -p $(dir $@)
-	python3 rspspc/gen_tables.py $(RUNNER)/snes/spc.c $@ $(BUILD_DIR)/rsp_spc_traps.h
-$(BUILD_DIR)/rsp_spc.o: rspspc/rsp_spc.S rspspc/spc_rsp_layout.h $(BUILD_DIR)/rsp_spc_tables.inc
-	@$(MAKE) --no-print-directory -f $(N64_INST)/include/n64.mk SOURCE_DIR=rspspc \
-		BUILD_DIR=$(BUILD_DIR) RSPASFLAGS="$(N64_RSPASFLAGS) -I$(abspath $(BUILD_DIR))" $@
-$(BUILD_DIR)/rsp_spc_syms.inc: $(BUILD_DIR)/rsp_spc.o rspspc/gen_syms.py
-	python3 rspspc/gen_syms.py $(BUILD_DIR)/rsp_spc.elf $@ $(N64_NM)
-# rsp_spc_ext runs in the rspq IMEM it borrows: check it fits there.
-$(BUILD_DIR)/rsp_spc_ext.o: rspspc/rsp_spc_ext.S rspspc/spc_rsp_layout.h $(BUILD_DIR)/rsp_spc_syms.inc
-	@$(MAKE) --no-print-directory -f $(N64_INST)/include/n64.mk SOURCE_DIR=rspspc \
-		BUILD_DIR=$(BUILD_DIR) RSPASFLAGS="$(N64_RSPASFLAGS) -I$(abspath $(BUILD_DIR))" $@
-# Paged modules (rsp_spc_m<k>.S), linked at the slot after the resident
-# borrowed code: they call it too (X_*). Checked to fit the slot.
-$(BUILD_DIR)/rsp_spc_ext_syms.inc: $(BUILD_DIR)/rsp_spc_ext.o rspspc/gen_syms.py
-	python3 rspspc/gen_syms.py --prefix X_ $(BUILD_DIR)/rsp_spc_ext.elf $@ $(N64_NM)
-$(BUILD_DIR)/rsp_spc_m%.o: rspspc/rsp_spc_m%.S rspspc/spc_rsp_layout.h $(BUILD_DIR)/rsp_spc_syms.inc $(BUILD_DIR)/rsp_spc_ext_syms.inc
-	@$(MAKE) --no-print-directory -f $(N64_INST)/include/n64.mk SOURCE_DIR=rspspc \
-		BUILD_DIR=$(BUILD_DIR) RSPASFLAGS="$(N64_RSPASFLAGS) -I$(abspath $(BUILD_DIR))" $@
-	python3 rspspc/gen_syms.py --check $(BUILD_DIR)/rsp_spc.elf $(BUILD_DIR)/rsp_spc_ext.elf $(N64_NM) $(@:.o=.elf)
-endif
-
 # ROMPAGING=1: the cartridge reads the SNES ROM through a TLB-mapped window
 # paged in from the N64 cartridge on demand (n64_platform_rom_window), so no
 # copy of the ROM stays in RAM; ROMPAGE_SLOTS 8 KB slots (default 24 = 192 KB).

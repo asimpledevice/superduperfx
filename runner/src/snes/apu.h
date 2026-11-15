@@ -146,9 +146,6 @@ void apu_port_sched_restore(Apu *apu, const ApuPortSched *in);
 /* Bring a deferred DSP up to date (no-op without SNESRECOMP_APU_DEFER_DSP).
  * Call before host code reads DSP output or writes ARAM directly. */
 void apu_dspSync(Apu* apu);
-#if SNESRECOMP_APU_DEFER_DSP
-void apu_dspJoinNow(Apu* apu);
-#endif
 /* Frame boundaries. Normally apu_dspSync. With SNESRECOMP_DSP_HOST_ASYNC
  * (a host whose frame-boundary code reads no DSP state, e.g. the N64) the
  * owed samples are started on the batch hook without waiting (or, while a
@@ -179,7 +176,6 @@ void apu_cycle(Apu* apu);
 /* Advance one bounded job. The build selects scalar clocks or native event
  * spans; both preserve port order, SPC/timer state and DSP sample edges. */
 void apu_runCycles(Apu* apu, uint32_t clocks);
-void apu_runCyclesC(Apu* apu, uint32_t clocks);  /* always the C core */
 const char *apu_time_implementation(void);
 uint8_t apu_cpuRead(Apu* apu, uint16_t adr);
 void apu_cpuWrite(Apu* apu, uint16_t adr, uint8_t val);
@@ -194,7 +190,6 @@ bool apu_schedulePortWrite(Apu* apu, uint8_t port, uint8_t val,
                            uint64_t guest_cycle);
 uint32_t apu_portQueueDepth(const Apu* apu);
 /* Advance real SPC execution until every queued bus event has landed. */
-void apu_drainDuePortWrites(Apu* apu);
 bool apu_runUntilPortQueueEmpty(Apu* apu, uint32_t max_cycles);
 /* Advance the live SPC to a guest timestamp using the same mapping as queued
  * CPU writes. This is the fast-forward coupling point: game frames and SPC

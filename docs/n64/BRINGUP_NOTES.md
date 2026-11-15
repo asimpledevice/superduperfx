@@ -2923,6 +2923,29 @@ passed, but SMW and JM2 S-DSP output differed from frame 300. Prep copies
 ARAM pages later than the CPU did, after the SPC has written them again; see
 `RED_DESIGN.md`, "Step 2 in stages".
 
+### The SPC moves back to the CPU; the RSP SPC is retired (2026-11-15)
+
+Owner decision: the SPC belongs on the CPU with the 65816 (see
+`RED_DESIGN.md`, "The SPC belongs on the CPU"). Removed: `n64/rspspc` (the
+SPC700 overlay, its paged modules, glue, test ROM, the `RSPSPC` and
+`RSPSPC_ASYNC` options), and the runner hooks only it used
+(`SNESRECOMP_APU_RUN_HOOK`, `_ADVANCE_HOOK`, `_JOIN_HOOK`, `_POLL_HOOK`,
+`rtl_advance_apu_to_cpu`, `rtl_apu_finish_frame`, `apu_runCyclesC`,
+`apu_drainDuePortWrites`, `apu_dspJoinNow`, Green's lane pump, the lane's
+APU lock). The default build ran the C core all along (`RSPSPC` was
+opt-in), so it is unchanged. The Phase 0 port and catch-up counters in
+`apu.c` now count only in `N64_PHASE0` builds. Kept: Red's ring and
+resident words, the S-DSP and its prep overlay (step 2a), the rdpq trim.
+The libdragon syncpoint hook the lane's doorbell used stays in
+`third_party/libdragon`, unused.
+
+What the RSP SPC showed, for the record: SPC700 emulation on the RSP works
+and is exact (random comparison, game hashes), and it took SMW from 79 to
+59.5 ms a frame. But every port read then waits on the RSP (11 ms a frame in
+SMW), and keeping the CPU and RSP views of the SPC consistent needed most of
+the machinery above. The C SPC costs roughly 30-40 ms a frame in SMW today;
+the next steps make it cheaper.
+
 ## Next steps
 
 1. Audio: check the RSP DSP by ear on hardware (output arrives later than

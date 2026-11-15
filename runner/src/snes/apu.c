@@ -110,18 +110,21 @@ uint32_t apu_portQueueDepth(const Apu* apu) {
   return apu->portQTail - apu->portQHead;
 }
 
-/* Sizing counters (Red's port ring): writes scheduled, and the writes since
- * the last SPC run (apu_runCycles keeps the largest such burst). */
+#ifdef N64_PHASE0
+/* Measurement counters (n64 N64_PHASE0 builds): CPU port writes scheduled,
+ * SPC catch-ups (apu_runCycles), and the most writes between two of them. */
 uint32_t g_apu_port_writes, g_apu_port_burst;
-/* SPC runs (apu_runCycles), and the most port writes between two of them. */
 uint32_t g_apu_catchups, g_apu_port_burst_max;
+#endif
 
 bool apu_schedulePortWrite(Apu* apu, uint8_t port, uint8_t val,
                            uint64_t guest_cycle) {
   if (apu_portQueueDepth(apu) >= APU_PORT_QUEUE_LEN)
     return false;
+#ifdef N64_PHASE0
   g_apu_port_writes++;
   g_apu_port_burst++;
+#endif
 
   /* Establish a correspondence between guest time and wherever the
    * callback-driven SPC is now. If the callback later runs ahead, rebase at
@@ -162,10 +165,6 @@ static inline void apu_drainPortQueue(Apu* apu) {
     apu->portQHead++;
   }
 }
-
-/* For an SPC700 core outside spc.c (n64/rspspc): apply the CPU port writes
- * due by now, as the native loop does before each instruction. */
-void apu_drainDuePortWrites(Apu* apu) { apu_drainPortQueue(apu); }
 
 bool apu_runUntilPortQueueEmpty(Apu* apu, uint32_t max_cycles) {
   while (apu->portQHead != apu->portQTail) {
@@ -331,10 +330,6 @@ static inline void apu_dspJoin(Apu* apu) {
 #endif
 }
 
-/* For an SPC700 core outside spc.c (n64/rspspc): take a batch still in
- * flight, so the host's Dsp and ARAM are current before that core runs. */
-void apu_dspJoinNow(Apu* apu) { apu_dspJoin(apu); }
-
 #ifdef SNESRECOMP_DSP_LAUNCH_HOOK
 /* After a launch the Dsp shows the in-flight batch's start state until the
  * join, so mark what the next batch can read from that state conservatively:
@@ -427,27 +422,8 @@ static void apu_dspSyncFor(Apu* apu, unsigned reason) {
   apu->dspLogN = 0;
 }
 
-/* SNESRECOMP_APU_JOIN_HOOK: an SPC core that runs asynchronously (n64/rspspc
- * lane) hands its state back before anything outside the SPC reads it. */
-#ifdef SNESRECOMP_APU_JOIN_HOOK
-void SNESRECOMP_APU_JOIN_HOOK(Apu* apu);
-#define APU_JOIN(apu) SNESRECOMP_APU_JOIN_HOOK(apu)
-#else
-#define APU_JOIN(apu) ((void)0)
-#endif
-void apu_dspSync(Apu* apu) { APU_JOIN(apu); apu_dspSyncFor(apu, APU_DSP_SYNC_HOST); }
-/* SNESRECOMP_APU_POLL_HOOK: the same, but only a run already finished;
- * returns 0 while one is still going. The frame-end sync never waits: with
- * a run in flight it does nothing (that run owns the pending samples and
- * the log until it is collected; they go with a later batch). */
-#ifdef SNESRECOMP_APU_POLL_HOOK
-int SNESRECOMP_APU_POLL_HOOK(Apu* apu);
-#define APU_POLL(apu) SNESRECOMP_APU_POLL_HOOK(apu)
-#else
-#define APU_POLL(apu) (APU_JOIN(apu), 1)
-#endif
+void apu_dspSync(Apu* apu) { apu_dspSyncFor(apu, APU_DSP_SYNC_HOST); }
 void apu_dspFrameSync(Apu* apu) {
-  if (!APU_POLL(apu)) return;
   apu_dspSyncFor(apu, SNESRECOMP_DSP_HOST_ASYNC ? APU_DSP_SYNC_FRAME : APU_DSP_SYNC_HOST);
 }
 void apu_dspEchoRead(Apu* apu) { apu_dspSyncFor(apu, APU_DSP_SYNC_ECHO_READ); }
@@ -659,33 +635,16 @@ void apu_cycle(Apu* apu) {
 #endif
 }
 
-/* The C SPC700 core (the LLE reference). */
-void apu_runCyclesC(Apu* apu, uint32_t clocks) {
+void apu_runCycles(Apu* apu, uint32_t clocks) {
+#ifdef N64_PHASE0
+  g_apu_catchups++;
+  if (g_apu_port_burst > g_apu_port_burst_max) g_apu_port_burst_max = g_apu_port_burst;
+  g_apu_port_burst = 0;
+#endif
 #if SNESRECOMP_APU_NATIVE
   apu_runCycles_native(apu, clocks);
 #else
   while (clocks--) apu_cycle(apu);
-#endif
-}
-
-/* SNESRECOMP_APU_RUN_HOOK names another SPC700 core for bulk runs (e.g.
- * n64/rspspc); it must keep the C core's contract and may call
- * apu_runCyclesC for what it does not cover. Single steps (apu_cycle) stay
- * in C. */
-#ifdef SNESRECOMP_APU_RUN_HOOK
-void SNESRECOMP_APU_RUN_HOOK(Apu* apu, uint32_t clocks);
-#endif
-
-void apu_runCycles(Apu* apu, uint32_t clocks) {
-  {  /* sizing counters: an SPC run is a horizon point for Red's port ring */
-    g_apu_catchups++;
-    if (g_apu_port_burst > g_apu_port_burst_max) g_apu_port_burst_max = g_apu_port_burst;
-    g_apu_port_burst = 0;
-  }
-#ifdef SNESRECOMP_APU_RUN_HOOK
-  SNESRECOMP_APU_RUN_HOOK(apu, clocks);
-#else
-  apu_runCyclesC(apu, clocks);
 #endif
 }
 

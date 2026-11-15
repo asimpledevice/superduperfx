@@ -246,7 +246,36 @@ APU phases).
   for attach). Step taken already: rdpq without its RSP triangle engine
   (1,360 bytes of IMEM free instead of 36).
 
-## The audio ownership model (owner, 2026-11-15)
+## The SPC belongs on the CPU (owner, 2026-11-15; supersedes the model below)
+
+The 65816 and the SPC talk constantly (port reads: about 5,200 a frame on
+JM2's loading screen); the SPC and the S-DSP talk rarely (register writes,
+a few catch-ups for echo, ENVX and the pages the S-DSP still has to read).
+The chatty pair goes on one processor. The RSP SPC (`n64/rspspc`, the
+async lane, its runner hooks) is retired; its history stays in
+BRINGUP_NOTES and git. The CPU makes room for the SPC by moving other work
+to the RSP and RDP instead (the PPU first).
+
+- **Blue** owns the 65816, the SPC (`spc.c`, the C core, also the LLE
+  reference) and ARAM. The SPC is caught up where the 65816's time is
+  known: port accesses and the frame boundary (at least once a frame, so
+  the S-DSP always has register writes to render).
+- **Red/Yellow** own the S-DSP: batches, decode (prep, step 2a), and the
+  output samples.
+- **Green** drives frames, the PPU and audio out, and never touches the
+  SPC. (The N64 CPU has one core: Blue and Green are fibers. Running the
+  SPC on Green would add a fiber switch to every port read and buy no
+  parallelism.)
+
+Next, in order: make the C SPC cheaper (exact idle-loop skipping for timer
+polls; the 65816's port-poll loops fast-forwarded by running the SPC until
+the port changes; the SPC's hot code laid out to fit the 16 KB I-cache), then
+the SPC → S-DSP link as a time-sliced queue of register writes with one
+shared ARAM and hot pages (the S-DSP's footprint: BRR spans of the playing
+voices, directory entries in use, the echo window), which removes the
+CPU's batch bookkeeping (marks, view, undo, pack/unpack, launch/join).
+
+## The audio ownership model (owner, 2026-11-15) (superseded above)
 
 What the hardware couples: the 65816 and the SPC through the four ports each
 way; the SPC and the DSP through DSP register writes and ARAM (samples, the

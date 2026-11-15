@@ -89,13 +89,6 @@ double apu_prof_ms = 0.0;
 uint64_t bridgeq_prof_calls = 0;
 double bridgeq_prof_ms = 0.0;
 #endif
-/* The bridge's catch-ups: posted without waiting with an asynchronous SPC
- * core (SNESRECOMP_APU_ADVANCE_HOOK, common_rtl.c), else run here. */
-#ifdef SNESRECOMP_APU_ADVANCE_HOOK
-#define BRIDGE_ADVANCE_APU() rtl_advance_apu_to_cpu()
-#else
-#define BRIDGE_ADVANCE_APU() do { RtlApuLock(); rtl_sync_apu_to_cpu_locked(); RtlApuUnlock(); } while (0)
-#endif
 static void bridge_apu_flush(CpuState *cpu) {
     /* SNESRECOMP_INTERP_NOAPU=1: skip the bridge's APU catch-up entirely.
      * Bisection aid for hosts that drive the SPC themselves -- if a run that
@@ -122,8 +115,10 @@ static void bridge_apu_flush(CpuState *cpu) {
          * by RtlApuWrite are never drained and the SPC never processes them.
          * Star Ocean's name-entry music transfer writes data to $2140-$2143
          * and polls for a response; without this sync the SPC is frozen. */
+        RtlApuLock();
         g_apu_last_sync_master = g_master_cycles;
-        BRIDGE_ADVANCE_APU();
+        rtl_sync_apu_to_cpu_locked();
+        RtlApuUnlock();
         s_apu_pending_master = 0;
         return;
     }
@@ -133,8 +128,10 @@ static void bridge_apu_flush(CpuState *cpu) {
      * bridge flushes no longer changes what the SPC does. */
     { static bool s_was_ready;
       if (bridge_apu_guest_time_ready()) {
+        RtlApuLock();
         g_apu_last_sync_master = g_master_cycles;
-        BRIDGE_ADVANCE_APU();
+        rtl_sync_apu_to_cpu_locked();
+        RtlApuUnlock();
         s_apu_pending_master = 0;
         s_was_ready = true;
         return;
@@ -172,16 +169,11 @@ void interp_bridge_flush_apu_pending(void) {
 #if SNESRECOMP_LLE_APU_GUEST_TARGET
     if (bridge_apu_guest_time_ready()) {
         /* Also when nothing is pending: compiled code may have run since the
-         * last catch-up, and the SPC must stand at guest time here (or, with
-         * an asynchronous core, be posted toward it: an upload syncs next). */
-        g_apu_last_sync_master = g_master_cycles;
-#ifdef SNESRECOMP_APU_ADVANCE_HOOK
-        rtl_advance_apu_to_cpu();
-#else
+         * last catch-up, and the SPC must stand at guest time here. */
         RtlApuLock();
+        g_apu_last_sync_master = g_master_cycles;
         rtl_sync_apu_to_cpu_locked();
         RtlApuUnlock();
-#endif
         s_apu_pending_master = 0;
     } else if (s_apu_pending_master) {
         bridge_apu_flush(&g_cpu);

@@ -23,8 +23,8 @@ and Joe & Mac 2 are the test games. Builds are checked in the
   against: memory map, PPU, APU, DMA, coprocessors (Super FX, SA-1, Cx4, DSP-1,
   S-DD1), and the interpreter.
 - **N64 host** (`n64/`): boot, video, audio and input on libdragon; the RDP
-  renderer; RSP microcode for the S-DSP (`rspdsp/`), BG line building
-  (`rspbg/`) and the SPC700 (`rspspc/`); ROM paging and a native code cache.
+  renderer; RSP microcode for the S-DSP (`rspdsp/`) and BG line building
+  (`rspbg/`); ROM paging and a native code cache.
 - **libdragon** (`third_party/libdragon/`): SuperDuperFX's own copy of the N64
   library, built by the N64 Makefiles.
 
@@ -46,7 +46,7 @@ make -C n64 GEN_DIR=<generated C> GEN_INC=<game config> ROM=<your .sfc>
 The first build also builds libdragon into `build/libdragon` (about a
 minute). See [`docs/n64/BRINGUP_NOTES.md`](docs/n64/BRINGUP_NOTES.md) for
 the toolchain, the build options (`RENDER`, `CODECACHE`, `ROMPAGING`,
-`RSPDSP`, `RSPSPC`, ...) and the measurements behind each design choice.
+`RSPDSP`, `RSPDSP_PREP`, ...) and the measurements behind each design choice.
 
 ## Tests
 
@@ -59,8 +59,8 @@ python3 -m pytest
 ```
 
 The first runs the emulation core's C tests on your PC in seconds; the second
-runs the recompiler's tests. The test ROMs in `n64/rspspc/test`,
-`n64/rspdsp/test`, `n64/rspbg/test` and `n64/hwtest` check the RSP microcode
+runs the recompiler's tests. The test ROMs in `n64/rspdsp/test`,
+`n64/rspdsp/preptest`, `n64/rspbg/test` and `n64/hwtest` check the RSP microcode
 and CPU/RSP signalling in ares or on hardware.
 
 ## Acknowledgements
