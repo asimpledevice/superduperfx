@@ -174,6 +174,29 @@ void n64_platform_audio_pump(void (*render)(int16_t *stereo, int frames)) {
 }
 
 uint32_t n64_platform_read_pad(void) {
+#ifdef N64_INPUT_SCRIPT
+  /* Scripted input for unattended runs (ares): press N64_INPUT_SCRIPT_MASK
+   * (default Start) for 3 frames every N64_INPUT_SCRIPT_PERIOD frames
+   * between N64_INPUT_SCRIPT_FROM and N64_INPUT_SCRIPT_TO; nothing else. */
+#ifndef N64_INPUT_SCRIPT_MASK
+#define N64_INPUT_SCRIPT_MASK (1u << 3)
+#endif
+#ifndef N64_INPUT_SCRIPT_FROM
+#define N64_INPUT_SCRIPT_FROM 250
+#endif
+#ifndef N64_INPUT_SCRIPT_TO
+#define N64_INPUT_SCRIPT_TO 600
+#endif
+#ifndef N64_INPUT_SCRIPT_PERIOD
+#define N64_INPUT_SCRIPT_PERIOD 64
+#endif
+  { static uint32_t s_frame;
+    const uint32_t f = s_frame++;
+    if (f >= N64_INPUT_SCRIPT_FROM && f < N64_INPUT_SCRIPT_TO &&
+        (f - N64_INPUT_SCRIPT_FROM) % N64_INPUT_SCRIPT_PERIOD < 3)
+      return N64_INPUT_SCRIPT_MASK;
+    return 0; }
+#endif
   joypad_poll();
   joypad_buttons_t b = joypad_get_buttons(JOYPAD_PORT_1);
   joypad_inputs_t in = joypad_get_inputs(JOYPAD_PORT_1);
@@ -404,62 +427,84 @@ void n64_platform_codepack_free(void *base) { free(base); }
 #include "red.h"
 volatile uint32_t g_hang_where, g_hang_frame;
 surface_t *volatile g_hang_fb;
-static uint32_t s_hang_epc[9];
-static unsigned s_hang_i, s_hang_last, s_hang_stuck;
+static unsigned s_hang_last, s_hang_stuck;
+static uint32_t s_hang_spins;
 #ifdef N64_RSPDSP
-void snesdsp_rsp_probe(uint32_t out[3]);
+void snesdsp_rsp_probe(uint32_t out[8]);
 #endif
 static void hang_line(surface_t *fb, int row, const char *text) {
-  graphics_draw_text(fb, 16, 12 + row * 10, text);
+  graphics_draw_text(fb, 12, 6 + row * 10, text);
 }
+#define DMEM32(off) (*(const volatile uint32_t *)(0xA4000000 + (off)))
+#define DMEM16(off) (*(const volatile uint16_t *)(0xA4000000 + (off)))
 static void hang_tick(int ovfl) {
   (void)ovfl;
-  uint32_t epc;
-  __asm__ volatile("mfc0 %0, $14" : "=r"(epc));
-  s_hang_epc[s_hang_i++ % 9] = epc;
+  const uint32_t spins = DMEM32(0x44);
+  const uint32_t dspins = spins - s_hang_spins;
+  s_hang_spins = spins;
   if (g_hang_frame != s_hang_last) { s_hang_last = g_hang_frame; s_hang_stuck = 0; return; }
   if (++s_hang_stuck < 8) return;
   surface_t *fb = g_hang_fb;
   if (!fb) return;
+  /* The RSP's PC, sampled many times: a loop shows as a small range. */
+  uint16_t pcs[6]; int npc = 0; uint16_t lo = 0xffff, hi = 0;
+  for (int i = 0; i < 400; i++) {
+    const uint16_t pc = (uint16_t)(*(volatile uint32_t *)0xA4080000 & 0xfff);
+    if (pc < lo) lo = pc;
+    if (pc > hi) hi = pc;
+    int k = 0;
+    while (k < npc && pcs[k] != pc) k++;
+    if (k == npc && npc < 6) pcs[npc++] = pc;
+  }
   char t[48];
-  graphics_draw_box(fb, 8, 8, fb->width - 16, 112, graphics_make_color(0, 0, 0, 255));
+  graphics_draw_box(fb, 4, 4, fb->width - 8, 146, graphics_make_color(0, 0, 0, 255));
   graphics_set_color(graphics_make_color(255, 80, 80, 255), 0);
-  snprintf(t, sizeof t, "HANG f%lu w%02lx s%u", (unsigned long)g_hang_frame,
+  snprintf(t, sizeof t, "HANG2 f%lu w%02lx s%u", (unsigned long)g_hang_frame,
            (unsigned long)g_hang_where, s_hang_stuck / 4);
   hang_line(fb, 0, t);
-  for (int k = 0; k < 3; k++) {
-    snprintf(t, sizeof t, "%08lx %08lx %08lx", (unsigned long)s_hang_epc[k * 3],
-             (unsigned long)s_hang_epc[k * 3 + 1], (unsigned long)s_hang_epc[k * 3 + 2]);
-    hang_line(fb, 1 + k, t);
-  }
-  snprintf(t, sizeof t, "SP %04lx PC %03lx DP %04lx",
-           (unsigned long)(*(volatile uint32_t *)0xA4040010 & 0xffff),
-           (unsigned long)(*(volatile uint32_t *)0xA4080000 & 0xfff),
-           (unsigned long)(*(volatile uint32_t *)0xA410000C & 0xffff));
-  hang_line(fb, 4, t);
-  snprintf(t, sizeof t, "DC %06lx DS %06lx DE %06lx",
+  snprintf(t, sizeof t, "SP %04lx PC %03x-%03x n%d", (unsigned long)(*(volatile uint32_t *)0xA4040010 & 0xffff),
+           lo, hi, npc);
+  hang_line(fb, 1, t);
+  snprintf(t, sizeof t, "%03x %03x %03x %03x %03x %03x", npc > 0 ? pcs[0] : 0, npc > 1 ? pcs[1] : 0,
+           npc > 2 ? pcs[2] : 0, npc > 3 ? pcs[3] : 0, npc > 4 ? pcs[4] : 0, npc > 5 ? pcs[5] : 0);
+  hang_line(fb, 2, t);
+  snprintf(t, sizeof t, "DP %04lx C%06lx E%06lx",
+           (unsigned long)(*(volatile uint32_t *)0xA410000C & 0xffff),
            (unsigned long)(*(volatile uint32_t *)0xA4100008 & 0xffffff),
-           (unsigned long)(*(volatile uint32_t *)0xA4100000 & 0xffffff),
            (unsigned long)(*(volatile uint32_t *)0xA4100004 & 0xffffff));
+  hang_line(fb, 3, t);
+  snprintf(t, sizeof t, "R %08lx %08lx %08lx", (unsigned long)DMEM32(0x18), (unsigned long)DMEM32(0x1c),
+           (unsigned long)DMEM32(0x20));
+  hang_line(fb, 4, t);
+  snprintf(t, sizeof t, "R %08lx %08lx %08lx", (unsigned long)DMEM32(0x24), (unsigned long)DMEM32(0x28),
+           (unsigned long)DMEM32(0x2c));
   hang_line(fb, 5, t);
-  const volatile uint32_t *dmem = (const volatile uint32_t *)0xA4000000;
-  snprintf(t, sizeof t, "%08lx %08lx %08lx %08lx", (unsigned long)dmem[2], (unsigned long)dmem[3],
-           (unsigned long)dmem[4], (unsigned long)dmem[5]);
+  snprintf(t, sizeof t, "R %08lx %08lx H%02lx T%02lx", (unsigned long)DMEM32(0x30), (unsigned long)DMEM32(0x34),
+           (unsigned long)DMEM32(0x38), (unsigned long)DMEM32(0x3c));
   hang_line(fb, 6, t);
-  snprintf(t, sizeof t, "%08lx %08lx %08lx %08lx", (unsigned long)dmem[14], (unsigned long)dmem[15],
-           (unsigned long)dmem[16], (unsigned long)dmem[17]);
+  snprintf(t, sizeof t, "MB %08lx %08lx G%04lx", (unsigned long)DMEM32(0x08), (unsigned long)DMEM32(0x0c),
+           (unsigned long)(DMEM32(0x40) & 0xffff));
   hang_line(fb, 7, t);
-  uint32_t fl[3] = {0, 0, 0};
+  snprintf(t, sizeof t, "IS %08lx d%lu", (unsigned long)spins, (unsigned long)dspins);
+  hang_line(fb, 8, t);
+  snprintf(t, sizeof t, "OV %08lx %08lx", (unsigned long)DMEM32(0x238), (unsigned long)DMEM32(0x23c));
+  hang_line(fb, 9, t);
+  snprintf(t, sizeof t, "DS n%u l%u L%lu P%lx", DMEM16(0x5f2), DMEM16(0x5f4), (unsigned long)DMEM32(0xdd8),
+           (unsigned long)DMEM32(0xdd4));
+  hang_line(fb, 10, t);
+  snprintf(t, sizeof t, "A%06lx L%06lx O%06lx", (unsigned long)(DMEM32(0x5f8) & 0xffffff),
+           (unsigned long)(DMEM32(0x5fc) & 0xffffff), (unsigned long)(DMEM32(0x600) & 0xffffff));
+  hang_line(fb, 11, t);
+  uint32_t fl[8] = {0};
 #ifdef N64_RSPDSP
   snesdsp_rsp_probe(fl);
 #endif
   snprintf(t, sizeof t, "F%lu %06lx %06lx D%06lx", (unsigned long)fl[0], (unsigned long)fl[1],
            (unsigned long)fl[2], (unsigned long)(g_red_dsp_done & 0xffffff));
-  hang_line(fb, 8, t);
-  { extern uint32_t g_blue_yields;
-    snprintf(t, sizeof t, "BW %08lx M%lu Y%lu", (unsigned long)g_red_blue_waits,
-             (unsigned long)g_red_messages, (unsigned long)g_blue_yields); }
-  hang_line(fb, 9, t);
+  hang_line(fb, 12, t);
+  snprintf(t, sizeof t, "CB n%lu l%lu R%lu/%lu M%08lx", (unsigned long)fl[3], (unsigned long)fl[4],
+           (unsigned long)fl[5], (unsigned long)fl[6], (unsigned long)fl[7]);
+  hang_line(fb, 13, t);
 }
 void hang_probe_start(void) {
   new_timer(TICKS_FROM_US(250000), TF_CONTINUOUS, hang_tick);

@@ -682,10 +682,17 @@ static bool launch(Dsp *dsp, uint8_t *aram, const ApuDspLogEntry *log, uint32_t 
 #ifdef N64_HANG_PROBE
 /* Hang probe (n64_platform.c): the batch in flight, and where the join is. */
 extern volatile uint32_t g_hang_where;
-void snesdsp_rsp_probe(uint32_t out[3]) {
+void snesdsp_rsp_probe(uint32_t out[8]) {
   out[0] = s_flight.active;
   out[1] = s_flight.seq;
   out[2] = s_seq;
+  out[3] = s_flight.samples;
+  out[4] = s_flight.nops;
+  /* What RDRAM holds for the RSP (uncached): the block's sample and op counts. */
+  const RspDspState *u = UncachedAddr(&s_block);
+  out[5] = *(const uint16_t *)(u->bytes + RSPDSP_P_SAMPLES);
+  out[6] = *(const uint16_t *)(u->bytes + RSPDSP_P_LOGN);
+  out[7] = *(const uint32_t *)(u->bytes + RSPDSP_P_DONE_MSG);
 }
 #define HANG_WHERE(v) (g_hang_where = (v))
 #else
