@@ -10,7 +10,7 @@ OUT="$HERE/build"
 mkdir -p "$OUT"
 SRCS=$(sed -n '/^RUNNER_SRCS = /,/^$/p' "$N64/Makefile" | sed 's/RUNNER_SRCS = //; s/\\//' | tr -s ' \t\n' ' ')
 DIAG=$(sed -n '/^N64_CFLAGS += -DSNESRECOMP_AUDIO_TRACE_HISTORY/,/^$/p' "$N64/Makefile" | sed 's/N64_CFLAGS += //; s/\\//' | tr -s ' \t\n' ' ')
-CFLAGS=(-std=gnu17 -O2 -g -ffunction-sections -fdata-sections "-I$N64/include" "-I$RUNNER" "-I$RUNNER/snes" "-I$RUNNER/desktop"
+CFLAGS=(-std=gnu17 -O2 -g -ffunction-sections -fdata-sections "-I$N64/include" "-I$N64/rsptile" "-I$RUNNER" "-I$RUNNER/snes" "-I$RUNNER/desktop"
   -DSNESRECOMP_TRACE=0 -DSNESRECOMP_EXECUTION_DEFAULT_MODE=SNESRECOMP_EXECUTION_MODE_OFF
   '-DN64_ROM_PATH=getenv("N64_PROFILE_ROM")' -include stdlib.h $DIAG "$@")
 OBJS=()
@@ -20,9 +20,10 @@ for s in $SRCS; do
   OBJS+=("$o")
   while [ "$(jobs -r | wc -l)" -ge "$(nproc)" ]; do wait -n; done
 done
-for s in n64_host.c n64_stubs.c n64_ppu_build.c n64_ppu_desc.c; do
+for s in n64_host.c n64_stubs.c n64_ppu_build.c n64_ppu_desc.c n64_ppu_scene.c; do
   o="$OUT/$s.o"; gcc "${CFLAGS[@]}" -w -c "$N64/src/$s" -o "$o"; OBJS+=("$o")
 done
+gcc "${CFLAGS[@]}" -w -c "$N64/rsptile/tile_cache_ref.c" -o "$OUT/tile_cache_ref.o"; OBJS+=("$OUT/tile_cache_ref.o")
 gcc "${CFLAGS[@]}" -w -c "$HERE/linux_platform.c" -o "$OUT/linux_platform.o"; OBJS+=("$OUT/linux_platform.o")
 gcc "${CFLAGS[@]}" -w -c "$HERE/rdp_reference.c" -o "$OUT/rdp_reference.o"; OBJS+=("$OUT/rdp_reference.o")
 wait

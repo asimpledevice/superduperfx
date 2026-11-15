@@ -459,6 +459,59 @@ static void merge_rsp_flags(N64PpuFrame *f) {
 #endif
 
 /* Expand a deferred run, tile-major. */
+#ifdef N64PPU_SCENE_CHECK
+/* Scene builder check (native): the run's quads (n64_ppu_scene.c), drawn
+ * from the tile cache's C reference the way the RDP will draw them, must
+ * reproduce the plane rows flush_run has just written, byte for byte. */
+#include <stdio.h>
+#include "n64_ppu_scene.h"
+#include "tile_cache.h"
+static uint32_t s_scn_runs, s_scn_rows, s_scn_bad, s_scn_quads;
+static void scene_check(N64PpuFrame *f, const BgRun *run, int plane) {
+  static N64SceneQuad q[33 * 30];
+  static uint8_t row[N64PPU_LINES][256];
+  const N64SceneBg bg = {.hs = run->hs, .vs = run->vs, .xsc = run->xsc, .bpp = run->bpp,
+                         .tileadr = run->tileadr};
+  const int r0 = run->l0 - 1, r1 = run->l1 - 1;
+  const uint16_t *vram = s_state.ppu->vram;
+  const int n = n64_scene_bg(&bg, vram, r0, r1, q, (int)(sizeof q / sizeof q[0]));
+  s_scn_quads += (uint32_t)n;
+#ifdef N64PPU_SCENE_CHECK_BREAK   /* the check must fail: one tile drawn unflipped */
+  if (n > 5) q[5].flags &= (uint8_t)~N64SCENE_HFLIP, q[5].pal ^= 1;
+#endif
+  uint8_t tile[TC_CI4_TILE];
+  for (int k = 0; k < n; ++k) {
+    tc_ref_tile(vram, run->bpp, q[k].tile, tile);
+    const unsigned pal = (q[k].flags & N64SCENE_PRIO ? 128u : 0u) + run->pal_base +
+                         q[k].pal * (run->bpp == 4 ? 16u : 4u);
+    for (int r = q[k].r0; r < q[k].r1; ++r) {
+      unsigned tr = q[k].row + (unsigned)(r - q[k].r0);
+      if (q[k].flags & N64SCENE_VFLIP) tr = 7 - tr;
+      for (int j = 0; j < 8; ++j) {
+        const int x = q[k].x0 + j;
+        if (x < 0 || x >= 256) continue;
+        const int s = (q[k].flags & N64SCENE_HFLIP) ? 8 + j : j;
+        const uint8_t b = tile[8 * tr + s / 2];
+        row[r][x] = (uint8_t)(pal + (s & 1 ? b & 15 : b >> 4));
+      }
+    }
+  }
+  s_scn_runs++;
+  for (int r = r0; r < r1; ++r) {
+    s_scn_rows++;
+    if (memcmp(row[r], plane_row(f, plane, r) + N64PPU_PAD, 256)) {
+      if (s_scn_bad++ < 8)
+        fprintf(stderr, "[scene] plane %d row %d differs (hs %u vs %u xsc %02x bpp %u)\n", plane, r,
+                run->hs, run->vs, run->xsc, run->bpp);
+    }
+  }
+  if (s_scn_runs % 1000 == 0)
+    fprintf(stderr, "[scene] %lu runs, %lu rows, %lu differ, %.1f quads a run\n",
+            (unsigned long)s_scn_runs, (unsigned long)s_scn_rows, (unsigned long)s_scn_bad,
+            (double)s_scn_quads / s_scn_runs);
+}
+#endif
+
 static void flush_run(N64PpuFrame *f, int screen, int layer) {
   BgRun *run = &s_state.runs[screen][layer];
   if (!run->active) return;
@@ -533,6 +586,9 @@ static void flush_run(N64PpuFrame *f, int screen, int layer) {
     }
     g0 = g1;
   }
+#ifdef N64PPU_SCENE_CHECK
+  scene_check(f, run, plane);
+#endif
 }
 
 /* Queue one line of one layer, flushing the run when its state changes. */
