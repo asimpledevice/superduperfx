@@ -701,6 +701,11 @@ void snesdsp_rsp_apu_join(void) {
     while (!red_dsp_done(s_flight.seq) && (uint32_t)get_ticks() - t0 < TICKS_FROM_MS(50)) {}
     if (!red_dsp_done(s_flight.seq)) {
       g_snesdsp_rsp_fallbacks++;
+#ifdef AB_HANG_DEBUG
+      { extern void n64_platform_log(const char *, ...);
+        n64_platform_log("[hang] S-DSP join fallback: seq %lu samples %lu nops %lu\n",
+                         (unsigned long)s_flight.seq, (unsigned long)s_flight.samples, (unsigned long)s_flight.nops); }
+#endif
 #if RSPDSP_RING
       rspq_ring_wait();
 #else

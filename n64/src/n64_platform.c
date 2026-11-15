@@ -126,6 +126,9 @@ void n64_platform_init(void) {
   rdpq_debug_start();
 #endif
   timer_init();
+#ifdef AB_HANG_DEBUG
+  { extern void ab_heartbeat_start(void); ab_heartbeat_start(); }
+#endif
 #ifdef N64_PHASE0
   p0_calibrate();
 #endif
@@ -391,3 +394,20 @@ void *n64_platform_codepack_load(uint32_t id, void **base_out) {
 }
 
 void n64_platform_codepack_free(void *base) { free(base); }
+
+#ifdef AB_HANG_DEBUG
+/* Hang hunt: once a second, where the host is (the exception PC of the
+ * interrupted code) and the frame counter. */
+volatile uint32_t g_ab_where;
+static void ab_heartbeat(int ovfl) {
+  (void)ovfl;
+  extern int snes_frame_counter;
+  uint32_t epc;
+  __asm__ volatile("mfc0 %0, $14" : "=r"(epc));
+  n64_platform_log("[hang] heartbeat f%d where %lu epc %08lx\n", snes_frame_counter,
+                   (unsigned long)g_ab_where, (unsigned long)epc);
+}
+void ab_heartbeat_start(void) {
+  new_timer(TIMER_TICKS(1000000), TF_CONTINUOUS, ab_heartbeat);
+}
+#endif

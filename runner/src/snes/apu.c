@@ -635,7 +635,26 @@ void apu_cycle(Apu* apu) {
 #endif
 }
 
+#ifdef SNESRECOMP_SPC_TICKS
+uint32_t g_spc_ticks, g_spc_calls;
+static inline uint32_t spc_count(void) { uint32_t c; __asm__ volatile("mfc0 %0, $9" : "=r"(c)); return c; }
+#endif
 void apu_runCycles(Apu* apu, uint32_t clocks) {
+#ifdef SNESRECOMP_SPC_TICKS
+  const uint32_t t0 = spc_count();
+  g_spc_calls++;
+#endif
+#ifdef AB_HANG_DEBUG
+  { static uint32_t n; extern int snes_frame_counter;
+    if ((++n & 0xff) == 0 || snes_frame_counter >= 112) {
+      extern void n64_platform_log(const char *, ...);
+      n64_platform_log("[hang] f%d spc pc %04x a%02x x%02x y%02x cyc %lu clocks %lu left %u t0 c%u d%u tg%u e%u ports %02x %02x out %02x %02x q%u\n",
+        snes_frame_counter, apu->spc->pc, apu->spc->a, apu->spc->x, apu->spc->y, (unsigned long)apu->cycles,
+        (unsigned long)clocks, apu->cpuCyclesLeft, apu->timer[0].counter, apu->timer[0].divider,
+        apu->timer[0].target, apu->timer[0].enabled, apu->inPorts[0], apu->inPorts[1],
+        apu->outPorts[0], apu->outPorts[1], (unsigned)(apu->portQTail - apu->portQHead));
+    } }
+#endif
 #ifdef N64_PHASE0
   g_apu_catchups++;
   if (g_apu_port_burst > g_apu_port_burst_max) g_apu_port_burst_max = g_apu_port_burst;
@@ -645,6 +664,14 @@ void apu_runCycles(Apu* apu, uint32_t clocks) {
   apu_runCycles_native(apu, clocks);
 #else
   while (clocks--) apu_cycle(apu);
+#endif
+#ifdef SNESRECOMP_SPC_TICKS
+  g_spc_ticks += spc_count() - t0;
+#endif
+#ifdef AB_HANG_DEBUG
+  { extern int snes_frame_counter;
+    if (snes_frame_counter >= 112) { extern void n64_platform_log(const char *, ...);
+      n64_platform_log("[hang] exit pc %04x cyc %lu\n", apu->spc->pc, (unsigned long)apu->cycles); } }
 #endif
 }
 
