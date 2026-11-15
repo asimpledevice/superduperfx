@@ -543,6 +543,9 @@ uint32_t rspq_mailbox_up(void)
 /** @brief The CPU's copy of the ring head (it is the only writer). */
 static uint32_t rspq_ring_head;
 uint32_t rspq_ring_commands, rspq_ring_wait_ticks;
+/** @brief What the CPU last wrote to each ring word, and how many words did
+    not read back as written (diagnostics: a lost DMEM write shows here). */
+uint32_t rspq_ring_shadow[RSPQ_RING_SIZE / 4], rspq_ring_readback_bad;
 
 void rspq_ring_write(const uint32_t *words, unsigned n)
 {
@@ -574,8 +577,15 @@ void rspq_ring_write(const uint32_t *words, unsigned n)
     }
 
     if (wrap)
-        for (uint32_t i = head / 4; i < RSPQ_RING_SIZE / 4; i++) ring[i] = RSPQ_RING_PAD_WORD;
-    for (unsigned i = 0; i < n; i++) ring[start / 4 + i] = words[i];
+        for (uint32_t i = head / 4; i < RSPQ_RING_SIZE / 4; i++)
+            ring[i] = rspq_ring_shadow[i] = RSPQ_RING_PAD_WORD;
+    for (unsigned i = 0; i < n; i++) ring[start / 4 + i] = rspq_ring_shadow[start / 4 + i] = words[i];
+    /* Read back before publishing; rewrite a word that did not land. */
+    for (unsigned i = 0; i < n; i++)
+        while (ring[start / 4 + i] != words[i]) {
+            rspq_ring_readback_bad++;
+            ring[start / 4 + i] = words[i];
+        }
     /* Publish: the RSP ignores the slots until the head moves past them. */
     MEMORY_BARRIER();
     *RSPQ_RING_FIELD(ring_head) = next;

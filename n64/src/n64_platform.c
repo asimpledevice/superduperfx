@@ -433,7 +433,7 @@ static uint32_t s_hang_spins;
 void snesdsp_rsp_probe(uint32_t out[8]);
 #endif
 static void hang_line(surface_t *fb, int row, const char *text) {
-  graphics_draw_text(fb, 12, 6 + row * 10, text);
+  graphics_draw_text(fb, 16, 20 + row * 10, text);
 }
 #define DMEM32(off) (*(const volatile uint32_t *)(0xA4000000 + (off)))
 #define DMEM16(off) (*(const volatile uint16_t *)(0xA4000000 + (off)))
@@ -457,7 +457,7 @@ static void hang_tick(int ovfl) {
     if (k == npc && npc < 6) pcs[npc++] = pc;
   }
   char t[48];
-  graphics_draw_box(fb, 4, 4, fb->width - 8, 146, graphics_make_color(0, 0, 0, 255));
+  graphics_draw_box(fb, 4, 4, fb->width - 8, 172, graphics_make_color(0, 0, 0, 255));
   graphics_set_color(graphics_make_color(255, 80, 80, 255), 0);
   snprintf(t, sizeof t, "HANG2 f%lu w%02lx s%u", (unsigned long)g_hang_frame,
            (unsigned long)g_hang_where, s_hang_stuck / 4);
@@ -482,6 +482,16 @@ static void hang_tick(int ovfl) {
   snprintf(t, sizeof t, "R %08lx %08lx H%02lx T%02lx", (unsigned long)DMEM32(0x30), (unsigned long)DMEM32(0x34),
            (unsigned long)DMEM32(0x38), (unsigned long)DMEM32(0x3c));
   hang_line(fb, 6, t);
+  {
+    extern uint32_t rspq_ring_shadow[8], rspq_ring_readback_bad, rspq_ring_commands;
+    /* Ring words that differ from what the CPU wrote: bit i = word i. */
+    unsigned diff = 0;
+    for (int i = 0; i < 8; i++)
+      if (DMEM32(0x18 + 4 * i) != rspq_ring_shadow[i]) diff |= 1u << i;
+    snprintf(t, sizeof t, "RB%lu X%02x C%lu S%08lx", (unsigned long)rspq_ring_readback_bad, diff,
+             (unsigned long)rspq_ring_commands, (unsigned long)rspq_ring_shadow[6]);
+    hang_line(fb, 14, t);
+  }
   snprintf(t, sizeof t, "MB %08lx %08lx G%04lx", (unsigned long)DMEM32(0x08), (unsigned long)DMEM32(0x0c),
            (unsigned long)(DMEM32(0x40) & 0xffff));
   hang_line(fb, 7, t);
