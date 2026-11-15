@@ -79,8 +79,17 @@ static void draw_frame_rdp(bool software_every_line) {
 
 #if N64_RENDER
 /* Finish a built frame (the RSP's background rows) and show it. */
+#ifdef N64_PRESENT_PROF
+static uint32_t s_pp_finish, s_pp_audio;
+#endif
 static void present_rdp_frame(uint32_t frame, const char *line) {
+#ifdef N64_PRESENT_PROF
+  const uint64_t pf = n64_platform_time_us();
   n64_ppu_build_finish();
+  s_pp_finish += (uint32_t)(n64_platform_time_us() - pf);
+#else
+  n64_ppu_build_finish();
+#endif
   const int diff = n64_ppu_draw_and_show(s_rdp_frame, line, N64_RENDER == 2);
 #ifdef N64PPU_WHY_LOG
   { /* Software-PPU lines per reason (bits of N64PPU_WHY_*), every 60 frames. */
@@ -531,7 +540,24 @@ static int host_main(void) {
 #else
     n64_platform_present(s_pixels, kSnesW, kSnesH, line);
 #endif
+#ifdef N64_PRESENT_PROF
+    { const uint64_t pa = n64_platform_time_us();
+      n64_platform_audio_pump(render_audio);
+      s_pp_audio += (uint32_t)(n64_platform_time_us() - pa); }
+    if (frame % 60 == 59) {
+      extern uint32_t g_present_prof[5];
+      n64_platform_log("[present] per frame (us): RSP BG merge %lu, display_get %lu, RDP commands %lu, "
+                       "status line %lu, RDP wait %lu, display_show %lu, audio pump %lu\n",
+                       (unsigned long)(s_pp_finish / 60), (unsigned long)(g_present_prof[0] / 60 / 47),
+                       (unsigned long)(g_present_prof[1] / 60 / 47), (unsigned long)(g_present_prof[2] / 60 / 47),
+                       (unsigned long)(g_present_prof[3] / 60 / 47), (unsigned long)(g_present_prof[4] / 60 / 47),
+                       (unsigned long)(s_pp_audio / 60));
+      s_pp_finish = s_pp_audio = 0;
+      for (int i = 0; i < 5; i++) g_present_prof[i] = 0;
+    }
+#else
     n64_platform_audio_pump(render_audio);
+#endif
     uint64_t t3 = n64_platform_time_us() + (t1p - t1);   /* present: both parts */
 
     if (frame < 8 || frame % 50 == 0)

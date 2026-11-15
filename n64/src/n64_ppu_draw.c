@@ -150,8 +150,21 @@ static __attribute__((noinline)) int compare(const N64PpuFrame *f, const surface
   return mismatches;
 }
 
+#ifdef N64_PRESENT_PROF
+/* Present's parts (ticks): 0 display_get, 1 issuing the frame's RDP
+ * commands, 2 the status line, 3 waiting for the RDP (N64_PRESENT_RDPWAIT
+ * builds only), 4 display_show. */
+uint32_t g_present_prof[5];
+#define PP_T() get_ticks()
+#define PP_ADD(i, t) (g_present_prof[i] += get_ticks() - (t))
+#else
+#define PP_T() 0u
+#define PP_ADD(i, t) ((void)(t))
+#endif
 int n64_ppu_draw_and_show(const N64PpuFrame *f, const char *status, int compare_with_software) {
+  uint32_t pt = PP_T();
   surface_t *fb = display_get();
+  PP_ADD(0, pt); pt = PP_T();
   data_cache_hit_writeback((void *)f->tlut, sizeof(f->tlut[0]) * (size_t)f->tlut_count);
 
   rdpq_attach(fb, NULL);
@@ -206,6 +219,11 @@ int n64_ppu_draw_and_show(const N64PpuFrame *f, const char *status, int compare_
   }
 #endif
 
+  PP_ADD(1, pt); pt = PP_T();
+#ifdef N64_PRESENT_RDPWAIT
+  rspq_wait();   /* measurement only: the RDP's drawing time */
+  PP_ADD(3, pt); pt = PP_T();
+#endif
   int mismatches = -1;
   if (compare_with_software) mismatches = compare(f, fb);
   {
@@ -217,11 +235,14 @@ int n64_ppu_draw_and_show(const N64PpuFrame *f, const char *status, int compare_
     }
     memset(g_n64ppu_strips, 0, sizeof g_n64ppu_strips);
   }
+  pt = PP_T();
   if (status && status[0]) {
     graphics_draw_box(fb, 16, N64_STATUS_Y - 2, fb->width - 32, 12, graphics_make_color(0, 0, 0, 255));
     graphics_set_color(graphics_make_color(255, 255, 0, 255), 0);
     graphics_draw_text(fb, 24, N64_STATUS_Y, status);
   }
+  PP_ADD(2, pt); pt = PP_T();
   display_show(fb);
+  PP_ADD(4, pt);
   return mismatches;
 }

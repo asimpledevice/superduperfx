@@ -190,3 +190,24 @@ IA16 palette), and adding them in the combiner.
    one pass straight into the final framebuffer, extra buffers only for
    bands that need colour maths, and palettes and the combiner wherever the
    SNES needs a per-pixel transform.
+
+## Present measured (2026-11-15)
+
+`N64_PRESENT_PROF` times present's parts; `N64_PRESENT_RDPWAIT` also waits
+for the RDP after the frame's commands. Per frame, ares:
+
+| | SMW | Pitfall | JM2 |
+|---|---|---|---|
+| Issuing the frame's RDP commands (CPU, rdpq) | 6.8-7.1 ms | 2.3-2.6 ms | 25 ms (software lines as textures) |
+| Waiting for `rspbg` (merging its flags) | 1.8-1.9 ms | 1.3-2.4 ms | ~0 |
+| Audio pump (audio out, S-DSP sync) | 1.8 ms | 1.3-1.5 ms | 2.0 ms |
+| Status line (CPU text into the framebuffer) | 0.2 ms | 0.2 ms | 0.2 ms |
+| display_get, display_show, waiting for the RDP | ~0 | ~0 | ~0 |
+
+Present is the CPU building the RDP command stream, not drawing: the RDP
+is done about 20 us after the last command. (ares may not model the RDP's
+timing faithfully, so the RDP's own busy time needs hardware.) A 256-wide
+framebuffer saves little CPU (the fill is one command); it is about RDP
+pixels and RDRAM traffic, which only hardware will show. The large cost
+is command generation, which is what the scene builder moves to the RSP
+(steps 3-4).
