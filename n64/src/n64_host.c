@@ -517,6 +517,12 @@ static int host_main(void) {
 
     uint64_t t0 = n64_platform_time_us();
     n64_platform_set_phase(N64_PHASE_CPU);
+#ifdef N64_HANG_PROBE
+    { extern volatile uint32_t g_hang_where, g_hang_frame; g_hang_frame = frame; g_hang_where = 0x01; }
+#define HOST_WHERE(v) do { extern volatile uint32_t g_hang_where; g_hang_where = (v); } while (0)
+#else
+#define HOST_WHERE(v) ((void)0)
+#endif
 #if N64_RENDER
     n64_ppu_build_release_vram();   /* the RSP has its VRAM snapshot */
 #endif
@@ -524,12 +530,14 @@ static int host_main(void) {
     recomp_cache_poll();   /* background code-cache load (nothing to do without one) */
 #endif
     RtlRunFrame(inputs);
+    HOST_WHERE(0x02);
     uint64_t t1 = n64_platform_time_us();
     n64_platform_set_phase(N64_PHASE_PRESENT);
 #if N64_PIPELINE
     if (pending) present_rdp_frame(pending_frame, pending_line);
 #endif
     uint64_t t1p = n64_platform_time_us();
+    HOST_WHERE(0x03);
     n64_platform_set_phase(N64_PHASE_PPU);
     PpuBeginDrawing(g_ppu, (uint8_t *)s_pixels, kSnesW * 4, kPpuRenderFlags_NewRenderer);
 #if N64_RENDER
@@ -538,6 +546,7 @@ static int host_main(void) {
     n64_draw_ppu_frame();
 #endif
     uint64_t t2 = n64_platform_time_us();
+    HOST_WHERE(0x04);
     n64_platform_set_phase(N64_PHASE_PRESENT);
 
     char line[64];
@@ -584,10 +593,18 @@ static int host_main(void) {
         n64_platform_log("[present] RDP per frame (us): pipe busy %lu, TMEM busy %lu, command buffer busy %lu\n",
                          (unsigned long)(g_present_rdp[0] / 60 / 62), (unsigned long)(g_present_rdp[1] / 60 / 62),
                          (unsigned long)(g_present_rdp[2] / 60 / 62));
-        snprintf(g_present_line, 48, "c%lu b%lu a%lu p%lu t%lu",
+        int o = snprintf(g_present_line, 48, "c%lu b%lu a%lu p%lu t%lu",
                  (unsigned long)(g_present_prof[1] / 60 / 4700), (unsigned long)(s_pp_finish / 60 / 100),
                  (unsigned long)(s_pp_audio / 60 / 100), (unsigned long)(g_present_rdp[0] / 60 / 6250),
                  (unsigned long)(g_present_rdp[1] / 60 / 6250));
+#if N64PPU_DESC
+        { /* the frame description (step 1): bands in the last frame */
+          extern const struct N64PpuDesc *n64_ppu_desc(void);
+          extern int n64_ppu_desc_bands(void);
+          snprintf(g_present_line + o, 48 - o, " n%d", n64_ppu_desc_bands()); }
+#else
+        (void)o;
+#endif
         for (int i = 0; i < 3; i++) g_present_rdp[i] = 0;
       }
       s_pp_finish = s_pp_audio = 0;

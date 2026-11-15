@@ -19,6 +19,7 @@ static uint32_t s_vram_count, s_oam_count, s_cgram_count;
 static bool s_open;
 
 const N64PpuDesc *n64_ppu_desc(void) { return &s_desc; }
+int n64_ppu_desc_bands(void) { return s_desc.nbands; }
 
 static void new_cgram(const Ppu *ppu) {
   s_cgram_count = ppu->cgramWriteCount;

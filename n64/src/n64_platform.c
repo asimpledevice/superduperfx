@@ -126,6 +126,9 @@ void n64_platform_init(void) {
   rdpq_debug_start();
 #endif
   timer_init();
+#ifdef N64_HANG_PROBE
+  { extern void hang_probe_start(void); hang_probe_start(); }
+#endif
 #ifdef N64_PHASE0
   p0_calibrate();
 #endif
@@ -391,3 +394,74 @@ void *n64_platform_codepack_load(uint32_t id, void **base_out) {
 }
 
 void n64_platform_codepack_free(void *base) { free(base); }
+
+#ifdef N64_HANG_PROBE
+/* Hang probe for hardware runs: a timer samples the interrupted CPU address
+ * four times a second; when the host's frame counter has not moved for two
+ * seconds it writes what it knows onto the last shown framebuffer (no log
+ * on hardware without USB): recent CPU addresses, the host stage marker,
+ * RSP and RDP status, Red's resident DMEM words, the S-DSP batch state. */
+#include "red.h"
+volatile uint32_t g_hang_where, g_hang_frame;
+surface_t *volatile g_hang_fb;
+static uint32_t s_hang_epc[9];
+static unsigned s_hang_i, s_hang_last, s_hang_stuck;
+#ifdef N64_RSPDSP
+void snesdsp_rsp_probe(uint32_t out[3]);
+#endif
+static void hang_line(surface_t *fb, int row, const char *text) {
+  graphics_draw_text(fb, 16, 12 + row * 10, text);
+}
+static void hang_tick(int ovfl) {
+  (void)ovfl;
+  uint32_t epc;
+  __asm__ volatile("mfc0 %0, $14" : "=r"(epc));
+  s_hang_epc[s_hang_i++ % 9] = epc;
+  if (g_hang_frame != s_hang_last) { s_hang_last = g_hang_frame; s_hang_stuck = 0; return; }
+  if (++s_hang_stuck < 8) return;
+  surface_t *fb = g_hang_fb;
+  if (!fb) return;
+  char t[48];
+  graphics_draw_box(fb, 8, 8, fb->width - 16, 112, graphics_make_color(0, 0, 0, 255));
+  graphics_set_color(graphics_make_color(255, 80, 80, 255), 0);
+  snprintf(t, sizeof t, "HANG f%lu w%02lx s%u", (unsigned long)g_hang_frame,
+           (unsigned long)g_hang_where, s_hang_stuck / 4);
+  hang_line(fb, 0, t);
+  for (int k = 0; k < 3; k++) {
+    snprintf(t, sizeof t, "%08lx %08lx %08lx", (unsigned long)s_hang_epc[k * 3],
+             (unsigned long)s_hang_epc[k * 3 + 1], (unsigned long)s_hang_epc[k * 3 + 2]);
+    hang_line(fb, 1 + k, t);
+  }
+  snprintf(t, sizeof t, "SP %04lx PC %03lx DP %04lx",
+           (unsigned long)(*(volatile uint32_t *)0xA4040010 & 0xffff),
+           (unsigned long)(*(volatile uint32_t *)0xA4080000 & 0xfff),
+           (unsigned long)(*(volatile uint32_t *)0xA410000C & 0xffff));
+  hang_line(fb, 4, t);
+  snprintf(t, sizeof t, "DC %06lx DS %06lx DE %06lx",
+           (unsigned long)(*(volatile uint32_t *)0xA4100008 & 0xffffff),
+           (unsigned long)(*(volatile uint32_t *)0xA4100000 & 0xffffff),
+           (unsigned long)(*(volatile uint32_t *)0xA4100004 & 0xffffff));
+  hang_line(fb, 5, t);
+  const volatile uint32_t *dmem = (const volatile uint32_t *)0xA4000000;
+  snprintf(t, sizeof t, "%08lx %08lx %08lx %08lx", (unsigned long)dmem[2], (unsigned long)dmem[3],
+           (unsigned long)dmem[4], (unsigned long)dmem[5]);
+  hang_line(fb, 6, t);
+  snprintf(t, sizeof t, "%08lx %08lx %08lx %08lx", (unsigned long)dmem[14], (unsigned long)dmem[15],
+           (unsigned long)dmem[16], (unsigned long)dmem[17]);
+  hang_line(fb, 7, t);
+  uint32_t fl[3] = {0, 0, 0};
+#ifdef N64_RSPDSP
+  snesdsp_rsp_probe(fl);
+#endif
+  snprintf(t, sizeof t, "F%lu %06lx %06lx D%06lx", (unsigned long)fl[0], (unsigned long)fl[1],
+           (unsigned long)fl[2], (unsigned long)(g_red_dsp_done & 0xffffff));
+  hang_line(fb, 8, t);
+  { extern uint32_t g_blue_yields;
+    snprintf(t, sizeof t, "BW %08lx M%lu Y%lu", (unsigned long)g_red_blue_waits,
+             (unsigned long)g_red_messages, (unsigned long)g_blue_yields); }
+  hang_line(fb, 9, t);
+}
+void hang_probe_start(void) {
+  new_timer(TICKS_FROM_US(250000), TF_CONTINUOUS, hang_tick);
+}
+#endif

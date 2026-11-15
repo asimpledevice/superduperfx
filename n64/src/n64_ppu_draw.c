@@ -168,14 +168,24 @@ char g_present_line[48];
 #define PP_T() 0u
 #define PP_ADD(i, t) ((void)(t))
 #endif
+#ifdef N64_HANG_PROBE
+extern volatile uint32_t g_hang_where;
+extern surface_t *volatile g_hang_fb;
+#define DRAW_WHERE(v) (g_hang_where = (v))
+#else
+#define DRAW_WHERE(v) ((void)0)
+#endif
 int n64_ppu_draw_and_show(const N64PpuFrame *f, const char *status, int compare_with_software) {
+  DRAW_WHERE(0x21);
   uint32_t pt = PP_T();
   surface_t *fb = display_get();
+  DRAW_WHERE(0x22);
   PP_ADD(0, pt); pt = PP_T();
   data_cache_hit_writeback((void *)f->tlut, sizeof(f->tlut[0]) * (size_t)f->tlut_count);
 
   rdpq_attach(fb, NULL);
 #if defined(N64_PRESENT_PROF) && defined(N64_PRESENT_RDPWAIT)
+  DRAW_WHERE(0x23);
   rspq_wait();                     /* nothing else on the RDP while counting */
   DPC_STATUS_REG = 0x3c0;          /* clear the clock, command, pipe and TMEM counters */
 #endif
@@ -232,6 +242,7 @@ int n64_ppu_draw_and_show(const N64PpuFrame *f, const char *status, int compare_
 
   PP_ADD(1, pt); pt = PP_T();
 #ifdef N64_PRESENT_RDPWAIT
+  DRAW_WHERE(0x24);
   rspq_wait();   /* measurement only: the RDP's drawing time */
   PP_ADD(3, pt); pt = PP_T();
 #ifdef N64_PRESENT_PROF
@@ -265,7 +276,12 @@ int n64_ppu_draw_and_show(const N64PpuFrame *f, const char *status, int compare_
   }
 #endif
   PP_ADD(2, pt); pt = PP_T();
+  DRAW_WHERE(0x25);
+#ifdef N64_HANG_PROBE
+  g_hang_fb = fb;
+#endif
   display_show(fb);
+  DRAW_WHERE(0x26);
   PP_ADD(4, pt);
   return mismatches;
 }

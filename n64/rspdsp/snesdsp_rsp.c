@@ -679,8 +679,24 @@ static bool launch(Dsp *dsp, uint8_t *aram, const ApuDspLogEntry *log, uint32_t 
   return true;
 }
 
+#ifdef N64_HANG_PROBE
+/* Hang probe (n64_platform.c): the batch in flight, and where the join is. */
+extern volatile uint32_t g_hang_where;
+void snesdsp_rsp_probe(uint32_t out[3]) {
+  out[0] = s_flight.active;
+  out[1] = s_flight.seq;
+  out[2] = s_seq;
+}
+#define HANG_WHERE(v) (g_hang_where = (v))
+#else
+#define HANG_WHERE(v) ((void)0)
+#endif
+
 void snesdsp_rsp_apu_join(void) {
   if (!s_flight.active) return;
+#ifdef N64_HANG_PROBE
+  const uint32_t where_was = g_hang_where;
+#endif
   const uint32_t tj = get_ticks();
   const uint32_t t0 = get_ticks();
   /* Red rings when the batch is done (RED_MSG_DSP_DONE). Blue hands the CPU
@@ -691,6 +707,7 @@ void snesdsp_rsp_apu_join(void) {
 #if SNESRECOMP_BLUE_THREAD
     if (blue_is_current()) {
       g_red_blue_waits = s_flight.seq | 0x80000000u;
+      HANG_WHERE(0x11);
       while (!red_dsp_done(s_flight.seq) && (uint32_t)get_ticks() - t0 < TICKS_FROM_MS(50)) {
         blue_yield();
         g_snesdsp_rsp_blue_yields++;
@@ -698,9 +715,11 @@ void snesdsp_rsp_apu_join(void) {
       g_red_blue_waits = 0;
     }
 #endif
+    HANG_WHERE(0x12);
     while (!red_dsp_done(s_flight.seq) && (uint32_t)get_ticks() - t0 < TICKS_FROM_MS(50)) {}
     if (!red_dsp_done(s_flight.seq)) {
       g_snesdsp_rsp_fallbacks++;
+      HANG_WHERE(0x13);
 #if RSPDSP_RING
       rspq_ring_wait();
 #else
@@ -708,6 +727,9 @@ void snesdsp_rsp_apu_join(void) {
 #endif
     }
   }
+#ifdef N64_HANG_PROBE
+  g_hang_where = where_was;
+#endif
   g_snesdsp_rsp_join_wait += get_ticks() - t0;   /* time the CPU waited */
   if (blue_is_current()) g_snesdsp_rsp_join_wait_blue += get_ticks() - t0;
   g_snesdsp_rsp_joins++;
