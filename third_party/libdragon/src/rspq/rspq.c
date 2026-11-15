@@ -528,9 +528,19 @@ void rspq_mailbox_set_handler(void (*handler)(uint32_t up))
     rspq_mailbox_handler = handler;
 }
 
+/** @brief CPU stores to DMEM that did not read back and were rewritten. A
+    hardware SMW run lost one ring command word in about 5000 frames (none in
+    ares); before the read-back, Red livelocked on the zero word. */
+uint32_t rspq_ring_readback_bad;
+
 void rspq_mailbox_send(uint32_t word)
 {
+    /* Hardware can drop a CPU store to DMEM (rspq_ring_write): read back. */
     *RSPQ_MAILBOX_DOWN_PTR = word;
+    while (*RSPQ_MAILBOX_DOWN_PTR != word) {
+        rspq_ring_readback_bad++;
+        *RSPQ_MAILBOX_DOWN_PTR = word;
+    }
 }
 
 uint32_t rspq_mailbox_up(void)
@@ -543,9 +553,8 @@ uint32_t rspq_mailbox_up(void)
 /** @brief The CPU's copy of the ring head (it is the only writer). */
 static uint32_t rspq_ring_head;
 uint32_t rspq_ring_commands, rspq_ring_wait_ticks;
-/** @brief What the CPU last wrote to each ring word, and how many words did
-    not read back as written (diagnostics: a lost DMEM write shows here). */
-uint32_t rspq_ring_shadow[RSPQ_RING_SIZE / 4], rspq_ring_readback_bad;
+/** @brief What the CPU last wrote to each ring word (diagnostics). */
+uint32_t rspq_ring_shadow[RSPQ_RING_SIZE / 4];
 
 void rspq_ring_write(const uint32_t *words, unsigned n)
 {
@@ -589,6 +598,10 @@ void rspq_ring_write(const uint32_t *words, unsigned n)
     /* Publish: the RSP ignores the slots until the head moves past them. */
     MEMORY_BARRIER();
     *RSPQ_RING_FIELD(ring_head) = next;
+    while (*RSPQ_RING_FIELD(ring_head) != next) {
+        rspq_ring_readback_bad++;
+        *RSPQ_RING_FIELD(ring_head) = next;
+    }
     rspq_ring_head = next;
     rspq_ring_commands++;
     enable_interrupts();

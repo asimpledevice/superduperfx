@@ -2985,6 +2985,32 @@ suspect is a CPU/RSP race in the S-DSP launch/join path or Red's kernel; it
 has to be found before any skip change lands. `n64-bringup` keeps the
 original timer-only skip.
 
+## Hardware freeze: a lost CPU store to DMEM (2026-11-15)
+
+SMW froze on the EverDrive (never in ares) at random frames between about
+1,200 and 4,000: Blue waited forever for an S-DSP batch. The hang probe
+(`N64_HANG_PROBE`, red text after 2 s stuck) showed why. Red's command ring
+in DMEM held the S-DSP command in every slot but one; the slot the RSP had
+reached read `00000000 00000000` although the CPU had written the command
+there and moved the head past it. Command word 0 is rspq's WaitNewInput,
+which consumes nothing, so Red re-dispatched it forever (idle-spin counter
+running, PC wandering through the dispatch loop).
+
+`rspq_ring_write` now reads every word back before publishing the head,
+rewrites one that did not land and counts it (`rspq_ring_readback_bad`,
+the `r` at the end of the present status line); the head store and
+`rspq_mailbox_send` are read back the same way (the RSP never writes those
+words, so a retry cannot duplicate anything). Result on hardware: no
+freeze through frame 4,931 with `r1`, i.e. one lost store caught in about
+5,000 frames (one ring command a batch, about 4 batches a frame). The
+store is lost when written, not overwritten later: the probe's shadow
+comparison exists for the second case if it ever shows.
+
+The cause is not known. Candidates: a CPU PIO write to DMEM colliding with
+an RSP DMA or RSP DMEM access, as the S-DSP and rspbg overlays DMA
+constantly. Any other uncached CPU store to SP memory while the RSP runs
+should be treated as unreliable and verified the same way.
+
 ## Next steps
 
 1. Audio: check the RSP DSP by ear on hardware (output arrives later than
