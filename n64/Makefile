@@ -58,6 +58,17 @@ $(BUILD_DIR)/rspdsp/snesdsp_rsp.o: rspdsp/snesdsp_rsp.c
 $(BUILD_DIR)/rsp_snesdsp.o: rspdsp/rsp_snesdsp.S rspdsp/snesdsp_rsp_layout.h rspdsp/rsp_snesdsp_tables.inc
 	@$(MAKE) --no-print-directory -f $(N64_INST)/include/n64.mk SOURCE_DIR=rspdsp \
 		BUILD_DIR=$(BUILD_DIR) RSPASFLAGS="$(N64_RSPASFLAGS)" $@
+# RSPDSP_PREP=1 (audio ownership step 2a): register writes are decoded on the
+# RSP (rspdsp/rsp_snesdsp_prep.S, run on Red's ring just before each batch);
+# 0 keeps the C decode (the reference; rspdsp/preptest compares the two).
+RSPDSP_PREP ?= 0
+ifeq ($(RSPDSP_PREP),1)
+N64_CFLAGS += -DRSPDSP_PREP=1
+OBJS += $(BUILD_DIR)/rsp_snesdsp_prep.o
+$(BUILD_DIR)/rsp_snesdsp_prep.o: rspdsp/rsp_snesdsp_prep.S rspdsp/snesdsp_rsp_layout.h
+	@$(MAKE) --no-print-directory -f $(N64_INST)/include/n64.mk SOURCE_DIR=rspdsp \
+		BUILD_DIR=$(BUILD_DIR) RSPASFLAGS="$(N64_RSPASFLAGS)" $@
+endif
 endif
 
 # RSPSPC=1: the SPC700 runs on the RSP (n64/rspspc) in bulk runs, the C core

@@ -285,6 +285,37 @@ Steps, each hash-identical to the C core:
 3. The audio pump takes finished samples only; the frame boundary stops
    forcing a catch-up.
 
+## Step 2 in stages (2026-11-15)
+
+Measured before step 2 (ares, per frame, gameplay): the CPU's S-DSP work is
+4.6 ms in SMW and 6.6 ms in JM2. It splits into decode 1.3/1.8 ms, the view
+(page copies and undo) 0.6/0.8, pack and submit 0.6, and the join 1.4/2.0
+(0.3-1.5 of it waiting). The S-DSP microcode fills IMEM to the last word,
+so new RSP work goes in a separate overlay ("prep") that Red runs on its
+ring just before each batch. Each stage is a build option, the CPU code
+stays as the reference, and each is hash-identical to the C core.
+
+- **2a. Decode on the RSP.** Prep turns the write log into the S-DSP's
+  operations. Decode is a function of the written byte plus a few values at
+  the batch's start (per-voice pitch, GAIN value, gain mode, rate 3, the
+  USEGAIN/DIRECTGAIN masks), which the CPU passes. The CPU still decides
+  whether a batch runs on the RSP (pitch modulation, the echo window,
+  operation count) with a scan that applies decode's rules to the few
+  registers they read. `RSPDSP_PREP=1`; `n64/rspdsp/preptest` compares the
+  two decoders.
+- **2b. The view on the RSP.** Prep copies the marked stale pages into the
+  view by DMA and undoes the batch's writes from the log's old values. The
+  CPU passes the marks and keeps the fresh bits.
+- **2c. S-DSP state stays on the RSP.** No pack or unpack per batch; the
+  CPU reads the few fields it needs (marks, ENVX/OUTX/ENDX) from the block,
+  as step 1a did for the SPC.
+- **2d. The join on the RSP.** The S-DSP writes samples into the output
+  ring and DMAs the echo bytes back to ARAM; the CPU's join only notes
+  that the batch is done.
+- **2e. No CPU between the SPC and the S-DSP.** Prep reads the SPC's raw
+  log directly, batch edges are taken on the RSP, and Red hands off from
+  the SPC overlay to prep and the S-DSP itself.
+
 ## Independence: where the CPU waits on the RSP today (2026-11-14)
 
 The CPU posts work to the RSP and soon waits for it, everywhere:

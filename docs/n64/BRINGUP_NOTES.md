@@ -2889,6 +2889,35 @@ unchanged by this commit (SMW and JM2 within noise of the C core run above).
 The fix is to retrain the engine layout with the asynchronous SPC build in
 the training traces. That waits for step 2, which changes the glue again.
 
+### Audio ownership, step 2a: S-DSP register writes decoded on the RSP (2026-11-15, opt-in)
+
+`RSPDSP_PREP=1`. A new overlay, `rspdsp/rsp_snesdsp_prep.S` (about 2.4 KB
+of IMEM), turns a batch's write log into the operations the S-DSP overlay
+applies, operation for operation as `decode()`/`emit_reg()` do on the CPU.
+It runs on Red's ring just before the batch (the S-DSP overlay is full to
+its last IMEM word, so it could not take the work). Decode needs only the
+written byte plus a few values at the batch's start, which the CPU passes
+in a small block: per-voice pitch, GAIN value, gain mode and rate 3, and the
+USEGAIN/DIRECTGAIN masks. The CPU still decides whether a batch runs on the
+RSP. `prep_count` applies decode's three rejections (no room for the next
+entry, pitch modulation, an echo window outside ARAM) to the few registers
+they read and gives the exact operation count. The log is DMA'd straight
+from `Apu.dspLog`, now 8-byte aligned. The C decode stays as the reference
+(`RSPDSP_PREP=0`).
+
+Validation: `n64/rspdsp/preptest` decodes random states and logs both ways
+(including logs long enough to overflow, pitch modulation and bad echo
+windows): 4,000 of 4,000 pass (2,445 byte-identical, 485,000 operations;
+1,555 rejected by both). Hashes identical to the C core (SMW 49, Pitfall 11,
+JM2 24 frames).
+
+Per frame (ares, with `RSPSPC=1`): the CPU's decode time is 1.3 → 0.4 ms
+in SMW and 1.8 → 0.45 ms in JM2 (what is left is the scan and the block);
+the whole launch is 2.6 → 1.5 ms. Run time per frame, 60-frame windows,
+against step 3: SMW gameplay about 62 → 59 ms; JM2 gameplay 81 → 68 ms,
+JM2 loading 745 → 659 ms (the JM2 gain is larger than the decode saving;
+JM2 moves with layout, see step 3).
+
 ## Next steps
 
 1. Audio: check the RSP DSP by ear on hardware (output arrives later than

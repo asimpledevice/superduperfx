@@ -19,6 +19,16 @@
 #endif
 
 DEFINE_RSP_UCODE(rsp_snesdsp);
+/* RSPDSP_PREP=1 (step 2a): register writes are decoded on the RSP
+ * (rsp_snesdsp_prep.S) instead of here; the C decode stays the reference. */
+#ifndef RSPDSP_PREP
+#define RSPDSP_PREP 0
+#endif
+#if RSPDSP_PREP
+DEFINE_RSP_UCODE(rsp_snesdsp_prep);
+static uint32_t s_prep_id;
+static struct __attribute__((aligned(16))) { uint8_t b[RSPPREP_PARAMS_SIZE]; } s_prm;
+#endif
 
 enum { kMaxSamples = 1024, kMaxOps = 4096 };
 
@@ -39,6 +49,9 @@ uint32_t g_snesdsp_rsp_ticks, g_snesdsp_rsp_samples;
 static void view_init(void);
 void snesdsp_rsp_init(void) {
   s_overlay_id = rspq_overlay_register(&rsp_snesdsp);
+#if RSPDSP_PREP
+  s_prep_id = rspq_overlay_register(&rsp_snesdsp_prep);
+#endif
   view_init();
   /* Launches invalidate only the samples a batch writes: no line of the
    * output buffer may stay dirty from the startup BSS clear. */
@@ -452,6 +465,104 @@ uint32_t g_snesdsp_rsp_view_ticks, g_snesdsp_rsp_pack_ticks, g_snesdsp_rsp_submi
 uint32_t g_snesdsp_rsp_reject[4];
 uint32_t g_snesdsp_rsp_blue_yields, g_snesdsp_rsp_fallbacks;
 
+#if RSPDSP_PREP
+/* The operations emit_reg writes for register `reg`, its byte included. */
+static uint32_t reg_ops(uint8_t reg) {
+  const unsigned c = reg >> 4;
+  switch (reg & 15) {
+    case 0: case 1: case 5: case 0xf: return 4;
+    case 2: case 3: case 4: return 2;
+    case 6: return 3;
+    case 7: return 5;
+    case 0xc: return c < 4 ? 4 : c == 6 ? 5 : c == 7 ? 1 : 2;
+    case 0xd: return c == 0 ? 6 : c == 1 ? 1 : c == 4 ? 10 : 2;
+    default: return 1;
+  }
+}
+
+/* What decode() would decide for this log, without decoding: the number of
+ * operations, or -1 where it rejects the batch (no room for the next entry,
+ * pitch modulation, an echo window outside ARAM: the same tests at the same
+ * entries, on the few registers they read). */
+static int prep_count(const Dsp *d, const ApuDspLogEntry *log, uint32_t n) {
+  unsigned pmod = 0;
+  for (int c = 0; c < 8; c++) pmod |= (unsigned)d->channel[c].pitchModulation << c;
+  bool ew = d->echoWrites;
+  uint32_t esa = d->echoBufferAdr, delay = d->echoDelay;
+  const uint32_t cur = (uint32_t)d->echoBufferIndex + d->echoRemain;
+  uint32_t o = 0;
+  for (uint32_t i = 0; i < n; i++) {
+    if (o + 24 > kMaxOps) return -1;
+    if (log[i].isReg != 1) { o += log[i].adr < 16 ? 2u : 1u; continue; }
+    const uint8_t reg = (uint8_t)log[i].adr, v = log[i].val;
+    if (reg == 0x2d) pmod = v;
+    else if (reg == 0x6c) ew = (v & 0x20) == 0;
+    else if (reg == 0x6d) esa = (uint32_t)v << 8;
+    else if (reg == 0x7d) { delay = (v & 0xfu) * 512u; if (!delay) delay = 1; }
+    if (pmod & 0xfe) return -1;
+    const uint32_t len = cur > delay ? cur : delay;
+    if (ew && !(esa >= 16 && esa + 4u * len <= 0x10000u)) return -1;
+    o += reg_ops(reg);
+  }
+  return (int)o;
+}
+
+/* The decode's input for the RSP: the log and the state at the batch's
+ * start that is not a function of the written byte. */
+static void prep_params(const Dsp *d, const ApuDspLogEntry *log, uint32_t n) {
+  data_cache_hit_writeback(log, n * sizeof *log);
+  uint8_t *b = s_prm.b;
+  *(uint32_t *)(b + RSPPREP_LOG) = PhysicalAddr(log);
+  *(uint32_t *)(b + RSPPREP_N) = n;
+  *(uint32_t *)(b + RSPPREP_OPS) = PhysicalAddr(s_ops.op);
+  unsigned ug = 0, dg = 0;
+  for (int c = 0; c < 8; c++) {
+    const DspChannel *ch = &d->channel[c];
+    ug |= (unsigned)ch->useGain << c;
+    dg |= (unsigned)ch->directGain << c;
+    *(uint16_t *)(b + RSPPREP_PITCH + 2 * c) = ch->pitch;
+    *(uint16_t *)(b + RSPPREP_GAINVAL + 2 * c) = ch->gainValue;
+    *(uint16_t *)(b + RSPPREP_RATE3 + 2 * c) = ch->adsrRates[3];
+    *(uint16_t *)(b + RSPPREP_GAINMODE + 2 * c) = ch->gainMode;
+  }
+  *(uint16_t *)(b + RSPPREP_USEGAIN) = (uint16_t)ug;
+  *(uint16_t *)(b + RSPPREP_DIRECTGAIN) = (uint16_t)dg;
+  data_cache_hit_writeback_invalidate(&s_prm, sizeof s_prm);
+}
+#endif
+
+#if RSPDSP_PREP && defined(RSPDSP_PREP_SELFTEST)
+/* preptest: decode `log` on the CPU (the reference) and on the RSP. Returns
+ * 0 when both reject the batch, 1 when the operations are identical, -1
+ * when only one rejects, -2 when the counts differ, else -(3 + index of the
+ * first differing operation). */
+static Op s_ref[kMaxOps + 32];
+int snesdsp_rsp_prep_selftest(const Dsp *dsp, const ApuDspLogEntry *log, uint32_t n,
+                              uint32_t *nops_out) {
+  shadow_from(dsp);
+  Op *o = s_ref, *end = s_ref + kMaxOps;
+  bool ok_c = true;
+  for (uint32_t i = 0; i < n && ok_c; i++)
+    ok_c = decode(&o, end, log[i].tag, log[i].isReg == 1, log[i].adr, log[i].val, true);
+  const int cnt = prep_count(dsp, log, n);
+  if (ok_c != (cnt >= 0)) return -1;
+  if (!ok_c) return 0;
+  const uint32_t nc = (uint32_t)(o - s_ref);
+  *nops_out = nc;
+  if ((uint32_t)cnt != nc) return -2;
+  memset(o, 0, 32 * sizeof *o);
+  memset(s_ops.op, 0xa5, (nc + 32) * sizeof(Op));   /* stale bytes would show */
+  data_cache_hit_writeback_invalidate(s_ops.op, (nc + 32) * sizeof(Op));
+  prep_params(dsp, log, n);
+  rspq_write(s_prep_id, 0, PhysicalAddr(&s_prm), 0);
+  rspq_wait();
+  for (uint32_t i = 0; i < nc + 32; i++)
+    if (memcmp(&s_ops.op[i], &s_ref[i], sizeof(Op))) return -(3 + (int)i);
+  return 1;
+}
+const void *snesdsp_rsp_prep_selftest_ops(int rsp) { return rsp ? (const void *)s_ops.op : (const void *)s_ref; }
+#endif
+
 static bool launch(Dsp *dsp, uint8_t *aram, const ApuDspLogEntry *log, uint32_t n,
                    uint32_t samples, const uint8_t *marks, uint8_t *fresh);
 bool snesdsp_rsp_apu_launch(Dsp *dsp, uint8_t *aram, const ApuDspLogEntry *log, uint32_t n,
@@ -470,11 +581,18 @@ static bool launch(Dsp *dsp, uint8_t *aram, const ApuDspLogEntry *log, uint32_t 
   if (pmod_used(dsp)) { g_snesdsp_rsp_reject[1]++; return false; }
   if (((uintptr_t)aram & 7) || !batch_ok(dsp, samples, true)) { g_snesdsp_rsp_reject[2]++; return false; }
   const uint32_t td = get_ticks();
+#if RSPDSP_PREP
+  if ((uintptr_t)log & 7) { g_snesdsp_rsp_reject[2]++; return false; }   /* DMA alignment */
+  const int cnt = prep_count(dsp, log, n);
+  if (cnt < 0) { g_snesdsp_rsp_reject[3]++; return false; }
+  const uint32_t nops = (uint32_t)cnt;
+#else
   shadow_from(dsp);
   Op *o = s_ops.op, *end = s_ops.op + kMaxOps;
   for (uint32_t i = 0; i < n; i++)
     if (!decode(&o, end, log[i].tag, log[i].isReg == 1, log[i].adr, log[i].val, true))
       { g_snesdsp_rsp_reject[3]++; return false; }
+#endif
   g_snesdsp_rsp_decode_ticks += get_ticks() - td;
   g_snesdsp_rsp_log_entries += n;
   /* The view keeps its pages between batches: a marked page is copied only
@@ -509,11 +627,16 @@ static bool launch(Dsp *dsp, uint8_t *aram, const ApuDspLogEntry *log, uint32_t 
 
   const uint32_t tp = get_ticks();
   g_snesdsp_rsp_view_ticks += tp - tv;
+#if !RSPDSP_PREP
   const uint32_t nops = (uint32_t)(o - s_ops.op);
   memset(o, 0, 32 * sizeof *o);
+#endif
   snesdsp_rsp_pack(dsp, &s_block);
   put(&s_block, RSPDSP_P_SAMPLES, (int)samples);
   put(&s_block, RSPDSP_P_LOGN, (int)nops);
+#if RSPDSP_PREP
+  prep_params(dsp, log, n);
+#endif
   const uint32_t ts = get_ticks();
   g_snesdsp_rsp_pack_ticks += ts - tp;
   *(uint32_t *)(s_block.bytes + RSPDSP_P_ARAM) = PhysicalAddr(s_view);
@@ -522,13 +645,21 @@ static bool launch(Dsp *dsp, uint8_t *aram, const ApuDspLogEntry *log, uint32_t 
   s_seq = (s_seq + 1) & 0xffffffu;
   *(uint32_t *)(s_block.bytes + RSPDSP_P_DONE_MSG) = RED_MSG(RED_MSG_DSP_DONE, s_seq);
   data_cache_hit_writeback_invalidate(&s_block, sizeof s_block);
+  /* (RSPDSP_PREP: the RSP writes them; no line may stay in the cache.) */
   data_cache_hit_writeback_invalidate(s_ops.op, (nops + 32) * sizeof(Op));
   /* Only the samples this batch writes; the CPU never writes s_out. */
   data_cache_hit_invalidate(&s_out, (samples * 4 + 15) & ~15u);
 #if RSPDSP_RING
+#if RSPDSP_PREP   /* the decode first: Red runs the ring in order */
+  const uint32_t pcmd[2] = {s_prep_id | PhysicalAddr(&s_prm), 0};
+  rspq_ring_write(pcmd, 2);
+#endif
   const uint32_t cmd[2] = {s_overlay_id | PhysicalAddr(&s_block), 0};
   rspq_ring_write(cmd, 2);
 #else
+#if RSPDSP_PREP
+  rspq_write(s_prep_id, 0, PhysicalAddr(&s_prm), 0);
+#endif
   rspq_write(s_overlay_id, 0, PhysicalAddr(&s_block), 0);
   rspq_flush();
 #endif

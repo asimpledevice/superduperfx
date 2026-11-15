@@ -98,6 +98,19 @@
 #define RSPDSP_LOG_HALF     1
 #define RSPDSP_LOG_BYTE     2
 
+/* PrepParams (rsp_snesdsp_prep.S, step 2a): the decode's input. Offsets in
+ * bytes; arrays are 8 x u16 by voice. */
+#define RSPPREP_LOG         0x00   /* u32 RDRAM address of the ApuDspLogEntry log */
+#define RSPPREP_N           0x04   /* u32 entries */
+#define RSPPREP_OPS         0x08   /* u32 RDRAM address for the operations */
+#define RSPPREP_USEGAIN     0x0c   /* u16 masks at the batch's start */
+#define RSPPREP_DIRECTGAIN  0x0e
+#define RSPPREP_PITCH       0x10
+#define RSPPREP_GAINVAL     0x20
+#define RSPPREP_RATE3       0x30
+#define RSPPREP_GAINMODE    0x40
+#define RSPPREP_PARAMS_SIZE 0x50
+
 /* The ARAM view the RSP reads is 64 KB plus a 16-byte mirror of its first
  * 16 bytes, so a BRR block that wraps past $FFFF reads contiguously. */
 #define RSPDSP_ARAM_SIZE    (0x10000 + 16)

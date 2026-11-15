@@ -102,7 +102,7 @@ struct Apu {
   /* Deferred DSP (host state; empty after every sync, save and reset). */
   uint32_t dspPending;
   uint32_t dspLogN;
-  ApuDspLogEntry dspLog[APU_DSP_LOG_LEN];
+  ApuDspLogEntry dspLog[APU_DSP_LOG_LEN] __attribute__((aligned(8)));   /* RSP DMA (n64/rspdsp) */
   /* The last value written to each DSP register. Registers other than
    * ENVX, OUTX and ENDX change only by writes, so reads of them are answered
    * here without catching up a deferred (or in-flight) DSP. */
