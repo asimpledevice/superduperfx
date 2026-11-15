@@ -64,15 +64,20 @@ Today: Blue records the raster journal; Green's PPU stage
 (`draw_frame_rdp`) replays it with HDMA (the real unit, `dma.c`) to get
 each line's registers, and builds lines for the RDP (`n64_ppu_build`): the
 CPU makes palettes, windows and sprite planes, `rspbg` expands BG rows into
-8-bit planes, the RDP composites the planes into an offscreen image the
-CPU then presents; unsupported lines fall back to the software PPU (JM2:
-all of them, big tiles). Costs (ares, gameplay): SMW PPU stage 16 ms +
+8-bit planes, the RDP composites the planes straight into the display
+framebuffer (320x240); unsupported lines fall back to the software PPU,
+drawn as textures (JM2: all of them, big tiles). "Present" (SMW 9 ms) is
+waiting for `rspbg`'s jobs, issuing the RDP commands (a full-screen fill
+each frame included) and the RDP drawing, plus the CPU writing the debug
+status line into the framebuffer. Costs (ares, gameplay): SMW PPU stage 16 ms +
 present 9 ms; JM2 230 ms + 27 ms. The software PPU stays the reference
 throughout (`RENDER=0`; `RENDER=2` compares).
 
 0. **Measure, reference, and check the hardware facts the plan rests on.**
    - Per-stage timing: Green's replay (journal + HDMA), the line builder
-     (palettes, windows, sprites), RSP busy time, RDP busy time, present.
+     (palettes, windows, sprites), RSP busy time, RDP busy time, and the
+     parts of present (waiting for the RSP, issuing commands, RDP drawing,
+     the status line).
    - Pixel compare against the software PPU (`RENDER=2`), with a
      tolerance mechanism for documented HLE differences; a ROM-free test
      ROM per new overlay (as `rspbg/test`).
@@ -86,9 +91,11 @@ throughout (`RENDER=0`; `RENDER=2` compares).
    PPU state instead of building lines; with VRAM/CGRAM/OAM snapshots (or
    dirty ranges) this is the contract the RSP consumes. The replay stays
    on Green at first (moving it needs WRAM/ROM snapshots for HDMA).
-2. **Straight to the display.** The RDP draws into the framebuffer the VI
-   shows (256 wide, VI-scaled, if step 0 confirms), retiring the CPU's
-   present copy. Independent of the rest; an early, measurable win.
+2. **Cheaper present.** The RDP already draws into the displayed
+   framebuffer; what step 0 finds in present gets trimmed here (for
+   example a 256-wide framebuffer the VI scales, if step 0 confirms it,
+   instead of filling and drawing into 320x240; the status line off the
+   per-frame path). Independent of the rest; an early, measurable win.
 3. **Tile cache overlay.** Dirty VRAM tiles to CI4/CI8 textures (flipped
    copies if copy mode cannot flip); CGRAM to TLUTs with brightness.
 4. **Scene builder overlay.** Mode 1 BG layers as texrects per band, in
@@ -169,10 +176,11 @@ IA16 palette), and adding them in the combiner.
    remapping) are nearly free. Budget: a 256x224 16-bit buffer is about
    112 KB, and a full-screen memory pass costs on the order of 1 ms (Kaze:
    five passes are a fifth of a 30 fps frame at 320x240).
-3. **The VI can replace the present stage.** It scans out a framebuffer of
+3. **The VI does the final scaling.** It scans out a framebuffer of
    programmable width, scales it to the screen and filters it after
-   drawing; if the RDP draws a 256-wide image the VI shows directly, the
-   CPU's present copy (SMW 9 ms, JM2 27 ms) mostly goes away.
+   drawing. The RDP already draws into the displayed framebuffer (320x240,
+   the SNES image centred); a 256-wide framebuffer the VI scales would
+   draw and fill fewer pixels per frame.
 4. **Tile decode stays on the RSP.** SNES tiles are planar (a pixel's bits
    spread over 2-8 bytes, each byte holding a bit of 8 pixels); a palette
    lookup maps one byte to one colour, so the RDP cannot assemble planar
