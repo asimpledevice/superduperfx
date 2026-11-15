@@ -530,17 +530,37 @@ void rspq_mailbox_set_handler(void (*handler)(uint32_t up))
 
 /** @brief CPU stores to DMEM that did not read back and were rewritten. A
     hardware SMW run lost one ring command word in about 5000 frames (none in
-    ares); before the read-back, Red livelocked on the zero word. */
-uint32_t rspq_ring_readback_bad;
+    ares); before the read-back, Red livelocked on the zero word.
+    Diagnostics for the cause: every verified store samples SP_STATUS just
+    before it; a lost one also samples it when the loss is seen. If lost
+    stores coincide with an RSP DMA (busy or full) far more often than stores
+    in general, the loss is a collision with DMA. */
+uint32_t rspq_ring_readback_bad;      /* lost stores (rewritten) */
+uint32_t rspq_ring_lost_dma;          /* ... with a DMA busy before or after */
+uint32_t rspq_ring_lost_status[2];    /* the last lost store: SP_STATUS before, after */
+uint32_t rspq_ring_stores, rspq_ring_stores_dma;   /* all verified stores; with a DMA busy before */
+
+#define RSPQ_SP_DMA_BITS (SP_STATUS_DMA_BUSY | SP_STATUS_DMA_FULL)
+
+static inline void rspq_dmem_store(volatile uint32_t *p, uint32_t v)
+{
+    const uint32_t before = *SP_STATUS;
+    *p = v;
+    rspq_ring_stores++;
+    if (before & RSPQ_SP_DMA_BITS) rspq_ring_stores_dma++;
+    if (*p == v) return;
+    const uint32_t after = *SP_STATUS;
+    rspq_ring_readback_bad++;
+    if ((before | after) & RSPQ_SP_DMA_BITS) rspq_ring_lost_dma++;
+    rspq_ring_lost_status[0] = before;
+    rspq_ring_lost_status[1] = after;
+    do *p = v; while (*p != v);
+}
 
 void rspq_mailbox_send(uint32_t word)
 {
     /* Hardware can drop a CPU store to DMEM (rspq_ring_write): read back. */
-    *RSPQ_MAILBOX_DOWN_PTR = word;
-    while (*RSPQ_MAILBOX_DOWN_PTR != word) {
-        rspq_ring_readback_bad++;
-        *RSPQ_MAILBOX_DOWN_PTR = word;
-    }
+    rspq_dmem_store(RSPQ_MAILBOX_DOWN_PTR, word);
 }
 
 uint32_t rspq_mailbox_up(void)
@@ -585,23 +605,19 @@ void rspq_ring_write(const uint32_t *words, unsigned n)
         if (!waited) t0 = TICKS_READ();
     }
 
+    /* Each store is read back and rewritten if it did not land. */
     if (wrap)
-        for (uint32_t i = head / 4; i < RSPQ_RING_SIZE / 4; i++)
-            ring[i] = rspq_ring_shadow[i] = RSPQ_RING_PAD_WORD;
-    for (unsigned i = 0; i < n; i++) ring[start / 4 + i] = rspq_ring_shadow[start / 4 + i] = words[i];
-    /* Read back before publishing; rewrite a word that did not land. */
-    for (unsigned i = 0; i < n; i++)
-        while (ring[start / 4 + i] != words[i]) {
-            rspq_ring_readback_bad++;
-            ring[start / 4 + i] = words[i];
+        for (uint32_t i = head / 4; i < RSPQ_RING_SIZE / 4; i++) {
+            rspq_ring_shadow[i] = RSPQ_RING_PAD_WORD;
+            rspq_dmem_store(&ring[i], RSPQ_RING_PAD_WORD);
         }
+    for (unsigned i = 0; i < n; i++) {
+        rspq_ring_shadow[start / 4 + i] = words[i];
+        rspq_dmem_store(&ring[start / 4 + i], words[i]);
+    }
     /* Publish: the RSP ignores the slots until the head moves past them. */
     MEMORY_BARRIER();
-    *RSPQ_RING_FIELD(ring_head) = next;
-    while (*RSPQ_RING_FIELD(ring_head) != next) {
-        rspq_ring_readback_bad++;
-        *RSPQ_RING_FIELD(ring_head) = next;
-    }
+    rspq_dmem_store(RSPQ_RING_FIELD(ring_head), next);
     rspq_ring_head = next;
     rspq_ring_commands++;
     enable_interrupts();

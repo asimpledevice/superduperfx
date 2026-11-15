@@ -604,8 +604,14 @@ static int host_main(void) {
           o += snprintf(g_present_line + o, 48 - o, " n%d", n64_ppu_desc_bands()); }
 #endif
         { /* ring words rewritten after a failed read-back (rspq_ring_write) */
-          extern uint32_t rspq_ring_readback_bad;
-          snprintf(g_present_line + o, 48 - o, " r%lu", (unsigned long)rspq_ring_readback_bad); }
+          /* r lost, D of them with an RSP DMA busy, S SP_STATUS before/after the
+           * last one, B% of all stores made with a DMA busy (the baseline) */
+          extern uint32_t rspq_ring_readback_bad, rspq_ring_lost_dma, rspq_ring_lost_status[2];
+          extern uint32_t rspq_ring_stores, rspq_ring_stores_dma;
+          snprintf(g_present_line + o, 48 - o, " r%lu D%lu S%lx/%lx B%lu", (unsigned long)rspq_ring_readback_bad,
+                   (unsigned long)rspq_ring_lost_dma, (unsigned long)(rspq_ring_lost_status[0] & 0x1f),
+                   (unsigned long)(rspq_ring_lost_status[1] & 0x1f),
+                   (unsigned long)(rspq_ring_stores ? (uint64_t)rspq_ring_stores_dma * 100 / rspq_ring_stores : 0)); }
         for (int i = 0; i < 3; i++) g_present_rdp[i] = 0;
       }
       s_pp_finish = s_pp_audio = 0;
