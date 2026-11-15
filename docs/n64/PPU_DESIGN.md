@@ -58,41 +58,56 @@ flags, on the RSP for drawing. Expected overlays (IMEM, as with the S-DSP
 and its prep): a tile-cache converter, a scene builder (tilemaps, sprites,
 windows to RDP commands), a line renderer (Mode 7, exact colour maths).
 
-## Work plan (2026-11-15)
+## Work plan (2026-11-15, revised after bsnes and Kaze)
 
 Today: Blue records the raster journal; Green's PPU stage
 (`draw_frame_rdp`) replays it with HDMA (the real unit, `dma.c`) to get
 each line's registers, and builds lines for the RDP (`n64_ppu_build`): the
 CPU makes palettes, windows and sprite planes, `rspbg` expands BG rows into
-8-bit planes, the RDP composites the planes; unsupported lines fall back
-to the software PPU (JM2: all of them, big tiles). Costs (ares, gameplay):
-SMW PPU stage 16 ms + present 9 ms; JM2 230 ms + 27 ms.
+8-bit planes, the RDP composites the planes into an offscreen image the
+CPU then presents; unsupported lines fall back to the software PPU (JM2:
+all of them, big tiles). Costs (ares, gameplay): SMW PPU stage 16 ms +
+present 9 ms; JM2 230 ms + 27 ms. The software PPU stays the reference
+throughout (`RENDER=0`; `RENDER=2` compares).
 
-0. **Measure and reference.** Per-stage timing (Green's replay, the
-   builder, RSP and RDP busy time); `RENDER=2` pixel compare against the
-   software PPU; ROM-free RSP test ROMs per overlay (as `rspbg/test`).
+0. **Measure, reference, and check the hardware facts the plan rests on.**
+   - Per-stage timing: Green's replay (journal + HDMA), the line builder
+     (palettes, windows, sprites), RSP busy time, RDP busy time, present.
+   - Pixel compare against the software PPU (`RENDER=2`), with a
+     tolerance mechanism for documented HLE differences; a ROM-free test
+     ROM per new overlay (as `rspbg/test`).
+   - Hardware checks (ares, then the EverDrive): combiner clamping of
+     negative and overflowing results, and 5-bit to 8-bit expansion (does
+     add/subtract land exactly; does an IA16 palette give exact 8-bit
+     inputs); whether copy-mode texrects can flip; blender additive mode
+     rounding; the VI showing a 256-wide framebuffer scaled to the screen
+     (and how libdragon's display code sets it up).
 1. **Frame description.** The replay emits bands of lines with identical
-   PPU state (the registers that matter per band) instead of building
-   lines; this record, plus VRAM/CGRAM/OAM snapshots, is what the RSP
-   consumes. The replay (journal + HDMA) stays on Green at first; moving
-   it to the RSP is a later step (HDMA reads WRAM and ROM, which need
-   snapshotting).
-2. **Tile cache overlay.** VRAM to CI4/CI8 textures for dirty tiles
-   (flipped variants if copy-mode texrects cannot flip), palettes to
-   TLUTs.
-3. **Scene builder overlay.** Mode 1 BG layers as texrects per band, in
-   priority order, scissored by windows; then sprites (evaluation and
-   texrects); the RDP draws straight into the display framebuffer.
-   Replaces `rspbg`'s plane expansion and the CPU's sprite planes; SMW and
-   Pitfall are the first consumers (they are fully on the RDP path today).
-4. **Green as the closer.** Frame handoff and present only; the CPU line
-   builder retires for covered features. Unsupported bands keep the
-   software PPU (drawn as a texture) until covered, so migration is
-   incremental.
-5. **Features**, each against the software PPU: big tiles and
-   offset-per-tile (cheap with the tile cache), colour maths (blender for
-   add/half-add, RSP line renderer for subtraction), mosaic, Mode 7,
-   hi-res.
+   PPU state instead of building lines; with VRAM/CGRAM/OAM snapshots (or
+   dirty ranges) this is the contract the RSP consumes. The replay stays
+   on Green at first (moving it needs WRAM/ROM snapshots for HDMA).
+2. **Straight to the display.** The RDP draws into the framebuffer the VI
+   shows (256 wide, VI-scaled, if step 0 confirms), retiring the CPU's
+   present copy. Independent of the rest; an early, measurable win.
+3. **Tile cache overlay.** Dirty VRAM tiles to CI4/CI8 textures (flipped
+   copies if copy mode cannot flip); CGRAM to TLUTs with brightness.
+4. **Scene builder overlay.** Mode 1 BG layers as texrects per band, in
+   priority order (priority as depth stays an option), scissored by
+   windows; then sprites (evaluation with exact limits, texrects). Red
+   feeds the RDP (Phase G). Replaces `rspbg`'s plane expansion and the
+   CPU's sprite planes. First consumers: SMW and Pitfall.
+5. **Green as the closer.** Frame handoff and VI only; the CPU line builder
+   retires for covered features. Bands not yet covered keep the software
+   PPU (drawn as a texture), so migration is incremental.
+6. **Features**, each against the software PPU:
+   - big tiles and offset-per-tile (cheap with the tile cache);
+   - colour maths: the subscreen drawn into its own buffer, then a combine
+     pass on the RDP (add and subtract in the combiner, IA16 palettes for
+     exact values if needed); the RSP line renderer only where the RDP
+     cannot match;
+   - mosaic (point-sampled upscale), hi-res, Mode 7 (RSP line sampling;
+     later, perspective planes as real geometry);
+   - fades and brightness as a combiner pass where cheaper than palettes.
 
 ## From bsnes (2026-11-15)
 
@@ -126,3 +141,44 @@ our design:
   could be real geometry at full resolution. The catch is TMEM (the Mode 7
   map is 1024x1024 at 8bpp), so the plane would be split into many small
   triangles of a few tiles each. A later enhancement.
+
+## From Kaze's Majora's Mask filters video (2026-11-15)
+
+The lesson: the RDP's fixed-function pieces are general-purpose hardware.
+A colour-indexed texture and its palette are a 256-entry lookup table; two
+texture slots with offset coordinates read alternate bytes; the combiner
+is a small fixed formula, `(A - B) * C + D`, with texture alpha usable on
+the colour side; the framebuffer is just memory, usable as a texture.
+Majora's Mask makes its greyscale filter by reading the 16-bit framebuffer
+as an 8-bit colour-indexed texture twice (offset by one byte), mapping one
+byte through the palette's intensity and the other through its alpha (an
+IA16 palette), and adding them in the combiner.
+
+1. **Colour maths on the RDP, subtraction included.** With the main
+   screen and the subscreen in separate buffers, a combine pass computes
+   main - sub (`A = TEX0, B = TEX1, C = 1, D = 0`) or main + sub
+   (`D = TEX1`); halving needs `C = 1/2` from a primitive or environment
+   value. To verify: clamping (SNES clamps per channel) and the 5-to-8-bit
+   expansion (replicated low bits can put an add one step off). An IA16
+   palette can supply exact 8-bit values, as Majora's Mask does. Two
+   256-pixel 16-bit rows of each screen fit TMEM together, so the pass works
+   in small strips.
+2. **The framebuffer is just memory.** Extra buffers (the subscreen) are
+   cheap in principle; fades and brightness can be a combiner multiply over
+   the finished frame; accessibility filters (greyscale, colour-blind
+   remapping) are nearly free. Budget: a 256x224 16-bit buffer is about
+   112 KB, and a full-screen memory pass costs on the order of 1 ms (Kaze:
+   five passes are a fifth of a 30 fps frame at 320x240).
+3. **The VI can replace the present stage.** It scans out a framebuffer of
+   programmable width, scales it to the screen and filters it after
+   drawing; if the RDP draws a 256-wide image the VI shows directly, the
+   CPU's present copy (SMW 9 ms, JM2 27 ms) mostly goes away.
+4. **Tile decode stays on the RSP.** SNES tiles are planar (a pixel's bits
+   spread over 2-8 bytes, each byte holding a bit of 8 pixels); a palette
+   lookup maps one byte to one colour, so the RDP cannot assemble planar
+   pixels. Decode once into the tile cache, then draw with the RDP's
+   colour-indexed path.
+5. **Memory passes are the cost; fixed-function tricks are free.** Prefer
+   one pass straight into the final framebuffer, extra buffers only for
+   bands that need colour maths, and palettes and the combiner wherever the
+   SNES needs a per-pixel transform.
