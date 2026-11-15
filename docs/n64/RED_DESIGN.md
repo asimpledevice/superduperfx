@@ -285,6 +285,27 @@ Steps, each hash-identical to the C core:
 3. The audio pump takes finished samples only; the frame boundary stops
    forcing a catch-up.
 
+## Audio output on the N64, and the latency it allows (2026-11-15)
+
+The N64 has no sound chip. The Audio Interface (AI) DMAs 16-bit stereo PCM
+from RDRAM to the DAC at a programmed rate, with two buffers queued (one
+playing, one pending) and an interrupt as each finishes. Native games
+render ahead in chunks: the CPU's sequencer builds a command list per
+output buffer (about a frame), an RSP audio microcode renders it, and the
+AI plays it a buffer or two later. libdragon wraps the AI as a ring of
+buffers (`audio_init(rate, buffers)`, `audio_can_write`,
+`audio_write_begin`/`end`); its mixer is an RSP microcode in the same
+style. We do not use the mixer: `n64_platform_audio_init(32000)` runs the
+AI at the S-DSP's 32 kHz with 4 buffers, and Green's
+`n64_platform_audio_pump` fills free buffers from the S-DSP's sample ring.
+Our S-DSP overlay plays the part of a native audio microcode.
+
+For the SPC/S-DSP split this means the S-DSP may trail the SPC by about a
+frame without starving the output: the AI buffers are the latency budget.
+How far the S-DSP is allowed to trail is then a choice about the hot set
+(a longer lag means more pages to protect) and the overlay switches (a
+shorter lag means more), not about audio timing.
+
 ## Step 2 in stages (2026-11-15)
 
 Measured before step 2 (ares, per frame, gameplay): the CPU's S-DSP work is
