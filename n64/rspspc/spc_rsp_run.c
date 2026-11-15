@@ -141,6 +141,7 @@ static void sync_pages(Apu *apu, uint8_t out[32]) {
 /* The next run from the current state for at most `clocks` cycles: its
  * length, or 0 when the next cycle must run in C (a DSP edge the C path
  * takes, or a state the RSP cannot run). Applies the port writes due now. */
+static uint32_t s_c_span = 1;   /* see c_step */
 static uint32_t plan_(Apu *apu, uint32_t clocks);
 static uint32_t plan(Apu *apu, uint32_t clocks) {
   PROF_BEGIN();
@@ -150,6 +151,7 @@ static uint32_t plan(Apu *apu, uint32_t clocks) {
 }
 static uint32_t plan_(Apu *apu, uint32_t clocks) {
   uint32_t n = clocks < SPC_RSP_MAX_RUN ? clocks : SPC_RSP_MAX_RUN;
+  s_c_span = 1;
   /* CPU port writes: those due now apply before the next instruction, as
    * in apu_runCycles_native, and the run stops at the next one's cycle. */
   if (apu->portQHead != apu->portQTail &&
@@ -171,6 +173,7 @@ static uint32_t plan_(Apu *apu, uint32_t clocks) {
    * edge that fills a batch. The RSP run stops just before. */
   const uint32_t c0 = apu->cycles, f = (32u - (c0 & 31u)) & 31u, p = apu->dspPending;
   const uint32_t special = p ? f + 32u * (APU_DSP_MAX_PENDING - p - 1u) : f;
+  s_c_span = f ? f : 32u;
   if (special < n) n = special;
   if (!n) C_WHY(0, 1);
   uint8_t sync[32];
@@ -198,12 +201,18 @@ static uint32_t plan_(Apu *apu, uint32_t clocks) {
   return n;
 }
 
-static void c_step(Apu *apu) {
+/* When plan returns 0, how far C goes before planning again: to the next
+ * sample edge, where the reasons it gives can change (a batch starts or
+ * fills, sync pages and the log change). Planning per cycle cost more than
+ * the C core itself during boot. Running further in C is always exact. */
+static uint32_t c_step(Apu *apu, uint32_t most) {
+  const uint32_t k = s_c_span < most ? s_c_span : most;
   materialize(apu);
   PROF_BEGIN();
-  apu_runCyclesC(apu, 1);
+  apu_runCyclesC(apu, k);
   PROF_END(3);
-  g_spc_rsp_c_cycles++;
+  g_spc_rsp_c_cycles += k;
+  return k;
 }
 
 static void post(Apu *apu, uint32_t n) {
@@ -301,7 +310,7 @@ static uint32_t collect(Apu *apu) {
       g_spc_rsp_trap_op[apu->ram[pc]]++;
       g_spc_rsp_trap_opnd[apu->ram[(uint16_t)(pc + 1)]]++; }
 #endif
-    c_step(apu);
+    (void)c_step(apu, 1);
     adv++;
     g_spc_rsp_traps++;
   }
@@ -350,8 +359,7 @@ static void run_apu(Apu *apu, uint32_t clocks) {
   while (clocks) {
     const uint32_t n = plan(apu, clocks);
     if (!n) {
-      c_step(apu);
-      clocks--;
+      clocks -= c_step(apu, clocks);
       continue;
     }
     post(apu, n);
@@ -387,7 +395,7 @@ static void lane_advance(Apu *apu, uint64_t target) {
     const uint64_t owed = target - apu->portClock;
     if (owed < SPC_RSP_MIN_RUN) break;   /* later, with more */
     const uint32_t n = plan(apu, owed > SPC_RSP_MAX_RUN ? SPC_RSP_MAX_RUN : (uint32_t)owed);
-    if (!n) { c_step(apu); continue; }
+    if (!n) { (void)c_step(apu, owed > SPC_RSP_MAX_RUN ? SPC_RSP_MAX_RUN : (uint32_t)owed); continue; }
     post(apu, n);
     g_spc_rsp_lane_posts++;
 #if SPC_RSP_ASYNC
@@ -397,6 +405,16 @@ static void lane_advance(Apu *apu, uint64_t target) {
   }
   s_in_apu--;
   g_spc_rsp_hook_ticks += spc_rsp_ticks() - t0;
+}
+
+/* apu_dspFrameSync: take a run only if it has finished (never wait). */
+int spc_rsp_lane_poll(Apu *apu) {
+  if (!s_fl.active) return 1;
+  if (s_in_apu || !spc_rsp_done()) return 0;
+  s_in_apu++;
+  (void)collect(apu);
+  s_in_apu--;
+  return 1;
 }
 
 uint32_t g_spc_rsp_lane_pumps;

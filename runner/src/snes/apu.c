@@ -436,8 +436,18 @@ void SNESRECOMP_APU_JOIN_HOOK(Apu* apu);
 #define APU_JOIN(apu) ((void)0)
 #endif
 void apu_dspSync(Apu* apu) { APU_JOIN(apu); apu_dspSyncFor(apu, APU_DSP_SYNC_HOST); }
+/* SNESRECOMP_APU_POLL_HOOK: the same, but only a run already finished;
+ * returns 0 while one is still going. The frame-end sync never waits: with
+ * a run in flight it does nothing (that run owns the pending samples and
+ * the log until it is collected; they go with a later batch). */
+#ifdef SNESRECOMP_APU_POLL_HOOK
+int SNESRECOMP_APU_POLL_HOOK(Apu* apu);
+#define APU_POLL(apu) SNESRECOMP_APU_POLL_HOOK(apu)
+#else
+#define APU_POLL(apu) (APU_JOIN(apu), 1)
+#endif
 void apu_dspFrameSync(Apu* apu) {
-  APU_JOIN(apu);
+  if (!APU_POLL(apu)) return;
   apu_dspSyncFor(apu, SNESRECOMP_DSP_HOST_ASYNC ? APU_DSP_SYNC_FRAME : APU_DSP_SYNC_HOST);
 }
 void apu_dspEchoRead(Apu* apu) { apu_dspSyncFor(apu, APU_DSP_SYNC_ECHO_READ); }

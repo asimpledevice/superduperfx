@@ -2822,6 +2822,59 @@ resident, so a full handler cache frees little net. The slice work above
 fits without it (it is cold, so it pages); 1b stays for when IMEM is needed
 again or to replace the SMW-based grouping of paged opcodes.
 
+### Audio ownership, step 3: the frame end and audio pump stop forcing syncs (2026-11-15)
+
+With the asynchronous lane (`RSPSPC_ASYNC`), the places outside Blue that
+used to run the SPC to "now" under the APU lock now post work or take only
+finished work:
+
+- `rtl_sync_apu_frame_boundary` notes the guest time and the boundary, then
+  advances the lane (posts a run) instead of syncing. The original body is
+  `rtl_sync_apu_frame_boundary_now`.
+- `apu_dspFrameSync` asks `SNESRECOMP_APU_POLL_HOOK` (`spc_rsp_lane_poll`)
+  first: a finished run is collected, an unfinished one skips the frame-end
+  S-DSP sync. Before this check the frame end launched the pending samples
+  while a run was in flight, and the collect then counted them again (one
+  extra sample, caught by the state hash).
+- `RtlRenderAudio` takes no APU lock; it reads finished samples only.
+- Green pumps the lane between frame stages (`GREEN_PUMP`: after the
+  frame's run, after the PPU draw, after the audio pump).
+- State-hash builds call `rtl_apu_finish_frame()` first, which runs the SPC
+  to the saved guest time and the boundary, so the hashes still compare
+  against the synchronous builds.
+- The bridge's catch-ups (`BRIDGE_ADVANCE_APU`) use
+  `rtl_advance_apu_to_cpu` only under the advance hook, and the old locked
+  sync otherwise. Since step A the host harnesses had failed to link (4
+  host tests); 837 now pass.
+
+Planner cost: when the planner says the next cycle must run in C (a DSP
+edge, a sync page, a directory over the I/O page, no log room), the glue ran
+one cycle and planned again. During JM2's boot and loading that was about
+11,000 plans a frame at about 5 µs each. Now C runs to the next sample edge
+(`s_c_span`), where those reasons can change, before planning again. Running
+further in C is always exact. Planning fell from 57 ms to 1.8 ms a frame in
+JM2's first 60 frames (that window: 126 ms a frame with opcode paging, 60 ms
+now).
+
+Hashes are identical to the C core (SMW 49, Pitfall 9, JM2 23 frames).
+Average run time per frame over 60-frame windows (ares):
+
+| | C core | opcode paging | step 1c | step 3 |
+|---|---|---|---|---|
+| SMW, frames 300–1950 | 79.4 ms | 82.7 ms | — | 59.5 ms |
+| JM2 frames 0–120 | 48 | 150 | 169 | 62 |
+| JM2 loading, frames 120–240 | 535 | 630 | 772 | 745 |
+| JM2 gameplay, frames 300–780 | 94 | 99 | 112 | 81 |
+
+Every JM2 window is faster than at step 1c. JM2's loading window is still
+slower than both the C core and opcode paging. Bisected over the commits in
+between (each built and run alone): the glue cost breakdown commit took it
+to 700 ms, step 1a to 728 and step 1c to 772. Step 3 brought it back to 745.
+That phase is S-DSP heavy (about 70 launches and 1,750 log entries a frame,
+590 Blue yields in the S-DSP wait) and runs most SPC cycles in C. This is
+the next thing to fix (a regression in one game is not offset by gains in
+another).
+
 ## Next steps
 
 1. Audio: check the RSP DSP by ear on hardware (output arrives later than

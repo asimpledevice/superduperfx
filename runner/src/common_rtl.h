@@ -67,6 +67,7 @@ void rtl_accumulate_apu_catchup(void);
  * pacing; afterward synchronize reads to the authoritative guest timestamp. */
 void rtl_sync_apu_to_cpu_locked(void);
 void rtl_advance_apu_to_cpu(void);   /* catch up without reading the result (may not wait) */
+void rtl_apu_finish_frame(void);     /* an asynchronous SPC brought to the last frame boundary */
 
 
 // Axis-7 determinism per-frame WRAM fingerprint ring (common_rtl.c).

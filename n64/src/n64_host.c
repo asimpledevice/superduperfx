@@ -140,6 +140,15 @@ void NORETURN Die(const char *error) {
   n64_platform_fatal(error ? error : "(null)");
 }
 
+/* Green keeps the asynchronous SPC fed between frames (Blue is idle here):
+ * a finished run is collected and the next posted toward the last target. */
+#if SPC_RSP_ASYNC
+void spc_rsp_lane_pump(void);
+#define GREEN_PUMP() spc_rsp_lane_pump()
+#else
+#define GREEN_PUMP() ((void)0)
+#endif
+
 /* Single-threaded host: the APU is only touched from the guest thread. */
 #if SPC_RSP_ASYNC
 /* Every reader of APU state takes this lock first: with the SPC running
@@ -487,6 +496,7 @@ static int host_main(void) {
     recomp_cache_poll();   /* background code-cache load (nothing to do without one) */
 #endif
     RtlRunFrame(inputs);
+    GREEN_PUMP();
     uint64_t t1 = n64_platform_time_us();
     n64_platform_set_phase(N64_PHASE_PRESENT);
 #if N64_PIPELINE
@@ -500,6 +510,7 @@ static int host_main(void) {
 #else
     n64_draw_ppu_frame();
 #endif
+    GREEN_PUMP();
     uint64_t t2 = n64_platform_time_us();
     n64_platform_set_phase(N64_PHASE_PRESENT);
 
@@ -529,6 +540,7 @@ static int host_main(void) {
     n64_platform_present(s_pixels, kSnesW, kSnesH, line);
 #endif
     n64_platform_audio_pump(render_audio);
+    GREEN_PUMP();
     uint64_t t3 = n64_platform_time_us() + (t1p - t1);   /* present: both parts */
 
     if (frame < 8 || frame % 50 == 0)
@@ -571,6 +583,7 @@ static int host_main(void) {
       /* Every DSP output sample, as produced (the frame end has synced a
        * deferred DSP), so builds with different DSP paths compare. */
       static uint32_t s_out_hash = 2166136261u, s_out_pos;
+      rtl_apu_finish_frame();    /* an asynchronous SPC: to the frame boundary first */
       apu_dspSync(g_snes->apu);  /* all samples so far, also with async batches */
       const Dsp *d = g_snes->apu->dsp;
       for (; s_out_pos != d->sampleWrite; ++s_out_pos) {

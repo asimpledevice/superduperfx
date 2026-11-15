@@ -245,6 +245,8 @@ static int16 g_audio_recovery_anchor_r;
 static int16 g_audio_last_output_l;
 static int16 g_audio_last_output_r;
 static void rtl_sync_apu_frame_boundary(void);
+static uint64_t s_apu_frame_boundary;   /* the last frame boundary (guest cycle) */
+static uint64_t s_apu_frame_guest;      /* guest time at that frame's end */
 
 static uint64_t rtl_apu_guest_cycle_at(bool clamp) {
   if (g_extended_frame_timing)
@@ -2230,7 +2232,37 @@ void rtl_apu_perf_snapshot(uint64_t *ns, uint64_t *calls) {
 uint64_t apub_prof_calls = 0;
 double apub_prof_ms = 0.0;
 #endif
+static void rtl_sync_apu_frame_boundary_now(void);
+/* With an asynchronous SPC core (SNESRECOMP_APU_ADVANCE_HOOK): the frame
+ * boundary posts the SPC toward it and does not wait; nothing reads the SPC
+ * here (the audio pump takes finished samples). rtl_apu_finish_frame brings
+ * it there for code that must see it (state hashes). */
 static void rtl_sync_apu_frame_boundary(void) {
+#ifdef SNESRECOMP_APU_ADVANCE_HOOK
+  void SNESRECOMP_APU_ADVANCE_HOOK(Apu* apu, uint64_t target);
+  s_apu_frame_guest = rtl_apu_guest_cycle();   /* before the frame clock is finished */
+  const uint64_t boundary = g_extended_frame_timing
+      ? rtl_apu_clock_finish(&g_apu_frame_clock, g_master_cycles)
+      : (uint64_t)snes_frame_counter * RTL_APU_CYCLES_PER_FRAME;
+  s_apu_frame_boundary = boundary;
+  uint64_t target;
+  if (apu_guestTarget(g_snes->apu, boundary, &target))
+    SNESRECOMP_APU_ADVANCE_HOOK(g_snes->apu, target);
+#else
+  rtl_sync_apu_frame_boundary_now();
+#endif
+}
+void rtl_apu_finish_frame(void) {
+#ifdef SNESRECOMP_APU_ADVANCE_HOOK
+  /* As the synchronous frame end: guest time (past the boundary when the
+   * frame overran), then the boundary. */
+  RtlApuLock();
+  rtl_run_apu_to_guest_cycle_locked(s_apu_frame_guest);
+  rtl_run_apu_to_guest_cycle_locked(s_apu_frame_boundary);
+  RtlApuUnlock();
+#endif
+}
+static void rtl_sync_apu_frame_boundary_now(void) {
 #ifdef SNESRECOMP_INTERP_PROFILE
   { extern uint64_t apub_prof_calls; extern double apub_prof_ms;
     clock_t _t0 = clock();
@@ -2573,7 +2605,9 @@ void RtlRenderAudio(int16 *audio_buffer, int samples, int channels) {
    * a consumer only: allowing it to invent SPC cycles makes its wall-clock
    * schedule a second, competing emulation clock and is what let audio drift
    * behind visuals after turbo. */
-  RtlApuLock();
+#ifndef SNESRECOMP_APU_ADVANCE_HOOK
+  RtlApuLock();   /* (an asynchronous SPC core: no join; the samples done are played) */
+#endif
 #if !SNESRECOMP_DSP_HOST_ASYNC
   apu_dspSync(g_snes->apu);  /* else the output arrives as batches complete */
 #endif
@@ -2607,7 +2641,9 @@ void RtlRenderAudio(int16 *audio_buffer, int samples, int channels) {
     g_audio_last_output_l = audio_buffer[(samples - 1) * 2];
     g_audio_last_output_r = audio_buffer[(samples - 1) * 2 + 1];
   }
+  #ifndef SNESRECOMP_APU_ADVANCE_HOOK
   RtlApuUnlock();
+#endif
 }
 
 /* Battery-backed SRAM + savestate slots live under RtlSaveRoot() (default
