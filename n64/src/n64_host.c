@@ -601,10 +601,11 @@ static int host_main(void) {
         { /* the frame description (step 1): bands in the last frame */
           extern const struct N64PpuDesc *n64_ppu_desc(void);
           extern int n64_ppu_desc_bands(void);
-          snprintf(g_present_line + o, 48 - o, " n%d", n64_ppu_desc_bands()); }
-#else
-        (void)o;
+          o += snprintf(g_present_line + o, 48 - o, " n%d", n64_ppu_desc_bands()); }
 #endif
+        { /* ring words rewritten after a failed read-back (rspq_ring_write) */
+          extern uint32_t rspq_ring_readback_bad;
+          snprintf(g_present_line + o, 48 - o, " r%lu", (unsigned long)rspq_ring_readback_bad); }
         for (int i = 0; i < 3; i++) g_present_rdp[i] = 0;
       }
       s_pp_finish = s_pp_audio = 0;
