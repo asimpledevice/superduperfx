@@ -2797,6 +2797,31 @@ cycle count and the carried cycles, kept current on collect. Hashes
 identical to the C core (SMW 49, Pitfall 11, JM2 24 frames); random
 comparison 2,000 of 2,000.
 
+### Audio ownership, step 1c (first part): the RSP applies port writes (2026-11-15)
+
+The CPU used to end every run at the next CPU port write and apply it in C
+before posting the next. Now a run takes the writes that come due inside it
+(up to six, `SPCRUN_EVS`, offsets from its start) and applies them itself,
+as `apu.c` does: before the first instruction that starts at or after the
+write's cycle. Its budget is sliced: the first slice ends at the first write;
+module 9 (paged, entered from the core's "budget used up" branch, a 2-word
+stub) applies the write to the input ports and grows the budget and `END` to
+the next offset, or to the run's total after the last; with none left it
+ends the run. Cycle counts, log timestamps and timer reads stay consistent
+because the budget and the remaining count move together; the timer-read
+undo is cleared at each slice (it is per instruction). The CPU drops the
+applied writes from its queue on collect. A write due exactly at the run's
+end waits for the next run, as in C (the random comparison caught that: 1 of
+2,000 before the fix, 2,000 of 2,000 after). Hashes identical to the C core
+(SMW 49, Pitfall 7, JM2 22 frames).
+
+Opcode cache (1b): measured, the opcode handlers and their private helpers
+are about 1.3 KB of the core; the other 2.1 KB (dispatch, memory and line
+cache, I/O page, logging, run start/end, addressing modes) must stay
+resident, so a full handler cache frees little net. The slice work above
+fits without it (it is cold, so it pages); 1b stays for when IMEM is needed
+again or to replace the SMW-based grouping of paged opcodes.
+
 ## Next steps
 
 1. Audio: check the RSP DSP by ear on hardware (output arrives later than

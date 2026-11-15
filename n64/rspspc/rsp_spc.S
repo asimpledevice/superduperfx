@@ -106,6 +106,7 @@ LINES:      .ds.b 2048              # 32 slots x 64 bytes
 #define EXT_DIV         0x1018
 #define EXT_MUL         0x1020
 #define EXT_WMARK       0x1028
+#define EXT_SLICE       0x1020      /* (MUL's old entry) */
 #define EXT_PAGE        0x1030
 
 SpcCmd_Run:
@@ -158,7 +159,7 @@ SpcCmd_Run:
 
 loop:
 OP_NOP:                             # (also the NOP handler)
-    blez fp, done
+    blez fp, slice                  # the budget slice is used up
     sh s6, %lo(PC0)
     sw fp, %lo(FP0)
     sb s5, ST + SPCRUN_SP0               # a trap inside a store rolls these back too
@@ -399,6 +400,9 @@ wio_f1:                             # $F1: in the borrowed IMEM (rsp_spc_ext.S)
 
 # Code in the borrowed IMEM (rsp_spc_ext.S, loaded over rspq's code for the
 # run): wait for that load, then enter through the table at its start.
+slice:                              # module 9: a port write due, or the end (done)
+    j ext_go
+    li t1, EXT_SLICE
 wmark:                              # page of line t2 into SPCRUN_WPAGES (uses s0, t0, t1)
     j ext_go
     li t1, EXT_WMARK

@@ -26,8 +26,8 @@ ext_begin:
     li t0, 8
     j x_page_id                     # 0x18 DIV (also through OP_PG6): module 6
     li t0, 6
-    j x_mul                         # 0x20
-    nop
+    j x_page_id                     # 0x20 the end of a budget slice: module 9
+    li t0, 9
     j x_wmark                       # 0x28
     nop
     j x_page_op                     # 0x30 an OP_PG<k> operation

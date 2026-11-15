@@ -33,6 +33,9 @@ typedef struct __attribute__((aligned(16))) {
   uint8_t sp0, psw0, pad[14];      /* pad[0]: SPCRUN_MOD */
   uint16_t tags[32];               /* line number, bit 15 dirty */
   uint8_t wpages[32];              /* pages of dirty lines evicted during the run */
+  uint8_t nev, iev, pad2[2];       /* port writes the run applies: left, applied */
+  uint32_t total;                  /* the run's whole budget (budget: up to the first write) */
+  struct { uint32_t at; uint8_t port, val, pad[2]; } ev[6];
 } SpcRspRun;
 
 void spc_rsp_init(void);

@@ -78,7 +78,7 @@ N64_CFLAGS += -DSPC_RSP_ASYNC=1 -DSNESRECOMP_APU_ADVANCE_HOOK=spc_rsp_lane_advan
 endif
 OBJS += $(BUILD_DIR)/rspspc/spc_rsp.o $(BUILD_DIR)/rspspc/spc_rsp_run.o \
 	$(BUILD_DIR)/rsp_spc.o $(BUILD_DIR)/rsp_spc_ext.o $(SPC_MODS)
-SPC_MODS = $(patsubst %,$(BUILD_DIR)/rsp_spc_m%.o,0 1 2 3 4 6 7 8)
+SPC_MODS = $(patsubst %,$(BUILD_DIR)/rsp_spc_m%.o,0 1 2 3 4 6 7 8 9)
 $(BUILD_DIR)/rspspc/%.o: rspspc/%.c
 	@mkdir -p $(dir $@)
 	@echo "    [CC] $<"

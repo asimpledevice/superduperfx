@@ -45,7 +45,15 @@
 #define SPCRUN_RA      0x144  /* ra across a module load */
 #define SPCRUN_TAGS    0x150  /* 64 bytes: the line cache's tags (bit 15 dirty) */
 #define SPCRUN_WPAGES  0x190  /* 32 bytes: pages of dirty lines evicted during the run */
-#define SPCRUN_IO      0x1b0  /* bytes moved each way: the block and the run's
+/* CPU port writes the run applies itself (module 9): the run's budget ends
+ * at each one's offset; there the write goes to the input ports and the
+ * budget (and END) grow to the next offset, or to the total after the last. */
+#define SPCRUN_NEV     0x1b0  /* u8: writes left */
+#define SPCRUN_IEV     0x1b1  /* u8: writes applied */
+#define SPCRUN_TOTAL   0x1b4  /* u32: the run's whole budget */
+#define SPCRUN_EVS     0x1b8  /* 6 x {u32 offset, u8 port, u8 value, u16 pad} */
+#define SPCRUN_MAXEV   6
+#define SPCRUN_IO      0x1e8  /* bytes moved each way: the block and the run's
                                * area, so the CPU zeroes the tags and the page
                                * bits and reads which pages the run wrote */
 
@@ -56,7 +64,8 @@
 #define EXT_SLOT       0x1c0
 #define EXT_MOD_SIZE   0x100
 #define EXT_MOD_OFS    0x840
-#define EXT_MODS       9      /* 0-4, 7: opcodes the core has no room for, 6: DIV, 8: $F1 writes */
+#define EXT_MODS       10     /* 0-4, 7: opcodes the core has no room for, 6: DIV, 8: $F1 writes,
+                               * 9: the end of a budget slice (port writes) */
 
 #define SPCEXIT_BUDGET 0      /* the budget is used up */
 #define SPCEXIT_TRAP   1      /* stopped before an opcode the RSP leaves to the CPU */

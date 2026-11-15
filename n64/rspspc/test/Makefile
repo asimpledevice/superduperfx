@@ -47,7 +47,7 @@ $(BUILD_DIR)/rsp_spc_syms.inc: $(BUILD_DIR)/rsp_spc.o ../gen_syms.py
 $(BUILD_DIR)/rsp_spc_ext.o: $(BUILD_DIR)/rsp_spc_syms.inc
 $(BUILD_DIR)/rsp_spc_ext.o: RSPASFLAGS += -I$(BUILD_DIR)
 # Paged modules (rsp_spc_m<k>.S): they call the resident borrowed code too.
-SPC_MODS = $(patsubst %,$(BUILD_DIR)/rsp_spc_m%.o,0 1 2 3 4 6 7 8)
+SPC_MODS = $(patsubst %,$(BUILD_DIR)/rsp_spc_m%.o,0 1 2 3 4 6 7 8 9)
 $(BUILD_DIR)/rsp_spc_ext_syms.inc: $(BUILD_DIR)/rsp_spc_ext.o ../gen_syms.py
 	python3 ../gen_syms.py --prefix X_ $(BUILD_DIR)/rsp_spc_ext.elf $@ $(N64_NM)
 $(SPC_MODS): $(BUILD_DIR)/rsp_spc_syms.inc $(BUILD_DIR)/rsp_spc_ext_syms.inc

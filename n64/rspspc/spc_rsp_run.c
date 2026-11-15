@@ -156,8 +156,10 @@ static uint32_t plan_(Apu *apu, uint32_t clocks) {
       apu->portQueue[apu->portQHead & (APU_PORT_QUEUE_LEN - 1u)].target_cycle <= apu->portClock)
     materialize(apu);   /* a write applies to the Apu's ports */
   apu_drainDuePortWrites(apu);
-  if (apu->portQHead != apu->portQTail) {
-    const uint64_t d = apu->portQueue[apu->portQHead & (APU_PORT_QUEUE_LEN - 1u)].target_cycle -
+  /* Later writes the run applies itself (step 1c: SPCRUN_EVS, module 9), up
+   * to SPCRUN_MAXEV of them; the run ends before the one after. */
+  if (apu->portQTail - apu->portQHead > SPCRUN_MAXEV) {
+    const uint64_t d = apu->portQueue[(apu->portQHead + SPCRUN_MAXEV) & (APU_PORT_QUEUE_LEN - 1u)].target_cycle -
                        apu->portClock;
     if (d < n) n = (uint32_t)d;
   }
@@ -219,6 +221,22 @@ static void post(Apu *apu, uint32_t n) {
   s_blk.logging = 0;
   memset(s_blk.sync, 0, 32);
 #endif
+  /* The port writes that come due within the run (offsets from its start):
+   * the run applies each at its offset; its first budget slice ends at the
+   * first (module 9 grows it to the next, then to the total). */
+  uint32_t k = 0;
+  for (uint32_t q = apu->portQHead; q != apu->portQTail && k < SPCRUN_MAXEV; q++, k++) {
+    const ApuPortWrite *w = &apu->portQueue[q & (APU_PORT_QUEUE_LEN - 1u)];
+    const uint64_t d = w->target_cycle - apu->portClock;
+    if (d >= n) break;   /* one due at the end waits for the next run, as in C */
+    s_run.ev[k].at = (uint32_t)d;
+    s_run.ev[k].port = w->port & 3;
+    s_run.ev[k].val = w->val;
+  }
+  s_run.nev = (uint8_t)k;
+  s_run.iev = 0;
+  s_run.total = n;
+  if (k) s_blk.budget = (int32_t)s_run.ev[0].at;
   s_fl.c0 = apu->cycles;
   s_fl.active = true;
   s_block_master = true;
@@ -258,6 +276,7 @@ static uint32_t collect(Apu *apu) {
   PROF_BEGIN();
   g_spc_rsp_collects++;
   mark_written(apu);
+  apu->portQHead += s_run.iev;         /* the port writes the run applied (to the block's ports) */
   apu->cycles = s_blk.cycles;          /* what planning reads; the rest stays in the block */
   apu->cpuCyclesLeft = s_blk.ccl;
   if (exit == SPCEXIT_TRAP) {

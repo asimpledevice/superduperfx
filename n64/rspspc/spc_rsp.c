@@ -17,6 +17,10 @@ DEFINE_RSP_UCODE(rsp_spc_m4);
 DEFINE_RSP_UCODE(rsp_spc_m6);
 DEFINE_RSP_UCODE(rsp_spc_m7);
 DEFINE_RSP_UCODE(rsp_spc_m8);
+DEFINE_RSP_UCODE(rsp_spc_m9);
+_Static_assert(offsetof(SpcRspRun, tags) == SPCRUN_TAGS && offsetof(SpcRspRun, nev) == SPCRUN_NEV &&
+               offsetof(SpcRspRun, total) == SPCRUN_TOTAL && offsetof(SpcRspRun, ev) == SPCRUN_EVS &&
+               offsetof(SpcRspRun, ev) + SPCRUN_MAXEV * 8 == SPCRUN_IO, "SpcRspRun");
 
 _Static_assert(sizeof(SpcRspBlock) == SPCST_SIZE, "SpcRspState");
 _Static_assert(offsetof(SpcRspBlock, psw) == SPCST_PSW && offsetof(SpcRspBlock, aram) == SPCST_ARAM &&
@@ -50,7 +54,8 @@ void spc_rsp_init(void) {
   memset(s_ext, 0, EXT_BUF_SIZE);
   memcpy(s_ext, rsp_spc_ext.code, n);
   const rsp_ucode_t *mods[EXT_MODS] = {&rsp_spc_m0, &rsp_spc_m1, &rsp_spc_m2, &rsp_spc_m3,
-                                       &rsp_spc_m4, NULL, &rsp_spc_m6, &rsp_spc_m7, &rsp_spc_m8};
+                                       &rsp_spc_m4, NULL, &rsp_spc_m6, &rsp_spc_m7, &rsp_spc_m8,
+                                       &rsp_spc_m9};
   for (int k = 0; k < EXT_MODS; k++) {
     if (!mods[k]) continue;
     const size_t m = (size_t)((uint8_t *)mods[k]->code_end - (uint8_t *)mods[k]->code);
