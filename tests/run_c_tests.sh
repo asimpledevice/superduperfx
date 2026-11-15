@@ -296,6 +296,17 @@ echo "=== APU guest-time pacing ==="
     $GC_SECTIONS_LINKER -o "$OUT/apu_port_guest_time_test"
 "$OUT/apu_port_guest_time_test"
 
+echo "=== APU native core vs the clock-by-clock reference (random run splits) ==="
+for cfg in "" "-DSNESRECOMP_APU_DEFER_DSP=1"; do
+  "$CC" -std=gnu11 -O2 -w -DSNESRECOMP_APU_NATIVE=1 $cfg \
+      -I "$ROOT/runner/src" -I "$ROOT/runner/src/snes" \
+      "$ROOT/tests/audio/apu_native_test.c" \
+      "$ROOT/runner/src/snes/spc.c" "$ROOT/runner/src/snes/dsp.c" \
+      "$ROOT/runner/src/snes/dsp_shadow.c" "$ROOT/runner/src/snes/audio_shadow.c" \
+      "$ROOT/runner/src/audio_trace.c" -o "$OUT/apu_native_test"
+  "$OUT/apu_native_test"
+done
+
 echo "=== audio trace history modes ==="
 for mode in 0 1 2 3; do
     "$CC" -std=c11 -Wall -Wextra -Werror -O1 \

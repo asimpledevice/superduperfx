@@ -152,6 +152,13 @@ static uint32_t apu_native_waitSkip(Apu *apu, uint32_t clocks) {
 }
 #endif
 
+#ifdef SNESRECOMP_SPC_PC_PROFILE
+/* Profiling builds: SPC cycles executed by instruction address, and cycles
+ * the wait skip fast-forwarded (n64 dumps the busiest addresses). */
+uint32_t g_spc_pc_cycles[0x10000];
+uint32_t g_spc_skip_cycles, g_spc_skip_count, g_spc_run_cycles;
+#endif
+
 static void apu_runCycles_native(Apu *apu, uint32_t clocks) {
   while (clocks) {
     apu_drainPortQueue(apu);
@@ -159,6 +166,10 @@ static void apu_runCycles_native(Apu *apu, uint32_t clocks) {
     if (!apu->cpuCyclesLeft && !apu->spc->stopped) {
       const uint32_t skipped = apu_native_waitSkip(apu, clocks);
       if (skipped) {
+#ifdef SNESRECOMP_SPC_PC_PROFILE
+        g_spc_skip_cycles += skipped;
+        g_spc_skip_count++;
+#endif
         clocks -= skipped;
         continue;
       }
@@ -170,7 +181,14 @@ static void apu_runCycles_native(Apu *apu, uint32_t clocks) {
       if (apu->spc->pc > g_spc_pc_max_seen)
         g_spc_pc_max_seen = apu->spc->pc;
 #endif
+#ifdef SNESRECOMP_SPC_PC_PROFILE
+      const uint16_t ppc = apu->spc->pc;
+#endif
       apu->cpuCyclesLeft = spc_runOpcode(apu->spc);
+#ifdef SNESRECOMP_SPC_PC_PROFILE
+      g_spc_pc_cycles[ppc] += apu->cpuCyclesLeft;
+      g_spc_run_cycles += apu->cpuCyclesLeft;
+#endif
     }
     unsigned sample_phase = apu->cycles & 31u;
 #if SNESRECOMP_APU_DEFER_DSP

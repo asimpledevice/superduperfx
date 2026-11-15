@@ -2946,6 +2946,45 @@ SMW), and keeping the CPU and RSP views of the SPC consistent needed most of
 the machinery above. The C SPC costs roughly 30-40 ms a frame in SMW today;
 the next steps make it cheaper.
 
+### SPC wait loops: where the C SPC's time goes, and a port-poll skip on hold (2026-11-15)
+
+The C core already skips timer waits (`apu_native_waitSkip`: `MOV reg,
+$FD-$FF / BEQ` loops fast-forwarded exactly to the next counter increment,
+the DSP getting the sample edges in between). Profiled with
+`SNESRECOMP_SPC_PC_PROFILE` (SPC cycles by address, dumped every 300
+frames), first 300 frames:
+
+| | Executed | Skipped | Where the executed cycles go |
+|---|---|---|---|
+| SMW | 3.27M | 5.45M (62%) | driver work (a 6-voice bit scan at `$12CE` is the largest), some timer-wait passes in short catch-ups |
+| JM2 | 7.75M | 0.02M | 31% `CMP X,!$00F4 / BNE` (waiting for the CPU's port write), 22% the IPL ROM handshake (`$FFCF`) |
+
+Measured inside `apu_runCycles` (CPU time in the SPC per frame, ares): SMW
+about 35 ms in gameplay; JM2 10-14 ms at boot, 128 ms on the loading screen
+(about 5,200 catch-ups of a few cycles a frame), 38-48 ms in gameplay.
+
+A generalized skip (`wip/spc-wait-skip`): port reads as well as timers, CMP
+forms and `CMP dp,#imm`, the IPL ROM, up to three branches back; passes are
+skipped to the next queued CPU write. It is exact: hash-identical in SMW,
+Pitfall and JM2, and `tests/audio/apu_native_test.c` (now with SMW-style
+timer loops and a port-poll loop, random run lengths and port writes,
+against the clock-by-clock reference; now run by `tests/run_c_tests.sh`)
+passes with 13,020 skips. Cost lessons: checking at every instruction cost
+SMW 2% of its SPC time, and the inlined skip overflowed
+`apu_runCycles_native`'s planned I-cache slot (41 functions moved). Gating
+the check (only at run starts and after a taken backward branch, and only
+with room for a pass) made JM2 faster than the baseline everywhere (boot
+3x, loading -2%, gameplay -5% of SPC time).
+
+On hold: some SMW timing builds with the gated skip stop at frame 113, the
+CPU waiting in the S-DSP join for a batch that never completes (also with
+`RSPDSP_RING=0`). The same code in a hash build, and other builds with the
+gated skip, run normally, and the reference test passes, so the trigger is
+timing (launch bursts during long skips), not the skip's results. The
+suspect is a CPU/RSP race in the S-DSP launch/join path or Red's kernel; it
+has to be found before any skip change lands. `n64-bringup` keeps the
+original timer-only skip.
+
 ## Next steps
 
 1. Audio: check the RSP DSP by ear on hardware (output arrives later than

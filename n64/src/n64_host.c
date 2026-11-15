@@ -610,6 +610,27 @@ static int host_main(void) {
       n64_platform_log("[dspsync] 60 frames, syncs/samples:%s\n", b);
     }
 #endif
+#ifdef SNESRECOMP_SPC_PC_PROFILE
+    if (frame % 300 == 299) {
+      extern uint32_t g_spc_pc_cycles[0x10000], g_spc_skip_cycles, g_spc_skip_count, g_spc_run_cycles;
+      n64_platform_log("[spcprof] 300 frames: %lu cycles executed, %lu skipped in %lu skips\n",
+                       (unsigned long)g_spc_run_cycles, (unsigned long)g_spc_skip_cycles,
+                       (unsigned long)g_spc_skip_count);
+      const uint8_t *ram = g_snes->apu->ram;
+      for (int k = 0; k < 24; k++) {
+        uint32_t best = 0; int bpc = -1;
+        for (int pc = 0; pc < 0x10000; pc++) if (g_spc_pc_cycles[pc] > best) { best = g_spc_pc_cycles[pc]; bpc = pc; }
+        if (bpc < 0) break;
+        n64_platform_log("[spcprof]   %04x %02x %02x %02x %02x  %lu cycles (%lu.%lu%%)\n", bpc,
+                         ram[bpc], ram[(uint16_t)(bpc + 1)], ram[(uint16_t)(bpc + 2)], ram[(uint16_t)(bpc + 3)],
+                         (unsigned long)best, (unsigned long)(best * 100ull / (g_spc_run_cycles ? g_spc_run_cycles : 1)),
+                         (unsigned long)(best * 1000ull / (g_spc_run_cycles ? g_spc_run_cycles : 1) % 10));
+        g_spc_pc_cycles[bpc] = 0;
+      }
+      memset(g_spc_pc_cycles, 0, sizeof g_spc_pc_cycles);
+      g_spc_skip_cycles = g_spc_skip_count = g_spc_run_cycles = 0;
+    }
+#endif
 #ifdef N64_PHASE0
     if (frame % 60 == 59) {
       extern void n64_phase0_take(uint32_t *, uint32_t *, uint32_t *);

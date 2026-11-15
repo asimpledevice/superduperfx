@@ -49,6 +49,31 @@ static void same(Apu *reference, Apu *native) {
 static void init(Apu *apu, unsigned mode) {
   apu_reset(apu);
   if (mode == 0) return; /* Real built-in IPL, waiting for CPU transfer. */
+  if (mode >= 3) {
+    /* Wait loops the native core skips in closed form (apu_native_waitSkip),
+     * each followed by a little work that changes state and ports:
+     * 3: mov y,!$00fd; beq back (timer 0, as N-SPC drivers wait)
+     * 4: mov y,$fe; beq back (timer 1, dp form)
+     * 5: cmp x,!$00f4; bne back (wait for the CPU to write port 0 = X)
+     * then inc x; mov $f5,x; mov a,$fd; mov $f6,a; bra to the loop. */
+    static const uint8_t code3[] = {0xec,0xfd,0x00, 0xf0,0xfb, 0x3d, 0xd8,0xf5, 0xe4,0xfd, 0xc4,0xf6, 0x2f,0xf3};
+    static const uint8_t code4[] = {0xeb,0xfe, 0xf0,0xfc, 0x3d, 0xd8,0xf5, 0xe4,0xfd, 0xc4,0xf6, 0x2f,0xf4};
+    static const uint8_t code5[] = {0x1e,0xf4,0x00, 0xd0,0xfb, 0x3d, 0xd8,0xf5, 0xe4,0xfd, 0xc4,0xf6, 0x2f,0xf3};
+    const uint8_t *code = mode == 3 ? code3 : mode == 4 ? code4 : code5;
+    memcpy(apu->ram + 0x200, code, mode == 4 ? sizeof code4 : sizeof code3);
+    apu->romReadable = false;
+    apu->spc->pc = 0x200;
+    apu->cpuCyclesLeft = 0;
+    apu_cpuWrite(apu, 0xf1, 3);   /* timers 0 and 1 */
+    apu_cpuWrite(apu, 0xfa, 16);
+    apu_cpuWrite(apu, 0xfb, 3);
+    dsp_write(apu->dsp, 0x6c, 0x20);
+    dsp_write(apu->dsp, 0x0c, 100);
+    dsp_write(apu->dsp, 0x07, 127);
+    dsp_write(apu->dsp, 0x3d, 1);
+    dsp_write(apu->dsp, 0x4c, 1);
+    return;
+  }
   /* A live program reads all timers, exchanges ports and changes timer
    * targets. Conditional branch adds variable instruction durations.
    * mov a,$fd; mov $f4,a; inc a; mov $fa,a; mov a,$f4;
@@ -77,7 +102,7 @@ static void init(Apu *apu, unsigned mode) {
 
 int main(int argc, char **argv) {
   Apu *reference = apu_init(), *native = apu_init();
-  for (unsigned mode = 0; mode < 3; mode++) {
+  for (unsigned mode = 0; mode < 6; mode++) {
     init(reference, mode); init(native, mode);
     if (mode == 2) {
       reference->cycles = native->cycles = UINT32_MAX - 100u;
@@ -91,7 +116,7 @@ int main(int argc, char **argv) {
         assert(apu_schedulePortWrite(reference, port, value, when));
         assert(apu_schedulePortWrite(native, port, value, when));
       }
-      if (!(step & 15u)) {
+      if (!(step & 15u) && mode < 3) {
         unsigned reg = 0xfa + random32() % 3, val = random32() & 255u;
         apu_cpuWrite(reference, reg, val); apu_cpuWrite(native, reg, val);
       }
@@ -117,6 +142,9 @@ int main(int argc, char **argv) {
     printf("APU component: scalar %.6f native %.6f ratio %.4f\n", scalar, batch, scalar/batch);
   }
   apu_free(reference); apu_free(native);
+#ifdef SNESRECOMP_SPC_PC_PROFILE
+  printf("wait skips: %lu (%lu cycles)\n", (unsigned long)g_spc_skip_count, (unsigned long)g_spc_skip_cycles);
+#endif
   puts("APU NATIVE CONTRACT PASSED");
   return 0;
 }
