@@ -55,6 +55,18 @@ static void from_block(Apu *apu, const SpcRspBlock *b) {
   memcpy(spc_rsp_dsp_regs(apu), b->dspRegs, 128);
 }
 
+/* Who holds the SPC's state between runs (step 1a, docs/n64/RED_DESIGN.md):
+ * the block (the RSP's copy, run after run) or the Apu (the C core's). The
+ * Apu is brought current only when CPU code needs it: a join from outside,
+ * a C step, a trap, a port write coming due. Kept current on the CPU in the
+ * meantime: cycles and the carried instruction cycles (planning reads them). */
+static bool s_block_master;
+static void materialize(Apu *apu) {
+  if (!s_block_master) return;
+  from_block(apu, &s_blk);
+  s_block_master = false;
+}
+
 #if SNESRECOMP_APU_DEFER_DSP
 /* DSP sample edges (multiples of 32 APU cycles) in [c0, c0 + n). */
 static uint32_t edges_in(uint32_t c0, uint32_t n) {
@@ -140,6 +152,9 @@ static uint32_t plan_(Apu *apu, uint32_t clocks) {
   uint32_t n = clocks < SPC_RSP_MAX_RUN ? clocks : SPC_RSP_MAX_RUN;
   /* CPU port writes: those due now apply before the next instruction, as
    * in apu_runCycles_native, and the run stops at the next one's cycle. */
+  if (apu->portQHead != apu->portQTail &&
+      apu->portQueue[apu->portQHead & (APU_PORT_QUEUE_LEN - 1u)].target_cycle <= apu->portClock)
+    materialize(apu);   /* a write applies to the Apu's ports */
   apu_drainDuePortWrites(apu);
   if (apu->portQHead != apu->portQTail) {
     const uint64_t d = apu->portQueue[apu->portQHead & (APU_PORT_QUEUE_LEN - 1u)].target_cycle -
@@ -182,6 +197,7 @@ static uint32_t plan_(Apu *apu, uint32_t clocks) {
 }
 
 static void c_step(Apu *apu) {
+  materialize(apu);
   PROF_BEGIN();
   apu_runCyclesC(apu, 1);
   PROF_END(3);
@@ -190,7 +206,8 @@ static void c_step(Apu *apu) {
 
 static void post(Apu *apu, uint32_t n) {
   PROF_BEGIN();
-  to_block(apu, &s_blk);
+  if (!s_block_master) to_block(apu, &s_blk);   /* else the block is the state */
+  s_blk.undoFp = 0;
   s_blk.budget = (int32_t)n;
 #if SNESRECOMP_APU_DEFER_DSP
   const uint32_t p = apu->dspPending;
@@ -204,6 +221,7 @@ static void post(Apu *apu, uint32_t n) {
 #endif
   s_fl.c0 = apu->cycles;
   s_fl.active = true;
+  s_block_master = true;
   memset(s_run.tags, 0, sizeof s_run.tags);       /* all line slots empty */
   memset(s_run.wpages, 0, sizeof s_run.wpages);
   s_run.pad[0] = 0xff;                            /* SPCRUN_MOD: no paged module loaded */
@@ -240,10 +258,14 @@ static uint32_t collect(Apu *apu) {
   PROF_BEGIN();
   g_spc_rsp_collects++;
   mark_written(apu);
-  from_block(apu, &s_blk);
-  /* A trap re-runs the instruction in C: undo its timer reads' clears. */
-  if (exit == SPCEXIT_TRAP && s_blk.undoFp && s_blk.undoFp == (uint32_t)(s_blk.budget - (int32_t)s_blk.used))
-    for (int i = 0; i < 3; i++) apu->timer[i].counter = s_blk.timer[i].pad[1];
+  apu->cycles = s_blk.cycles;          /* what planning reads; the rest stays in the block */
+  apu->cpuCyclesLeft = s_blk.ccl;
+  if (exit == SPCEXIT_TRAP) {
+    materialize(apu);
+    /* A trap re-runs the instruction in C: undo its timer reads' clears. */
+    if (s_blk.undoFp && s_blk.undoFp == (uint32_t)(s_blk.budget - (int32_t)s_blk.used))
+      for (int i = 0; i < 3; i++) apu->timer[i].counter = s_blk.timer[i].pad[1];
+  }
   apu->portClock += s_blk.used;
   g_spc_rsp_cycles += s_blk.used;
 #if SNESRECOMP_APU_DEFER_DSP
@@ -276,11 +298,13 @@ void spc_rsp_lane_hold(Apu *apu) { spc_rsp_lane_join(apu); s_in_apu++; }
 void spc_rsp_lane_release(void) { if (s_in_apu > 0) s_in_apu--; }
 
 void spc_rsp_lane_join(Apu *apu) {
-  if (!s_fl.active) return;
-  g_spc_rsp_lane_joins++;
-  s_in_apu++;
-  (void)collect(apu);
-  s_in_apu--;
+  if (s_fl.active) {
+    g_spc_rsp_lane_joins++;
+    s_in_apu++;
+    (void)collect(apu);
+    s_in_apu--;
+  }
+  materialize(apu);   /* a reader outside wants the Apu */
 }
 
 static void run_apu(Apu *apu, uint32_t clocks);
@@ -298,6 +322,7 @@ void spc_rsp_run_apu(Apu *apu, uint32_t clocks) {
     run_apu(apu, clocks);
     PROF_END(4);
   }
+  materialize(apu);   /* the caller reads the Apu next (ports, timers) */
   s_in_apu--;
   g_spc_rsp_hook_ticks += spc_rsp_ticks() - t0;
 }

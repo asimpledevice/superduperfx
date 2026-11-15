@@ -2784,6 +2784,19 @@ state on the RSP would save the packing and collecting (2-3 ms); the wait
 needs the frame boundary and the audio pump to stop forcing a sync, and the
 lane fed between catch-ups.
 
+### Audio ownership, step 1a: lazy SPC state on the CPU (2026-11-15)
+
+The plan (owner): one owner per piece, the CPU running no APU code
+(`RED_DESIGN.md`, "The audio ownership model"). First, the block in RDRAM
+is the SPC's state between runs; the CPU no longer packs and unpacks it per
+run. `materialize` brings the Apu current from the block only where CPU code
+needs it: a join from outside (`spc_rsp_lane_join`, so `RtlApuLock` and
+`apu_dspSync`), a C step, a trap, a port write coming due, and the end of a
+synchronous run (its caller reads the ports next). Planning only needs the
+cycle count and the carried cycles, kept current on collect. Hashes
+identical to the C core (SMW 49, Pitfall 11, JM2 24 frames); random
+comparison 2,000 of 2,000.
+
 ## Next steps
 
 1. Audio: check the RSP DSP by ear on hardware (output arrives later than
