@@ -62,6 +62,9 @@ $(BUILD_DIR)/rsp_snesdsp.o $(BUILD_DIR)/rsp_snesdsp_ne.o: rspdsp/rsp_snesdsp.S r
 # RSPDSP_BLOCKS=1: the S-DSP microcode takes BRR blocks and key-on starts
 # from records the S-DSP front end makes inline with the SPC
 # (runner/src/snes/dsp_frontend.c), not from ARAM (docs/n64/RED_DESIGN.md).
+ifeq ($(RSPDSP_STREAM),1)
+RSPDSP_BLOCKS := 1
+endif
 RSPDSP_BLOCKS ?= 0
 ifeq ($(RSPDSP_BLOCKS),1)
 N64_CFLAGS += -DRSPDSP_BLOCKS=1 -DSNESRECOMP_DSP_FRONTEND=1
@@ -72,6 +75,16 @@ endif
 # diverted to it, and there is no per-batch ARAM view (docs/n64/RED_DESIGN.md,
 # "Echo in place").
 RSPDSP_ECHO_IN_PLACE ?= 0
+# RSPDSP_STREAM=1: the audio split (docs/n64/RED_DESIGN.md). The S-DSP on Red
+# owns its state, runs from batches Blue posts and never joins, writes its
+# audio to the ring Green plays from. Implies the two options above.
+RSPDSP_STREAM ?= 0
+ifeq ($(RSPDSP_STREAM),1)
+RSPDSP_ECHO_IN_PLACE := 1
+N64_CFLAGS := $(filter-out -DSNESRECOMP_DSP_LAUNCH_HOOK=% -DSNESRECOMP_DSP_JOIN_HOOK=%,$(N64_CFLAGS))
+N64_CFLAGS += -DSNESRECOMP_DSP_STREAM=1 -DSNESRECOMP_DSP_RECORDS=1
+N64_RSPASFLAGS += -DRSPDSP_STREAM=1
+endif
 ifeq ($(RSPDSP_ECHO_IN_PLACE),1)
 N64_CFLAGS += -DSNESRECOMP_ECHO_IN_PLACE=1
 endif

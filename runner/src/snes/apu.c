@@ -858,10 +858,11 @@ static bool apu_echoDivert(Apu* apu, uint16_t adr, uint8_t val) {
   apu_echoNow(apu);
   const uint32_t l = adr >> 4;
   if (!apu_echoLate(apu, apu->echoTouch[l]) && !apu_echoLate(apu, apu->echoDirty[l])) return false;
-  if (apu->dspLogN == APU_DSP_LOG_LEN) {
 #if SNESRECOMP_DSP_STREAM
+  if (apu->dspLogN >= APU_STREAM_LOG_MAX) {
     apu_dspSyncFor(apu, APU_DSP_SYNC_LOG_FULL);   /* post; the log is empty again */
 #else
+  if (apu->dspLogN == APU_DSP_LOG_LEN) {
     /* No room: let the S-DSP catch up, then the line is plain ARAM. */
     apu_dspSyncFor(apu, APU_DSP_SYNC_LOG_FULL);
     apu_dspJoin(apu);
@@ -964,6 +965,10 @@ static void apu_streamStop(Apu* apu) {
   apu_yellow_stop(apu->dsp);
   apu->dspAt = apu->dspEdges;
   apu->dsp->sampleWrite = apu->dspAt;   /* every sample is in the ring */
+  /* ENVX/OUTX the SPC wrote since the last sample read back as written. */
+  for (int r = 8; r < 0x80; r += 16)
+    for (int k = 0; k < 2; k++)
+      if (apu->dspRegAt[r + k] == apu->dspEdges + 1) apu->dsp->ram[r + k] = apu->dspRegs[r + k];
 }
 
 /* The S-DSP's registers as of the SPC's time: post and wait. */
@@ -1309,7 +1314,7 @@ void apu_cpuWrite(Apu* apu, uint16_t adr, uint8_t val) {
         const uint8_t r = apu->dspAdr;
         apu->dspRegs[r] = r == 0x7c ? 0 : val;
         apu->dspRegAt[r] = apu->dspEdges + 1;
-        if (apu->dspLogN == APU_DSP_LOG_LEN) apu_dspSyncFor(apu, APU_DSP_SYNC_LOG_FULL);
+        if (apu->dspLogN >= APU_STREAM_LOG_MAX) apu_dspSyncFor(apu, APU_DSP_SYNC_LOG_FULL);
         ApuDspLogEntry *e = &apu->dspLog[apu->dspLogN++];
         e->adr = r; e->val = val; e->old = 0;
         e->tag = (uint16_t)apu->dspPending; e->isReg = 1;

@@ -80,6 +80,9 @@ uint32_t g_snesdsp_rsp_ticks, g_snesdsp_rsp_samples;
 
 /* The caller initialises rspq first (rspq_init, or rdpq_init). */
 static void view_init(void);
+#if SNESRECOMP_DSP_STREAM
+static void stream_init(void);
+#endif
 void snesdsp_rsp_init(void) {
   s_overlay_id = rspq_overlay_register(&rsp_snesdsp);
   s_overlay_ne_id = rspq_overlay_register(&rsp_snesdsp_ne);
@@ -91,6 +94,9 @@ void snesdsp_rsp_init(void) {
   /* Launches invalidate only the samples a batch writes: no line of the
    * output buffer may stay dirty from the startup BSS clear. */
   data_cache_hit_writeback_invalidate(&s_out, sizeof s_out);
+#if SNESRECOMP_DSP_STREAM
+  stream_init();
+#endif
 }
 
 static inline void put(RspDspState *s, unsigned off, int v) {
@@ -982,3 +988,221 @@ void snesdsp_rsp_apu_join(void) {
   s_flight.active = false;
   g_snesdsp_rsp_join_ticks += get_ticks() - tj;
 }
+
+#if SNESRECOMP_DSP_STREAM
+/* ---- The audio split: the microcode as the S-DSP back end ---------------
+ * (apu_dsp_batch.h, docs/n64/RED_DESIGN.md "The audio split".) Yellow's
+ * state block (s_block) is packed once when it takes over and stays in
+ * RDRAM: each batch DMAs it in, runs, and DMAs it out. Blue posts a batch to
+ * one of kSlots slots (its parameters, operations and records) and returns;
+ * it waits only for a free slot, for Yellow's progress when the SPC reads
+ * OUTX (or ENVX/ENDX of an untracked voice) or an echo line Yellow has still
+ * to write, and when it takes the state back (saves). Red posts each batch's
+ * sequence number when done (RED_MSG_DSP_DONE); progress is the end sample
+ * of the newest batch done. Output goes straight to s_ring, 8 bytes a
+ * sample; Green reads it once published. */
+enum { kSlots = 4, kSlotBlocks = 512, kSlotKeyons = 1024 };
+typedef struct {
+  struct __attribute__((aligned(16))) { uint8_t b[RSPDSP_PARAMS_SIZE]; } prm;
+  struct __attribute__((aligned(16))) { Op op[kMaxOps + 32]; } ops;
+  uint8_t blocks[(kSlotBlocks + 16) * RSPDSP_BLK_REC] __attribute__((aligned(16)));
+  uint16_t keyons[kSlotKeyons + 32] __attribute__((aligned(16)));
+  uint32_t seq, end;
+} Slot;
+static Slot s_slot[kSlots];
+static uint32_t s_head, s_tail;        /* slots posted (tail) and found done (head) */
+static uint32_t s_posted, s_done_end, s_published;
+static bool s_running;
+static int16_t s_ring[APU_STREAM_RING * 4 + 8] __attribute__((aligned(16)));
+static ApuYellowRegs s_regs;
+/* The ring is only ever read after its lines are dropped: none may stay
+ * dirty from the startup BSS clear. */
+static void stream_init(void) { data_cache_hit_writeback_invalidate(s_ring, sizeof s_ring); }
+uint32_t g_snesdsp_rsp_stream_posts, g_snesdsp_rsp_stream_slot_waits, g_snesdsp_rsp_stream_overflow;
+
+static inline void put32(void *p, uint32_t v) { memcpy(p, &v, 4); }
+static inline void put16(void *p, uint16_t v) { memcpy(p, &v, 2); }
+
+/* Wait for batch `seq` (the wait of the old join, without the join). */
+static void wait_seq(uint32_t seq) {
+  if (red_dsp_done(seq)) return;
+  const uint32_t t0 = get_ticks();
+#if SNESRECOMP_BLUE_THREAD
+  if (blue_is_current()) {
+    g_red_blue_waits = seq | 0x80000000u;
+    while (!red_dsp_done(seq) && (uint32_t)get_ticks() - t0 < TICKS_FROM_MS(50)) {
+      blue_yield();
+      g_snesdsp_rsp_blue_yields++;
+    }
+    g_red_blue_waits = 0;
+  }
+#endif
+  while (!red_dsp_done(seq) && (uint32_t)get_ticks() - t0 < TICKS_FROM_MS(50)) {}
+  if (!red_dsp_done(seq)) {
+    g_snesdsp_rsp_fallbacks++;
+#if RSPDSP_RING
+    rspq_ring_wait();
+#else
+    rspq_wait();
+#endif
+  }
+  g_snesdsp_rsp_join_wait += get_ticks() - t0;
+  if (blue_is_current()) g_snesdsp_rsp_join_wait_blue += get_ticks() - t0;
+}
+
+static void reap(void) {
+  while (s_head != s_tail && red_dsp_done(s_slot[s_head % kSlots].seq)) {
+    s_done_end = s_slot[s_head % kSlots].end;
+    s_head++;
+  }
+}
+
+static void wait_all(void) {
+  while (s_head != s_tail) { wait_seq(s_slot[s_head % kSlots].seq); reap(); }
+}
+
+void apu_yellow_start(const Dsp *dsp, uint8_t *aram, uint32_t at) {
+  wait_all();
+  snesdsp_rsp_pack(dsp, &s_block);
+  put32(s_block.bytes + RSPDSP_P_ARAM, PhysicalAddr(aram));
+  data_cache_hit_writeback_invalidate(&s_block, sizeof s_block);
+  memcpy(&s_shadow, dsp, offsetof(Dsp, sampleBuffer));   /* decodes register writes from here on */
+  s_posted = s_done_end = s_published = at;
+  s_running = true;
+}
+
+void apu_yellow_post(const ApuDspLogEntry *log, uint32_t n, uint32_t samples) {
+  if (s_tail - s_head == kSlots) {   /* no free slot: wait for the oldest */
+    g_snesdsp_rsp_stream_slot_waits++;
+    wait_seq(s_slot[s_head % kSlots].seq);
+  }
+  reap();
+  Slot *sl = &s_slot[s_tail % kSlots];
+  CHOOSE_OVERLAY(&s_shadow, log, n, IS_REG_APU);   /* on the state at the batch's start */
+  /* Register writes (decoded on the shadow, which follows every write) and
+   * SPC writes diverted to the S-DSP; other ARAM writes are in ARAM. */
+  Op *o = sl->ops.op, *end = sl->ops.op + kMaxOps;
+  for (uint32_t i = 0; i < n && o + 24 <= end; i++) {
+    if (log[i].isReg == 1) {
+      dsp_write(&s_shadow, (uint8_t)log[i].adr, log[i].val);
+      o = emit_reg(o, log[i].tag, (uint8_t)log[i].adr);
+    } else if (log[i].isReg == 3) {
+      o->tag = log[i].tag; o->kind = RSPDSP_LOG_ARAM; o->pad = 0;
+      o->adr = log[i].adr; o->val = log[i].val; o++;
+    }
+  }
+  if (o + 24 > end) g_snesdsp_rsp_stream_overflow++;   /* (Blue caps a post's log) */
+  const uint32_t nops = (uint32_t)(o - sl->ops.op);
+  memset(o, 0, 32 * sizeof *o);
+  /* Records. */
+  const ApuDspRecords *r = &g_apu_dsp_records;
+  uint32_t nb = r->nblocks, nk = r->nkeyons;
+  if (nb > kSlotBlocks || nk > kSlotKeyons) { g_snesdsp_rsp_stream_overflow++; nb = nb > kSlotBlocks ? kSlotBlocks : nb; nk = nk > kSlotKeyons ? kSlotKeyons : nk; }
+  memcpy(sl->blocks, r->blocks, nb * RSPDSP_BLK_REC);
+  memset(sl->blocks + nb * RSPDSP_BLK_REC, 0, 16 * RSPDSP_BLK_REC);
+  memcpy(sl->keyons, r->keyons, nk * RSPDSP_KON_REC);
+  memset(sl->keyons + nk, 0, 32 * RSPDSP_KON_REC);
+  g_snesdsp_rsp_blocks += nb;
+  /* The batch's echo lines: the SPC's writes there to RDRAM, none left in
+   * the cache (the RSP writes them). */
+  uint8_t *aram = s_shadow.apu_ram;
+  if (r->nruns > 16) {
+    data_cache_hit_writeback_invalidate(aram, 0x10000);
+  } else {
+    for (uint32_t k = 0; k < r->nruns; k++) {
+      const uint32_t l = r->run_line[k], c = r->run_count[k];
+      const uint32_t c1 = l + c > 0x1000 ? 0x1000 - l : c;
+      data_cache_hit_writeback_invalidate(aram + l * 16, c1 * 16);
+      if (c1 < c) data_cache_hit_writeback_invalidate(aram, (c - c1) * 16);
+    }
+  }
+  /* Parameters. */
+  s_seq = (s_seq + 1) & 0xffffffu;
+  uint8_t *p = sl->prm.b;
+  put32(p + RSPDSP_PP_LOG, PhysicalAddr(sl->ops.op));
+  put32(p + RSPDSP_PP_OUT, PhysicalAddr(s_ring) + (s_posted & (APU_STREAM_RING - 1)) * RSPDSP_OUT_SLOT);
+  put32(p + RSPDSP_PP_DONE_MSG, RED_MSG(RED_MSG_DSP_DONE, s_seq));
+  put32(p + RSPDSP_PP_BLK, PhysicalAddr(sl->blocks));
+  put32(p + RSPDSP_PP_KON, PhysicalAddr(sl->keyons));
+  put16(p + RSPDSP_PP_SAMPLES, (uint16_t)samples);
+  put16(p + RSPDSP_PP_LOGN, (uint16_t)nops);
+  data_cache_hit_writeback(&sl->prm, sizeof sl->prm);
+  data_cache_hit_writeback(sl->ops.op, (nops + 32) * sizeof(Op));
+  data_cache_hit_writeback(sl->blocks, (nb + 16) * RSPDSP_BLK_REC);
+  data_cache_hit_writeback(sl->keyons, (nk + 32) * RSPDSP_KON_REC);
+  sl->seq = s_seq;
+  s_posted += samples;
+  sl->end = s_posted;
+  s_tail++;
+  const uint32_t cmd[2] = {s_run_overlay | PhysicalAddr(&s_block), PhysicalAddr(&sl->prm)};
+#if RSPDSP_RING
+  rspq_ring_write(cmd, 2);
+#else
+  rspq_write(s_run_overlay, 0, PhysicalAddr(&s_block), PhysicalAddr(&sl->prm));
+  rspq_flush();
+#endif
+  g_snesdsp_rsp_stream_posts++;
+  g_snesdsp_rsp_samples += samples;
+}
+
+uint32_t apu_yellow_progress(void) { reap(); return s_done_end; }
+
+void apu_yellow_wait(uint32_t sample) {
+  reap();
+  while (s_head != s_tail && (int32_t)(sample - s_done_end) > 0) {
+    wait_seq(s_slot[s_head % kSlots].seq);
+    reap();
+  }
+  g_snesdsp_rsp_joins++;
+}
+
+/* The readable registers from Yellow's own state block (valid when nothing
+ * later is in flight: Blue asks after waiting for the SPC's time). */
+const ApuYellowRegs *apu_yellow_regs(void) {
+  const RspDspState *u = UncachedAddr(&s_block);
+  for (int v = 0; v < 8; v++) {
+    s_regs.envx[v] = (uint8_t)(getu(u, RSPDSP_V_GAIN + 2 * v) >> 4);
+    s_regs.outx[v] = (uint8_t)(get(u, RSPDSP_V_SAMPLEOUT + 2 * v) >> 7);
+  }
+  s_regs.endx = u->bytes[RSPDSP_RAM + 0x7c];
+  s_regs.at = s_done_end;
+  return &s_regs;
+}
+
+void apu_yellow_stop(Dsp *dsp) {
+  if (!s_running) return;
+  wait_all();
+  data_cache_hit_invalidate(&s_block, sizeof s_block);
+  snesdsp_rsp_unpack(dsp, &s_block);
+  set_envx_outx(dsp, s_slot[0].ops.op, 0, 1);   /* ENVX/OUTX from the state */
+  s_running = false;
+}
+
+void apu_yellow_discard(void) { wait_all(); s_running = false; }
+
+bool apu_yellow_running(void) { return s_running; }
+
+const int16_t *apu_yellow_ring(uint32_t *mask) {
+  *mask = APU_STREAM_RING - 1;
+  return s_ring;
+}
+
+/* Green: the finished samples, with their lines dropped from the cache. */
+uint32_t apu_yellow_publish(void) {
+  const uint32_t p = apu_yellow_progress();
+  uint32_t from = s_published;
+  if ((uint32_t)(p - from) > APU_STREAM_RING) from = p - APU_STREAM_RING;
+  while (from != p) {
+    const uint32_t i = from & (APU_STREAM_RING - 1);
+    uint32_t n = APU_STREAM_RING - i;
+    if (n > p - from) n = p - from;
+    /* Whole lines (Green never writes the ring, so none is dirty). */
+    const uintptr_t a = (uintptr_t)&s_ring[i * 4] & ~(uintptr_t)15;
+    const uintptr_t e = ((uintptr_t)&s_ring[(i + n) * 4] + 15) & ~(uintptr_t)15;
+    data_cache_hit_invalidate((void *)a, (unsigned long)(e - a));
+    from += n;
+  }
+  s_published = p;
+  return p;
+}
+#endif

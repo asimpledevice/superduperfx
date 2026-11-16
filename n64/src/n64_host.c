@@ -682,6 +682,18 @@ static int host_main(void) {
       /* Every DSP output sample, as produced (the frame end has synced a
        * deferred DSP), so builds with different DSP paths compare. */
       static uint32_t s_out_hash = 2166136261u, s_out_pos;
+#if SNESRECOMP_DSP_STREAM
+      /* The S-DSP's ring, to the SPC's time (hash builds only wait here). */
+      apu_dspFrameSync(g_snes->apu);
+      apu_yellow_wait(g_snes->apu->dspEdges);
+      apu_dspOutput(g_snes->apu);
+      const Dsp *d = g_snes->apu->dsp;
+      for (; d->outRing && s_out_pos != d->sampleWrite; ++s_out_pos) {
+        const int16_t *p = d->outRing + 4u * (s_out_pos & d->outMask);
+        s_out_hash = (s_out_hash ^ (uint16_t)p[0]) * 16777619u;
+        s_out_hash = (s_out_hash ^ (uint16_t)p[1]) * 16777619u;
+      }
+#else
       apu_dspSync(g_snes->apu);  /* all samples so far, also with async batches */
       const Dsp *d = g_snes->apu->dsp;
       for (; s_out_pos != d->sampleWrite; ++s_out_pos) {
@@ -689,6 +701,7 @@ static int host_main(void) {
         s_out_hash = (s_out_hash ^ (uint16_t)d->sampleBuffer[w * 2]) * 16777619u;
         s_out_hash = (s_out_hash ^ (uint16_t)d->sampleBuffer[w * 2 + 1]) * 16777619u;
       }
+#endif
 #ifndef N64_STATE_HASH_PERIOD
 #define N64_STATE_HASH_PERIOD 60
 #endif

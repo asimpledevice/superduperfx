@@ -98,6 +98,9 @@ bool apu_yellow_running(void);
  * back end drops their lines from the CPU's cache). Batches never cross
  * the ring's end (Blue posts at multiples of APU_STREAM_RING). */
 #define APU_STREAM_RING 8192u
+/* The most log entries in one post (the microcode back end decodes each
+ * into at most 10 operations of its 4096). */
+#define APU_STREAM_LOG_MAX 320u
 const int16_t *apu_yellow_ring(uint32_t *mask);
 uint32_t apu_yellow_publish(void);
 #endif
