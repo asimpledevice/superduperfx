@@ -27,7 +27,7 @@ RUNNER_SRCS = \
 	content_variant.c variant_selector.c cpu_trace.c audio_trace.c \
 	ppu_dma_trace.c execution_mode.c mod_audio.c host_mesh.c cpu_fast_map.c \
 	host_mesh_builder.c guarded_patch.c util.c \
-	snes/apu.c snes/cart.c snes/cpu.c snes/dma.c snes/dsp.c snes/dsp1.c \
+	snes/apu.c snes/cart.c snes/cpu.c snes/dma.c snes/dsp.c snes/dsp_frontend.c snes/dsp1.c \
 	snes/dsp1_hle.c snes/joypad.c snes/audio_shadow.c snes/dsp_shadow.c \
 	snes/color_lut.c snes/ppu.c snes/hd_jobs.c snes/ppu_legacy.c snes/sa1.c \
 	snes/sdd1.c snes/ws_shadow.c snes/snes.c snes/snes_other.c snes/spc.c \

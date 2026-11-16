@@ -770,5 +770,19 @@ gain, stage, rate counter and ENVX at random intervals (1.8 million checks,
 identical); broken copies (key off ignored between events, an off-by-one
 rate) fail.
 
-Next: the front end inline in the SPC loop (owner: no N64 cost
-measurement for now); then Yellow taking blocks from the queue.
+The front end inline in the SPC loop (2026-11-16): `SNESRECOMP_DSP_FRONTEND`
+(off by default). `Apu.dspEdges` counts the S-DSP's sample edges in every
+path (reference, native, the native timer-poll skip, the deferred edge),
+which is exactly the samples run when the SPC accesses anything (the
+native loop runs an opcode before the edge at the same cycle). The front
+end is advanced before every SPC ARAM write (`apu_spcWriteRam`) and every
+S-DSP register access, gets the register writes, and is rebuilt from the
+Dsp after a reset or a load. `SNESRECOMP_DSP_FRONTEND_CHECK` (the S-DSP in
+lockstep, so current at every SPC access) compares it at every register
+access: native runs of 2,600 frames with scripted input, SMW 81,920 checks
+and 409,111 blocks, Pitfall 589,824 / 148,865, Joe & Mac 2 278,528 /
+291,387, Tetris Attack 16,384 (no notes yet): no differences. The N64
+build compiles with it on beside the deferred S-DSP (blocks counted, not
+yet used).
+
+Next: Yellow taking blocks from the queue.

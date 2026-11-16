@@ -12,6 +12,9 @@ typedef struct Apu Apu;
 #include "snes.h"
 #include "spc.h"
 #include "dsp.h"
+#if SNESRECOMP_DSP_FRONTEND
+#include "dsp_frontend.h"
+#endif
 
 typedef struct Timer {
   uint8_t cycles;
@@ -113,7 +116,27 @@ struct Apu {
   bool dspInFlight;
   uint8_t dspFlightWrite[32];
 #endif
+#if SNESRECOMP_DSP_FRONTEND
+  /* The S-DSP front end (dsp_frontend.h), inline with the SPC: host state,
+   * rebuilt from the Dsp after a reset or a load (feValid). dspEdges counts
+   * the S-DSP samples run (sample edges), the front end's clock. */
+  uint32_t dspEdges;
+  bool feValid;
+  DspFrontEnd fe;
+#endif
 };
+
+#if SNESRECOMP_DSP_FRONTEND
+/* An S-DSP sample edge (after the sample): the front end's clock. */
+#define APU_FE_EDGE(apu) ((apu)->dspEdges++)
+/* Before an SPC write to ARAM: the front end reads blocks at their sample,
+ * so it must have processed every sample before this write. */
+#define APU_FE_BEFORE_ARAM_WRITE(apu) \
+  do { if ((apu)->feValid) dsp_fe_advance(&(apu)->fe, (apu)->dspEdges); } while (0)
+#else
+#define APU_FE_EDGE(apu) ((void)0)
+#define APU_FE_BEFORE_ARAM_WRITE(apu) ((void)0)
+#endif
 
 /*
  * CPU->APU port-write scheduler state, for rollback snapshots.

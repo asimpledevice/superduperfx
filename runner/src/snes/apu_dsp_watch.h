@@ -23,6 +23,7 @@
 /* An SPC write to plain ARAM. The check stays small because it is inlined
  * into every SPC store; logging is out of line. */
 static inline void apu_spcWriteRam(Apu* apu, uint16_t adr, uint8_t val) {
+  APU_FE_BEFORE_ARAM_WRITE(apu);
 #if SNESRECOMP_APU_DEFER_DSP_VERIFY
   if (apu->dspPending) { apu_dspLogRam(apu, adr, val); return; }
 #endif
@@ -38,6 +39,7 @@ static inline void apu_spcReadCheck(Apu* apu, uint16_t adr) {
 }
 #else
 static inline void apu_spcWriteRam(Apu* apu, uint16_t adr, uint8_t val) {
+  APU_FE_BEFORE_ARAM_WRITE(apu);
   apu->ram[adr] = val;
 }
 static inline void apu_spcReadCheck(Apu* apu, uint16_t adr) { (void)apu; (void)adr; }

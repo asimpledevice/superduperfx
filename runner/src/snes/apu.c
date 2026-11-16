@@ -85,6 +85,10 @@ void apu_reset(Apu* apu) {
   apu->cpuCyclesLeft = 7;
   apu->portClock = 0;
   apu_clearPortQueue(apu);
+#if SNESRECOMP_DSP_FRONTEND
+  apu->dspEdges = 0;
+  apu->feValid = false;   /* rebuilt from the reset Dsp at its next use */
+#endif
 }
 
 void apu_clearPortQueue(Apu* apu) {
@@ -544,6 +548,7 @@ void apu_dspViewStale(Apu* apu) {
 }
 
 static inline void apu_dspEdge(Apu* apu) {
+  APU_FE_EDGE(apu);
   if (!apu->dspPending) apu_dspStartBatch(apu);
   if (++apu->dspPending >= APU_DSP_MAX_PENDING) apu_dspSyncFor(apu, APU_DSP_SYNC_FULL_BATCH);
 }
@@ -570,6 +575,9 @@ void apu_saveload(Apu *apu, SaveLoadInfo *sli) {
   memcpy(apu->dspRegs, apu->dsp->ram, sizeof(apu->dspRegs));  /* after a load */
 #endif
   spc_saveload(apu->spc, sli);
+#if SNESRECOMP_DSP_FRONTEND
+  apu->feValid = false;   /* rebuilt from the Dsp at its next use */
+#endif
 }
 
 #if SNESRECOMP_SPC_DIAGNOSTICS || SNESRECOMP_TRACE
@@ -598,6 +606,7 @@ static inline void apu_cycle_reference(Apu* apu) {
   if((apu->cycles & 0x1f) == 0) {
     // every 32 cycles
     dsp_cycle(apu->dsp);
+    APU_FE_EDGE(apu);
   }
 
   // handle timers
@@ -652,6 +661,62 @@ const char *apu_time_implementation(void) {
   return SNESRECOMP_APU_NATIVE ? "NATIVE" : "LLE";
 }
 
+#if SNESRECOMP_DSP_FRONTEND
+/* The S-DSP front end inline with the SPC (docs/n64/RED_DESIGN.md). It is
+ * (re)built from the Dsp, which must then be current: a deferred DSP is
+ * synced first. Blocks are counted until a back end consumes them. */
+uint32_t g_dsp_fe_blocks;
+static void apu_feBlock(void *ctx, int voice, uint32_t sample, uint16_t start, const uint8_t b[9]) {
+  (void)ctx; (void)voice; (void)sample; (void)start; (void)b;
+  g_dsp_fe_blocks++;
+}
+static void apu_feNow(Apu* apu) {
+  if (!apu->feValid) {
+#if SNESRECOMP_APU_DEFER_DSP
+    apu_dspSync(apu);
+#endif
+    dsp_fe_init(&apu->fe, apu->dsp, apu->ram, apu->dspEdges, apu_feBlock, apu);
+    apu->feValid = true;
+  }
+  dsp_fe_advance(&apu->fe, apu->dspEdges);
+}
+#if SNESRECOMP_DSP_FRONTEND_CHECK
+/* Check builds (the DSP in lockstep, not deferred, so the Dsp is current at
+ * every SPC access): the front end must agree with the Dsp on every tracked
+ * voice's position, latch and envelope, and on ENDX. */
+uint32_t g_dsp_fe_checks, g_dsp_fe_bad;
+static void apu_feCheck(Apu* apu) {
+  DspFrontEnd *fe = &apu->fe;
+  const Dsp *d = apu->dsp;
+  if ((++g_dsp_fe_checks & 0x3fff) == 0)
+    fprintf(stderr, "[dspfe] %u checks, %u differ; %u blocks; work on %u samples of %u; untracked %02x\n",
+            g_dsp_fe_checks, g_dsp_fe_bad, g_dsp_fe_blocks, fe->events, apu->dspEdges, fe->untracked);
+  int bad = (fe->endx ^ d->ram[0x7c]) & (uint8_t)~fe->untracked;
+  for (int c = 0; c < 8 && !bad; c++) {
+    if (!dsp_fe_tracked(fe, c)) continue;
+    const DspChannel *ch = &d->channel[c];
+    const DspFeVoice *v = &fe->v[c];
+    const uint8_t envx = dsp_fe_envx(fe, c);
+    bad = dsp_fe_counter(fe, c) != ch->pitchCounter || v->offset != ch->decodeOffset ||
+          v->prev_flags != ch->previousFlags || v->key_on != ch->keyOn ||
+          v->gain != ch->gain || v->state != ch->adsrState || v->rate_counter != ch->rateCounter ||
+          envx != d->ram[c * 16 + 8];
+    if (bad && g_dsp_fe_bad < 10)
+      fprintf(stderr, "[dspfe] sample %u voice %d: counter %04x/%04x offset %04x/%04x gain %03x/%03x "
+              "state %u/%u\n", fe->now, c, dsp_fe_counter(fe, c), ch->pitchCounter, v->offset,
+              ch->decodeOffset, v->gain, ch->gain, v->state, ch->adsrState);
+  }
+  if (bad) {
+    if (g_dsp_fe_bad < 10 && ((fe->endx ^ d->ram[0x7c]) & (uint8_t)~fe->untracked))
+      fprintf(stderr, "[dspfe] sample %u: ENDX %02x/%02x\n", fe->now, fe->endx, d->ram[0x7c]);
+    g_dsp_fe_bad++;
+  }
+}
+#else
+#define apu_feCheck(apu) ((void)0)
+#endif
+#endif
+
 uint8_t apu_cpuRead(Apu* apu, uint16_t adr) {
   switch(adr) {
     case 0xf0:
@@ -665,6 +730,10 @@ uint8_t apu_cpuRead(Apu* apu, uint16_t adr) {
       return apu->dspAdr;
     }
     case 0xf3: {
+#if SNESRECOMP_DSP_FRONTEND
+      apu_feNow(apu);
+      apu_feCheck(apu);
+#endif
 #if SNESRECOMP_APU_DEFER_DSP
       {
         const uint8_t r = apu->dspAdr & 0x7f;
@@ -786,6 +855,13 @@ void apu_cpuWrite(Apu* apu, uint16_t adr, uint8_t val) {
       break;
     }
     case 0xf3: {
+#if SNESRECOMP_DSP_FRONTEND
+      if (apu->dspAdr < 0x80) {
+        apu_feNow(apu);
+        apu_feCheck(apu);
+        dsp_fe_write(&apu->fe, apu->dspAdr, val);
+      }
+#endif
 #if SNESRECOMP_APU_DEFER_DSP
       if(apu->dspAdr < 0x80)
         apu->dspRegs[apu->dspAdr] = apu->dspAdr == 0x7c ? 0 : val;
