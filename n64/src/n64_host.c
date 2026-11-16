@@ -705,6 +705,19 @@ static int host_main(void) {
       }
     }
 #endif
+#ifdef N64_MEM_REPORT
+    if (frame == 299) {   /* RAM in use, once everything lazy is allocated */
+      extern char end[];  /* end of the program's data and bss (an array: not gp-relative) */
+      const struct mallinfo mi = mallinfo();
+      n64_platform_log("[mem] RDRAM %lu KB; program image %lu KB; heap: break %lu KB above the image, "
+                       "in use %lu KB, free inside %lu KB; above the break %lu KB\n",
+                       (unsigned long)((*(volatile uint32_t *)0x80000318) / 1024),
+                       (unsigned long)(((uintptr_t)end - 0x80000000u) / 1024),
+                       (unsigned long)(((uintptr_t)sbrk(0) - (uintptr_t)end) / 1024),
+                       (unsigned long)(mi.uordblks / 1024), (unsigned long)(mi.fordblks / 1024),
+                       (unsigned long)((0x80000000u + (*(volatile uint32_t *)0x80000318) - (uintptr_t)sbrk(0)) / 1024));
+    }
+#endif
 #if SNESRECOMP_APU_DEFER_DSP
     if (frame % 60 == 59) {
       static const char *const why[APU_DSP_SYNC_REASONS] = {"host", "regread", "echoread", "echoreg", "logfull", "batch", "frame"};
