@@ -24,6 +24,8 @@ static const int rateValues[32] = {
   64, 48, 40, 32, 24, 20, 16, 12,
   10, 8, 6, 5, 4, 3, 2, 1
 };
+/* The envelope rate table, for the S-DSP front end (dsp_frontend.c). */
+const int *dsp_rate_values(void) { return rateValues; }
 
 /* Non-static: the dev faithful reference (dsp_shadow) reuses this canonical
  * Gaussian table (verified byte-identical to blargg's snes9x/bsnes gauss[512])

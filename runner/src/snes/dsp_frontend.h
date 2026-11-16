@@ -21,7 +21,11 @@
  * previous voice's output). Such voices are dropped from tracking
  * (dsp_fe_tracked) and need the S-DSP itself.
  *
- * Envelopes (ENVX) are not modelled yet. */
+ * Envelopes are lazy: a voice's envelope (gain, stage, rate counter) is
+ * stepped, exactly as dsp_cycleChannel does, only when something needs it:
+ * an ENVX read (dsp_fe_envx), a block ending without a loop, a key on, a
+ * write to the voice's ADSR/GAIN registers, KOF or FLG (key off and reset
+ * act on every sample while set). */
 #ifndef SNESRECOMP_DSP_FRONTEND_H
 #define SNESRECOMP_DSP_FRONTEND_H
 
@@ -39,6 +43,12 @@ typedef struct DspFeVoice {
   uint16_t pitch, counter, offset;
   uint8_t srcn, prev_flags;
   bool key_on, key_off, pmod;
+  /* Envelope, as of the start of sample te. */
+  uint32_t te;
+  uint16_t gain, rate_counter, sustain, gain_value;
+  uint16_t rates[4];   /* attack, decay, sustain, gain (dsp.c adsrRates) */
+  uint8_t state, gain_mode;
+  bool use_gain, direct_gain;
 } DspFeVoice;
 
 typedef struct DspFrontEnd {
@@ -50,6 +60,7 @@ typedef struct DspFrontEnd {
   uint16_t dir;
   uint8_t endx;
   uint8_t untracked;   /* voices with pitch modulation (bit per voice) */
+  bool reset;          /* FLG bit 7 */
   DspFeBlockFn *on_block;
   void *ctx;
   uint32_t events;     /* statistics: samples on which work was done */
@@ -69,6 +80,10 @@ void dsp_fe_write(DspFrontEnd *fe, uint8_t adr, uint8_t val);
 /* State queries at sample fe->now. */
 uint16_t dsp_fe_counter(const DspFrontEnd *fe, int voice);
 static inline uint8_t dsp_fe_endx(const DspFrontEnd *fe) { return fe->endx; }
+/* ENVX at sample fe->now (gain >> 4): steps the voice's envelope up to now. */
+uint8_t dsp_fe_envx(DspFrontEnd *fe, int voice);
+/* Step a voice's envelope up to fe->now (dsp_fe_envx does this). */
+void dsp_fe_env_sync(DspFrontEnd *fe, int voice);
 static inline bool dsp_fe_tracked(const DspFrontEnd *fe, int voice) {
   return !((fe->untracked >> voice) & 1);
 }

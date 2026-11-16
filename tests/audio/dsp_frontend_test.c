@@ -56,7 +56,7 @@ int main(void) {
   static Dsp d;
   static DspFrontEnd fe;
   int fails = 0;
-  uint32_t samples_total = 0, blocks_total = 0, events_total = 0, untracked_voices = 0;
+  uint32_t samples_total = 0, blocks_total = 0, events_total = 0, untracked_voices = 0, env_checks = 0;
   for (int t = 0; t < 3000 && fails < 5; t++) {
     for (int i = 0; i < 0x10000; i++) s_aram[i] = (uint8_t)rnd();
     random_state(&d);
@@ -70,12 +70,14 @@ int main(void) {
       for (int w = 0; w < writes; w++) {
         dsp_fe_advance(&fe, s);
         if (rnd() & 1) {
-          static const uint8_t timing[] = {0x02, 0x03, 0x04, 0x4c, 0x5c, 0x7c, 0x5d, 0x2d};
+          static const uint8_t timing[] = {0x02, 0x03, 0x04, 0x4c, 0x5c, 0x7c, 0x5d, 0x2d,
+                                           0x05, 0x06, 0x07, 0x05, 0x06, 0x07, 0x6c};
           uint8_t r = timing[rnd() % sizeof timing];
           if (r < 0x0c) r = (uint8_t)(r | (rnd() % 8) << 4);
           uint8_t v = (uint8_t)rnd();
           if (r == 0x2d) v &= (rnd() % 4 == 0) ? 0xff : 0;
           if (r == 0x4c) v &= (uint8_t)rnd();
+          if (r == 0x6c && (rnd() & 3)) v &= 0x7f;     /* reset mostly off */
           dsp_write(&d, r, v);
           dsp_fe_write(&fe, r, v);
         } else {
@@ -118,6 +120,24 @@ int main(void) {
         }
       }
       /* ENDX bits of untracked (PMON) voices are the S-DSP's to report. */
+      /* Envelopes, at random intervals (the lazy catch-up spans several samples). */
+      if (rnd() % 5 == 0) {
+        for (int c = 0; c < 8; c++) {
+          if (!dsp_fe_tracked(&fe, c)) continue;
+          const uint8_t envx = dsp_fe_envx(&fe, c);
+          const DspChannel *ch = &d.channel[c];
+          const DspFeVoice *v = &fe.v[c];
+          if (v->gain != ch->gain || v->state != ch->adsrState || v->rate_counter != ch->rateCounter ||
+              envx != d.ram[c * 16 + 8]) {
+            if (fails < 5)
+              printf("test %d sample %u voice %d: gain %03x/%03x state %u/%u rc %u/%u envx %02x/%02x\n",
+                     t, k, c, v->gain, ch->gain, v->state, ch->adsrState, v->rate_counter,
+                     ch->rateCounter, envx, d.ram[c * 16 + 8]);
+            fails++;
+          }
+          env_checks++;
+        }
+      }
       if ((fe.endx ^ d.ram[0x7c]) & (uint8_t)~fe.untracked) {
         if (fails < 5) printf("test %d sample %u: ENDX %02x/%02x\n", t, k, fe.endx, d.ram[0x7c]);
         fails++;
@@ -157,6 +177,7 @@ int main(void) {
   }
   printf("dsp front end: %u samples, %u blocks, work on %u samples (%.1f%%), %u voice-runs untracked (PMON)\n",
          samples_total, blocks_total, events_total, 100.0 * events_total / samples_total, untracked_voices);
+  printf("envelope checks: %u\n", env_checks);
   printf("%s\n", fails ? "FAIL" : "PASS");
   return fails ? 1 : 0;
 }

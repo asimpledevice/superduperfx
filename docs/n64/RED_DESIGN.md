@@ -762,6 +762,13 @@ a short history of echo writes).
 
 Built so far: the no-echo variant (`rsp_snesdsp_ne.S`); the front end's
 positions, blocks and ENDX (`dsp_frontend.c`, exact against `dsp_cycle`).
-Next: envelopes in the front end (lazy ENVX); the front end inline in the
-SPC loop with its cost measured on the N64; then Yellow taking blocks from
-the queue.
+Envelopes in the front end (2026-11-16): lazy, stepped exactly as
+dsp_cycleChannel only when needed (an ENVX read, a block ending without a
+loop, a key on, a write to the voice's ADSR/GAIN registers, KOF or FLG,
+since key off and reset act on every sample while set). The test checks
+gain, stage, rate counter and ENVX at random intervals (1.8 million checks,
+identical); broken copies (key off ignored between events, an off-by-one
+rate) fail.
+
+Next: the front end inline in the SPC loop (owner: no N64 cost
+measurement for now); then Yellow taking blocks from the queue.
