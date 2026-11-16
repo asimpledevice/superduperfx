@@ -24,6 +24,7 @@
  * into every SPC store; logging is out of line. */
 static inline void apu_spcWriteRam(Apu* apu, uint16_t adr, uint8_t val) {
   APU_FE_BEFORE_ARAM_WRITE(apu);
+  APU_FE_ECHO_LOG(apu, adr, 1);
 #if SNESRECOMP_APU_DEFER_DSP_VERIFY
   if (apu->dspPending) { apu_dspLogRam(apu, adr, val); return; }
 #endif
@@ -34,15 +35,17 @@ static inline void apu_spcWriteRam(Apu* apu, uint16_t adr, uint8_t val) {
 }
 /* An SPC read of plain ARAM: pages the DSP writes (echo) may hold owed data. */
 static inline void apu_spcReadCheck(Apu* apu, uint16_t adr) {
+  APU_FE_ECHO_LOG(apu, adr, 0);
   if (__builtin_expect(APU_DSP_PAGE_BIT(apu->spc->dspWatchSync, adr), 0))
     apu_dspEchoRead(apu);
 }
 #else
 static inline void apu_spcWriteRam(Apu* apu, uint16_t adr, uint8_t val) {
   APU_FE_BEFORE_ARAM_WRITE(apu);
+  APU_FE_ECHO_LOG(apu, adr, 1);
   apu->ram[adr] = val;
 }
-static inline void apu_spcReadCheck(Apu* apu, uint16_t adr) { (void)apu; (void)adr; }
+static inline void apu_spcReadCheck(Apu* apu, uint16_t adr) { (void)apu; (void)adr; APU_FE_ECHO_LOG(apu, adr, 0); }
 #endif
 
 #endif

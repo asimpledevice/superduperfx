@@ -133,7 +133,16 @@ struct Apu {
  * so it must have processed every sample before this write. */
 #define APU_FE_BEFORE_ARAM_WRITE(apu) \
   do { if ((apu)->feValid) dsp_fe_advance(&(apu)->fe, (apu)->dspEdges); } while (0)
+#if SNESRECOMP_ECHO_LOG
+/* Host diagnostic: SPC accesses to bytes the echo has written or the ring
+ * region in use (apu.c). */
+void apu_feEchoLog(Apu* apu, uint16_t adr, int isWrite);
+#define APU_FE_ECHO_LOG(apu, adr, w) apu_feEchoLog(apu, adr, w)
 #else
+#define APU_FE_ECHO_LOG(apu, adr, w) ((void)0)
+#endif
+#else
+#define APU_FE_ECHO_LOG(apu, adr, w) ((void)0)
 #define APU_FE_EDGE(apu) ((void)0)
 #define APU_FE_BEFORE_ARAM_WRITE(apu) ((void)0)
 #endif

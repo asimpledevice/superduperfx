@@ -685,6 +685,9 @@ static uint16_t s_feKon[2][kFeMaxKeyons + 32] __attribute__((aligned(16)));
 static uint32_t s_feNblk, s_feNkon;
 static int s_feBuf;
 static bool s_feRecOk;                 /* this batch's records stand for ARAM */
+#if SNESRECOMP_ECHO_LOG
+static uint32_t s_elOwnedR, s_elOwnedW, s_elClearW, s_elInRingR, s_elFeR, s_elRegs;
+#endif
 
 static inline uint8_t apu_feReg(const Apu* apu, uint8_t r) {
 #if SNESRECOMP_APU_DEFER_DSP
@@ -717,6 +720,9 @@ static void apu_feKeyOn(void *ctx, int voice, uint32_t sample, uint16_t start) {
 static void apu_feRead(void *ctx, uint16_t adr, unsigned len) {
   Apu *apu = ctx;
   if (!dsp_fe_echo_owned(&apu->fe, adr, len)) return;
+#if SNESRECOMP_ECHO_LOG
+  s_elFeR++;
+#endif
   if (s_feRecOk) g_dsp_fe_echo_conflicts++;
   s_feRecOk = false;
 }
@@ -732,6 +738,58 @@ static void apu_feTakeRecords(Apu* apu) {
   s_feNblk = s_feNkon = 0;
   s_feRecOk = false;   /* until the next batch starts */
 }
+#if SNESRECOMP_ECHO_LOG
+/* Host diagnostic: which echo paths a game hits. Counts SPC reads and
+ * writes of bytes the echo has written (owned), writes into the ring
+ * region while echo writes are off (a clear), front-end reads of owned
+ * bytes, and lists every ESA/EDL/FLG-bit-5 change. */
+static Apu *s_elApu;
+static void apu_feEchoLogEnd(void) {
+  if (s_elApu && s_elApu->feValid) {
+    DspFrontEnd *fe = &s_elApu->fe;
+    dsp_fe_echo_sync(fe);
+    unsigned n = 0;
+    for (unsigned i = 0; i < sizeof fe->echo_owned / 4; i++) n += __builtin_popcount(fe->echo_owned[i]);
+    fprintf(stderr, "[echolog] end: sample %u, ESA %04x, ring %u bytes, echo writes %s, owned %u bytes; "
+            "Dsp FLG %02x echoWrites %d\n", fe->now, fe->esa, fe->delay * 4u, fe->echo_writes ? "on" : "off",
+            n * 4, s_elApu->dsp->ram[0x6c], s_elApu->dsp->echoWrites);
+  }
+  fprintf(stderr, "[echolog] SPC reads of owned bytes %u, writes to owned bytes %u; "
+          "writes into the region with echo writes off %u, reads there %u; "
+          "front-end reads of owned bytes %u; ESA/EDL/FLG5 changes %u\n",
+          s_elOwnedR, s_elOwnedW, s_elClearW, s_elInRingR, s_elFeR, s_elRegs);
+}
+static bool apu_feInRegion(const DspFrontEnd *fe, uint16_t adr) {
+  return (uint16_t)(adr - fe->esa) < (uint32_t)fe->delay * 4u;
+}
+void apu_feEchoLog(Apu* apu, uint16_t adr, int isWrite) {
+  static bool reg;
+  if (!reg) { reg = true; atexit(apu_feEchoLogEnd); }
+  s_elApu = apu;
+  if (!apu->feValid) return;
+  DspFrontEnd *fe = &apu->fe;
+  dsp_fe_advance(fe, apu->dspEdges);
+  dsp_fe_echo_sync(fe);
+  const bool owned = dsp_fe_echo_owned(fe, adr, 1);
+  uint32_t *c = owned ? (isWrite ? &s_elOwnedW : &s_elOwnedR)
+                      : (!fe->echo_writes && apu_feInRegion(fe, adr)) ? (isWrite ? &s_elClearW : &s_elInRingR) : NULL;
+  if (!c) return;
+  if (owned && *c < 4)
+    fprintf(stderr, "[echolog] sample %u: SPC %s %04x (owned; ESA %04x len %u, writes %s) pc %04x\n",
+            fe->now, isWrite ? "write" : "read", adr, fe->esa, fe->delay * 4u,
+            fe->echo_writes ? "on" : "off", apu->spc->pc);
+  (*c)++;
+}
+static void apu_feEchoLogReg(Apu* apu, uint8_t r, uint8_t v) {
+  const uint8_t old = apu_feReg(apu, r);
+  if (!(r == 0x6d || r == 0x7d || (r == 0x6c && ((old ^ v) & 0x20)))) return;
+  if (r != 0x6c && old == v) return;
+  if (s_elRegs++ < 40)
+    fprintf(stderr, "[echolog] sample %u: %s %02x -> %02x\n", apu->dspEdges,
+            r == 0x6d ? "ESA" : r == 0x7d ? "EDL" : "FLG echo-writes-off bit", r == 0x6c ? (old >> 5) & 1 : old,
+            r == 0x6c ? (v >> 5) & 1 : v);
+}
+#endif
 static void apu_feNow(Apu* apu) {
   /* Voices left untracked by pitch modulation: rebuild once it is off. */
   if (apu->feValid && apu->fe.untracked && !(apu_feReg(apu, 0x2d) & 0xfe)) apu->feValid = false;
@@ -925,6 +983,9 @@ void apu_cpuWrite(Apu* apu, uint16_t adr, uint8_t val) {
       if (apu->dspAdr < 0x80) {
         apu_feNow(apu);
         apu_feCheck(apu);
+#if SNESRECOMP_ECHO_LOG
+        apu_feEchoLogReg(apu, apu->dspAdr, val);
+#endif
         dsp_fe_write(&apu->fe, apu->dspAdr, val);
       }
 #endif
