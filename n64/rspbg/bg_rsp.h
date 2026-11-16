@@ -16,6 +16,8 @@ void n64_bgrsp_frame_begin(void);
 void n64_bgrsp_sync_vram(const uint16_t *vram, uint32_t vram_count);
 /* Wait until the latest snapshot is taken (before VRAM may change). */
 void n64_bgrsp_release_vram(void);
+/* The latest VRAM snapshot (RDRAM written by the RSP) and its write count. */
+const uint16_t *n64_bgrsp_snapshot(uint32_t *vram_count);
 /* Start the queued jobs now (they otherwise wait for the next flush). */
 void n64_bgrsp_kick(void);
 /* The CPU wrote [p, p + n) of memory the RSP also writes (plane rows):

@@ -335,3 +335,38 @@ conversion of all three depths 21.6 ms; a sync with nothing changed
 touches VRAM: next are larger blocks, double-buffered DMA and a
 block-level compare before the per-unit one, or dirty ranges from the
 VRAM snapshot path, which already copies all 64 KB whenever VRAM changes.
+
+## Step 4: the scene builder (2026-11-16)
+
+**4a, BG quads (C reference).** `n64_ppu_scene.c` (`n64_scene_bg`) turns
+one background layer over a run of lines into quads: one 8x8 tile per tile
+row it crosses, with screen x, rows, tile-cache index, first texture row,
+flips, priority and palette. `N64PPU_SCENE_CHECK` (native harness) draws
+every run's quads from the tile cache's C reference the way the RDP does
+and compares them with the plane rows the CPU expansion wrote: SMW (2,600
+frames: title, intro, world map, a level; 1.1 million rows) and Pitfall
+(3,000 frames) identical; `N64PPU_SCENE_CHECK_BREAK` fails as it should.
+About 900 quads per full-screen layer.
+
+**4b, drawing them (`SCENE=1`, opt-in, CPU-issued).** Main-screen BG
+passes are drawn as copy-mode texture rectangles from the tile cache
+(synced from the rspbg VRAM snapshot at present, after an `rdpq_fence`:
+the RDP may still be reading the caches), with TLUTs per CGRAM version and
+brightness (`TC_TLUT_16` for 4bpp layers, `TC_TLUT_2BPP` for 2bpp), and
+each quad's per-band registers from the frame description. Passes with a
+colour-window clip, sprites and the subscreen keep the planes for now.
+RENDER=2 in ares (SMW title and attract demo, through frame 600): every
+compared frame identical to the software PPU, the BG planes unused.
+
+Found on the way: a copy-mode rectangle cut by the scissor's left edge
+does not start its texture at the cut (ares; the leftmost tile under fine
+scroll showed scrambled texels). Quads are clipped to the span on the CPU
+side, with s advanced, instead.
+
+Cost (ares, `N64_PRESENT_PROF`): issuing the RDP commands takes 99 ms a
+frame against 5.9 ms for the planes: one `rdpq_tex_upload` and one
+rectangle per quad (~2,700 a frame) from the CPU. This path exists to
+prove the drawing; the commands are to be generated on the RSP (4c), with
+fewer of them: empty tiles skipped (a per-tile flag from the tile cache),
+several tiles per TMEM load, and the BG plane expansion (`rspbg` jobs)
+dropped for layers the scene draws.

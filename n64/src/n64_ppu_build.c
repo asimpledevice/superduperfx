@@ -943,6 +943,9 @@ bool n64_ppu_build_line(const Ppu *ppu, int line) {
 void n64_ppu_build_end(void) {
   flush_all(s_state.frame);
 #if N64_RSPBG
+#if N64PPU_SCENE   /* the scene draws from this frame's VRAM: snapshot it */
+  n64_bgrsp_sync_vram(s_state.ppu->vram, s_state.ppu->vramWriteCount);
+#endif
   n64_bgrsp_kick();
 #endif
 }

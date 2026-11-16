@@ -63,4 +63,8 @@ typedef struct N64PpuDesc {
   uint32_t flags;
 } N64PpuDesc;
 
+/* The last frame's description (n64_ppu_desc.c). */
+const N64PpuDesc *n64_ppu_desc(void);
+int n64_ppu_desc_bands(void);
+
 #endif

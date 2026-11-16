@@ -96,6 +96,23 @@ $(BUILD_DIR)/rsp_bg.o: rspbg/rsp_bg.S rspbg/bg_rsp_layout.h rspbg/rsp_bg_full.in
 		BUILD_DIR=$(BUILD_DIR) RSPASFLAGS="$(N64_RSPASFLAGS)" $@
 endif
 
+# SCENE=1: the scene builder (docs/n64/PPU_DESIGN.md step 4): main-screen
+# BG layers drawn from the tile cache (n64/rsptile) as texture rectangles.
+# Needs RSPBG=1 (the VRAM snapshot) and the frame description.
+SCENE ?= 0
+ifeq ($(SCENE),1)
+N64_CFLAGS += -DN64PPU_SCENE=1 -DN64PPU_DESC=1 -Irsptile
+OBJS += $(BUILD_DIR)/n64_ppu_scene.o $(BUILD_DIR)/rsptile/tile_cache.o \
+	$(BUILD_DIR)/rsptile/tile_cache_ref.o $(BUILD_DIR)/rsp_tile.o
+$(BUILD_DIR)/rsptile/%.o: rsptile/%.c rsptile/tile_cache.h rsptile/tile_cache_layout.h
+	@mkdir -p $(dir $@)
+	@echo "    [CC] $<"
+	$(CC) -c $(CFLAGS) -o $@ $<
+$(BUILD_DIR)/rsp_tile.o: rsptile/rsp_tile.S rsptile/tile_cache_layout.h rsptile/rsp_tile_conv.inc
+	@$(MAKE) --no-print-directory -f $(N64_INST)/include/n64.mk SOURCE_DIR=rsptile \
+		BUILD_DIR=$(BUILD_DIR) RSPASFLAGS="$(N64_RSPASFLAGS)" $@
+endif
+
 # CODECACHE=1: GEN_DIR was generated with SNESRECOMP_EMIT_LEAN=1 and
 # SNESRECOMP_EMIT_CODE_CACHE=1. tools/n64/split_code_cache.py moves every
 # compiled routine body into its own module object; the main program keeps

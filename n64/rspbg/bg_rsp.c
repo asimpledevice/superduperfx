@@ -70,6 +70,11 @@ void n64_bgrsp_release_vram(void) {
 
 void n64_bgrsp_kick(void) { rspq_flush(); }
 
+const uint16_t *n64_bgrsp_snapshot(uint32_t *vram_count) {
+  *vram_count = s_vram_count;
+  return s_vram_valid ? s_snap : NULL;
+}
+
 void n64_bgrsp_cpu_wrote(void *p, unsigned n) { data_cache_hit_writeback_invalidate(p, n); }
 
 int n64_bgrsp_submit(const uint16_t *vram, uint8_t *dst, int nrows, uint16_t y,
