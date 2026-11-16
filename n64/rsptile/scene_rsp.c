@@ -21,12 +21,22 @@ typedef struct __attribute__((packed, aligned(16))) {
   uint32_t empty, pad2[3];
 } SceneJob;
 _Static_assert(sizeof(SceneJob) == SCJ_SIZE, "scene job layout");
+/* A command covers at most 32 rows (n64_ppu_draw.c): five tile rows of 33
+ * tiles, 56 bytes of RDP commands each, plus its own syncs, must fit in the
+ * room Red requires before starting it. */
+_Static_assert(5 * 33 * 56 + 64 < SCENE_RDP_ROOM, "a scene command must fit SCENE_RDP_ROOM");
 
 enum { kJobs = 1024 };   /* ring: far more than a frame's passes */
 
 static uint32_t s_ovl;
 static SceneJob *s_jobs;
 static unsigned s_next;
+
+uint32_t n64_scene_rsp_room_waits(void) {
+  /* The overlay's saved state, as of its last switch out (statistics). */
+  const uint32_t *st = UncachedAddr(rspq_overlay_get_state(&rsp_scene));
+  return st[0];
+}
 
 void n64_scene_rsp_init(void) {
   s_ovl = rspq_overlay_register(&rsp_scene);

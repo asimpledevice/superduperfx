@@ -174,10 +174,14 @@ static bool scene_draw_bg_(int layer, bool hi, int a, int b, int sx0, int sx1) {
     s_loaded_tlut = -1;
     const uint8_t *cache = bpp == 4 ? n64_tile_cache_c4() : n64_tile_cache_c2();
 #if N64PPU_SCENE_RSP
-    /* The RSP reads the tilemaps and emits the rectangles. */
-    n64_scene_rsp_bg(s_scene_vram, cache,
-                     bpp == 4 ? n64_tile_cache_empty4() : n64_tile_cache_empty2(), bg.hs, bg.vs, bg.xsc, bpp, bg.tileadr, r0, r1, hi,
-                     sx0, sx1, kOx, kOy);
+    /* The RSP reads the tilemaps and emits the rectangles, at most 32 rows
+     * a command: at most five tile rows of 33 tiles at 56 bytes, ~9.3 KB of
+     * RDP commands, under RSPQ_RDP_ROOM, so a command never waits for the
+     * RDP once Red has started it (docs/n64/PPU_DESIGN.md). */
+    for (int c0 = r0; c0 < r1; c0 += 32)
+      n64_scene_rsp_bg(s_scene_vram, cache,
+                       bpp == 4 ? n64_tile_cache_empty4() : n64_tile_cache_empty2(), bg.hs, bg.vs,
+                       bg.xsc, bpp, bg.tileadr, c0, c0 + 32 < r1 ? c0 + 32 : r1, hi, sx0, sx1, kOx, kOy);
     continue;
 #endif
     const int n = n64_scene_bg(&bg, s_scene_vram, r0, r1, q, (int)(sizeof q / sizeof q[0]));

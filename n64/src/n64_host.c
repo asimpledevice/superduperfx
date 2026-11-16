@@ -588,6 +588,11 @@ static int host_main(void) {
                        (unsigned long)(s_pp_audio / 60));
 #if N64PPU_SCENE
       { extern uint32_t g_scene_ticks, g_scene_tlut_ticks, g_scene_sync_ticks, g_scene_passes;
+#if N64PPU_SCENE_RSP
+        extern uint32_t n64_scene_rsp_room_waits(void);
+        n64_platform_log("[scene] scene commands retried for RDP room: %lu (total)\n",
+                         (unsigned long)n64_scene_rsp_room_waits());
+#endif
         n64_platform_log("[scene] per frame (us): passes %lu, scene_draw_bg %lu (TLUTs %lu), cache sync %lu\n",
                          (unsigned long)(g_scene_passes / 60), (unsigned long)(g_scene_ticks / 60 / 47),
                          (unsigned long)(g_scene_tlut_ticks / 60 / 47), (unsigned long)(g_scene_sync_ticks / 60 / 47));
@@ -615,10 +620,18 @@ static int host_main(void) {
            * last one, B% of all stores made with a DMA busy (the baseline) */
           extern uint32_t rspq_ring_readback_bad, rspq_ring_lost_dma, rspq_ring_lost_status[2];
           extern uint32_t rspq_ring_stores, rspq_ring_stores_dma;
+          #if N64PPU_SCENE_RSP
+          { extern uint32_t n64_scene_rsp_room_waits(void);
+            /* r lost DMEM stores, q scene commands retried for RDP room */
+            snprintf(g_present_line + o, 48 - o, " r%lu q%lu", (unsigned long)rspq_ring_readback_bad,
+                     (unsigned long)n64_scene_rsp_room_waits()); }
+#else
           snprintf(g_present_line + o, 48 - o, " r%lu D%lu S%lx/%lx B%lu", (unsigned long)rspq_ring_readback_bad,
                    (unsigned long)rspq_ring_lost_dma, (unsigned long)(rspq_ring_lost_status[0] & 0x1f),
                    (unsigned long)(rspq_ring_lost_status[1] & 0x1f),
-                   (unsigned long)(rspq_ring_stores ? (uint64_t)rspq_ring_stores_dma * 100 / rspq_ring_stores : 0)); }
+                   (unsigned long)(rspq_ring_stores ? (uint64_t)rspq_ring_stores_dma * 100 / rspq_ring_stores : 0));
+#endif
+        }
         for (int i = 0; i < 3; i++) g_present_rdp[i] = 0;
       }
       s_pp_finish = s_pp_audio = 0;

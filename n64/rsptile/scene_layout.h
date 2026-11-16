@@ -23,4 +23,9 @@
 #define SCJ_EMPTY   32   /* u32 the cache's empty-tile bitmap (512 bytes read), 0: none */
 #define SCJ_SIZE    48
 
+/* RDP buffer room a scene command requires before it starts (rsp_scene.S):
+ * every command emits less than this (the CPU limits a command to 32 rows),
+ * so once started it never waits for the RDP. */
+#define SCENE_RDP_ROOM 0x4400
+
 #endif

@@ -32,7 +32,8 @@ RSPQ_EndOverlayHeader
 
 RSPQ_BeginSavedState
     .align 3
-SAVED_UNUSED: .ds.b 8
+ROOM_WAITS:   .long 0               # retries for lack of RDP buffer room (statistics)
+SAVED_PAD:    .long 0
 RSPQ_EndSavedState
 
 #define OUTB_SIZE 1024
@@ -64,6 +65,31 @@ ZB:      .ds.b 512                  # empty-tile bitmap
 #   v1 output pointer
     .func SceneCmd_Bg
 SceneCmd_Bg:
+    # Start only with SCENE_RDP_ROOM bytes of room in the RDP buffer: room
+    # left in the current buffer, or no buffer pending at the RDP (so
+    # RDPQ_Send can switch at once; as RSPQCmd_RdpSetBuffer waits, a SYNC_FULL
+    # in progress included). A command emits less than that, so it never
+    # spins on the RDP. Without room, step back over this command and return
+    # to the dispatch loop, which serves Red's ring (the S-DSP) first and
+    # then runs this command again.
+    lw t0, %lo(RDPQ_SENTINEL)
+    lw t1, %lo(RDPQ_CURRENT)
+    li t3, 0xFFFFFF
+    and t1, t1, t3
+    sub t0, t0, t1
+    slti t0, t0, SCENE_RDP_ROOM
+    beqz t0, Scene_go               # room in the current buffer
+    mfc0 t1, COP0_DP_STATUS
+    lbu t3, %lo(RDPQ_SYNCFULL_ONGOING)
+    ori t3, DP_STATUS_END_VALID
+    and t1, t1, t3
+    beqz t1, Scene_go               # the next buffer can start now
+    lw t1, %lo(ROOM_WAITS)
+    addiu t1, t1, 1
+    sw t1, %lo(ROOM_WAITS)
+    j RSPQ_Loop
+    addiu rspq_dmem_buf_ptr, rspq_dmem_buf_ptr, -4   # this command, again
+Scene_go:
     li t0, 0xffffff
     and s0, a0, t0
     sw s0, %lo(JOBADR)

@@ -9,6 +9,9 @@
 #include <stdint.h>
 
 void n64_scene_rsp_init(void);
+/* Times a scene command found too little RDP buffer room and went back to
+ * the dispatch loop (which serves the ring first) to try again. */
+uint32_t n64_scene_rsp_room_waits(void);
 void n64_scene_rsp_bg(const uint16_t *vram, const uint8_t *cache, const uint8_t *empty,
                       uint16_t hs, uint16_t vs,
                       uint8_t xsc, int bpp, uint16_t tileadr, int r0, int r1, int prio,

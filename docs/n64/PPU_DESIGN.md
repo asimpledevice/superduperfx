@@ -430,3 +430,42 @@ queued behind, the S-DSP included. Decided:
 (Native N64 games solved the same problem with task yielding: the audio
 task preempts the graphics task, whose microcode saves its state at safe
 points.)
+
+### Options for "never spins forever", and what is in (2026-11-16)
+
+"Forever" is two cases: a slow RDP (the wait ends) and a hung RDP (it
+does not).
+
+1. **Room check before a graphics command starts (in).** A command that
+   emits RDP commands first checks that the RDP buffer can take its
+   worst-case output: room left in the current 64 KB buffer
+   (`RDPQ_SENTINEL - RDPQ_CURRENT`), or no buffer pending at the RDP
+   (`END_VALID` clear in `DP_STATUS`, and no SYNC_FULL in progress), as
+   `RSPQCmd_RdpSetBuffer` waits. Without room it steps the queue pointer
+   back over itself and returns to the dispatch loop, which serves Red's
+   ring (the S-DSP) first and then runs it again. Done in `SceneCmd_Bg`
+   (`SCENE_RDP_ROOM`, 17 KB); retries counted in the overlay's saved state
+   (`n64_scene_rsp_room_waits`, `q` on the present line).
+   Not in the shared dispatch loop: the rspq kernel is linked into every
+   overlay's 4 KB of IMEM, and the S-DSP microcode already fills it to the
+   last word, so 18 more kernel instructions broke its build (and
+   libdragon's GL microcode). libdragon's own rdpq commands are therefore
+   not covered: each emits at most 176 bytes and can still spin at a
+   buffer switch when the RDP is a full buffer behind. Covering them needs
+   kernel IMEM (freed elsewhere in the kernel, or in the S-DSP microcode).
+2. **Bounded output per command (in).** Scene passes go to the RSP 32 rows
+   at a time: at most five tile rows of 33 tiles at 56 bytes, ~9.3 KB,
+   under the room the check requires (a static assert in `scene_rsp.c`).
+   The tile cache sync emits no RDP commands, so it cannot spin, but it is
+   long; splitting it is for audio latency, not for this.
+3. **Frame-level pacing in Green** keeps the room check rarely failing
+   (planned, above).
+4. **A watchdog for a hung RDP** (planned): count how long a retry loop
+   sees no progress in the RDP's fetch pointer (`DP_CURRENT`) and raise
+   an error the hang probe shows, instead of freezing silently.
+5. Not for us: yielding inside `RDPQ_Send`'s wait. The S-DSP overlay does
+   not fit in IMEM beside a graphics overlay, and our overlays do not save
+   and restore themselves mid-command.
+
+RENDER=2 in ares with 1 and 2 in: SMW identical through frame 540, no
+retries (ares draws instantly, so only hardware exercises the check).
