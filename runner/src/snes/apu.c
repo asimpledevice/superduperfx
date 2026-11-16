@@ -16,6 +16,9 @@
 #if SNESRECOMP_APU_DEFER_DSP
 static inline void apu_dspJoin(Apu* apu);
 #endif
+#if SNESRECOMP_DSP_FRONTEND
+static void apu_feNow(Apu* apu);
+#endif
 #include "../audio_trace.h"
 
 #ifndef SNESRECOMP_TRACE
@@ -93,6 +96,14 @@ void apu_reset(Apu* apu) {
   memset(apu->echoTouch, 0, sizeof apu->echoTouch);
   memset(apu->echoDirty, 0, sizeof apu->echoDirty);
   apu->echoRuns = 0;
+#endif
+#if SNESRECOMP_DSP_STREAM
+  apu_yellow_discard();   /* the S-DSP's state is the reset Dsp's again */
+  memset(apu->echoPageTouch, 0, sizeof apu->echoPageTouch);
+  memset(apu->echoPageDirty, 0, sizeof apu->echoPageDirty);
+  memset(apu->echoRegion, 0, sizeof apu->echoRegion);
+  memset(apu->dspRegAt, 0, sizeof apu->dspRegAt);
+  apu_feNow(apu);         /* the front end tracks from the first sample */
 #endif
 #endif
 }
@@ -382,7 +393,18 @@ static void apu_dspMarkAfterLaunch(Apu* apu, uint32_t n) {
 static void apu_feTakeRecords(Apu* apu);
 static void apu_feBatchStart(Apu* apu);
 #endif
+#if SNESRECOMP_DSP_STREAM
+static void apu_streamPost(Apu* apu);
+#endif
 static void apu_dspSyncFor(Apu* apu, unsigned reason) {
+#if SNESRECOMP_DSP_STREAM
+  /* The audio split: post what is owed to the S-DSP; never wait. */
+  if (!apu->dspPending && !apu->dspLogN) return;
+  g_apu_dsp_sync_count[reason]++;
+  g_apu_dsp_sync_samples[reason] += apu->dspPending;
+  apu_streamPost(apu);
+  return;
+#endif
 #ifdef SNESRECOMP_DSP_JOIN_HOOK
   /* A frame-end flush never waits for a batch still running: its samples
    * stay owed and go with the next batch. (After the frame's last SPC
@@ -467,7 +489,14 @@ static void apu_dspSyncFor(Apu* apu, unsigned reason) {
   apu->dspLogN = 0;
 }
 
+#if SNESRECOMP_DSP_STREAM
+static void apu_streamStop(Apu* apu);
+/* The Dsp current (saves, front-end rebuilds, hosts that want it): the
+ * S-DSP hands its state back. It takes it again at the next post. */
+void apu_dspSync(Apu* apu) { apu_streamStop(apu); }
+#else
 void apu_dspSync(Apu* apu) { apu_dspSyncFor(apu, APU_DSP_SYNC_HOST); }
+#endif
 void apu_dspFrameSync(Apu* apu) {
   apu_dspSyncFor(apu, SNESRECOMP_DSP_HOST_ASYNC ? APU_DSP_SYNC_FRAME : APU_DSP_SYNC_HOST);
 }
@@ -541,6 +570,9 @@ static void apu_dspStartBatch(Apu* apu) {
 #if SNESRECOMP_DSP_FRONTEND
   apu_feBatchStart(apu);
 #endif
+#if SNESRECOMP_DSP_STREAM
+  return;   /* no marks: the S-DSP reads records, and its echo lines are stamped */
+#endif
   const Dsp *d = apu->dsp;
   uint32_t loop = d->echoDelay;
   const uint32_t current = (uint32_t)d->echoBufferIndex + d->echoRemain;
@@ -587,6 +619,10 @@ void apu_dspLogRam(Apu* apu, uint16_t adr, uint8_t val) {
 }
 
 void apu_dspWriteSlow(Apu* apu, uint16_t adr, uint8_t val) {
+#if SNESRECOMP_DSP_STREAM
+  if (!apu_echoDivert(apu, adr, val)) apu->ram[adr] = val;
+  return;
+#endif
 #ifdef SNESRECOMP_DSP_LAUNCH_HOOK
   apu->spc->dspViewFresh[adr >> 11] &= (uint8_t)~(1u << ((adr >> 8) & 7));
   if (!APU_DSP_PAGE_BIT(apu->spc->dspWatchLog, adr)) { apu->ram[adr] = val; return; }
@@ -628,6 +664,10 @@ void apu_saveload(Apu *apu, SaveLoadInfo *sli) {
   spc_saveload(apu->spc, sli);
 #if SNESRECOMP_DSP_FRONTEND
   apu->feValid = false;   /* rebuilt from the Dsp at its next use */
+#if SNESRECOMP_DSP_STREAM
+  apu->dspAt = apu->dspEdges;
+  apu_feNow(apu);         /* (the Dsp is current: synced above, or loaded) */
+#endif
 #endif
 }
 
@@ -776,6 +816,10 @@ static void apu_feEcho(void *ctx, uint32_t unit, uint32_t count, uint32_t s_end,
     const uint32_t l = (first + k) & 0xfff;
     apu->echoTouch[l] = s_end;
     if (writes && (int32_t)(s_end - apu->echoDirty[l]) > 0) apu->echoDirty[l] = s_end;
+#if SNESRECOMP_DSP_STREAM
+    apu->echoPageTouch[l >> 4] = s_end;
+    if (writes && (int32_t)(s_end - apu->echoPageDirty[l >> 4]) > 0) apu->echoPageDirty[l >> 4] = s_end;
+#endif
   }
   /* The pending batch's runs (merged with the last when they continue it). */
   const uint32_t r = apu->echoRuns;
@@ -796,6 +840,9 @@ static void apu_feEcho(void *ctx, uint32_t unit, uint32_t count, uint32_t s_end,
 static inline void apu_echoNow(Apu* apu) {
   dsp_fe_advance(&apu->fe, apu->dspEdges);
   dsp_fe_echo_sync(&apu->fe);
+#if SNESRECOMP_DSP_STREAM
+  if (apu_yellow_running()) apu->dspAt = apu_yellow_progress();
+#endif
 }
 static void apu_dspMark(Apu* apu, uint16_t start, uint32_t len, uint8_t bits);
 static void apu_dspSyncFor(Apu* apu, unsigned reason);
@@ -808,10 +855,14 @@ static bool apu_echoDivert(Apu* apu, uint16_t adr, uint8_t val) {
   const uint32_t l = adr >> 4;
   if (!apu_echoLate(apu, apu->echoTouch[l]) && !apu_echoLate(apu, apu->echoDirty[l])) return false;
   if (apu->dspLogN == APU_DSP_LOG_LEN) {
+#if SNESRECOMP_DSP_STREAM
+    apu_dspSyncFor(apu, APU_DSP_SYNC_LOG_FULL);   /* post; the log is empty again */
+#else
     /* No room: let the S-DSP catch up, then the line is plain ARAM. */
     apu_dspSyncFor(apu, APU_DSP_SYNC_LOG_FULL);
     apu_dspJoin(apu);
     return false;
+#endif
   }
   ApuDspLogEntry *e = &apu->dspLog[apu->dspLogN++];
   e->adr = adr; e->val = val; e->old = 0;
@@ -820,7 +871,11 @@ static bool apu_echoDivert(Apu* apu, uint16_t adr, uint8_t val) {
    * batch is pending goes with the next one). */
   const uint32_t due = apu->dspEdges + 1;
   if ((int32_t)(due - apu->echoDirty[l]) > 0) apu->echoDirty[l] = due;
+#if SNESRECOMP_DSP_STREAM
+  if ((int32_t)(due - apu->echoPageDirty[l >> 4]) > 0) apu->echoPageDirty[l >> 4] = due;
+#else
   apu_dspMark(apu, adr, 1, APU_DSP_WATCH_LOG | APU_DSP_WATCH_SYNC);
+#endif
   /* This line may hold the SPC's earlier writes: to ARAM before the S-DSP
    * reads it, and out of the cache (the S-DSP writes it). */
   apu_echo_cache_drop(apu->ram + (adr & ~15u), 16);
@@ -828,12 +883,96 @@ static bool apu_echoDivert(Apu* apu, uint16_t adr, uint8_t val) {
 }
 /* An SPC read on a page marked for sync. */
 uint8_t apu_dspReadSlow(Apu* apu, uint16_t adr) {
+#if SNESRECOMP_DSP_STREAM
+  apu_echoNow(apu);
+  if (!apu_echoLate(apu, apu->echoDirty[adr >> 4])) return apu->ram[adr];
+  /* Wait for the S-DSP to reach the SPC's time: post what is owed, then
+   * its progress. */
+  apu_dspSyncFor(apu, APU_DSP_SYNC_ECHO_READ);
+  apu_yellow_wait(apu->dspEdges);
+  apu->dspAt = apu_yellow_progress();
+  return apu_echo_read_uncached(apu->ram + adr);
+#else
   if (!apu->feValid) { apu_dspEchoRead(apu); return apu->ram[adr]; }
   apu_echoNow(apu);
   if (!apu_echoLate(apu, apu->echoDirty[adr >> 4])) return apu->ram[adr];
   apu_dspEchoRead(apu);   /* the S-DSP to the SPC's time */
   apu_dspJoin(apu);
   return apu_echo_read_uncached(apu->ram + adr);
+#endif
+}
+#endif
+
+#if SNESRECOMP_DSP_STREAM
+/* ---- The audio split: Blue's side (docs/n64/RED_DESIGN.md) --------------
+ * The S-DSP ("Yellow", apu_yellow_* back end) owns its state while running.
+ * Blue posts batches and never joins them. It waits for Yellow's progress
+ * only when the SPC reads OUTX, ENVX/ENDX of a voice the front end does not
+ * track (pitch modulation), or an echo line Yellow has still to write. */
+uint32_t g_apu_stream_posts, g_apu_stream_waits, g_apu_stream_unsupported;
+
+/* The pages of the echo ring in use: the S-DSP touches them every lap
+ * (writes or not), whatever the stamps say yet. The lap in progress keeps
+ * its length (a new EDL applies at the wrap): both count. */
+static void apu_streamRegion(Apu* apu) {
+  memset(apu->echoRegion, 0, sizeof apu->echoRegion);
+  if (!apu->feValid) { memset(apu->echoRegion, 0xff, sizeof apu->echoRegion); return; }
+  DspFrontEnd *fe = &apu->fe;
+  dsp_fe_echo_sync(fe);
+  uint32_t slots = fe->delay;
+  const uint32_t lap = (uint32_t)fe->echo_index + fe->echo_remain;
+  if (lap > slots) slots = lap;
+  const uint32_t first = fe->esa >> 8, last = ((uint32_t)fe->esa + slots * 4u - 1u) >> 8;
+  for (uint32_t p = first; p <= last && p < first + 256; p++)
+    apu->echoRegion[(p >> 3) & 31] |= (uint8_t)(1u << (p & 7));
+}
+
+static void apu_streamEnsure(Apu* apu) {
+  if (apu_yellow_running()) return;
+  apu_yellow_start(apu->dsp, apu->ram, apu->dspAt);   /* the Dsp is current at dspAt */
+}
+
+static void apu_streamPost(Apu* apu) {
+  apu_streamEnsure(apu);
+  apu_feTakeRecords(apu);
+  if (apu->dspPending && !g_apu_dsp_records.valid) g_apu_stream_unsupported++;
+  apu_yellow_post(apu->dspLog, apu->dspLogN, apu->dspPending);
+  apu->dspPending = 0;
+  apu->dspLogN = 0;
+  g_apu_stream_posts++;
+  apu->dspAt = apu_yellow_progress();
+}
+
+/* Hand the S-DSP's state back to the Dsp (current at dspEdges after it). */
+static void apu_streamStop(Apu* apu) {
+  if (apu->dspPending || apu->dspLogN) apu_streamPost(apu);
+  apu_yellow_stop(apu->dsp);
+  apu->dspAt = apu->dspEdges;
+}
+
+/* The S-DSP's registers as of the SPC's time: post and wait. */
+static const ApuYellowRegs *apu_streamRegs(Apu* apu) {
+  apu_dspSyncFor(apu, APU_DSP_SYNC_REG_READ);
+  apu_streamEnsure(apu);
+  apu_yellow_wait(apu->dspEdges);
+  g_apu_stream_waits++;
+  apu->dspAt = apu_yellow_progress();
+  return apu_yellow_regs();
+}
+
+/* An SPC read of ENVX, OUTX or ENDX. */
+static uint8_t apu_streamRegRead(Apu* apu, uint8_t r) {
+  if (apu->dspRegAt[r] == apu->dspEdges + 1) return apu->dspRegs[r];   /* written this sample */
+  DspFrontEnd *fe = &apu->fe;
+  const int v = r >> 4;
+  if (r == 0x7c) {
+    uint8_t val = dsp_fe_endx(fe) & (uint8_t)~fe->untracked;
+    if (fe->untracked) val |= apu_streamRegs(apu)->endx & fe->untracked;
+    return val;
+  }
+  if ((r & 0xf) == 8 && dsp_fe_tracked(fe, v)) return dsp_fe_envx(fe, v);
+  const ApuYellowRegs *y = apu_streamRegs(apu);
+  return (r & 0xf) == 8 ? y->envx[v] : y->outx[v];
 }
 #endif
 
@@ -947,6 +1086,9 @@ static void apu_feNow(Apu* apu) {
     apu->fe.on_echo = apu_feEcho;
     apu->dspAt = apu->dspEdges;    /* synced above */
 #endif
+#if SNESRECOMP_DSP_STREAM
+    apu_streamRegion(apu);
+#endif
     apu->feValid = true;
   }
   dsp_fe_advance(&apu->fe, apu->dspEdges);
@@ -1004,6 +1146,13 @@ uint8_t apu_cpuRead(Apu* apu, uint16_t adr) {
 #if SNESRECOMP_DSP_FRONTEND
       apu_feNow(apu);
       apu_feCheck(apu);
+#endif
+#if SNESRECOMP_DSP_STREAM
+      {
+        const uint8_t r = apu->dspAdr & 0x7f;
+        if ((r & 0xf) == 8 || (r & 0xf) == 9 || r == 0x7c) return apu_streamRegRead(apu, r);
+        return apu->dspRegs[r];
+      }
 #endif
 #if SNESRECOMP_APU_DEFER_DSP
       {
@@ -1133,7 +1282,23 @@ void apu_cpuWrite(Apu* apu, uint16_t adr, uint8_t val) {
         apu_feEchoLogReg(apu, apu->dspAdr, val);
 #endif
         dsp_fe_write(&apu->fe, apu->dspAdr, val);
+#if SNESRECOMP_DSP_STREAM
+        if (apu->dspAdr == 0x6c || apu->dspAdr == 0x6d || apu->dspAdr == 0x7d) apu_streamRegion(apu);
+#endif
       }
+#endif
+#if SNESRECOMP_DSP_STREAM
+      /* Every register write goes to the S-DSP in the log (none to the Dsp). */
+      if (apu->dspAdr < 0x80) {
+        const uint8_t r = apu->dspAdr;
+        apu->dspRegs[r] = r == 0x7c ? 0 : val;
+        apu->dspRegAt[r] = apu->dspEdges + 1;
+        if (apu->dspLogN == APU_DSP_LOG_LEN) apu_dspSyncFor(apu, APU_DSP_SYNC_LOG_FULL);
+        ApuDspLogEntry *e = &apu->dspLog[apu->dspLogN++];
+        e->adr = r; e->val = val; e->old = 0;
+        e->tag = (uint16_t)apu->dspPending; e->isReg = 1;
+      }
+      break;
 #endif
 #if SNESRECOMP_APU_DEFER_DSP
       if(apu->dspAdr < 0x80)

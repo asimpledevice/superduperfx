@@ -9,7 +9,36 @@
 #if SNESRECOMP_ECHO_IN_PLACE && !(SNESRECOMP_APU_DEFER_DSP && SNESRECOMP_DSP_FRONTEND)
 #error "SNESRECOMP_ECHO_IN_PLACE needs SNESRECOMP_APU_DEFER_DSP and SNESRECOMP_DSP_FRONTEND"
 #endif
-#if SNESRECOMP_APU_DEFER_DSP
+#if SNESRECOMP_DSP_STREAM
+/* The audio split: the SPC's ARAM accesses leave the fast path only on
+ * pages where the S-DSP may still touch an echo line (its ring in use, or a
+ * line stamped past its progress). apu.c decides exactly per line. */
+#define APU_DSP_PAGE_BIT(marks, adr) ((marks)[(adr) >> 11] & (1u << (((adr) >> 8) & 7)))
+void apu_dspWriteSlow(Apu* apu, uint16_t adr, uint8_t val);
+uint8_t apu_dspReadSlow(Apu* apu, uint16_t adr);
+static inline bool apu_streamLate(const Apu* apu, uint32_t stamp) {
+  return (int32_t)(stamp - apu->dspAt) > 0;
+}
+static inline void apu_spcWriteRam(Apu* apu, uint16_t adr, uint8_t val) {
+  APU_FE_BEFORE_ARAM_WRITE(apu);
+  APU_FE_ECHO_LOG(apu, adr, 1);
+  const uint32_t p = adr >> 8;
+  if (__builtin_expect(((apu->echoRegion[p >> 3] >> (p & 7)) & 1) ||
+                       apu_streamLate(apu, apu->echoPageTouch[p]) ||
+                       apu_streamLate(apu, apu->echoPageDirty[p]), 0))
+    apu_dspWriteSlow(apu, adr, val);
+  else
+    apu->ram[adr] = val;
+}
+static inline uint8_t apu_spcReadRam(Apu* apu, uint16_t adr) {
+  APU_FE_ECHO_LOG(apu, adr, 0);
+  const uint32_t p = adr >> 8;
+  if (__builtin_expect((apu->fe.echo_writes && ((apu->echoRegion[p >> 3] >> (p & 7)) & 1)) ||
+                       apu_streamLate(apu, apu->echoPageDirty[p]), 0))
+    return apu_dspReadSlow(apu, adr);
+  return apu->ram[adr];
+}
+#elif SNESRECOMP_APU_DEFER_DSP
 /* Page marks during a batch (bits in Spc.dspWatchLog/dspWatchSync): LOG =
  * the DSP may read the page, so SPC writes there are logged; SYNC = the DSP
  * may write it (echo), so SPC reads there sync first. All clear between

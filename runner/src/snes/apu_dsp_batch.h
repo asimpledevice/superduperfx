@@ -65,6 +65,34 @@ typedef struct ApuDspRecords {
   uint16_t run_line[16], run_count[16];
   uint32_t nruns;
 } ApuDspRecords;
+#if SNESRECOMP_DSP_STREAM
+/* The audio split (docs/n64/RED_DESIGN.md "The audio split"): the S-DSP
+ * ("Yellow") owns its state and runs behind the SPC from batches Blue posts
+ * and never joins. A back end implements these: the microcode on Red
+ * (n64/rspdsp/snesdsp_rsp.c) or the C model (runner/src/snes/dsp_yellow_c.c).
+ *
+ * start: take over the S-DSP state (`dsp`, current at sample `at`); ARAM is
+ *   the one, live ARAM. post: queue `samples` samples with the log's
+ *   register writes (isReg 1) and diverted SPC writes (isReg 3) at their
+ *   tags, and the records in g_apu_dsp_records; returns at once (it may
+ *   wait only for a free slot). progress: samples Yellow has run. wait:
+ *   until progress reaches `sample` (posted already). regs: OUTX, ENVX and
+ *   ENDX as of progress (after a wait to sample t: as of t, when the posts
+ *   end at t). stop: run everything posted and hand the state back into
+ *   `dsp` (saves, a front-end rebuild). discard: drop everything (reset). */
+typedef struct ApuYellowRegs {
+  uint8_t outx[8], envx[8], endx;
+  uint32_t at;
+} ApuYellowRegs;
+void apu_yellow_start(const Dsp *dsp, uint8_t *aram, uint32_t at);
+void apu_yellow_post(const ApuDspLogEntry *log, uint32_t n, uint32_t samples);
+uint32_t apu_yellow_progress(void);
+void apu_yellow_wait(uint32_t sample);
+const ApuYellowRegs *apu_yellow_regs(void);
+void apu_yellow_stop(Dsp *dsp);
+void apu_yellow_discard(void);
+bool apu_yellow_running(void);
+#endif
 #if SNESRECOMP_ECHO_IN_PLACE
 /* Host cache hooks (the N64 build: n64/rspdsp/snesdsp_rsp.c): write back
  * and drop `len` bytes at `p` from the CPU's data cache; read one byte past

@@ -23,7 +23,7 @@
 #define SNESRECOMP_APU_NATIVE 1
 #endif
 
-#if SNESRECOMP_ECHO_IN_PLACE
+#if SNESRECOMP_ECHO_IN_PLACE && !SNESRECOMP_DSP_STREAM
 #define SNESRECOMP_DSP_LAUNCH_HOOK test_launch
 #define SNESRECOMP_DSP_JOIN_HOOK test_join
 #endif
@@ -40,7 +40,7 @@ static uint32_t rnd(void) {
   return rng;
 }
 
-#if SNESRECOMP_ECHO_IN_PLACE
+#if SNESRECOMP_ECHO_IN_PLACE && !SNESRECOMP_DSP_STREAM
 /* The RSP stand-in. */
 static ApuDspLogEntry s_log[APU_DSP_LOG_LEN];
 static uint32_t s_n, s_samples, s_launches, s_rejects, s_diverted;
@@ -74,6 +74,8 @@ void test_join(void) {
     if (k < s_samples) dsp_cycle(s_dsp);
   }
 }
+#endif
+#if SNESRECOMP_ECHO_IN_PLACE
 void apu_echo_cache_drop(const void *p, uint32_t len) { (void)p; (void)len; }
 uint8_t apu_echo_read_uncached(const uint8_t *p) { return *p; }
 #endif
@@ -187,11 +189,29 @@ int main(int argc, char **argv) {
       dspw(apu, 0x4c, (uint8_t)(1u << (rnd() % 4)));
     } else if (r < 85) {
       dspw(apu, 0x0d, (uint8_t)rnd());
+    } else if (r < 93) {         /* read ENVX, OUTX or ENDX */
+      const uint32_t k = rnd() % 17;
+      const uint8_t reg = k == 16 ? 0x7c : (uint8_t)((k >> 1) * 16 + 8 + (k & 1));
+      apu_cpuWrite(apu, 0xf2, reg);
+      const uint8_t v = apu_cpuRead(apu, 0xf3);
+      mix(&v, 1);
+      if (rnd() % 4 == 0) { const uint8_t v2 = apu_cpuRead(apu, 0xf3); mix(&v2, 1); }
+    } else if (r < 95) {         /* clear ENDX, or write ENVX/OUTX */
+      const uint8_t reg = (rnd() & 1) ? 0x7c : (uint8_t)((rnd() % 8) * 16 + 8 + (rnd() & 1));
+      dspw(apu, reg, (uint8_t)rnd());
+      apu_cpuWrite(apu, 0xf2, reg);
+      const uint8_t v = apu_cpuRead(apu, 0xf3);
+      mix(&v, 1);
     }
     if (step % every == every - 1) checkpoint(apu, step + 1);
   }
   checkpoint(apu, steps);
-#if SNESRECOMP_ECHO_IN_PLACE
+#if SNESRECOMP_DSP_STREAM
+  { extern uint32_t g_apu_stream_posts, g_apu_stream_waits, g_apu_stream_unsupported, g_dsp_yellow_c_missing;
+    fprintf(stderr, "stream: %u posts, %u register waits, %u unsupported, %u missing records, %u echo conflicts\n",
+            g_apu_stream_posts, g_apu_stream_waits, g_apu_stream_unsupported, g_dsp_yellow_c_missing,
+            g_dsp_fe_echo_conflicts); }
+#elif SNESRECOMP_ECHO_IN_PLACE
   fprintf(stderr, "echo in place: %u batches launched, %u left to C, %u diverted writes, %u echo conflicts\n",
           s_launches, s_rejects, s_diverted, g_dsp_fe_echo_conflicts);
 #endif

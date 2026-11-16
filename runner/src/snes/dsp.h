@@ -54,8 +54,26 @@ typedef struct DspChannel {
   bool echoEnable;
 } DspChannel;
 
+#if SNESRECOMP_DSP_RECORDS
+/* The S-DSP's sample data from the front end's records (dsp_frontend.c), as
+ * the microcode takes it, for a C S-DSP that runs behind the SPC: each
+ * decode takes the next block record (16 bytes: start address, the 9 bytes
+ * as read at that sample) and each key on the next start address, in the
+ * order they are consumed. A decode or key on with no record left sets
+ * `missing`. Host state, outside the saveload region. */
+typedef struct DspRecords {
+  const uint8_t *blocks;
+  uint32_t nblocks, iblock;
+  const uint16_t *keyons;
+  uint32_t nkeyons, ikeyon;
+  bool missing;
+} DspRecords;
+#endif
 struct Dsp {
   uint8_t *apu_ram;
+#if SNESRECOMP_DSP_RECORDS
+  DspRecords *records;   /* non-NULL: blocks and key-on starts from records */
+#endif
   // Host publication policy, outside the guest snapshot. Speculation still
   // executes every DSP cycle but must never enter the live consumer queue.
   bool suppressOutput;

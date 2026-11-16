@@ -462,6 +462,13 @@ static void dsp_cycleChannel(Dsp* dsp, int ch) {
       uint16_t samplePointer = dsp->dirPage + 4 * c->srcn;
       c->decodeOffset = dsp->apu_ram[samplePointer] |
                         (dsp->apu_ram[(samplePointer + 1) & 0xffff] << 8);
+#if SNESRECOMP_DSP_RECORDS
+      if (dsp->records) {
+        DspRecords *r = dsp->records;
+        if (r->ikeyon < r->nkeyons) c->decodeOffset = r->keyons[r->ikeyon++];
+        else r->missing = true;
+      }
+#endif
       memset(c->decodeBuffer, 0, sizeof(c->decodeBuffer));
       c->gain = 0;
       // Key-on always enters the ATTACK stage; whether the envelope VALUE
@@ -646,6 +653,9 @@ static void dsp_decodeBrr(Dsp* dsp, int ch) {
   if(c->previousFlags == 1 || c->previousFlags == 3) {
     // loop sample
     uint16_t samplePointer = dsp->dirPage + 4 * c->srcn;
+#if SNESRECOMP_DSP_RECORDS
+    if (!dsp->records)   /* else the block record carries the address */
+#endif
     c->decodeOffset = ram[(samplePointer + 2) & 0xffff] |
                       (ram[(samplePointer + 3) & 0xffff] << 8);
     if(c->previousFlags == 1) {
@@ -663,6 +673,21 @@ static void dsp_decodeBrr(Dsp* dsp, int ch) {
   int _brr_old = c->old, _brr_older = c->older;
 #endif
   uint16_t off = c->decodeOffset;
+#if SNESRECOMP_DSP_RECORDS
+  uint16_t recStart = 0;
+  if (dsp->records) {
+    DspRecords *r = dsp->records;
+    if (r->iblock < r->nblocks) {
+      const uint8_t *rec = r->blocks + 16u * r->iblock++;
+      memcpy(&recStart, rec, 2);
+      ram = rec + 2;   /* the 9 bytes, read from offset 0 below */
+    } else {
+      r->missing = true;
+      recStart = off;
+    }
+    off = ram == dsp->apu_ram ? recStart : 0;
+  }
+#endif
   const uint8_t header = ram[off++];
   const int shift = header >> 4;
   const int filter = (header & 0xc) >> 2;
@@ -675,6 +700,9 @@ static void dsp_decodeBrr(Dsp* dsp, int ch) {
     case 2: dsp_brrBlock(ram, &off, out, shift, 2, &old, &older); break;
     default: dsp_brrBlock(ram, &off, out, shift, 3, &old, &older); break;
   }
+#if SNESRECOMP_DSP_RECORDS
+  if (dsp->records) off = (uint16_t)(recStart + 9);
+#endif
   c->decodeOffset = off;
   c->older = older;
   c->old = old;

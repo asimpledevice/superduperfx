@@ -141,7 +141,24 @@ struct Apu {
   uint16_t echoRunLine[16], echoRunCount[16];
   uint32_t echoRuns;         /* > 16: too many, take the whole ring */
 #endif
+#if SNESRECOMP_DSP_STREAM
+  /* The audio split: per ARAM page, the latest line stamps (the SPC's fast
+   * path checks pages); the pages of the echo ring in use (a bit per page:
+   * the S-DSP will touch them whatever the stamps say yet); and, per DSP
+   * register, the sample edge count + 1 of the SPC's last write (a read in
+   * the same sample returns the written value). */
+  uint32_t echoPageTouch[256];
+  uint32_t echoPageDirty[256];
+  uint8_t echoRegion[32];
+  uint32_t dspRegAt[0x80];
+#endif
 };
+#if SNESRECOMP_DSP_STREAM && !(SNESRECOMP_ECHO_IN_PLACE && SNESRECOMP_DSP_RECORDS)
+#error "SNESRECOMP_DSP_STREAM needs SNESRECOMP_ECHO_IN_PLACE and SNESRECOMP_DSP_RECORDS"
+#endif
+#if SNESRECOMP_DSP_STREAM && (defined(SNESRECOMP_DSP_LAUNCH_HOOK) || defined(SNESRECOMP_DSP_BATCH_HOOK))
+#error "SNESRECOMP_DSP_STREAM replaces the launch and batch hooks"
+#endif
 
 #if SNESRECOMP_DSP_FRONTEND
 /* An S-DSP sample edge (after the sample): the front end's clock. */
