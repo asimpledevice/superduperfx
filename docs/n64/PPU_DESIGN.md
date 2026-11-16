@@ -404,3 +404,29 @@ for empty tiles. RENDER=2 still identical (SMW through frame 660); present's
 command issue in ares went from 12.7 to 11.8 ms, so the number of
 rectangles is not the main cost there. Next is measuring on hardware, where
 the RSP's and the RDP's own time can be seen (ares models neither).
+
+## The RSP must never wait on the RDP mid-command (owner, 2026-11-16)
+
+A buffer only absorbs bursts: if the RDP is slower than the frame rate for
+long enough, any buffer fills and the RSP blocks in `RDPQ_Send` (spinning
+on DP_STATUS until the RDP has fetched a buffer), stalling every RSP job
+queued behind, the S-DSP included. Decided:
+
+- **Double-buffer what the RDP reads** (the tile caches, ~384 KB for 2bpp
+  and 4bpp; RAM allows it: ~2.2 MB free with SCENE=1, `N64_MEM_REPORT`), so
+  the next frame's tile sync never waits for the RDP and the per-frame
+  `rdpq_fence` goes away.
+- **Bound every graphics command's output** (scene passes split into a
+  few tile rows, at most ~16 KB of RDP commands each) and have Red's
+  dispatch check the RDP buffer for that much room before starting one;
+  without room it keeps servicing its ring (the S-DSP) and retries. Waits
+  for the RDP then happen only between commands, where audio can run.
+  The frame-end SYNC_FULL follows the same rule.
+- **Frame-level pacing in Green:** before queuing frame N's graphics, check
+  the RDP has finished frame N-2 (or N-1); if not, skip drawing frame N
+  (game logic and audio continue). A slow RDP becomes dropped frames, never
+  an unbounded queue.
+
+(Native N64 games solved the same problem with task yielding: the audio
+task preempts the graphics task, whose microcode saves its state at safe
+points.)
