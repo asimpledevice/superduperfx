@@ -3006,6 +3006,13 @@ freeze through frame 4,931 with `r1`, i.e. one lost store caught in about
 store is lost when written, not overwritten later: the probe's shadow
 comparison exists for the second case if it ever shows.
 
+Follow-up (probe v6, which also samples SP_STATUS before every verified
+store): 21,267 frames on the EverDrive (about six minutes, world map and
+levels) with no lost store at all (`r0 D0`). Either the loss is rarer
+than one in 5,000 frames, or the extra SP_STATUS read before each store
+changes the timing enough to avoid it; both fit a collision. The read-back
+stays.
+
 The cause is not known. Candidates: a CPU PIO write to DMEM colliding with
 an RSP DMA or RSP DMEM access, as the S-DSP and rspbg overlays DMA
 constantly. Any other uncached CPU store to SP memory while the RSP runs
