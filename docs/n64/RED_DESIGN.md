@@ -810,6 +810,76 @@ SMW sets a 4 KB ring at $6000). In-game this covers the writes-off case
 (SMW 4, Pitfall 26 SPC writes into the ring region); the writes-on rules
 are covered by the synthetic test. A game that turns echo on is wanted.
 
+### The audio split, as built (owner milestone, 2026-11-17)
+
+Owner direction: one ARAM; Yellow writes into it; Blue does none of the
+join or copy work. `SNESRECOMP_DSP_STREAM` (N64: `RSPDSP_STREAM=1`, which
+implies `RSPDSP_BLOCKS` and echo in place). The LLE reference (C S-DSP,
+lockstep or deferred) stays selectable at build time.
+
+**The back-end interface** (`apu_dsp_batch.h`, `apu_yellow_*`): start (take
+the S-DSP state, once), post (a batch: register writes, diverted SPC writes,
+untrack entries, the front end's records), progress, wait, regs, stop (hand
+the state back: saves, front-end rebuilds), discard (reset), ring and
+publish (the output). Two back ends: the microcode on Red
+(`n64/rspdsp/snesdsp_rsp.c`) and a C model (`runner/src/snes/dsp_yellow_c.c`)
+that runs each batch as late as possible, for host builds and tests.
+
+**Blue** (`apu.c`):
+- Posts a batch at 256 samples, at the output ring's end, at a frame end,
+  when its log reaches 320 entries, or when the SPC reads something only
+  Yellow knows. It never joins, packs or unpacks.
+- Register writes go only to the log (none to the C `Dsp`). Reads of ENVX
+  and ENDX come from the front end for tracked voices. OUTX, and ENVX/ENDX of
+  untracked voices, wait for Yellow's progress to reach the SPC's time and
+  read Yellow's state. A read in the same sample as a write returns the
+  written value.
+- Echo in place as before; the SPC's fast path checks per-page echo stamps
+  and the ring in use. Echo reads of lines Yellow has still to write wait
+  for progress and read past the cache.
+
+**Yellow** keeps its state between batches (the microcode's state block
+stays in RDRAM; per-batch parameters come in a separate block), writes its
+output straight into an 8-byte-slot ring indexed by absolute sample, and
+posts each batch's sequence number when done (progress).
+
+**Green** moves the consumer's write counter to Yellow's progress (dropping
+the new lines from its cache) and reads the ring (`dsp_peek` and friends use
+`Dsp.outRing`).
+
+**Untracked voices and the undo ledger.** Voices the front end cannot track
+(pitch modulation; a block or directory read of echo bytes Yellow has still
+to write) are Yellow's to read: it reads their directory entries and blocks
+from ARAM at its own sample. While any voice is untracked, Blue keeps the
+ledger: every stored SPC write to ARAM as (time, address, old value);
+diverted writes leave ARAM alone and are not in it. A read at sample t takes
+the oldest entry for the address written after t, else ARAM. (Read-at-Red
+records were dropped: if the bytes the front end read are not the real
+ones, its own tracking of the voice is wrong too, so the voice must become
+untracked.)
+
+**Remaining Blue waits:** a free batch slot (four in flight), the three
+agreed reads, a full ledger, and the handover when tracking resumes after
+pitch modulation ends (the state comes back to rebuild the front end).
+
+**Tests.** `tests/audio/echo_in_place_test.c` built as the audio split test
+(in `tests/run_c_tests.sh`): one random script against the lockstep S-DSP,
+with ENVX/OUTX/ENDX reads and writes, echo ring moves and pokes, pitch
+modulation and voices playing samples inside the echo ring; every SPC read,
+ARAM, the S-DSP state and the whole output stream compared. 40,000 steps
+identical; break copies (reads not waiting, ENVX off by one, the
+same-sample rule, the ring pages in the write filter, echo reads not
+waiting, no ledger, ledger unused, conflicts not untracking, untrack
+entries ignored) all fail. N64: SMW in ares with `RSPDSP_STREAM=1` is
+identical to the C S-DSP build (WRAM, ARAM, every output sample) at all 26
+checkpoints.
+
+**Not yet:** untracked voices on the microcode (pitch modulation needs each
+voice's previous voice's output from the same sample, a serial path the
+vector microcode does not have, and IMEM is full: a separate variant). Until
+then an N64 stream build plays untracked voices wrongly; none of the test
+games has one.
+
 ### Results back to Blue (owner, 2026-11-16)
 
 Consistency of what Red publishes: Red must never wait on Blue, so a
