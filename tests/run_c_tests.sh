@@ -307,6 +307,15 @@ for cfg in "" "-DSNESRECOMP_APU_DEFER_DSP=1"; do
   "$OUT/apu_native_test"
 done
 
+echo "=== S-DSP front end vs the C S-DSP (random states and logs) ==="
+"$CC" -std=gnu11 -O2 -w \
+    -I "$ROOT/runner/src" -I "$ROOT/runner/src/snes" \
+    "$ROOT/tests/audio/dsp_frontend_test.c" \
+    "$ROOT/runner/src/snes/dsp_frontend.c" "$ROOT/runner/src/snes/dsp.c" \
+    "$ROOT/runner/src/snes/dsp_shadow.c" "$ROOT/runner/src/snes/audio_shadow.c" \
+    "$ROOT/runner/src/audio_trace.c" -o "$OUT/dsp_frontend_test"
+"$OUT/dsp_frontend_test"
+
 echo "=== audio trace history modes ==="
 for mode in 0 1 2 3; do
     "$CC" -std=c11 -Wall -Wextra -Werror -O1 \

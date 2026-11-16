@@ -681,3 +681,44 @@ Pitch modulation is not fed from the outbox: it is not a register read but
 pitch driven by the previous voice's output, and a stale value would put
 Blue's block positions out of step with the audio, so PMON voices stay on
 Red with the ledger fallback.
+
+### The front end, first version (2026-11-16)
+
+`runner/src/snes/dsp_frontend.c` (`dsp_frontend.h`): per voice the pitch
+counter, block decodes (the previous block's loop/end flags, the
+directory's loop address, ENDX) and key on (even samples, after the decode,
+KOF holding the latch), event-driven: one comparison against the next
+event sample, work only at decodes and key ons. Reports each decoded block
+(voice, sample, start, 9 bytes) as read at that sample. Voices with pitch
+modulation are dropped from tracking (their ENDX bits too). Envelopes not
+yet. `tests/audio/dsp_frontend_test.c` (in `tests/run_c_tests.sh`) steps it
+beside `dsp_cycle` on 3,000 random states with random register and ARAM
+writes: 1.7 million samples, 863,000 blocks, identical (counters, offsets,
+flags, latches, ENDX, every block's start and bytes); deliberately broken
+copies (a crossing one sample late, a wrong loop rule) fail. Random states
+had work on 39% of samples; real music, with lower pitches, fewer.
+
+**The echo window.** Within a sample the S-DSP decodes before it writes
+echo, and its echo writes land in ARAM. In the agreed design Blue's ARAM
+does not receive Red's echo writes, so a block or directory entry inside
+the echo window (echo writes on) must not be read from Blue's ARAM: such a
+block is shipped as "read at Red" and Red fills it from its own echo copy
+(exact: Red works in sample order); a directory entry there makes the voice
+untracked (Red's fallback). Both are rare and detectable on Blue, which
+knows the window from ESA/EDL and FLG.
+
+### Results back to Blue (owner, 2026-11-16)
+
+Consistency of what Red publishes: Red must never wait on Blue, so a
+sequence counter (Red never blocks, Blue retries rarely) or two slots with
+an index suit it better than the SP semaphore (with which Red could find
+it held). Large results go to RDRAM as Red produces them; Blue checks a
+flag in DMEM and takes what is there.
+
+**Register history in RDRAM.** Red appends readable register state indexed
+by sample time (OUTX for the eight voices is 8 bytes a sample, about 4 KB
+a frame), DMA'd a chunk at a time; a ring Blue discards behind its own
+time. A backward read at sample t then needs only Red's progress to have
+passed t, not Red to stop at t: Blue waits for the progress word and reads
+the entry for t (exact). An HLE build may take the newest entry instead of
+waiting.
