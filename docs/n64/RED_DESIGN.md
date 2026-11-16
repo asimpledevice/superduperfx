@@ -649,3 +649,35 @@ writes go "into the past" when the SPC wrote that byte later: they update
 the ledger entry's old value instead of ARAM. The CPU must not hold dirty
 echo-window lines (the SPC's echo-window accesses take the uncached slow
 path). Cost on Red: a per-page bitmap check per read, rarely a short scan.
+
+### Refinements (owner, 2026-11-16)
+
+**The front end short-circuits.** Inline in the SPC loop does not mean
+work every sample. The front end keeps one number, the next sample at
+which anything can happen (the earliest block crossing over the voices, a
+pending key on or off, a pending reset); at each sample edge it compares
+and returns. A voice's crossing sample follows from its counter and pitch
+(the counter advances by a fixed step each sample), so counters are
+brought current only when something happens, and the next-event sample is
+recomputed only when an event fires or the SPC writes something that
+changes timing (pitch, key on/off, source number, directory, reset). The
+per-sample cost is one comparison; work happens at block crossings. This
+also fits idle-loop skipping: a skip jumps time and the events in between
+are handled in order.
+
+**Small urgent results go through the mailbox / outbox.** Red posts
+progress ("caught up to sample T") in the mailbox's up word, as it posts
+"batch done" today, and a small outbox holds the latest readable values as
+of T (the eight OUTX). Blue reads them without waiting; a sequence counter
+(odd while Red writes) makes the read consistent. Resident DMEM comes out
+of every overlay, so the outbox stays small; larger results go to an RDRAM
+block Red DMAs, with only the progress word in the mailbox.
+
+Stale reads are an HLE option, not the default: the exact build makes an
+OUTX read wait for Red to reach its sample; an HLE build may take the
+outbox's latest OUTX (selectable at build time, documented, validated per
+game). ENDX and ENVX need neither: the front end answers them exactly.
+Pitch modulation is not fed from the outbox: it is not a register read but
+pitch driven by the previous voice's output, and a stale value would put
+Blue's block positions out of step with the audio, so PMON voices stay on
+Red with the ledger fallback.
