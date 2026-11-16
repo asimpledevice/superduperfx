@@ -19,16 +19,19 @@ uint8_t apu_dspReadSlow(Apu* apu, uint16_t adr);
 static inline bool apu_streamLate(const Apu* apu, uint32_t stamp) {
   return (int32_t)(stamp - apu->dspAt) > 0;
 }
+void apu_streamLedger(Apu* apu, uint16_t adr);
 static inline void apu_spcWriteRam(Apu* apu, uint16_t adr, uint8_t val) {
   APU_FE_BEFORE_ARAM_WRITE(apu);
   APU_FE_ECHO_LOG(apu, adr, 1);
   const uint32_t p = adr >> 8;
   if (__builtin_expect(((apu->echoRegion[p >> 3] >> (p & 7)) & 1) ||
                        apu_streamLate(apu, apu->echoPageTouch[p]) ||
-                       apu_streamLate(apu, apu->echoPageDirty[p]), 0))
-    apu_dspWriteSlow(apu, adr, val);
-  else
+                       apu_streamLate(apu, apu->echoPageDirty[p]), 0)) {
+    apu_dspWriteSlow(apu, adr, val);   /* (keeps the ledger if it stores) */
+  } else {
+    if (__builtin_expect(apu->fe.untracked != 0, 0)) apu_streamLedger(apu, adr);
     apu->ram[adr] = val;
+  }
 }
 static inline uint8_t apu_spcReadRam(Apu* apu, uint16_t adr) {
   APU_FE_ECHO_LOG(apu, adr, 0);

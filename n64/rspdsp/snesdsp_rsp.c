@@ -456,7 +456,8 @@ static void st_keyon(void *ctx, int voice, uint32_t sample, uint16_t start) {
   if (s_nkon == kMaxKon) { s_overflow = true; return; }
   s_kon[s_nkon++] = start;
 }
-static void st_read(void *ctx, uint16_t adr, unsigned len) {
+static void st_read(void *ctx, int voice, uint32_t sample, uint16_t adr, unsigned len) {
+  (void)voice; (void)sample;
   (void)ctx;
   if (!s_echo_on) return;
   for (int w = 0; w < s_nwin; w++) {
@@ -1061,7 +1062,8 @@ static void wait_all(void) {
   while (s_head != s_tail) { wait_seq(s_slot[s_head % kSlots].seq); reap(); }
 }
 
-void apu_yellow_start(const Dsp *dsp, uint8_t *aram, uint32_t at) {
+void apu_yellow_start(const Dsp *dsp, uint8_t *aram, uint32_t at, uint8_t untracked) {
+  (void)untracked;   /* TODO(audio split): untracked voices on the microcode */
   wait_all();
   snesdsp_rsp_pack(dsp, &s_block);
   put32(s_block.bytes + RSPDSP_P_ARAM, PhysicalAddr(aram));

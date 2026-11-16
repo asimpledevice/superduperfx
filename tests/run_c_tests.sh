@@ -314,14 +314,15 @@ echo "=== S-DSP front end vs the C S-DSP (random states and logs) ==="
     "$ROOT/runner/src/snes/dsp_frontend.c" "$ROOT/runner/src/snes/dsp.c" \
     "$ROOT/runner/src/snes/dsp_shadow.c" "$ROOT/runner/src/snes/audio_shadow.c" \
     "$ROOT/runner/src/audio_trace.c" -o "$OUT/dsp_frontend_test"
+"$OUT/dsp_frontend_test"
 
 echo "=== Echo in place: deferred S-DSP owning its echo ring vs lockstep ==="
 EIP_SRCS=("$ROOT/runner/src/snes/spc.c" "$ROOT/runner/src/snes/dsp.c" "$ROOT/runner/src/snes/dsp_frontend.c"
           "$ROOT/runner/src/snes/dsp_shadow.c" "$ROOT/runner/src/snes/audio_shadow.c" "$ROOT/runner/src/audio_trace.c")
-"$CC" -std=gnu11 -O2 -w -DSNESRECOMP_APU_NATIVE=1 -I "$ROOT/runner/src" -I "$ROOT/runner/src/snes" \
+"$CC" -std=gnu11 -O2 -w -DSNESRECOMP_APU_NATIVE=1 -DEIP_BASIC=1 -I "$ROOT/runner/src" -I "$ROOT/runner/src/snes" \
     "$ROOT/tests/audio/echo_in_place_test.c" "${EIP_SRCS[@]}" -o "$OUT/echo_in_place_ref"
 "$CC" -std=gnu11 -O2 -w -DSNESRECOMP_APU_NATIVE=1 -DSNESRECOMP_APU_DEFER_DSP=1 -DSNESRECOMP_DSP_FRONTEND=1 \
-    -DSNESRECOMP_ECHO_IN_PLACE=1 -I "$ROOT/runner/src" -I "$ROOT/runner/src/snes" \
+    -DSNESRECOMP_ECHO_IN_PLACE=1 -DEIP_BASIC=1 -I "$ROOT/runner/src" -I "$ROOT/runner/src/snes" \
     "$ROOT/tests/audio/echo_in_place_test.c" "${EIP_SRCS[@]}" -o "$OUT/echo_in_place_test"
 for every in 500 7; do
   "$OUT/echo_in_place_ref" 12000 $every > "$OUT/echo_in_place_ref.txt"
@@ -331,17 +332,19 @@ done
 echo "echo in place matches lockstep"
 
 echo "=== Audio split: Blue posts to a C model of the S-DSP, never joins, vs lockstep ==="
+echo "    (also pitch modulation and samples inside the echo ring: untracked voices and the ledger)"
+"$CC" -std=gnu11 -O2 -w -DSNESRECOMP_APU_NATIVE=1 -I "$ROOT/runner/src" -I "$ROOT/runner/src/snes" \
+    "$ROOT/tests/audio/echo_in_place_test.c" "${EIP_SRCS[@]}" -o "$OUT/echo_in_place_ref"
 "$CC" -std=gnu11 -O2 -w -DSNESRECOMP_APU_NATIVE=1 -DSNESRECOMP_APU_DEFER_DSP=1 -DSNESRECOMP_DSP_FRONTEND=1 \
     -DSNESRECOMP_ECHO_IN_PLACE=1 -DSNESRECOMP_DSP_RECORDS=1 -DSNESRECOMP_DSP_STREAM=1 \
     -I "$ROOT/runner/src" -I "$ROOT/runner/src/snes" "$ROOT/tests/audio/echo_in_place_test.c" "${EIP_SRCS[@]}" \
     "$ROOT/runner/src/snes/dsp_yellow_c.c" -o "$OUT/audio_split_test"
 for every in 500 7; do
-  "$OUT/echo_in_place_ref" 12000 $every > "$OUT/echo_in_place_ref.txt"
-  "$OUT/audio_split_test" 12000 $every > "$OUT/audio_split_test.txt"
+  "$OUT/echo_in_place_ref" 20000 $every > "$OUT/echo_in_place_ref.txt"
+  "$OUT/audio_split_test" 20000 $every > "$OUT/audio_split_test.txt"
   cmp "$OUT/echo_in_place_ref.txt" "$OUT/audio_split_test.txt"
 done
 echo "audio split matches lockstep"
-"$OUT/dsp_frontend_test"
 
 echo "=== audio trace history modes ==="
 for mode in 0 1 2 3; do

@@ -620,7 +620,12 @@ void apu_dspLogRam(Apu* apu, uint16_t adr, uint8_t val) {
 
 void apu_dspWriteSlow(Apu* apu, uint16_t adr, uint8_t val) {
 #if SNESRECOMP_DSP_STREAM
-  if (!apu_echoDivert(apu, adr, val)) apu->ram[adr] = val;
+  /* Stored writes go in the ledger while a voice is untracked; a diverted
+   * write leaves ARAM as it is (the S-DSP applies it at its sample). */
+  if (!apu_echoDivert(apu, adr, val)) {
+    if (apu->fe.untracked) apu_streamLedger(apu, adr);
+    apu->ram[adr] = val;
+  }
   return;
 #endif
 #ifdef SNESRECOMP_DSP_LAUNCH_HOOK
@@ -786,15 +791,26 @@ static void apu_feBatchStart(Apu* apu) {
   s_feRecOk = apu->feValid;
 }
 static void apu_feBlock(void *ctx, int voice, uint32_t sample, uint16_t start, const uint8_t b[9]) {
-  (void)ctx; (void)voice; (void)sample;
+  (void)voice; (void)sample;
+#if SNESRECOMP_DSP_STREAM
+  if ((((Apu *)ctx)->fe.untracked >> voice) & 1) return;   /* untracked from this read on */
+#else
+  (void)ctx;
+#endif
   g_dsp_fe_blocks++;
   if (s_feNblk == kFeMaxBlocks) { s_feRecOk = false; return; }
   ApuFeBlockRec *r = &s_feBlk[s_feBuf][s_feNblk++];
   r->start = start;
   memcpy(r->b, b, 9);
+  memset(r->pad, 0, sizeof r->pad);
 }
 static void apu_feKeyOn(void *ctx, int voice, uint32_t sample, uint16_t start) {
-  (void)ctx; (void)voice; (void)sample;
+  (void)voice; (void)sample;
+#if SNESRECOMP_DSP_STREAM
+  if ((((Apu *)ctx)->fe.untracked >> voice) & 1) return;
+#else
+  (void)ctx;
+#endif
   if (s_feNkon == kFeMaxKeyons) { s_feRecOk = false; return; }
   s_feKon[s_feBuf][s_feNkon++] = start;
 }
@@ -934,7 +950,9 @@ static void apu_streamRegion(Apu* apu) {
 
 static void apu_streamEnsure(Apu* apu) {
   if (apu_yellow_running()) return;
-  apu_yellow_start(apu->dsp, apu->ram, apu->dspAt);   /* the Dsp is current at dspAt */
+  /* The Dsp is current at dspAt, the untracked voices as they were then
+   * (later changes are in the log). */
+  apu_yellow_start(apu->dsp, apu->ram, apu->dspAt, apu->dspUntracked);
   /* The consumer reads the back end's ring from now on, in absolute
    * samples (restarting where it left off when the counts still agree). */
   Dsp *d = apu->dsp;
@@ -947,6 +965,38 @@ void apu_dspOutput(Apu* apu) {
   if (apu_yellow_running()) apu->dsp->sampleWrite = apu_yellow_publish();
 }
 
+ApuLedgerEntry g_apu_ledger[APU_LEDGER_LEN];
+uint32_t g_apu_ledger_head, g_apu_ledger_tail;
+uint32_t g_apu_stream_ledger_waits;
+/* Entries the S-DSP has passed go. */
+static void apu_streamLedgerDrop(Apu* apu) {
+  while (g_apu_ledger_head != g_apu_ledger_tail &&
+         (int32_t)(g_apu_ledger[g_apu_ledger_head & (APU_LEDGER_LEN - 1)].time - apu->dspAt) <= 0)
+    g_apu_ledger_head++;
+}
+/* An SPC write to ARAM while a voice is untracked: its old value, for the
+ * S-DSP's reads at earlier samples. */
+void apu_streamLedger(Apu* apu, uint16_t adr) {
+  if (g_apu_ledger_tail - g_apu_ledger_head == APU_LEDGER_LEN) {
+    apu->dspAt = apu_yellow_running() ? apu_yellow_progress() : apu->dspEdges;
+    apu_streamLedgerDrop(apu);
+    if (g_apu_ledger_tail - g_apu_ledger_head == APU_LEDGER_LEN) {
+      /* Full: let the S-DSP reach the SPC's time; every entry expires. */
+      g_apu_stream_ledger_waits++;
+      apu_dspSyncFor(apu, APU_DSP_SYNC_LOG_FULL);
+      apu_yellow_wait(apu->dspEdges);
+      apu->dspAt = apu_yellow_progress();
+      apu_streamLedgerDrop(apu);
+    }
+  }
+  ApuLedgerEntry *e = &g_apu_ledger[g_apu_ledger_tail & (APU_LEDGER_LEN - 1)];
+  e->time = apu->dspEdges;
+  e->adr = adr;
+  e->old = apu->ram[adr];
+  e->pad = 0;
+  g_apu_ledger_tail++;
+}
+
 static void apu_streamPost(Apu* apu) {
   apu_streamEnsure(apu);
   apu_feTakeRecords(apu);
@@ -956,6 +1006,7 @@ static void apu_streamPost(Apu* apu) {
   apu->dspLogN = 0;
   g_apu_stream_posts++;
   apu->dspAt = apu_yellow_progress();
+  apu_streamLedgerDrop(apu);
 }
 
 /* Hand the S-DSP's state back to the Dsp (current at dspEdges after it). */
@@ -964,6 +1015,7 @@ static void apu_streamStop(Apu* apu) {
   if (!apu_yellow_running()) return;   /* the Dsp is current already */
   apu_yellow_stop(apu->dsp);
   apu->dspAt = apu->dspEdges;
+  apu->dspUntracked = apu->fe.untracked;   /* (the front end is at dspEdges: posted above) */
   apu->dsp->sampleWrite = apu->dspAt;   /* every sample is in the ring */
   /* ENVX/OUTX the SPC wrote since the last sample read back as written. */
   for (int r = 8; r < 0x80; r += 16)
@@ -1003,8 +1055,9 @@ static uint8_t apu_streamRegRead(Apu* apu, uint8_t r) {
  * mid-run with echo_owned current to the sample being read. Echo in place:
  * only bytes the S-DSP has still to write (in the window) conflict; the
  * read may have pulled their line into the cache, so it is dropped. */
-static void apu_feRead(void *ctx, uint16_t adr, unsigned len) {
+static void apu_feRead(void *ctx, int voice, uint32_t sample, uint16_t adr, unsigned len) {
   Apu *apu = ctx;
+  (void)voice; (void)sample;
 #if SNESRECOMP_ECHO_IN_PLACE
   bool late = false;
   for (uint32_t l = adr >> 4; l <= ((uint32_t)adr + len - 1) >> 4; l++)
@@ -1019,8 +1072,17 @@ static void apu_feRead(void *ctx, uint16_t adr, unsigned len) {
 #if SNESRECOMP_ECHO_LOG
   s_elFeR++;
 #endif
-  if (s_feRecOk) g_dsp_fe_echo_conflicts++;
+  g_dsp_fe_echo_conflicts++;
+#if SNESRECOMP_DSP_STREAM
+  /* The bytes are the S-DSP's to write yet: the voice is the S-DSP's to
+   * read from here (an untracked voice, as with pitch modulation). */
+  dsp_fe_untrack(&apu->fe, voice);
+  ApuDspLogEntry *e = &apu->dspLog[apu->dspLogN++];
+  e->adr = (uint16_t)(1u << voice); e->val = 0; e->old = 0;
+  e->tag = (uint16_t)(sample - (apu->dspEdges - apu->dspPending)); e->isReg = 4;
+#else
   s_feRecOk = false;
+#endif
 }
 /* At a batch's launch: hand its records over and start the next set. */
 static void apu_feTakeRecords(Apu* apu) {
@@ -1036,7 +1098,11 @@ static void apu_feTakeRecords(Apu* apu) {
   g_apu_dsp_records.nblocks = s_feNblk;
   g_apu_dsp_records.keyons = s_feKon[s_feBuf];
   g_apu_dsp_records.nkeyons = s_feNkon;
+#if SNESRECOMP_DSP_STREAM
+  g_apu_dsp_records.valid = s_feRecOk && apu->feValid;   /* untracked voices: the ledger */
+#else
   g_apu_dsp_records.valid = s_feRecOk && apu->feValid && !apu->fe.untracked;
+#endif
   s_feBuf ^= 1;
   s_feNblk = s_feNkon = 0;
   s_feRecOk = false;   /* until the next batch starts */
@@ -1095,10 +1161,10 @@ static void apu_feEchoLogReg(Apu* apu, uint8_t r, uint8_t v) {
 #endif
 static void apu_feNow(Apu* apu) {
   /* Voices left untracked by pitch modulation: rebuild once it is off. */
-  if (apu->feValid && apu->fe.untracked && !(apu_feReg(apu, 0x2d) & 0xfe)) apu->feValid = false;
-  if (!apu->feValid) {
+  const bool rebuild = apu->feValid && apu->fe.untracked && !(apu_feReg(apu, 0x2d) & 0xfe);
+  if (!apu->feValid || rebuild) {
 #if SNESRECOMP_APU_DEFER_DSP
-    apu_dspSync(apu);
+    apu_dspSync(apu);   /* (with the old front end still valid: its batch completes) */
 #endif
     dsp_fe_init(&apu->fe, apu->dsp, apu->ram, apu->dspEdges, apu_feBlock, apu);
     apu->fe.on_keyon = apu_feKeyOn;
@@ -1109,6 +1175,7 @@ static void apu_feNow(Apu* apu) {
 #endif
 #if SNESRECOMP_DSP_STREAM
     apu_streamRegion(apu);
+    apu->dspUntracked = apu->fe.untracked;
 #endif
     apu->feValid = true;
   }

@@ -463,7 +463,11 @@ static void dsp_cycleChannel(Dsp* dsp, int ch) {
       c->decodeOffset = dsp->apu_ram[samplePointer] |
                         (dsp->apu_ram[(samplePointer + 1) & 0xffff] << 8);
 #if SNESRECOMP_DSP_RECORDS
-      if (dsp->records) {
+      if (dsp->records && ((dsp->records->untracked >> ch) & 1)) {
+        DspRecords *r = dsp->records;
+        c->decodeOffset = r->read(r->ctx, samplePointer) |
+                          (r->read(r->ctx, (uint16_t)(samplePointer + 1)) << 8);
+      } else if (dsp->records) {
         DspRecords *r = dsp->records;
         if (r->ikeyon < r->nkeyons) c->decodeOffset = r->keyons[r->ikeyon++];
         else r->missing = true;
@@ -654,7 +658,11 @@ static void dsp_decodeBrr(Dsp* dsp, int ch) {
     // loop sample
     uint16_t samplePointer = dsp->dirPage + 4 * c->srcn;
 #if SNESRECOMP_DSP_RECORDS
-    if (!dsp->records)   /* else the block record carries the address */
+    if (dsp->records && ((dsp->records->untracked >> ch) & 1)) {
+      DspRecords *r = dsp->records;
+      c->decodeOffset = r->read(r->ctx, (uint16_t)(samplePointer + 2)) |
+                        (r->read(r->ctx, (uint16_t)(samplePointer + 3)) << 8);
+    } else if (!dsp->records)   /* else the block record carries the address */
 #endif
     c->decodeOffset = ram[(samplePointer + 2) & 0xffff] |
                       (ram[(samplePointer + 3) & 0xffff] << 8);
@@ -675,7 +683,14 @@ static void dsp_decodeBrr(Dsp* dsp, int ch) {
   uint16_t off = c->decodeOffset;
 #if SNESRECOMP_DSP_RECORDS
   uint16_t recStart = 0;
-  if (dsp->records) {
+  uint8_t own[9];
+  if (dsp->records && ((dsp->records->untracked >> ch) & 1)) {
+    DspRecords *r = dsp->records;   /* an untracked voice: its own read */
+    for (int k = 0; k < 9; k++) own[k] = r->read(r->ctx, (uint16_t)(off + k));
+    recStart = off;
+    ram = own;
+    off = 0;
+  } else if (dsp->records) {
     DspRecords *r = dsp->records;
     if (r->iblock < r->nblocks) {
       const uint8_t *rec = r->blocks + 16u * r->iblock++;

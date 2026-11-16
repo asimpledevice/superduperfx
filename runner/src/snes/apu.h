@@ -151,6 +151,7 @@ struct Apu {
   uint32_t echoPageDirty[256];
   uint8_t echoRegion[32];
   uint32_t dspRegAt[0x80];
+  uint8_t dspUntracked;      /* the front end's untracked voices at dspAt (the Dsp's time) */
 #endif
 };
 #if SNESRECOMP_DSP_STREAM && !(SNESRECOMP_ECHO_IN_PLACE && SNESRECOMP_DSP_RECORDS)

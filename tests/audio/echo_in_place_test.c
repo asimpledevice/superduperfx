@@ -219,6 +219,20 @@ int main(int argc, char **argv) {
       apu_cpuWrite(apu, 0xf2, reg);
       const uint8_t v = apu_cpuRead(apu, 0xf3);
       mix(&v, 1);
+#if !EIP_BASIC   /* (the audio split's own cases: the echo-in-place stand-in reads samples from ARAM) */
+    } else if (r < 97) {         /* pitch modulation on voices 1-3 */
+      dspw(apu, 0x2d, (uint8_t)(rnd() & 0x0e));
+    } else if (r < 98) {         /* a voice plays sample data inside the echo ring */
+      const uint16_t at = (uint16_t)(ring + (rnd() % len) / 9 * 9);
+      apu_cpuWrite(apu, 0x1010, (uint8_t)at); apu_cpuWrite(apu, 0x1011, (uint8_t)(at >> 8));
+      apu_cpuWrite(apu, 0x1012, (uint8_t)at); apu_cpuWrite(apu, 0x1013, (uint8_t)(at >> 8));
+      const uint8_t v = (uint8_t)(rnd() % 4);
+      dspw(apu, (uint8_t)(v * 16 + 4), 4);
+      dspw(apu, 0x4c, (uint8_t)(1u << v));
+    } else if (r < 99) {         /* back to its own sample */
+      const uint8_t v = (uint8_t)(rnd() % 4);
+      dspw(apu, (uint8_t)(v * 16 + 4), v);
+#endif
     }
     drain(apu);
     if (step % every == every - 1) checkpoint(apu, step + 1);

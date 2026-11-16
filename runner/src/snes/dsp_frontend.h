@@ -47,7 +47,7 @@ typedef void DspFeBlockFn(void *ctx, int voice, uint32_t sample, uint16_t start,
 /* A key on's start address (read from the directory at that sample). */
 typedef void DspFeKeyOnFn(void *ctx, int voice, uint32_t sample, uint16_t start);
 /* Every ARAM range the front end reads: directory entries and blocks. */
-typedef void DspFeReadFn(void *ctx, uint16_t adr, unsigned len);
+typedef void DspFeReadFn(void *ctx, int voice, uint32_t sample, uint16_t adr, unsigned len);
 /* Echo slots the S-DSP touches: `count` 4-byte units from unit `unit`
  * (wrapping at 16384), read each sample and also written when `writes`, at
  * samples before `s_end`. Called for every run, echo writes on or off. */
@@ -98,6 +98,13 @@ static inline void dsp_fe_advance(DspFrontEnd *fe, uint32_t sample) {
   extern void dsp_fe_run(DspFrontEnd *fe, uint32_t sample);
   if (fe->next < sample) dsp_fe_run(fe, sample);
   else fe->now = sample;
+}
+/* Stop tracking a voice (as pitch modulation does): no more of its blocks,
+ * key ons or ENVX here; the S-DSP reads its samples itself. Callable from
+ * the callbacks (for the voice being decoded). */
+static inline void dsp_fe_untrack(DspFrontEnd *fe, int voice) {
+  fe->v[voice].pmod = true;
+  fe->untracked |= (uint8_t)(1u << voice);
 }
 /* A register write at sample fe->now (call dsp_fe_advance first). */
 void dsp_fe_write(DspFrontEnd *fe, uint8_t adr, uint8_t val);

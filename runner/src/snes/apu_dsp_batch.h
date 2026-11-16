@@ -72,7 +72,8 @@ typedef struct ApuDspRecords {
  * (n64/rspdsp/snesdsp_rsp.c) or the C model (runner/src/snes/dsp_yellow_c.c).
  *
  * start: take over the S-DSP state (`dsp`, current at sample `at`); ARAM is
- *   the one, live ARAM. post: queue `samples` samples with the log's
+ *   the one, live ARAM; `untracked`: the voices Blue's front end does not
+ *   track (see the ledger below). post: queue `samples` samples with the log's
  *   register writes (isReg 1) and diverted SPC writes (isReg 3) at their
  *   tags, and the records in g_apu_dsp_records; returns at once (it may
  *   wait only for a free slot). progress: samples Yellow has run. wait:
@@ -84,7 +85,7 @@ typedef struct ApuYellowRegs {
   uint8_t outx[8], envx[8], endx;
   uint32_t at;
 } ApuYellowRegs;
-void apu_yellow_start(const Dsp *dsp, uint8_t *aram, uint32_t at);
+void apu_yellow_start(const Dsp *dsp, uint8_t *aram, uint32_t at, uint8_t untracked);
 void apu_yellow_post(const ApuDspLogEntry *log, uint32_t n, uint32_t samples);
 uint32_t apu_yellow_progress(void);
 void apu_yellow_wait(uint32_t sample);
@@ -101,6 +102,25 @@ bool apu_yellow_running(void);
 /* The most log entries in one post (the microcode back end decodes each
  * into at most 10 operations of its 4096). */
 #define APU_STREAM_LOG_MAX 320u
+/* Voices the front end does not track (pitch modulation, or a read of echo
+ * bytes the S-DSP had still to write): the S-DSP reads their directory
+ * entries and blocks from ARAM at its own sample. ARAM is ahead in time, so
+ * while any voice is untracked Blue keeps the undo ledger: every SPC write
+ * to ARAM as (time, address, old value), time being the sample before which
+ * it happened. A read of address a at sample t takes the old value of the
+ * oldest entry for a with time > t, else ARAM. Entries are in time order in
+ * a ring [head, tail); Blue drops those the S-DSP has passed. A voice stops
+ * being tracked by a PMON write (the S-DSP sees the register) or by a log
+ * entry with isReg 4 (adr: the voices) at its tag; tracking resumes only
+ * when the S-DSP hands its state back (apu_yellow_stop/start). */
+typedef struct ApuLedgerEntry {
+  uint32_t time;
+  uint16_t adr;
+  uint8_t old, pad;
+} ApuLedgerEntry;
+#define APU_LEDGER_LEN 4096u
+extern ApuLedgerEntry g_apu_ledger[APU_LEDGER_LEN];
+extern uint32_t g_apu_ledger_head, g_apu_ledger_tail;
 const int16_t *apu_yellow_ring(uint32_t *mask);
 uint32_t apu_yellow_publish(void);
 #endif

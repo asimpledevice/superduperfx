@@ -67,6 +67,12 @@ typedef struct DspRecords {
   const uint16_t *keyons;
   uint32_t nkeyons, ikeyon;
   bool missing;
+  /* Voices the front end does not track (pitch modulation, a read of echo
+   * bytes it could not have): their directory entries and blocks are read
+   * through `read` (ARAM as at this sample: the undo ledger applied). */
+  uint8_t untracked;
+  uint8_t (*read)(void *ctx, uint16_t adr);
+  void *ctx;
 } DspRecords;
 #endif
 struct Dsp {
