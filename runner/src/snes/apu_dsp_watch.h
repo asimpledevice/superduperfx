@@ -6,6 +6,9 @@
 #include "apu.h"
 #include "spc.h"
 
+#if SNESRECOMP_ECHO_IN_PLACE && !(SNESRECOMP_APU_DEFER_DSP && SNESRECOMP_DSP_FRONTEND)
+#error "SNESRECOMP_ECHO_IN_PLACE needs SNESRECOMP_APU_DEFER_DSP and SNESRECOMP_DSP_FRONTEND"
+#endif
 #if SNESRECOMP_APU_DEFER_DSP
 /* Page marks during a batch (bits in Spc.dspWatchLog/dspWatchSync): LOG =
  * the DSP may read the page, so SPC writes there are logged; SYNC = the DSP
@@ -34,10 +37,19 @@ static inline void apu_spcWriteRam(Apu* apu, uint16_t adr, uint8_t val) {
     apu->ram[adr] = val;
 }
 /* An SPC read of plain ARAM: pages the DSP writes (echo) may hold owed data. */
-static inline void apu_spcReadCheck(Apu* apu, uint16_t adr) {
+#if SNESRECOMP_ECHO_IN_PLACE
+uint8_t apu_dspReadSlow(Apu* apu, uint16_t adr);
+#endif
+static inline uint8_t apu_spcReadRam(Apu* apu, uint16_t adr) {
   APU_FE_ECHO_LOG(apu, adr, 0);
-  if (__builtin_expect(APU_DSP_PAGE_BIT(apu->spc->dspWatchSync, adr), 0))
+  if (__builtin_expect(APU_DSP_PAGE_BIT(apu->spc->dspWatchSync, adr), 0)) {
+#if SNESRECOMP_ECHO_IN_PLACE
+    return apu_dspReadSlow(apu, adr);
+#else
     apu_dspEchoRead(apu);
+#endif
+  }
+  return apu->ram[adr];
 }
 #else
 static inline void apu_spcWriteRam(Apu* apu, uint16_t adr, uint8_t val) {
@@ -45,7 +57,10 @@ static inline void apu_spcWriteRam(Apu* apu, uint16_t adr, uint8_t val) {
   APU_FE_ECHO_LOG(apu, adr, 1);
   apu->ram[adr] = val;
 }
-static inline void apu_spcReadCheck(Apu* apu, uint16_t adr) { (void)apu; (void)adr; APU_FE_ECHO_LOG(apu, adr, 0); }
+static inline uint8_t apu_spcReadRam(Apu* apu, uint16_t adr) {
+  APU_FE_ECHO_LOG(apu, adr, 0);
+  return apu->ram[adr];
+}
 #endif
 
 #endif

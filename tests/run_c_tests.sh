@@ -314,6 +314,21 @@ echo "=== S-DSP front end vs the C S-DSP (random states and logs) ==="
     "$ROOT/runner/src/snes/dsp_frontend.c" "$ROOT/runner/src/snes/dsp.c" \
     "$ROOT/runner/src/snes/dsp_shadow.c" "$ROOT/runner/src/snes/audio_shadow.c" \
     "$ROOT/runner/src/audio_trace.c" -o "$OUT/dsp_frontend_test"
+
+echo "=== Echo in place: deferred S-DSP owning its echo ring vs lockstep ==="
+EIP_SRCS=("$ROOT/runner/src/snes/spc.c" "$ROOT/runner/src/snes/dsp.c" "$ROOT/runner/src/snes/dsp_frontend.c"
+          "$ROOT/runner/src/snes/dsp_shadow.c" "$ROOT/runner/src/snes/audio_shadow.c" "$ROOT/runner/src/audio_trace.c")
+"$CC" -std=gnu11 -O2 -w -DSNESRECOMP_APU_NATIVE=1 -I "$ROOT/runner/src" -I "$ROOT/runner/src/snes" \
+    "$ROOT/tests/audio/echo_in_place_test.c" "${EIP_SRCS[@]}" -o "$OUT/echo_in_place_ref"
+"$CC" -std=gnu11 -O2 -w -DSNESRECOMP_APU_NATIVE=1 -DSNESRECOMP_APU_DEFER_DSP=1 -DSNESRECOMP_DSP_FRONTEND=1 \
+    -DSNESRECOMP_ECHO_IN_PLACE=1 -I "$ROOT/runner/src" -I "$ROOT/runner/src/snes" \
+    "$ROOT/tests/audio/echo_in_place_test.c" "${EIP_SRCS[@]}" -o "$OUT/echo_in_place_test"
+for every in 500 7; do
+  "$OUT/echo_in_place_ref" 12000 $every > "$OUT/echo_in_place_ref.txt"
+  "$OUT/echo_in_place_test" 12000 $every > "$OUT/echo_in_place_test.txt"
+  cmp "$OUT/echo_in_place_ref.txt" "$OUT/echo_in_place_test.txt"
+done
+echo "echo in place matches lockstep"
 "$OUT/dsp_frontend_test"
 
 echo "=== audio trace history modes ==="

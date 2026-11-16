@@ -88,6 +88,12 @@ void apu_reset(Apu* apu) {
 #if SNESRECOMP_DSP_FRONTEND
   apu->dspEdges = 0;
   apu->feValid = false;   /* rebuilt from the reset Dsp at its next use */
+#if SNESRECOMP_ECHO_IN_PLACE
+  apu->dspAt = apu->dspFlightEnd = 0;
+  memset(apu->echoTouch, 0, sizeof apu->echoTouch);
+  memset(apu->echoDirty, 0, sizeof apu->echoDirty);
+  apu->echoRuns = 0;
+#endif
 #endif
 }
 
@@ -297,7 +303,7 @@ static void apu_dspForward(Apu* apu, uint32_t pending, uint32_t n, bool narrow) 
     for (; i < n && apu->dspLog[i].tag == k; i++) {
       const ApuDspLogEntry *e = &apu->dspLog[i];
       if (e->isReg == 1) dsp_write(apu->dsp, (uint8_t)e->adr, e->val);
-      else if (e->isReg == 0 || !narrow) apu->ram[e->adr] = e->val;
+      else if (e->isReg == 0 || e->isReg == 3 || !narrow) apu->ram[e->adr] = e->val;
     }
     if (k < pending) dsp_cycle(apu->dsp);
   }
@@ -325,9 +331,21 @@ static inline void apu_dspJoin(Apu* apu) {
   SNESRECOMP_DSP_JOIN_HOOK();
   apu->dspInFlight = false;
   memset(apu->dspFlightWrite, 0, sizeof apu->dspFlightWrite);
+#if SNESRECOMP_ECHO_IN_PLACE
+  apu->dspAt = apu->dspFlightEnd;
+#endif
   if (!apu->dspPending) {  /* marks left for the flight; none owed now */
     memset(apu->spc->dspWatchLog, 0, sizeof(apu->spc->dspWatchLog));
     memset(apu->spc->dspWatchSync, 0, sizeof(apu->spc->dspWatchSync));
+#if SNESRECOMP_ECHO_IN_PLACE
+    /* Writes diverted since (they go with the next batch). */
+    for (uint32_t i = 0; i < apu->dspLogN; i++)
+      if (apu->dspLog[i].isReg == 3) {
+        const uint16_t a = apu->dspLog[i].adr;
+        apu->spc->dspWatchLog[a >> 11] |= (uint8_t)(1u << ((a >> 8) & 7));
+        apu->spc->dspWatchSync[a >> 11] |= (uint8_t)(1u << ((a >> 8) & 7));
+      }
+#endif
   }
 #else
   (void)apu;
@@ -414,6 +432,16 @@ static void apu_dspSyncFor(Apu* apu, unsigned reason) {
     apu->dspInFlight = true;
     memcpy(apu->dspFlightWrite, writes, sizeof writes);
     apu_dspMarkAfterLaunch(apu, n);
+#if SNESRECOMP_ECHO_IN_PLACE
+    /* Until the join: every page the batch could touch stays marked (SPC
+     * writes there are checked against the window, reads that need it
+     * wait). */
+    apu->dspFlightEnd = apu->dspEdges;
+    for (int i = 0; i < 32; i++) {
+      apu->spc->dspWatchLog[i] |= marks[i] | writes[i];
+      apu->spc->dspWatchSync[i] |= writes[i];
+    }
+#endif
     /* Only full batches run in the background; other syncs want results. */
     if (reason != APU_DSP_SYNC_FULL_BATCH && reason != APU_DSP_SYNC_LOG_FULL &&
         reason != APU_DSP_SYNC_FRAME) {
@@ -422,6 +450,9 @@ static void apu_dspSyncFor(Apu* apu, unsigned reason) {
     }
   } else {
     apu_dspReplay(apu, pending, n, true);
+#if SNESRECOMP_ECHO_IN_PLACE
+    apu->dspAt = apu->dspEdges;
+#endif
   }
 #elif defined(SNESRECOMP_DSP_BATCH_HOOK)
   apu_dspRevert(apu, n, true);
@@ -429,6 +460,9 @@ static void apu_dspSyncFor(Apu* apu, unsigned reason) {
     apu_dspForward(apu, pending, n, true);
 #else
   apu_dspReplay(apu, pending, n, true);
+#if SNESRECOMP_ECHO_IN_PLACE
+  apu->dspAt = apu->dspEdges;
+#endif
 #endif
   apu->dspLogN = 0;
 }
@@ -522,9 +556,16 @@ static void apu_dspStartBatch(Apu* apu) {
 }
 
 /* An SPC write to a page the DSP may read during the batch. */
+#if SNESRECOMP_ECHO_IN_PLACE
+static bool apu_echoDivert(Apu* apu, uint16_t adr, uint8_t val);
+#endif
 void apu_dspLogRam(Apu* apu, uint16_t adr, uint8_t val) {
+#if SNESRECOMP_ECHO_IN_PLACE
+  if (apu_echoDivert(apu, adr, val)) return;   /* for the S-DSP to apply */
+#else
   if (apu->dspInFlight && APU_DSP_PAGE_BIT(apu->dspFlightWrite, adr))
     { s_join_why = 7; apu_dspJoin(apu); }  /* the batch's echo bytes come first */
+#endif
   if (!apu->dspPending) {  /* marks kept for a flight; nothing owed */
     apu->ram[adr] = val;
     return;
@@ -713,13 +754,108 @@ static void apu_feKeyOn(void *ctx, int voice, uint32_t sample, uint16_t start) {
   if (s_feNkon == kFeMaxKeyons) { s_feRecOk = false; return; }
   s_feKon[s_feBuf][s_feNkon++] = start;
 }
+#if SNESRECOMP_ECHO_IN_PLACE
+/* ---- Echo in place (docs/n64/RED_DESIGN.md, "Echo in place") -----------
+ * The S-DSP reads and writes its echo slots in this ARAM, at its own time,
+ * behind the SPC. The front end reports each run of slots it touches
+ * (apu_feEcho), stamping their lines. An SPC write to a line the S-DSP
+ * still has to touch (in the window) is diverted: logged with isReg 3 and
+ * not stored, for the S-DSP to apply at its sample. An SPC read of a line
+ * the S-DSP still has to write waits for the S-DSP and reads past the
+ * cache. Everything else is plain ARAM. */
+static inline bool apu_echoLate(const Apu* apu, uint32_t stamp) {
+  return (int32_t)(stamp - apu->dspAt) > 0;
+}
+static void apu_feEcho(void *ctx, uint32_t unit, uint32_t count, uint32_t s_end, bool writes) {
+  Apu *apu = ctx;
+  if (count > 0x4000) count = 0x4000;
+  /* Lines [first, last] (wrapping at 4096). */
+  const uint32_t first = unit >> 2, nlines = ((unit + count - 1) >> 2) - first + 1;
+  const uint32_t n = nlines > 0x1000 ? 0x1000 : nlines;
+  for (uint32_t k = 0; k < n; k++) {
+    const uint32_t l = (first + k) & 0xfff;
+    apu->echoTouch[l] = s_end;
+    if (writes && (int32_t)(s_end - apu->echoDirty[l]) > 0) apu->echoDirty[l] = s_end;
+  }
+  /* The pending batch's runs (merged with the last when they continue it). */
+  const uint32_t r = apu->echoRuns;
+  if (r && r <= 16) {
+    const uint32_t end = (uint32_t)apu->echoRunLine[r - 1] + apu->echoRunCount[r - 1];
+    if ((end & 0xfff) == (first & 0xfff) && apu->echoRunCount[r - 1] + n <= 0x1000) {
+      apu->echoRunCount[r - 1] = (uint16_t)(apu->echoRunCount[r - 1] + n);
+      return;
+    }
+    /* Already covered (the same lines again, e.g. EDL 0). */
+    const uint32_t rel = (first - apu->echoRunLine[r - 1]) & 0xfff;
+    if (rel + n <= apu->echoRunCount[r - 1]) return;
+  }
+  if (r < 16) { apu->echoRunLine[r] = (uint16_t)(first & 0xfff); apu->echoRunCount[r] = (uint16_t)n; }
+  if (r <= 16) apu->echoRuns = r + 1;
+}
+/* The front end, and its echo position, at the SPC's time. */
+static inline void apu_echoNow(Apu* apu) {
+  dsp_fe_advance(&apu->fe, apu->dspEdges);
+  dsp_fe_echo_sync(&apu->fe);
+}
+static void apu_dspMark(Apu* apu, uint16_t start, uint32_t len, uint8_t bits);
+static void apu_dspSyncFor(Apu* apu, unsigned reason);
+static inline void apu_dspJoin(Apu* apu);
+/* An SPC write (on a page the batch marks): diverted when its line is in
+ * the window. Returns true when it was. */
+static bool apu_echoDivert(Apu* apu, uint16_t adr, uint8_t val) {
+  if (!apu->feValid) return false;
+  apu_echoNow(apu);
+  const uint32_t l = adr >> 4;
+  if (!apu_echoLate(apu, apu->echoTouch[l]) && !apu_echoLate(apu, apu->echoDirty[l])) return false;
+  if (apu->dspLogN == APU_DSP_LOG_LEN) {
+    /* No room: let the S-DSP catch up, then the line is plain ARAM. */
+    apu_dspSyncFor(apu, APU_DSP_SYNC_LOG_FULL);
+    apu_dspJoin(apu);
+    return false;
+  }
+  ApuDspLogEntry *e = &apu->dspLog[apu->dspLogN++];
+  e->adr = adr; e->val = val; e->old = 0;
+  e->tag = (uint16_t)apu->dspPending; e->isReg = 3;
+  /* Applied before the sample after the SPC's (+1: a write made while no
+   * batch is pending goes with the next one). */
+  const uint32_t due = apu->dspEdges + 1;
+  if ((int32_t)(due - apu->echoDirty[l]) > 0) apu->echoDirty[l] = due;
+  apu_dspMark(apu, adr, 1, APU_DSP_WATCH_LOG | APU_DSP_WATCH_SYNC);
+  /* This line may hold the SPC's earlier writes: to ARAM before the S-DSP
+   * reads it, and out of the cache (the S-DSP writes it). */
+  apu_echo_cache_drop(apu->ram + (adr & ~15u), 16);
+  return true;
+}
+/* An SPC read on a page marked for sync. */
+uint8_t apu_dspReadSlow(Apu* apu, uint16_t adr) {
+  if (!apu->feValid) { apu_dspEchoRead(apu); return apu->ram[adr]; }
+  apu_echoNow(apu);
+  if (!apu_echoLate(apu, apu->echoDirty[adr >> 4])) return apu->ram[adr];
+  apu_dspEchoRead(apu);   /* the S-DSP to the SPC's time */
+  apu_dspJoin(apu);
+  return apu_echo_read_uncached(apu->ram + adr);
+}
+#endif
+
 /* A read of bytes the S-DSP's echo has written since the front end began
  * (exactly: the front end tracks the echo position) reads the S-DSP's own
  * output, which ARAM here may not hold yet: such a batch runs in C. Called
- * mid-run with echo_owned current to the sample being read. */
+ * mid-run with echo_owned current to the sample being read. Echo in place:
+ * only bytes the S-DSP has still to write (in the window) conflict; the
+ * read may have pulled their line into the cache, so it is dropped. */
 static void apu_feRead(void *ctx, uint16_t adr, unsigned len) {
   Apu *apu = ctx;
+#if SNESRECOMP_ECHO_IN_PLACE
+  bool late = false;
+  for (uint32_t l = adr >> 4; l <= ((uint32_t)adr + len - 1) >> 4; l++)
+    if (apu_echoLate(apu, apu->echoDirty[l & 0xfff])) {
+      late = true;
+      apu_echo_cache_drop(apu->ram + ((l & 0xfff) << 4), 16);
+    }
+  if (!late) return;
+#else
   if (!dsp_fe_echo_owned(&apu->fe, adr, len)) return;
+#endif
 #if SNESRECOMP_ECHO_LOG
   s_elFeR++;
 #endif
@@ -729,6 +865,13 @@ static void apu_feRead(void *ctx, uint16_t adr, unsigned len) {
 /* At a batch's launch: hand its records over and start the next set. */
 static void apu_feTakeRecords(Apu* apu) {
   if (apu->feValid) dsp_fe_advance(&apu->fe, apu->dspEdges);
+#if SNESRECOMP_ECHO_IN_PLACE
+  if (apu->feValid) dsp_fe_echo_sync(&apu->fe);   /* the batch's echo lines, all of them */
+  g_apu_dsp_records.nruns = apu->feValid ? apu->echoRuns : 17;
+  memcpy(g_apu_dsp_records.run_line, apu->echoRunLine, sizeof apu->echoRunLine);
+  memcpy(g_apu_dsp_records.run_count, apu->echoRunCount, sizeof apu->echoRunCount);
+  apu->echoRuns = 0;
+#endif
   g_apu_dsp_records.blocks = s_feBlk[s_feBuf];
   g_apu_dsp_records.nblocks = s_feNblk;
   g_apu_dsp_records.keyons = s_feKon[s_feBuf];
@@ -800,6 +943,10 @@ static void apu_feNow(Apu* apu) {
     dsp_fe_init(&apu->fe, apu->dsp, apu->ram, apu->dspEdges, apu_feBlock, apu);
     apu->fe.on_keyon = apu_feKeyOn;
     apu->fe.on_read = apu_feRead;
+#if SNESRECOMP_ECHO_IN_PLACE
+    apu->fe.on_echo = apu_feEcho;
+    apu->dspAt = apu->dspEdges;    /* synced above */
+#endif
     apu->feValid = true;
   }
   dsp_fe_advance(&apu->fe, apu->dspEdges);
@@ -908,8 +1055,7 @@ uint8_t apu_cpuRead(Apu* apu, uint16_t adr) {
   if(apu->romReadable && adr >= 0xffc0) {
     return bootRom[adr - 0xffc0];
   }
-  apu_spcReadCheck(apu, adr);
-  return apu->ram[adr];
+  return apu_spcReadRam(apu, adr);
 }
 
 /* Diagnostic counters: track SPC writes to specific addresses so we

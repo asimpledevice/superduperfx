@@ -58,8 +58,11 @@ static void owned_set(DspFrontEnd *fe, uint32_t unit, uint32_t n) {
 }
 
 /* Mark `count` samples of echo writes from ring index `index`. */
-static inline void echo_mark(DspFrontEnd *fe, uint32_t index, uint32_t count) {
-  if (fe->echo_writes && count) owned_set(fe, ((uint32_t)fe->esa >> 2) + index, count);
+static inline void echo_mark(DspFrontEnd *fe, uint32_t index, uint32_t count, uint32_t s_end) {
+  if (!count) return;
+  const uint32_t unit = ((uint32_t)fe->esa >> 2) + index;
+  if (fe->echo_writes) owned_set(fe, unit, count);
+  if (fe->on_echo) fe->on_echo(fe->ctx, unit & 0x3fff, count, s_end, fe->echo_writes);
 }
 
 /* Advance the echo position over samples [echo_t, s). */
@@ -70,7 +73,7 @@ static void echo_catch_up(DspFrontEnd *fe, uint32_t s) {
   if (!n) return;
   /* Up to the next wrap. */
   uint32_t step = n < fe->echo_remain ? n : fe->echo_remain;
-  echo_mark(fe, fe->echo_index, step);
+  echo_mark(fe, fe->echo_index, step, fe->echo_t - n + step);
   fe->echo_index = (uint16_t)(fe->echo_index + step);
   fe->echo_remain = (uint16_t)(fe->echo_remain - step);
   n -= step;
@@ -80,7 +83,7 @@ static void echo_catch_up(DspFrontEnd *fe, uint32_t s) {
   if (!n) return;
   /* Whole rings, then the rest (the delay holds: writes to EDL catch up first). */
   const uint32_t rest = n % fe->delay;
-  echo_mark(fe, 0, n >= fe->delay ? fe->delay : rest);
+  echo_mark(fe, 0, n >= fe->delay ? fe->delay : rest, s);
   fe->echo_index = (uint16_t)rest;
   fe->echo_remain = (uint16_t)(fe->delay - rest);
 }
@@ -179,14 +182,14 @@ static void decode(DspFrontEnd *fe, int i, uint32_t s) {
   const uint8_t *ram = fe->aram;
   if (v->prev_flags == 1 || v->prev_flags == 3) {   /* loop (and end) */
     const uint16_t p = (uint16_t)(fe->dir + 4 * v->srcn);
-    if (fe->on_read) fe->on_read(fe->ctx, (uint16_t)(p + 2), 2);
     v->offset = (uint16_t)(ram[(uint16_t)(p + 2)] | ram[(uint16_t)(p + 3)] << 8);
+    if (fe->on_read) fe->on_read(fe->ctx, (uint16_t)(p + 2), 2);
     if (v->prev_flags == 1) { v->state = 4; v->gain = 0; }   /* end: release, gain 0 */
     fe->endx |= (uint8_t)(1u << i);
   }
   uint8_t b[9];
-  if (fe->on_read) fe->on_read(fe->ctx, v->offset, 9);
   for (int k = 0; k < 9; k++) b[k] = ram[(uint16_t)(v->offset + k)];
+  if (fe->on_read) fe->on_read(fe->ctx, v->offset, 9);
   if (fe->on_block) fe->on_block(fe->ctx, i, s, v->offset, b);
   v->prev_flags = b[0] & 3;
   v->offset = (uint16_t)(v->offset + 9);
@@ -207,8 +210,8 @@ static void voice_sample(DspFrontEnd *fe, int i, uint32_t s) {
       v->key_on = false;
       v->prev_flags = 0;
       const uint16_t p = (uint16_t)(fe->dir + 4 * v->srcn);
-      if (fe->on_read) fe->on_read(fe->ctx, p, 2);
       v->offset = (uint16_t)(fe->aram[p] | fe->aram[(uint16_t)(p + 1)] << 8);
+      if (fe->on_read) fe->on_read(fe->ctx, p, 2);
       if (fe->on_keyon) fe->on_keyon(fe->ctx, i, s, v->offset);
       v->gain = 0;
       v->state = 0;

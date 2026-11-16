@@ -124,6 +124,23 @@ struct Apu {
   bool feValid;
   DspFrontEnd fe;
 #endif
+#if SNESRECOMP_ECHO_IN_PLACE
+  /* Echo in place (the S-DSP owns the echo ring inside this ARAM; see
+   * docs/n64/RED_DESIGN.md): the window is the samples [dspAt, dspEdges)
+   * the S-DSP has still to run. Per 16-byte line of ARAM, the end of the
+   * last front-end catch-up in which the S-DSP touches the line (reads or
+   * writes an echo slot there) and the last in which it writes it (echo
+   * writes, or a diverted SPC write it has still to apply). A line is in
+   * the window while its stamp is past dspAt. */
+  uint32_t dspAt;            /* the sample the Dsp's state is at */
+  uint32_t dspFlightEnd;     /* the in-flight batch's end sample */
+  uint32_t echoTouch[0x10000 / 16];
+  uint32_t echoDirty[0x10000 / 16];
+  /* Lines the pending batch touches, as runs (handed over at launch, so
+   * the host can write them back and drop them from its cache). */
+  uint16_t echoRunLine[16], echoRunCount[16];
+  uint32_t echoRuns;         /* > 16: too many, take the whole ring */
+#endif
 };
 
 #if SNESRECOMP_DSP_FRONTEND

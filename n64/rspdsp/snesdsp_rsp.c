@@ -583,10 +583,24 @@ bool snesdsp_rsp_apu_batch(Dsp *dsp, uint8_t *aram, const ApuDspLogEntry *log, u
  * join the DSP state and output are taken back and the echo bytes the batch
  * wrote are copied into the live ARAM (the runtime joins before the SPC can
  * touch the echo window). */
+#if SNESRECOMP_ECHO_IN_PLACE
+/* Echo in place (docs/n64/RED_DESIGN.md): the RSP works on the live ARAM.
+ * Its blocks and key-on starts come as records, its register writes and the
+ * SPC writes diverted to it (isReg 3) in the log; the echo ring is its own
+ * in ARAM, and the runtime keeps the SPC off the lines it has still to
+ * touch. No view, no undo, no copy-back. */
+static void view_init(void) {}
+void apu_echo_cache_drop(const void *p, uint32_t len) { data_cache_hit_writeback_invalidate((void *)p, len); }
+uint8_t apu_echo_read_uncached(const uint8_t *p) { return *(const volatile uint8_t *)UncachedAddr(p); }
+#if RSPDSP_PREP || !RSPDSP_BLOCKS
+#error "SNESRECOMP_ECHO_IN_PLACE needs RSPDSP_BLOCKS and not RSPDSP_PREP"
+#endif
+#else
 static uint8_t s_view[RSPDSP_ARAM_SIZE] __attribute__((aligned(16)));  /* + the mirror of $0000-$000F */
 /* The view is only ever accessed uncached; drop any lines the startup BSS
  * clear left dirty, so a later eviction cannot overwrite page copies. */
 static void view_init(void) { data_cache_hit_writeback_invalidate(s_view, sizeof s_view); }
+#endif
 static struct {
   bool active, echoWrites;
   Dsp *dsp;
@@ -732,9 +746,19 @@ static bool launch(Dsp *dsp, uint8_t *aram, const ApuDspLogEntry *log, uint32_t 
 #else
   shadow_from(dsp);
   Op *o = s_ops.op, *end = s_ops.op + kMaxOps;
-  for (uint32_t i = 0; i < n; i++)
+  for (uint32_t i = 0; i < n; i++) {
+#if SNESRECOMP_ECHO_IN_PLACE
+    /* ARAM holds the SPC's other writes already. */
+    if (log[i].isReg == 3) {
+      if (!decode(&o, end, log[i].tag, false, log[i].adr, log[i].val, false))
+        { g_snesdsp_rsp_reject[3]++; return false; }
+      continue;
+    }
+    if (log[i].isReg != 1) continue;
+#endif
     if (!decode(&o, end, log[i].tag, log[i].isReg == 1, log[i].adr, log[i].val, true))
       { g_snesdsp_rsp_reject[3]++; return false; }
+  }
 #endif
   g_snesdsp_rsp_decode_ticks += get_ticks() - td;
   g_snesdsp_rsp_log_entries += n;
@@ -746,6 +770,24 @@ static bool launch(Dsp *dsp, uint8_t *aram, const ApuDspLogEntry *log, uint32_t 
    * afterwards, so they lose their bit; echo pages the batch writes match
    * ARAM again after the join's copy-back. */
   const uint32_t tv = get_ticks();
+#if SNESRECOMP_ECHO_IN_PLACE
+  (void)marks; (void)fresh;
+  {
+    /* The lines the batch's echo touches: the SPC's writes there to RDRAM
+     * first, and none of them left in the cache (the RSP writes them). */
+    const ApuDspRecords *r = &g_apu_dsp_records;
+    if (r->nruns > 16) {
+      data_cache_hit_writeback_invalidate(aram, 0x10000);
+    } else {
+      for (uint32_t k = 0; k < r->nruns; k++) {
+        const uint32_t l = r->run_line[k], c = r->run_count[k];
+        const uint32_t c1 = l + c > 0x1000 ? 0x1000 - l : c;
+        data_cache_hit_writeback_invalidate(aram + l * 16, c1 * 16);
+        if (c1 < c) data_cache_hit_writeback_invalidate(aram, (c - c1) * 16);
+      }
+    }
+  }
+#else
   uint8_t *uview = UncachedAddr(s_view);
   for (unsigned p = 0; p < 256; p++) {
     const uint8_t bit = (uint8_t)(1u << (p & 7));
@@ -767,6 +809,7 @@ static bool launch(Dsp *dsp, uint8_t *aram, const ApuDspLogEntry *log, uint32_t 
       if (log[i].adr < 16) uview[0x10000 + log[i].adr] = log[i].old;
       fresh[log[i].adr >> 11] &= (uint8_t)~(1u << ((log[i].adr >> 8) & 7));
     }
+#endif
 
   const uint32_t tp = get_ticks();
   g_snesdsp_rsp_view_ticks += tp - tv;
@@ -783,7 +826,11 @@ static bool launch(Dsp *dsp, uint8_t *aram, const ApuDspLogEntry *log, uint32_t 
 #endif
   const uint32_t ts = get_ticks();
   g_snesdsp_rsp_pack_ticks += ts - tp;
+#if SNESRECOMP_ECHO_IN_PLACE
+  *(uint32_t *)(s_block.bytes + RSPDSP_P_ARAM) = PhysicalAddr(aram);
+#else
   *(uint32_t *)(s_block.bytes + RSPDSP_P_ARAM) = PhysicalAddr(s_view);
+#endif
   *(uint32_t *)(s_block.bytes + RSPDSP_P_LOG) = PhysicalAddr(s_ops.op);
   *(uint32_t *)(s_block.bytes + RSPDSP_P_OUT) = PhysicalAddr(s_out.s);
 #if RSPDSP_BLOCKS
@@ -906,6 +953,7 @@ void snesdsp_rsp_apu_join(void) {
     dsp->sampleBuffer[w * 2 + 1] = s_out.s[i * 2 + 1];
     dsp->sampleWrite++;
   }
+#if !SNESRECOMP_ECHO_IN_PLACE
   /* The echo bytes the batch wrote, sample by sample as dsp.c writes them:
    * FLG, ESA and EDL writes logged in the batch (ops tagged k apply before
    * sample k) move the window and switch the writes. */
@@ -930,6 +978,7 @@ void snesdsp_rsp_apu_join(void) {
       if (!remain) { remain = delay; index = 0; }
     }
   }
+#endif
   s_flight.active = false;
   g_snesdsp_rsp_join_ticks += get_ticks() - tj;
 }

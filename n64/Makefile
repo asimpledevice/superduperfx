@@ -67,6 +67,14 @@ ifeq ($(RSPDSP_BLOCKS),1)
 N64_CFLAGS += -DRSPDSP_BLOCKS=1 -DSNESRECOMP_DSP_FRONTEND=1
 N64_RSPASFLAGS += -DRSPDSP_BLOCKS=1
 endif
+# RSPDSP_ECHO_IN_PLACE=1 (needs RSPDSP_BLOCKS=1): the S-DSP owns its echo
+# ring inside the live ARAM; SPC writes into lines it has still to touch are
+# diverted to it, and there is no per-batch ARAM view (docs/n64/RED_DESIGN.md,
+# "Echo in place").
+RSPDSP_ECHO_IN_PLACE ?= 0
+ifeq ($(RSPDSP_ECHO_IN_PLACE),1)
+N64_CFLAGS += -DSNESRECOMP_ECHO_IN_PLACE=1
+endif
 # RSPDSP_PREP=1 (audio ownership step 2a): register writes are decoded on the
 # RSP (rspdsp/rsp_snesdsp_prep.S, run on Red's ring just before each batch);
 # 0 keeps the C decode (the reference; rspdsp/preptest compares the two).

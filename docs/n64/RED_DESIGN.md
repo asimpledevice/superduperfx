@@ -721,6 +721,95 @@ gets the bytes back. Test: `tests/audio/dsp_frontend_test.c` compares index,
 remain and the bitmap against `dsp_cycle` (random ESA/EDL/FLG writes,
 244,485 checks exact); a copy that ignores EDL writes fails.
 
+### Echo in place (owner decision, 2026-11-16)
+
+Goal (owner): the fewest dependencies between the CPU and the RSP, not the
+memory saved. The S-DSP (Yellow) owns its echo ring inside the one ARAM;
+the SPC (Blue) keeps the rest. There is no per-batch ARAM view, no undo of
+the view, and no copy-back of echo bytes at the join.
+
+What the ring is: ESA × 256, EDL × 2 KB (EDL 0: one 4-byte slot), walked
+one 4-byte slot (16-bit left, right) per sample. At each slot the S-DSP
+**reads** the value one lap old (the FIR input), and **writes** the new one
+back if FLG bit 5 is clear. So Yellow reads its slots even with echo writes
+off (an earlier note here and in conversation said writes-off slots were
+plain SPC bytes; that holds only once Yellow has passed them). A new ESA
+takes effect at once, a new EDL at the wrap. Nothing clears a slot; data
+leaves only by being overwritten a lap later.
+
+The window: the samples [dspAt, now) that Yellow has still to run (dspAt:
+the in-flight batch's start, else the pending batch's). The front end
+reports each run of slots it passes (`on_echo`), and Blue stamps the 16-byte
+lines with the catch-up's end sample: `echoTouch` (Yellow reads or writes
+the line) and `echoDirty` (Yellow writes it, or a diverted SPC write is still
+to apply). A line is in the window while its stamp is past dspAt. Stamping a
+whole catch-up with its end is conservative (a line may look late a little
+longer), never short.
+
+Rules (`apu.c`, `SNESRECOMP_ECHO_IN_PLACE`; N64 `RSPDSP_ECHO_IN_PLACE=1`,
+needs `RSPDSP_BLOCKS=1`):
+
+- **SPC write** to a line in the window (touched or dirty): diverted. It
+  goes in the log with `isReg` 3 and is not stored; Yellow applies it at its
+  sample (the microcode's existing ARAM-write record). The line's dirty stamp
+  moves to the next sample, its page is marked for reads, and the line is
+  written back and dropped from the CPU cache (the SPC's earlier bytes in it
+  reach RDRAM before Yellow's read-modify-write). Any other write is stored
+  as before.
+- **SPC read** of a dirty line in the window: Blue waits for Yellow (sync and
+  join) and reads past the cache (`UncachedAddr`). Other reads are normal,
+  including reads of lines Yellow only reads.
+- **Launch:** the batch's lines (the runs the front end reported, handed
+  over in `g_apu_dsp_records`) are written back and dropped from the cache,
+  so the SPC's direct writes reach RDRAM before Yellow reads them and no
+  stale line survives Yellow's writes. While the batch is in flight every
+  page it can touch stays marked, so the SPC's accesses there take the
+  checks above.
+- **Front-end reads** (blocks, directory entries) of a dirty line in the
+  window: the batch's records are invalid (it runs in C), and the line is
+  dropped from the cache (the read may have pulled it in). The front end now
+  calls `on_read` after reading.
+- **C fallback:** the C S-DSP replays in place too: undo skips diverted
+  writes (ARAM never held them), the replay applies them at their tags.
+
+Cache invariant: a line Yellow writes in the window is never dirty in the
+CPU's cache (dropped at launch or at a divert; afterwards the SPC's writes
+there are diverted and its reads wait and bypass the cache). Lines are 16
+bytes and the ring starts on a 256-byte boundary, so only an EDL 0 slot
+shares a line with other bytes; line granularity covers it.
+
+What falls out: the hand-back of an old region after ESA moves, and the
+"clear marks once the SPC rewrites a unit" refinement, are automatic: a line
+leaves the window once Yellow passes it, and ARAM then holds the right bytes.
+The cumulative `echo_owned` bitmap stays for builds without echo in place.
+
+Tests:
+
+- `tests/audio/echo_in_place_test.c` (in `tests/run_c_tests.sh`): one random
+  script run twice, the S-DSP in lockstep and deferred with echo in place.
+  A stand-in for the RSP runs each launched batch at its join (the latest
+  possible, the hardest case for the rules) on the live ARAM, applying only
+  register writes and diverted writes, and rejects a quarter of batches to
+  the C replay. The script moves the ring, changes EDL, turns echo writes
+  on and off, clears, pokes and reads the ring, with echo voices playing.
+  It hashes every read, ARAM and the S-DSP. 20,000 steps at three
+  checkpoint spacings: identical (up to 14,805 batches in place, 4,983 in
+  C, 4,393 diverted writes).
+- Break copies, each failing: no diverting; reads not waiting; no touch
+  stamps; no dirty stamp for diverted writes; no dirty stamps for echo
+  writes; replay skipping diverted writes. (An off-by-one on the stamps does
+  not fail: they are conservative by a whole catch-up.)
+- SMW in ares (`RSPDSP_BLOCKS=1 RSPDSP_ECHO_IN_PLACE=1`): state hashes
+  identical to the C S-DSP build at all 26 checkpoints to frame 1500;
+  1,964,520 of 1,964,837 samples on the RSP.
+
+Coverage caveat: none of our test games turns echo writes on in the runs we
+have (`SNESRECOMP_ECHO_LOG`, host: SMW to the map and a 40,000-frame
+replay, Pitfall, Joe & Mac 2 and Tetris Attack's boot: echo writes stay off;
+SMW sets a 4 KB ring at $6000). In-game this covers the writes-off case
+(SMW 4, Pitfall 26 SPC writes into the ring region); the writes-on rules
+are covered by the synthetic test. A game that turns echo on is wanted.
+
 ### Results back to Blue (owner, 2026-11-16)
 
 Consistency of what Red publishes: Red must never wait on Blue, so a

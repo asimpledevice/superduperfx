@@ -48,6 +48,10 @@ typedef void DspFeBlockFn(void *ctx, int voice, uint32_t sample, uint16_t start,
 typedef void DspFeKeyOnFn(void *ctx, int voice, uint32_t sample, uint16_t start);
 /* Every ARAM range the front end reads: directory entries and blocks. */
 typedef void DspFeReadFn(void *ctx, uint16_t adr, unsigned len);
+/* Echo slots the S-DSP touches: `count` 4-byte units from unit `unit`
+ * (wrapping at 16384), read each sample and also written when `writes`, at
+ * samples before `s_end`. Called for every run, echo writes on or off. */
+typedef void DspFeEchoFn(void *ctx, uint32_t unit, uint32_t count, uint32_t s_end, bool writes);
 
 typedef struct DspFeVoice {
   uint32_t t;          /* the counter is as of the start of sample t */
@@ -80,7 +84,8 @@ typedef struct DspFrontEnd {
   uint32_t echo_owned[0x10000 / 4 / 32];   /* bit per 4-byte unit of ARAM */
   DspFeBlockFn *on_block;
   DspFeKeyOnFn *on_keyon;   /* optional */
-  DspFeReadFn *on_read;     /* optional */
+  DspFeReadFn *on_read;     /* optional; called after the bytes are read */
+  DspFeEchoFn *on_echo;     /* optional */
   void *ctx;
   uint32_t events;     /* statistics: samples on which work was done */
 } DspFrontEnd;

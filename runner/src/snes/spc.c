@@ -74,8 +74,7 @@ static void spc_doOpcode(Spc* spc, uint8_t opcode);
  * the full path for their per-access instrumentation. */
 static inline uint8_t spc_read(Spc* spc, uint16_t adr) {
   if ((adr & 0xfff0) != 0x00f0 && adr < 0xffc0) {
-    apu_spcReadCheck(spc->apu, adr);
-    return spc->apu->ram[adr];
+    return apu_spcReadRam(spc->apu, adr);
   }
   return apu_cpuRead(spc->apu, adr);
 }

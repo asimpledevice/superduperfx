@@ -15,7 +15,8 @@ typedef struct ApuDspLogEntry {
   uint8_t val;
   uint8_t old;    /* ARAM value before the write (ARAM entries) */
   uint16_t tag;   /* samples owed when written */
-  uint8_t isReg;  /* 1 register write, 0 ARAM write (2: verify builds) */
+  uint8_t isReg;  /* 1 register write, 0 ARAM write (2: verify builds;
+                     3: diverted, SNESRECOMP_ECHO_IN_PLACE) */
 } ApuDspLogEntry;
 
 /* SNESRECOMP_DSP_BATCH_HOOK names a host function that runs a batch:
@@ -55,7 +56,22 @@ typedef struct ApuDspRecords {
   const uint16_t *keyons;
   uint32_t nkeyons;
   bool valid;
+  /* SNESRECOMP_ECHO_IN_PLACE: the 16-byte lines of ARAM whose echo slots the
+   * batch reads or writes, as runs of lines (wrapping at 4096). The host
+   * writes them back and drops them from its data cache before the batch
+   * starts; nruns > 16 means: the whole ARAM. Log entries with isReg 3 are
+   * SPC writes diverted to the S-DSP: ARAM does not hold them; the batch
+   * applies them at their tags. Other ARAM entries are already in ARAM. */
+  uint16_t run_line[16], run_count[16];
+  uint32_t nruns;
 } ApuDspRecords;
+#if SNESRECOMP_ECHO_IN_PLACE
+/* Host cache hooks (the N64 build: n64/rspdsp/snesdsp_rsp.c): write back
+ * and drop `len` bytes at `p` from the CPU's data cache; read one byte past
+ * the cache. */
+void apu_echo_cache_drop(const void *p, uint32_t len);
+uint8_t apu_echo_read_uncached(const uint8_t *p);
+#endif
 extern ApuDspRecords g_apu_dsp_records;
 
 #ifdef SNESRECOMP_DSP_LAUNCH_HOOK
