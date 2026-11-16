@@ -76,15 +76,18 @@ static void use_tlut(const N64PpuFrame *f, int t) {
 #include "n64_ppu_scene.h"
 #include "snes/ppu.h"
 #include "tile_cache.h"
+#if N64PPU_SCENE_RSP
+#include "scene_rsp.h"
+#endif
 
 static bool s_scene_init;
 static uint32_t s_scene_vram_count = ~0u;
 static const uint16_t *s_scene_vram;
-uint32_t g_scene_quads, g_scene_passes;
+uint32_t g_scene_quads, g_scene_passes, g_scene_ticks, g_scene_tlut_ticks, g_scene_sync_ticks;
 /* TLUTs for this frame: [cgram version][kind]: TC_TLUT_16 for 4bpp
  * layers, TC_TLUT_2BPP with the OBJ half for 2bpp (palette base in the low
  * half), keyed by brightness and base. */
-enum { kSceneTluts = 16 };
+enum { kSceneTluts = 64 };
 static uint16_t s_scene_tlut[kSceneTluts][256] __attribute__((aligned(16)));
 static struct { int cgram; uint8_t bright, kind, base, valid; } s_scene_tkey[kSceneTluts];
 static int s_scene_ntlut;
@@ -92,6 +95,9 @@ static int s_scene_ntlut;
 static void scene_frame_begin(void) {
   if (!s_scene_init) {
     n64_tile_cache_init(TC_FMT_2BPP | TC_FMT_4BPP);
+#if N64PPU_SCENE_RSP
+    n64_scene_rsp_init();
+#endif
     s_scene_init = true;
   }
   s_scene_ntlut = 0;
@@ -101,9 +107,11 @@ static void scene_frame_begin(void) {
   if (!snap || count == s_scene_vram_count) return;
   s_scene_vram_count = count;
   /* The RDP may still be drawing from the caches: let it finish first. */
+  const uint32_t t0 = TICKS_READ();
   rdpq_fence();
   n64_tile_cache_sync(snap);
   data_cache_hit_invalidate((void *)((uintptr_t)snap & ~15u), 0x10000 + 16);
+  g_scene_sync_ticks += TICKS_READ() - t0;
 }
 
 static const uint16_t *scene_tlut(int cgram, unsigned bright, unsigned kind, unsigned base) {
@@ -119,7 +127,9 @@ static const uint16_t *scene_tlut(int cgram, unsigned bright, unsigned kind, uns
   s_scene_tkey[i].base = (uint8_t)base;
   /* On the CPU for now: the frame description's CGRAM copy is rewritten by
    * the next frame's replay before the RSP would get to it. */
+  const uint32_t t0 = TICKS_READ();
   tc_ref_tlut(n64_ppu_desc()->cgram[cgram], bright, kind, base, 0x100, s_scene_tlut[i]);
+  g_scene_tlut_ticks += TICKS_READ() - t0;
   data_cache_hit_writeback(s_scene_tlut[i], 512);
   return s_scene_tlut[i];
 }
@@ -127,7 +137,14 @@ static const uint16_t *scene_tlut(int cgram, unsigned bright, unsigned kind, uns
 /* Draws BG layer `layer`'s tiles of priority `hi` over rows [a, b) (within
  * the current scissor). Returns false when it cannot (the caller draws the
  * plane). */
+static bool scene_draw_bg_(int layer, bool hi, int a, int b, int sx0, int sx1);
 static bool scene_draw_bg(int layer, bool hi, int a, int b, int sx0, int sx1) {
+  const uint32_t t0 = TICKS_READ();
+  const bool r = scene_draw_bg_(layer, hi, a, b, sx0, sx1);
+  g_scene_ticks += TICKS_READ() - t0;
+  return r;
+}
+static bool scene_draw_bg_(int layer, bool hi, int a, int b, int sx0, int sx1) {
   if (!s_scene_vram) return false;
   const N64PpuDesc *d = n64_ppu_desc();
   static N64SceneQuad q[33 * 29];
@@ -148,7 +165,6 @@ static bool scene_draw_bg(int layer, bool hi, int a, int b, int sx0, int sx1) {
     const uint16_t *tl = scene_tlut(band->cgram, PPU_brightness(regs),
                                     bpp == 4 ? TC_TLUT_16 : TC_TLUT_2BPP, pal_base);
     if (!tl) return false;
-    const int n = n64_scene_bg(&bg, s_scene_vram, r0, r1, q, (int)(sizeof q / sizeof q[0]));
     if (!copy_mode) {
       rdpq_set_mode_copy(true);
       rdpq_mode_tlut(TLUT_RGBA16);
@@ -157,8 +173,13 @@ static bool scene_draw_bg(int layer, bool hi, int a, int b, int sx0, int sx1) {
     rdpq_tex_upload_tlut((uint16_t *)tl, 0, 256);
     s_loaded_tlut = -1;
     const uint8_t *cache = bpp == 4 ? n64_tile_cache_c4() : n64_tile_cache_c2();
-    const int ntiles = bpp == 4 ? TC_C4_TILES : TC_C2_TILES;
-    (void)ntiles;
+#if N64PPU_SCENE_RSP
+    /* The RSP reads the tilemaps and emits the rectangles. */
+    n64_scene_rsp_bg(s_scene_vram, cache, bg.hs, bg.vs, bg.xsc, bpp, bg.tileadr, r0, r1, hi,
+                     sx0, sx1, kOx, kOy);
+    continue;
+#endif
+    const int n = n64_scene_bg(&bg, s_scene_vram, r0, r1, q, (int)(sizeof q / sizeof q[0]));
     for (int i = 0; i < n; ++i) {
       if (!(q[i].flags & N64SCENE_PRIO) != !hi) continue;
       surface_t t = surface_make((void *)(cache + (size_t)q[i].tile * TC_CI4_TILE), FMT_CI4, 16, 8, 8);
@@ -232,11 +253,12 @@ static void draw_rdp_band(const N64PpuFrame *f, int a, int b) {
       const int p = *o & 0xf;
       const int layer = n64ppu_plane_layer(p);
       if (!(L->main_layers & (1 << layer)) || (sp->hide & (1 << layer))) continue;
-      const uint32_t *rows = (*o & N64PPU_HI) ? f->rows_hi[p] : f->rows[p];
-      if (!rows_any(rows, a, b)) continue;
 #if N64PPU_SCENE
+      /* No plane was built for these (n64_ppu_build_line, same rule). */
       if (p <= N64PPU_BG4 && !sp->clip && scene_draw_bg(p, (*o & N64PPU_HI) != 0, a, b, sp->x0, sp->x1)) continue;
 #endif
+      const uint32_t *rows = (*o & N64PPU_HI) ? f->rows_hi[p] : f->rows[p];
+      if (!rows_any(rows, a, b)) continue;
       const int sel = n64ppu_entry_sel(L->order, *o);
       use_tlut(f, sp->clip ? N64PPU_TLUT_BLACK + sel : L->tl_main[sel]);
       draw_plane(f, p, rows, a, b);

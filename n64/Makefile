@@ -111,6 +111,17 @@ $(BUILD_DIR)/rsptile/%.o: rsptile/%.c rsptile/tile_cache.h rsptile/tile_cache_la
 $(BUILD_DIR)/rsp_tile.o: rsptile/rsp_tile.S rsptile/tile_cache_layout.h rsptile/rsp_tile_conv.inc
 	@$(MAKE) --no-print-directory -f $(N64_INST)/include/n64.mk SOURCE_DIR=rsptile \
 		BUILD_DIR=$(BUILD_DIR) RSPASFLAGS="$(N64_RSPASFLAGS)" $@
+# SCENE_RSP=1 (with SCENE=1): the RSP emits the tile rectangles (rsp_scene.S);
+# SCENE_RSP=0 issues them from the CPU (the reference).
+SCENE_RSP ?= 1
+ifeq ($(SCENE_RSP),1)
+N64_CFLAGS += -DN64PPU_SCENE_RSP=1
+OBJS += $(BUILD_DIR)/rsptile/scene_rsp.o $(BUILD_DIR)/rsp_scene.o
+$(BUILD_DIR)/rsptile/scene_rsp.o: rsptile/scene_rsp.h rsptile/scene_layout.h
+$(BUILD_DIR)/rsp_scene.o: rsptile/rsp_scene.S rsptile/scene_layout.h
+	@$(MAKE) --no-print-directory -f $(N64_INST)/include/n64.mk SOURCE_DIR=rsptile \
+		BUILD_DIR=$(BUILD_DIR) RSPASFLAGS="$(N64_RSPASFLAGS)" $@
+endif
 endif
 
 # CODECACHE=1: GEN_DIR was generated with SNESRECOMP_EMIT_LEAN=1 and

@@ -370,3 +370,28 @@ prove the drawing; the commands are to be generated on the RSP (4c), with
 fewer of them: empty tiles skipped (a per-tile flag from the tile cache),
 several tiles per TMEM load, and the BG plane expansion (`rspbg` jobs)
 dropped for layers the scene draws.
+
+**4c, the RSP emits the rectangles (`SCENE_RSP=1`, default with
+`SCENE=1`).** `n64/rsptile/rsp_scene.S` (`SceneCmd_Bg`): one command per
+background pass (layer, priority, desc band rows, span): the RSP reads the
+tilemap rows from the VRAM snapshot and writes, per tile, SYNC_LOAD,
+SET_TEXTURE_IMAGE, LOAD_BLOCK, [SYNC_TILE, SET_TILE on a palette change]
+and a copy-mode TEXTURE_RECTANGLE straight into rdpq's stream
+(`rsp_rdpq.inc`, `RDPQ_Send` every 16 tiles), ending with SYNC_LOAD,
+SYNC_TILE and SYNC_PIPE so rdpq's following commands need no knowledge of
+it. The CPU issues the mode, the TLUT and one command per pass. Main-screen
+BG layers drawn this way get no plane any more (`n64_ppu_build_line`
+skips their expansion under the same rule the draw uses: mode 0 or 1, no
+big tiles, no colour-window clip on the line). RENDER=2 in ares, SMW title
+and attract demo: identical to the software PPU on every compared frame
+through frame 750 (the RSP version matched on its first run).
+
+Cost so far (ares, SMW attract, per frame): the CPU's scene work is small
+(8 passes, 1.5-1.8 ms including 0.4 ms of TLUTs computed on the CPU, and
+0.4 ms to start the cache sync), but present's command issue rose from
+5.9 ms (planes) to 12.7 ms: the CPU stalls queuing the remaining plane
+commands (sprites, subscreen) behind the RSP, which now converts tiles
+(2.2 ms when VRAM changed) and emits ~2,700 rectangles. Next, in order:
+skip empty tiles (a per-tile flag from the tile cache; SMW's sky is mostly
+empty tiles), a cheaper no-change sync, sprites as rectangles (dropping
+the OBJ planes), and then hardware RDP time, which ares does not model.

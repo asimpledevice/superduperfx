@@ -586,6 +586,13 @@ static int host_main(void) {
                        (unsigned long)(g_present_prof[1] / 60 / 47), (unsigned long)(g_present_prof[2] / 60 / 47),
                        (unsigned long)(g_present_prof[3] / 60 / 47), (unsigned long)(g_present_prof[4] / 60 / 47),
                        (unsigned long)(s_pp_audio / 60));
+#if N64PPU_SCENE
+      { extern uint32_t g_scene_ticks, g_scene_tlut_ticks, g_scene_sync_ticks, g_scene_passes;
+        n64_platform_log("[scene] per frame (us): passes %lu, scene_draw_bg %lu (TLUTs %lu), cache sync %lu\n",
+                         (unsigned long)(g_scene_passes / 60), (unsigned long)(g_scene_ticks / 60 / 47),
+                         (unsigned long)(g_scene_tlut_ticks / 60 / 47), (unsigned long)(g_scene_sync_ticks / 60 / 47));
+        g_scene_ticks = g_scene_tlut_ticks = g_scene_sync_ticks = g_scene_passes = 0; }
+#endif
       { /* On screen too (hardware has no log without USB), tenths of a ms:
          * c commands, b BG wait, a audio, p RDP pipe busy, t TMEM busy. */
         extern uint32_t g_present_rdp[3];

@@ -914,12 +914,25 @@ bool n64_ppu_build_line(const Ppu *ppu, int line) {
   /* Background layers of both screens: queued (rows rewritten at flush);
    * layers off on this line get their row cleared now. */
   const int nbg = PPU_mode(ppu) == 0 ? 4 : 3;
+#if N64PPU_SCENE
+  bool scene_line_ok = PPU_mode(ppu) <= 1 && !(ppu->bgmode & 0xf0);
+  for (int k = 0; k < s->n; ++k) scene_line_ok &= !s->clip[k];
+#endif
   const uint8_t enabled[2] = {ppu->screenEnabled[0], L->sub_layers};
   for (int screen = 0; screen < 2; ++screen) {
     for (int layer = 0; layer < 4; ++layer) {
       if (layer < nbg && (enabled[screen] & (1 << layer))) {
         const int bpp = (PPU_mode(ppu) == 0 || layer == 2) ? 2 : 4;
         const unsigned pal_base = PPU_mode(ppu) == 0 ? 32u * layer : 0;
+#if N64PPU_SCENE
+        /* Drawn by the scene builder (n64_ppu_draw.c scene_draw_bg, same
+         * rule): no plane. */
+        if (!screen && scene_line_ok) {
+          flush_run(f, screen, layer);
+          L->main_layers |= (uint8_t)(1 << layer);
+          continue;
+        }
+#endif
         queue_bg(f, ppu, screen, layer, line, bpp, pal_base);
         if (!screen) L->main_layers |= (uint8_t)(1 << layer);
       } else {
