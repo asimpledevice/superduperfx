@@ -69,6 +69,13 @@
 #define RSPDSP_P_LOG        (RSPDSP_G + 0x3c)  /* u32 RDRAM address */
 #define RSPDSP_P_OUT        (RSPDSP_G + 0x40)  /* u32 RDRAM address */
 #define RSPDSP_P_DONE_MSG   (RSPDSP_G + 0x44)  /* u32 mailbox word posted when the batch is done */
+/* RSPDSP_BLOCKS: the batch's decoded blocks and key-on start addresses,
+ * produced by the S-DSP front end (runner/src/snes/dsp_frontend.c) in the
+ * order the microcode consumes them (sample by sample, voices 0-7). */
+#define RSPDSP_P_BLK        (RSPDSP_G + 0x48)  /* u32 RDRAM address of the block records */
+#define RSPDSP_P_KON        (RSPDSP_G + 0x4c)  /* u32 RDRAM address of the key-on records */
+#define RSPDSP_BLK_REC      16                 /* u16 start, 9 block bytes, 5 pad */
+#define RSPDSP_KON_REC      2                  /* u16 start address */
 /* Coefficients split for exact vector multiplies: for a coefficient k
  * scaled to K = k << (16 - shift), u = K & 0xffff (unsigned) and
  * c = K >> 16 (signed), so VMUDM(s, u) + VMADH(s, c) leaves exactly

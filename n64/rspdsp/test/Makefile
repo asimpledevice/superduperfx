@@ -13,7 +13,7 @@ $(BUILD_DIR)/test_main.o: test_main.c
 	@mkdir -p $(dir $@)
 	$(N64_CC) -c $(CFLAGS) $(N64_CFLAGS) -o $@ $<
 
-DSP_SRCS = dsp.c dsp_shadow.c audio_shadow.c
+DSP_SRCS = dsp.c dsp_frontend.c dsp_shadow.c audio_shadow.c
 DSP_OBJS = $(addprefix $(BUILD_DIR)/runner/,$(DSP_SRCS:.c=.o)) $(BUILD_DIR)/runner/audio_trace.o
 $(BUILD_DIR)/runner/%.o: $(RUNNER)/snes/%.c
 	@mkdir -p $(dir $@)

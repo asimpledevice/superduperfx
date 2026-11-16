@@ -413,6 +413,96 @@ static void set_envx_outx(Dsp *dsp, const Op *ops, uint32_t nops, uint32_t sampl
 
 /* Run the decoded batch (s_ops, nops) on `aram` (aram_len bytes covered by
  * cache maintenance) and publish its output. */
+#if RSPDSP_BLOCKS
+/* ---- Block and key-on records (RSPDSP_BLOCKS) -----------------------------
+ * The microcode takes each decoded block and each key on's start address
+ * from records instead of reading ARAM (docs/n64/RED_DESIGN.md). Here the
+ * records of a batch are produced by running the S-DSP front end over it
+ * (dsp_frontend.c) with the logged ARAM writes applied at their samples.
+ * A batch in which a block or directory read touches an echo window while
+ * echo writes may be on falls back to C: those bytes are the S-DSP's own
+ * echo output, which the front end does not see. */
+#include "dsp_frontend.h"
+enum { kMaxBlk = 4096, kMaxKon = 1024 };
+typedef struct { uint16_t start; uint8_t b[9]; uint8_t pad[5]; } BlkRec;
+_Static_assert(sizeof(BlkRec) == RSPDSP_BLK_REC, "block record");
+static BlkRec s_blk[kMaxBlk + 16] __attribute__((aligned(16)));
+static uint16_t s_kon[kMaxKon + 32] __attribute__((aligned(16)));
+static uint32_t s_nblk, s_nkon;
+static bool s_conflict, s_overflow, s_echo_on;
+static struct { uint16_t start; uint32_t len; } s_win[8];
+static int s_nwin;
+uint32_t g_snesdsp_rsp_blocks, g_snesdsp_rsp_echo_conflicts, g_snesdsp_rsp_last_nblk, g_snesdsp_rsp_last_nkon;
+static uint8_t s_scratch[0x10000];
+
+static void st_block(void *ctx, int voice, uint32_t sample, uint16_t start, const uint8_t b[9]) {
+  (void)ctx; (void)voice; (void)sample;
+  if (s_nblk == kMaxBlk) { s_overflow = true; return; }
+  BlkRec *r = &s_blk[s_nblk++];
+  r->start = start;
+  memcpy(r->b, b, 9);
+#ifdef RSPDSP_BLOCKS_BREAK   /* test only: the check must fail with this */
+  if (s_nblk == 1) r->b[4] ^= 0x11;
+#endif
+}
+static void st_keyon(void *ctx, int voice, uint32_t sample, uint16_t start) {
+  (void)ctx; (void)voice; (void)sample;
+  if (s_nkon == kMaxKon) { s_overflow = true; return; }
+  s_kon[s_nkon++] = start;
+}
+static void st_read(void *ctx, uint16_t adr, unsigned len) {
+  (void)ctx;
+  if (!s_echo_on) return;
+  for (int w = 0; w < s_nwin; w++) {
+    const uint32_t off = (uint16_t)(adr - s_win[w].start);   /* distance into the window, mod 64K */
+    if (off < s_win[w].len || (uint16_t)(s_win[w].start - adr) < len) { s_conflict = true; return; }
+  }
+}
+static void st_window(uint16_t esa, uint32_t len) {
+  if (s_nwin == 8) { s_conflict = true; return; }
+  s_win[s_nwin].start = esa;
+  s_win[s_nwin].len = len;
+  s_nwin++;
+}
+
+/* Records for a batch from the state at its start; false: run it in C. */
+static bool streams_for_batch(const Dsp *dsp, const uint8_t *aram, const SnesDspLogIn *log,
+                              uint32_t n, uint32_t samples) {
+  memcpy(s_scratch, aram, 0x10000);
+  s_nblk = s_nkon = 0;
+  s_conflict = s_overflow = false;
+  s_echo_on = dsp->echoWrites;
+  s_nwin = 0;
+  uint32_t len = dsp->echoDelay;
+  if ((uint32_t)dsp->echoBufferIndex + dsp->echoRemain > len) len = dsp->echoBufferIndex + dsp->echoRemain;
+  st_window(dsp->echoBufferAdr, 4u * len);
+  DspFrontEnd fe;
+  dsp_fe_init(&fe, dsp, s_scratch, 0, st_block, NULL);
+  fe.on_keyon = st_keyon;
+  fe.on_read = st_read;
+  uint16_t esa = dsp->echoBufferAdr;
+  for (uint32_t i = 0; i < n; i++) {
+    dsp_fe_advance(&fe, log[i].tag);
+    if (log[i].isReg) {
+      const uint8_t r = (uint8_t)log[i].adr, v = log[i].val;
+      if (r == 0x6c && !(v & 0x20)) s_echo_on = true;
+      if (r == 0x6d) esa = (uint16_t)(v << 8);
+      if (r == 0x6d || r == 0x7d) st_window(esa, 4u * 15u * 512u);   /* any length it may reach */
+      dsp_fe_write(&fe, r, v);
+    } else {
+      s_scratch[log[i].adr] = log[i].val;
+    }
+  }
+  dsp_fe_advance(&fe, samples);
+  if (s_conflict) g_snesdsp_rsp_echo_conflicts++;
+  if (fe.untracked || s_conflict || s_overflow) return false;
+  g_snesdsp_rsp_blocks += s_nblk;
+  g_snesdsp_rsp_last_nblk = s_nblk;
+  g_snesdsp_rsp_last_nkon = s_nkon;
+  return true;
+}
+#endif
+
 static void run(Dsp *dsp, uint8_t *aram, uint32_t aram_len, Op *o, uint32_t samples) {
   const uint32_t nops = (uint32_t)(o - s_ops.op);
   memset(o, 0, 32 * sizeof *o);  /* the RSP fetches whole chunks */
@@ -422,6 +512,12 @@ static void run(Dsp *dsp, uint8_t *aram, uint32_t aram_len, Op *o, uint32_t samp
   *(uint32_t *)(s_block.bytes + RSPDSP_P_ARAM) = PhysicalAddr(aram);
   *(uint32_t *)(s_block.bytes + RSPDSP_P_LOG) = PhysicalAddr(s_ops.op);
   *(uint32_t *)(s_block.bytes + RSPDSP_P_OUT) = PhysicalAddr(s_out.s);
+#if RSPDSP_BLOCKS
+  *(uint32_t *)(s_block.bytes + RSPDSP_P_BLK) = PhysicalAddr(s_blk);
+  *(uint32_t *)(s_block.bytes + RSPDSP_P_KON) = PhysicalAddr(s_kon);
+  data_cache_hit_writeback(s_blk, (s_nblk + 16) * sizeof s_blk[0]);
+  data_cache_hit_writeback(s_kon, (s_nkon + 32) * sizeof s_kon[0]);
+#endif
   data_cache_hit_writeback_invalidate(&s_block, sizeof s_block);
   data_cache_hit_writeback_invalidate(s_ops.op, (nops + 32) * sizeof(Op));
   data_cache_hit_writeback_invalidate(aram, aram_len);
@@ -453,6 +549,9 @@ bool snesdsp_rsp_batch(Dsp *dsp, uint8_t *aram, const SnesDspLogIn *log, uint32_
   for (uint32_t i = 0; i < n; i++)
     if (!decode(&o, end, log[i].tag, log[i].isReg, log[i].adr, log[i].val, true)) return false;
   CHOOSE_OVERLAY(dsp, log, n, IS_REG_IN);
+#if RSPDSP_BLOCKS
+  if (!streams_for_batch(dsp, aram, log, n, samples)) return false;
+#endif
   run(dsp, aram, RSPDSP_ARAM_SIZE, o, samples);
   return true;
 }
@@ -464,6 +563,9 @@ bool snesdsp_rsp_apu_batch(Dsp *dsp, uint8_t *aram, const ApuDspLogEntry *log, u
                            uint32_t samples, bool aramEndReachable) {
   if (aramEndReachable || ((uintptr_t)aram & 7) || !batch_ok(dsp, samples, false))
     return false;
+#if RSPDSP_BLOCKS
+  return false;   /* records come from the inline front end (not yet wired here) */
+#endif
   shadow_from(dsp);
   Op *o = s_ops.op, *end = s_ops.op + kMaxOps;
   for (uint32_t i = 0; i < n; i++)
@@ -611,6 +713,9 @@ bool snesdsp_rsp_apu_launch(Dsp *dsp, uint8_t *aram, const ApuDspLogEntry *log, 
 }
 static bool launch(Dsp *dsp, uint8_t *aram, const ApuDspLogEntry *log, uint32_t n,
                    uint32_t samples, const uint8_t *marks, uint8_t *fresh) {
+#if RSPDSP_BLOCKS
+  return false;   /* records come from the inline front end (not yet wired here) */
+#endif
   /* Why batches stay in C (g_snesdsp_rsp_reject: an echo window that wraps
    * past $FFFF, pitch modulation, other state, the log). The view mirrors
    * $0000-$000F after $FFFF for BRR blocks that run past the end. */

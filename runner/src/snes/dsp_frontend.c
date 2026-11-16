@@ -113,11 +113,13 @@ static void decode(DspFrontEnd *fe, int i, uint32_t s) {
   const uint8_t *ram = fe->aram;
   if (v->prev_flags == 1 || v->prev_flags == 3) {   /* loop (and end) */
     const uint16_t p = (uint16_t)(fe->dir + 4 * v->srcn);
+    if (fe->on_read) fe->on_read(fe->ctx, (uint16_t)(p + 2), 2);
     v->offset = (uint16_t)(ram[(uint16_t)(p + 2)] | ram[(uint16_t)(p + 3)] << 8);
     if (v->prev_flags == 1) { v->state = 4; v->gain = 0; }   /* end: release, gain 0 */
     fe->endx |= (uint8_t)(1u << i);
   }
   uint8_t b[9];
+  if (fe->on_read) fe->on_read(fe->ctx, v->offset, 9);
   for (int k = 0; k < 9; k++) b[k] = ram[(uint16_t)(v->offset + k)];
   if (fe->on_block) fe->on_block(fe->ctx, i, s, v->offset, b);
   v->prev_flags = b[0] & 3;
@@ -138,7 +140,9 @@ static void voice_sample(DspFrontEnd *fe, int i, uint32_t s) {
       v->key_on = false;
       v->prev_flags = 0;
       const uint16_t p = (uint16_t)(fe->dir + 4 * v->srcn);
+      if (fe->on_read) fe->on_read(fe->ctx, p, 2);
       v->offset = (uint16_t)(fe->aram[p] | fe->aram[(uint16_t)(p + 1)] << 8);
+      if (fe->on_keyon) fe->on_keyon(fe->ctx, i, s, v->offset);
       v->gain = 0;
       v->state = 0;
     }

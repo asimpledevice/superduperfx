@@ -36,6 +36,10 @@ struct Dsp;
 
 typedef void DspFeBlockFn(void *ctx, int voice, uint32_t sample, uint16_t start,
                           const uint8_t bytes[9]);
+/* A key on's start address (read from the directory at that sample). */
+typedef void DspFeKeyOnFn(void *ctx, int voice, uint32_t sample, uint16_t start);
+/* Every ARAM range the front end reads: directory entries and blocks. */
+typedef void DspFeReadFn(void *ctx, uint16_t adr, unsigned len);
 
 typedef struct DspFeVoice {
   uint32_t t;          /* the counter is as of the start of sample t */
@@ -62,6 +66,8 @@ typedef struct DspFrontEnd {
   uint8_t untracked;   /* voices with pitch modulation (bit per voice) */
   bool reset;          /* FLG bit 7 */
   DspFeBlockFn *on_block;
+  DspFeKeyOnFn *on_keyon;   /* optional */
+  DspFeReadFn *on_read;     /* optional */
   void *ctx;
   uint32_t events;     /* statistics: samples on which work was done */
 } DspFrontEnd;

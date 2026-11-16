@@ -785,4 +785,23 @@ and 409,111 blocks, Pitfall 589,824 / 148,865, Joe & Mac 2 278,528 /
 build compiles with it on beside the deferred S-DSP (blocks counted, not
 yet used).
 
-Next: Yellow taking blocks from the queue.
+Yellow taking blocks from records (2026-11-16): `RSPDSP_BLOCKS` (C and
+RSP builds). The front end reports, besides each block, each key on's start
+address (`on_keyon`) and every ARAM range it reads (`on_read`). A batch's
+two record streams, blocks (16 bytes: start, 9 bytes) and key-on starts
+(2 bytes), come in the order the microcode consumes them (sample by sample,
+voices 0-7), so the microcode takes the next record instead of DMA-ing the
+block from ARAM or reading the directory (`Dir_Entry` and `Aram_Read8` are
+left out); the header's end/loop flags still drive ENDX and the release on
+the RSP. Echo stays on the RSP's ARAM image. A batch whose block or
+directory reads touch an echo window while echo writes may be on runs in C
+for now (the "read at Red" case is not built). IMEM: full variant 4,080
+bytes (16 free), no-echo 3,744. `n64/rspdsp/test` with the records (the
+test produces them by running the front end over each batch): 1,423 of
+1,423 RSP batches identical to the C S-DSP (577 fell back: random sample
+data inside random echo windows, PMON), 1,134 RSP cycles a sample against
+1,241 reading ARAM; corrupting one record byte (`RSPDSP_BLOCKS_BREAK`)
+fails. The default build is unchanged (4,096 bytes, 2,000 of 2,000).
+
+Next: the runtime's batches take their records from the inline front end
+(`apu.c`), so `RSPDSP_BLOCKS` can run in the game.

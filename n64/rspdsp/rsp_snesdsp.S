@@ -65,6 +65,11 @@ SCR_RMW:    .ds.b 16
 SCR_ECHO:   .ds.b 32        # two echo buffers (current, prefetch), 16 apart
     .align 3
 LOGBUF:     .ds.b 32 * RSPDSP_LOG_ENTRY
+#ifdef RSPDSP_BLOCKS
+    .align 3
+BLKBUF:     .ds.b 16 * RSPDSP_BLK_REC   # block records (16 at a time)
+KONBUF:     .ds.b 64                    # key-on records (32 at a time)
+#endif
 OUTBUF:     .ds.b 32 * 4 + 8
 
     .text
@@ -97,6 +102,14 @@ SnesDspCmd_Run:
     sw t1, %lo(PREF_ADR)            # no echo prefetch yet
     li t1, %lo(SCR_ECHO)
     sw t1, %lo(PREF_BUF)
+#ifdef RSPDSP_BLOCKS
+    lw t1, %lo(DSP + RSPDSP_P_BLK)
+    sw t1, %lo(BLK_RD)
+    lw t1, %lo(DSP + RSPDSP_P_KON)
+    sw t1, %lo(KON_RD)
+    sw zero, %lo(BLK_LEFT)
+    sw zero, %lo(KON_LEFT2)
+#endif
     move fp, zero
     move s5, zero
 
@@ -206,6 +219,7 @@ Aram_Rmw:                           # a0: ARAM offset (may be >= $10000), a1: va
     jr t7
     nop
 
+#ifndef RSPDSP_BLOCKS   /* the front end reads the directory */
 # Read 8 bytes of ARAM containing offset a0 into SCR_DIR; returns the DMEM
 # address of the requested byte in v0. (Used for directory entries.)
 Aram_Read8:
@@ -239,6 +253,8 @@ Dir_Entry:
     or v1, t1, t3                   # loop
     jr t6
     move v0, a3
+
+#endif
 
 ########################################################################
 # One sample (dsp_cycle)
@@ -638,6 +654,14 @@ SAVE_RA3:   .word 0
 LOG_PTR:    .word 0
 LOG_LEFT:   .word 0
 KON_LEFT:   .word 0
+#ifdef RSPDSP_BLOCKS
+BLK_RD:     .word 0                 # RDRAM: the next unread block records
+BLK_PTR:    .word 0
+BLK_LEFT:   .word 0
+KON_RD:     .word 0
+KON_PTR:    .word 0
+KON_LEFT2:  .word 0
+#endif
     .text
 
 # Write OUTBUF (fp samples) to P_OUT and advance it.
@@ -707,6 +731,7 @@ Brr_Decode:
     beqz t3, Brr_block
     nop
     sw t1, %lo(BRR_PF)
+#ifndef RSPDSP_BLOCKS   /* with blocks, the record carries the loop address */
     lhu a2, %lo(DSP + RSPDSP_V_SRCN)(t4)
     sw t4, %lo(BRR_T4)
     jal Dir_Entry
@@ -714,6 +739,7 @@ Brr_Decode:
     lw t4, %lo(BRR_T4)
     srl a2, t4, 1
     sh v1, %lo(DSP + RSPDSP_V_DECOFF)(t4)
+#endif
     lw t1, %lo(BRR_PF)
     li t3, 1
     bne t1, t3, 1f
@@ -726,6 +752,34 @@ Brr_Decode:
     or t1, t1, t3
     sb t1, %lo(DSP + RSPDSP_RAM + 0x7c)
 Brr_block:
+#ifdef RSPDSP_BLOCKS
+    # The next block record (start address, 9 bytes), as the front end
+    # read it from ARAM at this sample.
+    sw t4, %lo(BRR_T4)              # the decode below reloads the voice from it
+    lw t1, %lo(BLK_LEFT)
+    bnez t1, 2f
+    lw v0, %lo(BLK_PTR)
+    lw s0, %lo(BLK_RD)
+    li s4, %lo(BLKBUF)
+    jal DMAIn
+    li t0, DMA_SIZE(16 * RSPDSP_BLK_REC, 1)
+    lw s0, %lo(BLK_RD)
+    addiu s0, s0, 16 * RSPDSP_BLK_REC
+    sw s0, %lo(BLK_RD)
+    li t1, 16
+    li v0, %lo(BLKBUF)
+2:  addiu t1, t1, -1
+    sw t1, %lo(BLK_LEFT)
+    addiu t1, v0, RSPDSP_BLK_REC
+    sw t1, %lo(BLK_PTR)
+    lhu a0, 0(v0)                   # start
+    # The decode below uses the 32 bytes at the block as scratch (as it
+    # did in SCR_BRR): copy the record there, not decode in the buffer.
+    lqv $v03, 0x00, v0
+    li v0, %lo(SCR_BRR)
+    sqv $v03, 0x00, v0
+    addiu v0, v0, 2                 # v0 -> block in DMEM
+#else
     # Fetch 16 bytes containing the 9-byte block (the ARAM view mirrors
     # its first 16 bytes after $FFFF, so a wrapping block is contiguous).
     lhu a0, %lo(DSP + RSPDSP_V_DECOFF)(t4)
@@ -740,6 +794,7 @@ Brr_block:
     lw t4, %lo(BRR_T4)
     andi t3, a0, 7
     addiu v0, t3, %lo(SCR_BRR)      # v0 -> block in DMEM
+#endif
     addiu a0, a0, 9
     andi a0, a0, 0xffff
     sh a0, %lo(DSP + RSPDSP_V_DECOFF)(t4)
@@ -881,9 +936,31 @@ Env_KeyOn:
     sh t1, %lo(DSP + RSPDSP_M_KEYON)
     sh zero, %lo(DSP + RSPDSP_V_PREVFLAGS)(t4)
     sw t4, %lo(BRR_T4)
+#ifdef RSPDSP_BLOCKS
+    # The next key-on record: the start address the front end read from
+    # the directory at this sample.
+    lw t1, %lo(KON_LEFT2)
+    bnez t1, 2f
+    lw v0, %lo(KON_PTR)
+    lw s0, %lo(KON_RD)
+    li s4, %lo(KONBUF)
+    jal DMAIn
+    li t0, DMA_SIZE(64, 1)
+    lw s0, %lo(KON_RD)
+    addiu s0, s0, 64
+    sw s0, %lo(KON_RD)
+    li t1, 64 / RSPDSP_KON_REC
+    li v0, %lo(KONBUF)
+2:  addiu t1, t1, -1
+    sw t1, %lo(KON_LEFT2)
+    addiu t1, v0, RSPDSP_KON_REC
+    sw t1, %lo(KON_PTR)
+    lhu v0, 0(v0)
+#else
     lhu a2, %lo(DSP + RSPDSP_V_SRCN)(t4)
     jal Dir_Entry
     nop
+#endif
     lw t4, %lo(BRR_T4)
     srl a2, t4, 1
     sh v0, %lo(DSP + RSPDSP_V_DECOFF)(t4)

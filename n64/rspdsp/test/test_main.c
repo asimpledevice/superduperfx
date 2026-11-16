@@ -154,9 +154,16 @@ int main(void) {
     const size_t lo = offsetof(Dsp, ram), hi = offsetof(Dsp, sampleBuffer);
     const uint8_t *pa = (const uint8_t *)&a, *pb = (const uint8_t *)&b;
     int bad = 0;
-    for (size_t o = lo; o < hi; o++) if (pa[o] != pb[o]) {
-      if (fails < 6) debugf("  state differs at Dsp+0x%x: ref %02x rsp %02x\n", (unsigned)o, pa[o], pb[o]);
-      bad = 1; break;
+    { int shown = 0;
+      for (size_t o = lo; o < hi; o++) if (pa[o] != pb[o]) {
+        if (fails < 3 && shown++ < 12) debugf("  state differs at Dsp+0x%x: ref %02x rsp %02x\n", (unsigned)o, pa[o], pb[o]);
+        bad = 1;
+      }
+#if RSPDSP_BLOCKS
+      { extern uint32_t g_snesdsp_rsp_last_nblk, g_snesdsp_rsp_last_nkon;
+        if (bad && fails < 3) debugf("  records: %lu blocks, %lu key ons\n", (unsigned long)g_snesdsp_rsp_last_nblk,
+                                     (unsigned long)g_snesdsp_rsp_last_nkon); }
+#endif
     }
     if (a.sampleWrite != b.sampleWrite) {
       if (fails < 6) debugf("  sampleWrite ref %lu rsp %lu\n", (unsigned long)a.sampleWrite, (unsigned long)b.sampleWrite);
