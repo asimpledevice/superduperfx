@@ -588,3 +588,64 @@ the C S-DSP build at all 26 checkpoints to frame 1500.
 **Paging slot (next).** Rare code (key on, directory entries, ARAM reads,
 and the new publish / run-to-t / pitch-modulation / wrapping-echo paths)
 DMA'd into a fixed IMEM slot when used, so the full variant has room too.
+
+## ARAM between the SPC and the S-DSP: the agreed design (owner, 2026-11-16)
+
+The problem is time, not size: the SPC (Blue) runs ahead of the S-DSP
+(Red) in emulated time, yet each S-DSP read must see ARAM as it was at
+that sample, and ARAM is random access (looping samples, shared
+instruments, the directory and the echo ring are read again and again).
+Snapshots (copy at the batch's start, undo later writes) and replay logs
+(the S-DSP keeps its own copy and re-applies every SPC write) both spend
+work twice. Two designs replace them.
+
+### Main design: the S-DSP front end on Blue, merged with the SPC
+
+The S-DSP's control half runs on Blue inside the SPC's run loop, one step
+at every sample edge (every 32 SPC cycles: lockstep, like the hardware and
+the C reference): per voice, the pitch counter, block crossings, key on
+and key off, the BRR header's end and loop flags (and the directory entry
+at a loop or key on). At a block crossing it reads the 9-byte block from
+ARAM at that moment, the exact moment the S-DSP would, and puts it in the
+queue to Red with its sample time, beside the register writes. Envelopes
+are not stepped on Blue: they are computed lazily, from the last known
+state, when the SPC reads ENVX.
+
+Red is then a pure function of the queue: decode the shipped blocks,
+interpolate, envelope, mix, echo. It never reads the SPC's ARAM. The echo
+buffer is the one ARAM region Red keeps, as its own copy of the echo
+window: SPC writes into the window go into the queue; SPC reads of the
+window wait for Red (backward read). What this removes: the ledger, the
+snapshot, the marks, the view and its undo, shared-memory cache hazards,
+and the S-DSP microcode's ARAM read, directory and write paths (IMEM).
+
+Register reads: ENDX and ENVX are answered on Blue with no round trip
+(ENDX from the headers and timing, ENVX from the lazy envelope). OUTX needs
+real audio, so it still syncs with Red (rare).
+
+Exact by construction (the same order of events as the C S-DSP); tested
+like the S-DSP, against `dsp_cycle` on random states. Game-independent: it
+lives in the shared runtime (`apu.c`), and the full C S-DSP stays as the
+reference. Cost: a fixed step per sample (estimated 100-200 CPU cycles, to
+be measured). If that shows, or once idle-loop skipping fast-forwards the
+SPC, the front end becomes event-driven: the next block crossing per voice
+is a closed-form time, so it works only at crossings.
+
+Not predictable on Blue: pitch modulation (PMON), whose pitch depends on
+the previous voice's audio output. PMON voices use the fallback below.
+
+### Fallback (PMON voices): one shared ARAM plus an undo ledger
+
+The S-DSP reads the SPC's ARAM directly. Every SPC write also appends
+(address, old value, time) to a ledger. A read at S-DSP time t takes the
+oldest ledger entry for that address later than t (its old value is the
+byte at t), else ARAM's value; entries the S-DSP has passed expire. Nothing
+is applied twice. Subtleties: the SPC's ARAM sits in the CPU's data cache,
+so a post writes back the lines written since the last post, and ledger
+entries are appended uncached so an entry reaches RDRAM before its data can
+(an evicted line must never show a future value without its entry; the
+S-DSP fetches data first, then checks the ledger). The S-DSP's own echo
+writes go "into the past" when the SPC wrote that byte later: they update
+the ledger entry's old value instead of ARAM. The CPU must not hold dirty
+echo-window lines (the SPC's echo-window accesses take the uncached slow
+path). Cost on Red: a per-page bitmap check per read, rarely a short scan.
