@@ -222,6 +222,11 @@ void apu_dspSync(Apu* apu);
 #define SNESRECOMP_DSP_HOST_ASYNC 0
 #endif
 void apu_dspFrameSync(Apu* apu);
+#if SNESRECOMP_DSP_STREAM
+/* The audio split: before reading output samples, the consumer moves the
+ * Dsp's sampleWrite to the S-DSP back end's progress. */
+void apu_dspOutput(Apu* apu);
+#endif
 /* ARAM changed outside the SPC's writes: no page of the batch view is
  * current (no-op without an asynchronous batch host). */
 void apu_dspViewStale(Apu* apu);

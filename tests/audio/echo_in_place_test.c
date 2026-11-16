@@ -90,15 +90,32 @@ static void dspw(Apu *apu, uint8_t r, uint8_t v) {
   apu_cpuWrite(apu, 0xf3, v);
 }
 
+/* The output samples, in order (each build drains what it has). */
+static uint32_t ho = 2166136261u, nout;
+static void drain(Apu *apu) {
+#if SNESRECOMP_DSP_STREAM
+  apu_dspOutput(apu);
+#endif
+  int16_t buf[2 * 512];
+  for (;;) {
+    const uint32_t n = dsp_getSamples(apu->dsp, buf, 512);
+    if (!n) break;
+    for (uint32_t i = 0; i < 2 * n; i++) { ho ^= (uint16_t)buf[i]; ho *= 16777619u; }
+    nout += n;
+  }
+}
+
 static void checkpoint(Apu *apu, unsigned step) {
 #if SNESRECOMP_APU_DEFER_DSP
   apu_dspSync(apu);
 #endif
+  drain(apu);
   uint32_t hr = 2166136261u, hd = 2166136261u;
   for (int i = 0; i < 0x10000; i++) { hr ^= apu->ram[i]; hr *= 16777619u; }
+  /* The S-DSP's state (its output ring is hashed as drained). */
   const uint8_t *d = (const uint8_t *)apu->dsp->ram;
-  for (size_t i = 0; i < sizeof(Dsp) - offsetof(Dsp, ram); i++) { hd ^= d[i]; hd *= 16777619u; }
-  printf("step %u: reads %08x ram %08x dsp %08x\n", step, h, hr, hd);
+  for (size_t i = 0; i < offsetof(Dsp, sampleBuffer) - offsetof(Dsp, ram); i++) { hd ^= d[i]; hd *= 16777619u; }
+  printf("step %u: reads %08x ram %08x dsp %08x out %08x (%u)\n", step, h, hr, hd, ho, nout);
   if (getenv("EIP_RAW") && step == (unsigned)atoi(getenv("EIP_RAW"))) {
     FILE *f = fopen(getenv("EIP_RAWF"), "wb");
     fwrite(apu->dsp, sizeof(Dsp), 1, f); fclose(f);
@@ -203,6 +220,7 @@ int main(int argc, char **argv) {
       const uint8_t v = apu_cpuRead(apu, 0xf3);
       mix(&v, 1);
     }
+    drain(apu);
     if (step % every == every - 1) checkpoint(apu, step + 1);
   }
   checkpoint(apu, steps);

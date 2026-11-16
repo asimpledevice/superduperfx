@@ -92,6 +92,14 @@ const ApuYellowRegs *apu_yellow_regs(void);
 void apu_yellow_stop(Dsp *dsp);
 void apu_yellow_discard(void);
 bool apu_yellow_running(void);
+/* Output: sample s (absolute, counted like progress) is at
+ * ring[(s & mask) * 4] (L, R, two unused), valid below progress. publish:
+ * the progress, with the new samples made readable to the caller (the N64
+ * back end drops their lines from the CPU's cache). Batches never cross
+ * the ring's end (Blue posts at multiples of APU_STREAM_RING). */
+#define APU_STREAM_RING 8192u
+const int16_t *apu_yellow_ring(uint32_t *mask);
+uint32_t apu_yellow_publish(void);
 #endif
 #if SNESRECOMP_ECHO_IN_PLACE
 /* Host cache hooks (the N64 build: n64/rspdsp/snesdsp_rsp.c): write back

@@ -862,6 +862,13 @@ uint32_t dsp_available(const Dsp* dsp) {
 }
 
 void dsp_peek(const Dsp* dsp, uint32_t offset, int16_t* l, int16_t* r) {
+#if SNESRECOMP_DSP_STREAM
+  if (dsp->outRing) {
+    const int16_t *p = dsp->outRing + 4u * ((dsp->sampleRead + offset) & dsp->outMask);
+    *l = p[0]; *r = p[1];
+    return;
+  }
+#endif
   uint32_t idx = (dsp->sampleRead + offset) & (DSP_SAMPLE_RING - 1);
   *l = dsp->sampleBuffer[idx * 2];
   *r = dsp->sampleBuffer[idx * 2 + 1];
@@ -885,6 +892,9 @@ uint32_t dsp_getSamples(Dsp* dsp, int16_t* sampleData, int frames) {
   uint32_t n = (uint32_t)frames < available ? (uint32_t)frames : available;
   uint32_t base = dsp->sampleRead;
   for (uint32_t i = 0; i < n; i++) {
+#if SNESRECOMP_DSP_STREAM
+    if (dsp->outRing) { dsp_peek(dsp, i, &sampleData[i * 2], &sampleData[i * 2 + 1]); continue; }
+#endif
     uint32_t idx = (base + i) & (DSP_SAMPLE_RING - 1);
     sampleData[i * 2] = dsp->sampleBuffer[idx * 2];
     sampleData[i * 2 + 1] = dsp->sampleBuffer[idx * 2 + 1];

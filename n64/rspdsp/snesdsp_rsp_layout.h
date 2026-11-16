@@ -93,6 +93,21 @@
 #define RSPDSP_SC_C         0x420
 #define RSPDSP_STATE_SIZE   0x430  /* multiple of 16 */
 
+/* RSPDSP_STREAM (the audio split): the state block is Yellow's own and stays
+ * in RDRAM between batches; each batch's parameters come in a separate
+ * block (the command's second word), and the P_* fields above other than
+ * P_ARAM are unused. Output samples are 8 bytes each in the ring (L, R and
+ * two unused halfwords), so every sample's address is DMA-aligned. */
+#define RSPDSP_PP_LOG       0x00   /* u32 RDRAM address of the operations */
+#define RSPDSP_PP_OUT       0x04   /* u32 RDRAM address of the first sample's slot */
+#define RSPDSP_PP_DONE_MSG  0x08   /* u32 mailbox word posted when the batch is done */
+#define RSPDSP_PP_BLK       0x0c   /* u32 RDRAM address of the block records */
+#define RSPDSP_PP_KON       0x10   /* u32 RDRAM address of the key-on records */
+#define RSPDSP_PP_SAMPLES   0x14   /* u16 */
+#define RSPDSP_PP_LOGN      0x16   /* u16 operations */
+#define RSPDSP_PARAMS_SIZE  0x18   /* multiple of 8 */
+#define RSPDSP_OUT_SLOT     8      /* bytes per output sample in the ring */
+
 /* Log entries (8 bytes): u16 tag (samples owed when written), u8 kind,
  * u8 unused, u16 address, u16 value. Entries are in time order. Kinds:
  *   0 ARAM byte write (address = ARAM address)

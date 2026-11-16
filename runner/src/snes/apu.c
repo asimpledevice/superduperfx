@@ -638,6 +638,10 @@ static inline void apu_dspEdge(Apu* apu) {
   APU_FE_EDGE(apu);
   if (!apu->dspPending) apu_dspStartBatch(apu);
   if (++apu->dspPending >= APU_DSP_MAX_PENDING) apu_dspSyncFor(apu, APU_DSP_SYNC_FULL_BATCH);
+#if SNESRECOMP_DSP_STREAM
+  /* Batches end at the output ring's end (the S-DSP writes them whole). */
+  else if (!(apu->dspEdges & (APU_STREAM_RING - 1))) apu_dspSyncFor(apu, APU_DSP_SYNC_FULL_BATCH);
+#endif
 }
 #else
 void apu_dspSync(Apu* apu) { (void)apu; }
@@ -930,6 +934,16 @@ static void apu_streamRegion(Apu* apu) {
 static void apu_streamEnsure(Apu* apu) {
   if (apu_yellow_running()) return;
   apu_yellow_start(apu->dsp, apu->ram, apu->dspAt);   /* the Dsp is current at dspAt */
+  /* The consumer reads the back end's ring from now on, in absolute
+   * samples (restarting where it left off when the counts still agree). */
+  Dsp *d = apu->dsp;
+  if (!d->outRing || d->sampleWrite != apu->dspAt) d->sampleRead = d->sampleWrite = apu->dspAt;
+  d->outRing = apu_yellow_ring(&d->outMask);
+}
+
+/* The consumer (Green): the samples the S-DSP has finished become readable. */
+void apu_dspOutput(Apu* apu) {
+  if (apu_yellow_running()) apu->dsp->sampleWrite = apu_yellow_publish();
 }
 
 static void apu_streamPost(Apu* apu) {
@@ -945,9 +959,11 @@ static void apu_streamPost(Apu* apu) {
 
 /* Hand the S-DSP's state back to the Dsp (current at dspEdges after it). */
 static void apu_streamStop(Apu* apu) {
-  if (apu->dspPending || apu->dspLogN) apu_streamPost(apu);
+  if (apu->dspPending || apu->dspLogN) apu_streamPost(apu);   /* (starts it if need be) */
+  if (!apu_yellow_running()) return;   /* the Dsp is current already */
   apu_yellow_stop(apu->dsp);
   apu->dspAt = apu->dspEdges;
+  apu->dsp->sampleWrite = apu->dspAt;   /* every sample is in the ring */
 }
 
 /* The S-DSP's registers as of the SPC's time: post and wait. */

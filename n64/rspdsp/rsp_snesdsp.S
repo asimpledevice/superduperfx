@@ -21,6 +21,18 @@
 #include <rsp_queue.inc>
 #include "snesdsp_rsp_layout.h"
 
+/* Per-batch parameters: in the state block, or (RSPDSP_STREAM) in their own
+ * block, loaded from the command's second word. */
+#ifdef RSPDSP_STREAM
+#define PAR(f) (PARAMS + RSPDSP_PP_##f)
+#define OUT_SHIFT 3
+#define OUT_FLUSH 16
+#else
+#define PAR(f) (DSP + RSPDSP_P_##f)
+#define OUT_SHIFT 2
+#define OUT_FLUSH 32
+#endif
+
     .set noreorder
     .set at
 
@@ -70,7 +82,13 @@ LOGBUF:     .ds.b 32 * RSPDSP_LOG_ENTRY
 BLKBUF:     .ds.b 16 * RSPDSP_BLK_REC   # block records (16 at a time)
 KONBUF:     .ds.b 64                    # key-on records (32 at a time)
 #endif
+#ifdef RSPDSP_STREAM
+    .align 3
+PARAMS:     .ds.b RSPDSP_PARAMS_SIZE
+OUTBUF:     .ds.b OUT_FLUSH * RSPDSP_OUT_SLOT
+#else
 OUTBUF:     .ds.b 32 * 4 + 8
+#endif
 
     .text
 
@@ -93,19 +111,25 @@ SnesDspCmd_Run:
     li s4, %lo(DSP)
     jal DMAIn
     li t0, DMA_SIZE(RSPDSP_STATE_SIZE, 1)
+#ifdef RSPDSP_STREAM
+    move s0, a1                     # this batch's parameters
+    li s4, %lo(PARAMS)
+    jal DMAIn
+    li t0, DMA_SIZE(RSPDSP_PARAMS_SIZE, 1)
+#endif
 
-    lhu s6, %lo(DSP + RSPDSP_P_SAMPLES)
-    lhu s2, %lo(DSP + RSPDSP_P_LOGN)
-    lw s1, %lo(DSP + RSPDSP_P_LOG)
+    lhu s6, %lo(PAR(SAMPLES))
+    lhu s2, %lo(PAR(LOGN))
+    lw s1, %lo(PAR(LOG))
     sw zero, %lo(LOG_LEFT)
     li t1, -1
     sw t1, %lo(PREF_ADR)            # no echo prefetch yet
     li t1, %lo(SCR_ECHO)
     sw t1, %lo(PREF_BUF)
 #ifdef RSPDSP_BLOCKS
-    lw t1, %lo(DSP + RSPDSP_P_BLK)
+    lw t1, %lo(PAR(BLK))
     sw t1, %lo(BLK_RD)
-    lw t1, %lo(DSP + RSPDSP_P_KON)
+    lw t1, %lo(PAR(KON))
     sw t1, %lo(KON_RD)
     sw zero, %lo(BLK_LEFT)
     sw zero, %lo(KON_LEFT2)
@@ -133,7 +157,7 @@ Run_done:
     jal DMAOut                      # synchronous: the block is in RDRAM after it
     li t0, DMA_SIZE(RSPDSP_STATE_SIZE, 1)
     # Tell the CPU (Red's mailbox doorbell): the word the CPU chose.
-    lw t1, %lo(DSP + RSPDSP_P_DONE_MSG)
+    lw t1, %lo(PAR(DONE_MSG))
     RSPQ_MailboxPost t1, t0
     jr s3
     nop
@@ -630,11 +654,11 @@ C_env:
     move a1, zero
 1:  jal Noise
     nop
-    sll t1, fp, 2
+    sll t1, fp, OUT_SHIFT
     sh a0, %lo(OUTBUF + 0)(t1)
     sh a1, %lo(OUTBUF + 2)(t1)
     addiu fp, fp, 1
-    li t1, 32
+    li t1, OUT_FLUSH
     bne fp, t1, 1f
     nop
     jal Out_Flush
@@ -668,13 +692,15 @@ KON_LEFT2:  .word 0
 Out_Flush:
     beqz fp, 1f
     move t7, ra
-    lw s0, %lo(DSP + RSPDSP_P_OUT)
-    sll t1, fp, 2
+    lw s0, %lo(PAR(OUT))
+    sll t1, fp, OUT_SHIFT
     addu t3, s0, t1
-    sw t3, %lo(DSP + RSPDSP_P_OUT)
+    sw t3, %lo(PAR(OUT))
+#ifndef RSPDSP_STREAM                 /* (8-byte slots are whole DMA units) */
     addiu t1, t1, 7                 # DMA in whole 8-byte units
     srl t1, t1, 3
     sll t1, t1, 3
+#endif
     addiu t0, t1, -1                # DMA_SIZE(len, 1) = len - 1
     li s4, %lo(OUTBUF)
     jal DMAOut

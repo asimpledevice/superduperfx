@@ -2554,7 +2554,9 @@ void RtlRenderAudio(int16 *audio_buffer, int samples, int channels) {
    * schedule a second, competing emulation clock and is what let audio drift
    * behind visuals after turbo. */
   RtlApuLock();
-#if !SNESRECOMP_DSP_HOST_ASYNC
+#if SNESRECOMP_DSP_STREAM
+  apu_dspOutput(g_snes->apu);  /* the S-DSP's finished samples */
+#elif !SNESRECOMP_DSP_HOST_ASYNC
   apu_dspSync(g_snes->apu);  /* else the output arrives as batches complete */
 #endif
   rtl_render_native(g_snes->apu->dsp, audio_buffer, samples);

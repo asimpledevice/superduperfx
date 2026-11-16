@@ -45,6 +45,7 @@ static struct {
   uint32_t head, tail;  /* batches posted (tail) and run (head) */
   ApuYellowRegs regs;
   uint32_t missing;     /* records that ran out (must stay 0) */
+  int16_t ring[APU_STREAM_RING * 4];   /* output: 8 bytes a sample */
 } y;
 
 uint32_t g_dsp_yellow_c_missing;
@@ -69,7 +70,15 @@ static void yellow_run_one(void) {
       if (e->isReg == 1) dsp_write(&y.dsp, (uint8_t)e->adr, e->val);
       else if (e->isReg == 3) y.aram[e->adr] = e->val;
     }
-    if (k < b->samples) dsp_cycle(&y.dsp);
+    if (k < b->samples) {
+      dsp_cycle(&y.dsp);
+      /* The sample to the output ring; Yellow's own Dsp ring stays drained. */
+      const uint32_t w = (y.dsp.sampleWrite - 1) & (DSP_SAMPLE_RING - 1);
+      int16_t *o = &y.ring[4u * ((y.progress + k) & (APU_STREAM_RING - 1))];
+      o[0] = y.dsp.sampleBuffer[w * 2];
+      o[1] = y.dsp.sampleBuffer[w * 2 + 1];
+      y.dsp.sampleRead = y.dsp.sampleWrite;
+    }
   }
   y.dsp.records = NULL;
   if (rec.missing || rec.iblock != rec.nblocks || rec.ikeyon != rec.nkeyons) {
@@ -87,6 +96,8 @@ void apu_yellow_start(const Dsp *dsp, uint8_t *aram, uint32_t at) {
   y.dsp.shadow = NULL;
   y.dsp.output_filter = NULL;
   y.dsp.records = NULL;
+  y.dsp.outRing = NULL;
+  y.dsp.sampleRead = y.dsp.sampleWrite;   /* drained: every sample is written */
   y.aram = aram;
   y.progress = y.posted = at;
   y.head = y.tail = 0;
@@ -121,8 +132,8 @@ const ApuYellowRegs *apu_yellow_regs(void) { return &y.regs; }
 void apu_yellow_stop(Dsp *dsp) {
   if (!y.running) return;
   while (y.head != y.tail) yellow_run_one();
-  /* The simulation state and the output ring back to Blue's Dsp. */
-  memcpy(dsp->ram, y.dsp.ram, offsetof(Dsp, sampleRead) - offsetof(Dsp, ram));
+  /* The simulation state back to Blue's Dsp (the output stays in the ring). */
+  memcpy(dsp->ram, y.dsp.ram, offsetof(Dsp, sampleBuffer) - offsetof(Dsp, ram));
   y.running = false;
 }
 
@@ -131,5 +142,9 @@ void apu_yellow_discard(void) { y.running = false; y.head = y.tail = 0; }
 bool apu_yellow_running(void) { return y.running; }
 
 const Dsp *apu_yellow_dsp(void) { return &y.dsp; }
+
+const int16_t *apu_yellow_ring(uint32_t *mask) { *mask = APU_STREAM_RING - 1; return y.ring; }
+
+uint32_t apu_yellow_publish(void) { return y.progress; }
 
 #endif

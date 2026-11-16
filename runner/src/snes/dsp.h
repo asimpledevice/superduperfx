@@ -74,6 +74,14 @@ struct Dsp {
 #if SNESRECOMP_DSP_RECORDS
   DspRecords *records;   /* non-NULL: blocks and key-on starts from records */
 #endif
+#if SNESRECOMP_DSP_STREAM
+  /* The audio split: when set, the output samples are the S-DSP back end's
+   * ring (apu_dsp_batch.h: sample s at outRing[(s & outMask) * 4], L then
+   * R), and sampleRead/sampleWrite count absolute samples (the consumer
+   * moves sampleWrite to the back end's progress). Host state. */
+  const int16_t *outRing;
+  uint32_t outMask;
+#endif
   // Host publication policy, outside the guest snapshot. Speculation still
   // executes every DSP cycle but must never enter the live consumer queue.
   bool suppressOutput;
