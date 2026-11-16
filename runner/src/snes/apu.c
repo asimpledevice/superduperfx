@@ -360,6 +360,10 @@ static void apu_dspMarkAfterLaunch(Apu* apu, uint32_t n) {
 }
 #endif
 
+#if SNESRECOMP_DSP_FRONTEND
+static void apu_feTakeRecords(Apu* apu);
+static void apu_feBatchStart(Apu* apu);
+#endif
 static void apu_dspSyncFor(Apu* apu, unsigned reason) {
 #ifdef SNESRECOMP_DSP_JOIN_HOOK
   /* A frame-end flush never waits for a batch still running: its samples
@@ -384,6 +388,9 @@ static void apu_dspSyncFor(Apu* apu, unsigned reason) {
 #endif
   memset(apu->spc->dspWatchLog, 0, sizeof(apu->spc->dspWatchLog));  /* nothing owed now */
   memset(apu->spc->dspWatchSync, 0, sizeof(apu->spc->dspWatchSync));
+#if SNESRECOMP_DSP_FRONTEND
+  apu_feTakeRecords(apu);   /* this batch's block and key-on records */
+#endif
 #if SNESRECOMP_APU_DEFER_DSP_VERIFY
   static uint8_t ram0[0x10000], ramN[0x10000];
   static Dsp dsp0, dspN;
@@ -497,6 +504,9 @@ static void apu_dspMarkRegWindows(Apu* apu) {
  * EDL and DIR writes extend the marks when they make new pages reachable
  * (apu_dspMarkRegWindows). */
 static void apu_dspStartBatch(Apu* apu) {
+#if SNESRECOMP_DSP_FRONTEND
+  apu_feBatchStart(apu);
+#endif
   const Dsp *d = apu->dsp;
   uint32_t loop = d->echoDelay;
   const uint32_t current = (uint32_t)d->echoBufferIndex + d->echoRemain;
@@ -665,17 +675,94 @@ const char *apu_time_implementation(void) {
 /* The S-DSP front end inline with the SPC (docs/n64/RED_DESIGN.md). It is
  * (re)built from the Dsp, which must then be current: a deferred DSP is
  * synced first. Blocks are counted until a back end consumes them. */
-uint32_t g_dsp_fe_blocks;
+uint32_t g_dsp_fe_blocks, g_dsp_fe_echo_conflicts;
+ApuDspRecords g_apu_dsp_records;
+enum { kFeMaxBlocks = 2048, kFeMaxKeyons = 1024 };
+typedef struct { uint16_t start; uint8_t b[9]; uint8_t pad[5]; } ApuFeBlockRec;
+/* Two of each: the RSP reads one batch's records while the SPC runs on. */
+static ApuFeBlockRec s_feBlk[2][kFeMaxBlocks + 16] __attribute__((aligned(16)));
+static uint16_t s_feKon[2][kFeMaxKeyons + 32] __attribute__((aligned(16)));
+static uint32_t s_feNblk, s_feNkon;
+static int s_feBuf;
+static bool s_feRecOk;                 /* this batch's records stand for ARAM */
+static uint16_t s_feEsa[4];            /* echo windows seen this batch */
+static int s_feNesa;
+static uint8_t s_feEdlMax;
+static bool s_feEchoOn;
+
+static inline uint8_t apu_feReg(const Apu* apu, uint8_t r) {
+#if SNESRECOMP_APU_DEFER_DSP
+  return apu->dspRegs[r];   /* the SPC's latest write: the front end's time */
+#else
+  return apu->dsp->ram[r];
+#endif
+}
+/* A new batch's record state, from the registers at its start. */
+static void apu_feBatchStart(Apu* apu) {
+  s_feRecOk = apu->feValid;
+  s_feNesa = 1;
+  s_feEsa[0] = (uint16_t)(apu_feReg(apu, 0x6d) << 8);
+  s_feEdlMax = apu_feReg(apu, 0x7d) & 0xf;
+  s_feEchoOn = !(apu_feReg(apu, 0x6c) & 0x20);
+}
 static void apu_feBlock(void *ctx, int voice, uint32_t sample, uint16_t start, const uint8_t b[9]) {
-  (void)ctx; (void)voice; (void)sample; (void)start; (void)b;
+  (void)ctx; (void)voice; (void)sample;
   g_dsp_fe_blocks++;
+  if (s_feNblk == kFeMaxBlocks) { s_feRecOk = false; return; }
+  ApuFeBlockRec *r = &s_feBlk[s_feBuf][s_feNblk++];
+  r->start = start;
+  memcpy(r->b, b, 9);
+}
+static void apu_feKeyOn(void *ctx, int voice, uint32_t sample, uint16_t start) {
+  (void)ctx; (void)voice; (void)sample;
+  if (s_feNkon == kFeMaxKeyons) { s_feRecOk = false; return; }
+  s_feKon[s_feBuf][s_feNkon++] = start;
+}
+/* A read inside an echo window while echo writes may be on reads the
+ * S-DSP's own echo output, which ARAM here does not hold yet: such a batch
+ * runs in C. Windows: every ESA seen this batch, the longest EDL. */
+static void apu_feRead(void *ctx, uint16_t adr, unsigned len) {
+  (void)ctx;
+  if (!s_feEchoOn) return;
+  const uint32_t wlen = s_feEdlMax ? 4u * 512u * s_feEdlMax : 4u;
+  for (int i = 0; i < s_feNesa; i++) {
+    const uint32_t off = (uint16_t)(adr - s_feEsa[i]);
+    if (off < wlen || (uint16_t)(s_feEsa[i] - adr) < len) {
+      if (s_feRecOk) g_dsp_fe_echo_conflicts++;
+      s_feRecOk = false;
+      return;
+    }
+  }
+}
+/* A register write the record checks care about (FLG, ESA, EDL). */
+static void apu_feEchoWrite(uint8_t r, uint8_t v) {
+  if (r == 0x6c && !(v & 0x20)) s_feEchoOn = true;
+  if (r == 0x6d && s_feNesa < 4) s_feEsa[s_feNesa++] = (uint16_t)(v << 8);
+  if (r == 0x6d && s_feNesa >= 4) s_feRecOk = false;
+  if (r == 0x7d && (v & 0xf) > s_feEdlMax) s_feEdlMax = v & 0xf;
+}
+/* At a batch's launch: hand its records over and start the next set. */
+static void apu_feTakeRecords(Apu* apu) {
+  if (apu->feValid) dsp_fe_advance(&apu->fe, apu->dspEdges);
+  g_apu_dsp_records.blocks = s_feBlk[s_feBuf];
+  g_apu_dsp_records.nblocks = s_feNblk;
+  g_apu_dsp_records.keyons = s_feKon[s_feBuf];
+  g_apu_dsp_records.nkeyons = s_feNkon;
+  g_apu_dsp_records.valid = s_feRecOk && apu->feValid && !apu->fe.untracked;
+  s_feBuf ^= 1;
+  s_feNblk = s_feNkon = 0;
+  s_feRecOk = false;   /* until the next batch starts */
 }
 static void apu_feNow(Apu* apu) {
+  /* Voices left untracked by pitch modulation: rebuild once it is off. */
+  if (apu->feValid && apu->fe.untracked && !(apu_feReg(apu, 0x2d) & 0xfe)) apu->feValid = false;
   if (!apu->feValid) {
 #if SNESRECOMP_APU_DEFER_DSP
     apu_dspSync(apu);
 #endif
     dsp_fe_init(&apu->fe, apu->dsp, apu->ram, apu->dspEdges, apu_feBlock, apu);
+    apu->fe.on_keyon = apu_feKeyOn;
+    apu->fe.on_read = apu_feRead;
     apu->feValid = true;
   }
   dsp_fe_advance(&apu->fe, apu->dspEdges);
@@ -859,6 +946,7 @@ void apu_cpuWrite(Apu* apu, uint16_t adr, uint8_t val) {
       if (apu->dspAdr < 0x80) {
         apu_feNow(apu);
         apu_feCheck(apu);
+        apu_feEchoWrite(apu->dspAdr, val);
         dsp_fe_write(&apu->fe, apu->dspAdr, val);
       }
 #endif

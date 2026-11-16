@@ -813,10 +813,12 @@ static int host_main(void) {
                       g_snesdsp_rsp_pages, g_snesdsp_rsp_async, g_snesdsp_rsp_join_wait_blue,
                       g_snesdsp_rsp_decode_ticks, g_snesdsp_rsp_log_entries,
                       g_snesdsp_rsp_view_ticks, g_snesdsp_rsp_pack_ticks, g_snesdsp_rsp_submit_ticks;
-      extern uint32_t g_snesdsp_rsp_reject[4];
-      n64_platform_log("[rspdsp] batches left in C (60 frames): echo wraps %lu, pitch modulation %lu, other state %lu, log %lu\n",
+      extern uint32_t g_snesdsp_rsp_reject[5];
+      n64_platform_log("[rspdsp] batches left in C (60 frames): echo wraps %lu, pitch modulation %lu, other state %lu, log %lu, "
+                       "no records %lu\n",
                        (unsigned long)g_snesdsp_rsp_reject[0], (unsigned long)g_snesdsp_rsp_reject[1],
-                       (unsigned long)g_snesdsp_rsp_reject[2], (unsigned long)g_snesdsp_rsp_reject[3]);
+                       (unsigned long)g_snesdsp_rsp_reject[2], (unsigned long)g_snesdsp_rsp_reject[3],
+                       (unsigned long)g_snesdsp_rsp_reject[4]);
       memset(g_snesdsp_rsp_reject, 0, sizeof g_snesdsp_rsp_reject);
       extern uint32_t g_snesdsp_rsp_blue_yields, g_snesdsp_rsp_fallbacks, g_red_messages;
       n64_platform_log("[red] 60 frames: %lu messages; S-DSP waits: %lu Blue yields, %lu fallbacks\n",

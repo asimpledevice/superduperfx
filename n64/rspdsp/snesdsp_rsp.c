@@ -601,7 +601,7 @@ uint32_t g_snesdsp_rsp_launch_ticks, g_snesdsp_rsp_join_ticks, g_snesdsp_rsp_pag
 uint32_t g_snesdsp_rsp_join_wait_blue;   /* the part of join_wait spent on the Blue thread */
 uint32_t g_snesdsp_rsp_decode_ticks, g_snesdsp_rsp_log_entries;   /* launch: log decode, entries */
 uint32_t g_snesdsp_rsp_view_ticks, g_snesdsp_rsp_pack_ticks, g_snesdsp_rsp_submit_ticks;
-uint32_t g_snesdsp_rsp_reject[4];
+uint32_t g_snesdsp_rsp_reject[5];   /* [4]: no valid front-end records (RSPDSP_BLOCKS) */
 uint32_t g_snesdsp_rsp_blue_yields, g_snesdsp_rsp_fallbacks;
 
 #if RSPDSP_PREP
@@ -714,7 +714,8 @@ bool snesdsp_rsp_apu_launch(Dsp *dsp, uint8_t *aram, const ApuDspLogEntry *log, 
 static bool launch(Dsp *dsp, uint8_t *aram, const ApuDspLogEntry *log, uint32_t n,
                    uint32_t samples, const uint8_t *marks, uint8_t *fresh) {
 #if RSPDSP_BLOCKS
-  return false;   /* records come from the inline front end (not yet wired here) */
+  /* The blocks and key-on starts come from the inline front end. */
+  if (!g_apu_dsp_records.valid) { g_snesdsp_rsp_reject[4]++; return false; }
 #endif
   /* Why batches stay in C (g_snesdsp_rsp_reject: an echo window that wraps
    * past $FFFF, pitch modulation, other state, the log). The view mirrors
@@ -785,6 +786,16 @@ static bool launch(Dsp *dsp, uint8_t *aram, const ApuDspLogEntry *log, uint32_t 
   *(uint32_t *)(s_block.bytes + RSPDSP_P_ARAM) = PhysicalAddr(s_view);
   *(uint32_t *)(s_block.bytes + RSPDSP_P_LOG) = PhysicalAddr(s_ops.op);
   *(uint32_t *)(s_block.bytes + RSPDSP_P_OUT) = PhysicalAddr(s_out.s);
+#if RSPDSP_BLOCKS
+  {
+    const ApuDspRecords *r = &g_apu_dsp_records;
+    *(uint32_t *)(s_block.bytes + RSPDSP_P_BLK) = PhysicalAddr(r->blocks);
+    *(uint32_t *)(s_block.bytes + RSPDSP_P_KON) = PhysicalAddr(r->keyons);
+    data_cache_hit_writeback(r->blocks, (r->nblocks + 16) * RSPDSP_BLK_REC);
+    data_cache_hit_writeback(r->keyons, (r->nkeyons + 32) * RSPDSP_KON_REC);
+    g_snesdsp_rsp_blocks += r->nblocks;
+  }
+#endif
   s_seq = (s_seq + 1) & 0xffffffu;
   *(uint32_t *)(s_block.bytes + RSPDSP_P_DONE_MSG) = RED_MSG(RED_MSG_DSP_DONE, s_seq);
   data_cache_hit_writeback_invalidate(&s_block, sizeof s_block);

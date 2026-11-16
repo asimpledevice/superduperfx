@@ -40,6 +40,24 @@ bool SNESRECOMP_DSP_BATCH_HOOK(Dsp *dsp, uint8_t *aram, const ApuDspLogEntry *lo
  * the runtime clears the bit whenever ARAM's page changes otherwise. Until SNESRECOMP_DSP_JOIN_HOOK returns,
  * the Dsp still shows the batch's start state; the runtime joins before
  * anything can observe the DSP or the echo bytes it writes back. */
+/* SNESRECOMP_DSP_FRONTEND: the batch being launched also comes with the
+ * records the S-DSP front end produced for it (runner/src/snes/
+ * dsp_frontend.c): each decoded block (16 bytes: big-endian start address,
+ * the 9 bytes as read at that sample, 5 pad) and each key on's start
+ * address, in the order the S-DSP consumes them (sample by sample, voices
+ * 0-7). `valid` is false when they cannot stand for ARAM: the front end was
+ * not tracking every voice (pitch modulation), a read touched an echo
+ * window while echo writes were on, or a buffer filled. The arrays stay
+ * unchanged until the next launch's batch completes. */
+typedef struct ApuDspRecords {
+  const void *blocks;
+  uint32_t nblocks;
+  const uint16_t *keyons;
+  uint32_t nkeyons;
+  bool valid;
+} ApuDspRecords;
+extern ApuDspRecords g_apu_dsp_records;
+
 #ifdef SNESRECOMP_DSP_LAUNCH_HOOK
 bool SNESRECOMP_DSP_LAUNCH_HOOK(Dsp *dsp, uint8_t *aram, const ApuDspLogEntry *log,
                                 uint32_t n, uint32_t samples, const uint8_t *pageMarks,

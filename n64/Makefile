@@ -59,6 +59,14 @@ $(BUILD_DIR)/rsp_snesdsp.o $(BUILD_DIR)/rsp_snesdsp_ne.o: rspdsp/rsp_snesdsp.S r
 		rspdsp/snesdsp_rsp_layout.h rspdsp/rsp_snesdsp_tables.inc
 	@$(MAKE) --no-print-directory -f $(N64_INST)/include/n64.mk SOURCE_DIR=rspdsp \
 		BUILD_DIR=$(BUILD_DIR) RSPASFLAGS="$(N64_RSPASFLAGS)" $@
+# RSPDSP_BLOCKS=1: the S-DSP microcode takes BRR blocks and key-on starts
+# from records the S-DSP front end makes inline with the SPC
+# (runner/src/snes/dsp_frontend.c), not from ARAM (docs/n64/RED_DESIGN.md).
+RSPDSP_BLOCKS ?= 0
+ifeq ($(RSPDSP_BLOCKS),1)
+N64_CFLAGS += -DRSPDSP_BLOCKS=1 -DSNESRECOMP_DSP_FRONTEND=1
+N64_RSPASFLAGS += -DRSPDSP_BLOCKS=1
+endif
 # RSPDSP_PREP=1 (audio ownership step 2a): register writes are decoded on the
 # RSP (rspdsp/rsp_snesdsp_prep.S, run on Red's ring just before each batch);
 # 0 keeps the C decode (the reference; rspdsp/preptest compares the two).

@@ -803,5 +803,20 @@ data inside random echo windows, PMON), 1,134 RSP cycles a sample against
 1,241 reading ARAM; corrupting one record byte (`RSPDSP_BLOCKS_BREAK`)
 fails. The default build is unchanged (4,096 bytes, 2,000 of 2,000).
 
-Next: the runtime's batches take their records from the inline front end
-(`apu.c`), so `RSPDSP_BLOCKS` can run in the game.
+The game's batches take their records from the inline front end
+(2026-11-16): `RSPDSP_BLOCKS=1` (Makefile; also turns on
+`SNESRECOMP_DSP_FRONTEND`). `apu.c` keeps two record buffers (the RSP reads
+one batch's while the SPC fills the next), hands a batch's records over at
+its launch (`g_apu_dsp_records`, `apu_dsp_batch.h`), and marks them invalid
+(the batch runs in C) when the front end was not tracking every voice
+(pitch modulation: the front end is rebuilt once PMON is off), a read
+touched an echo window while echo writes were on (every ESA seen in the
+batch, its longest EDL), or a buffer filled. SMW in ares: 1,810,265 of
+1,810,582 S-DSP samples ran on the RSP from records (317 before the front
+end first started), and the state hashes (WRAM, ARAM, every output sample)
+are identical to the C S-DSP build at all 26 checkpoints to frame 1500.
+
+What still reads ARAM on the RSP: echo (Yellow's echo window; today the
+batch's ARAM view), and the logged ARAM writes it applies there. The CPU
+still builds the view, marks and undo for that and for the C fallback;
+retiring them is the next stage (step 4 of the earlier list).
