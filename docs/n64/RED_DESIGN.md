@@ -551,3 +551,15 @@ logged writes at their samples, and a fallback when the echo window
 overlaps sample data the voices read in the same batch. That frees room in
 the voice stage for publishing ENVX/OUTX/ENDX, "run to sample t", and
 eventually pitch modulation. Next candidate: BRR decode as a pre-pass.
+
+## RSP dual issue (owner note, 2026-11-16)
+
+Excluding pipeline stalls, the RSP issues one scalar-unit (SU) and one
+vector-unit (VU) instruction in the same cycle, so microcode should
+interleave them. Vector loads and stores (LQV, SSV, ...) run in the SU's
+load/store path and pair with VU arithmetic. First candidate: the tile
+cache conversion (`n64/rsptile/gen_conv.py`) emits each word's VAND/VMADN
+run and then its eight SSV stores back to back; interleaving each word's
+stores with the next word's vector work should roughly halve that section.
+Others: the scene command's scalar address math beside vector work, and
+the S-DSP microcode's mixing and echo sections.
