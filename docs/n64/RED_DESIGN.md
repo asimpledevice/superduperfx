@@ -512,3 +512,42 @@ against the C core:
 - S-DSP batches as queued commands consuming the SPC's log; the CPU joins
   only where it needs DSP state. The S-DSP overlay keeps its state between
   batches (the Yellow-lane rewrite).
+
+## The S-DSP microcode's IMEM, and splitting overlays (owner, 2026-11-16)
+
+Overlays may be split into smaller stages, at the cost of an overlay switch
+(IMEM and data, tens of microseconds) and intermediate buffers, when one is
+too constrained. The S-DSP microcode (`rsp_snesdsp.S`) fills IMEM to the
+last word (4,096 bytes, of which the rspq kernel is 704 and the S-DSP
+3,392):
+
+| Part | Bytes | Runs |
+|---|---|---|
+| rspq kernel (in every overlay) | 704 | per command |
+| Batch loop, log apply, ARAM access (`Aram_Rmw`, `Dir_Entry`) | 516 | per batch / per logged write |
+| A: pitch counters | 188 | per sample |
+| B: Gaussian interpolation | 268 | per sample |
+| C-H: key on/off, envelopes, gain, volumes, mix, master, output | 824 | per sample |
+| Out_Flush, Noise | 148 | per 32 samples / with noise |
+| BRR decode (four filter loops) | 776 | per 16 samples per voice |
+| Key on | 116 | on key-on |
+| Echo (FIR, feedback, echo buffer) | 556 | per sample with echo |
+
+Already there for the fire-and-forget link: the microcode applies logged
+ARAM writes at their sample (`Log_aram` -> `Aram_Rmw`, an 8-byte
+read-modify-write by DMA into the ARAM image it reads). What feeds it today
+is the CPU's per-batch view (marked pages copied, the batch's writes
+undone). With an RSP-owned ARAM copy and every SPC write logged, the view,
+marks and undo go away; but one read-modify-write per write would be costly
+at thousands of writes a frame, so the writes should be applied a line or a
+page at a time, with per-sample order kept only where the S-DSP reads.
+
+First split candidate: **echo as its own stage** (556 bytes). Echo never
+feeds back into the voices, and for EDL >= 1 its delay (>= 512 samples)
+exceeds a batch (256), so a second pass can take each sample's echo input
+and dry total from the voice stage and finish the batch (EDL = 0 keeps a
+one-sample loop inside the echo stage). It needs the echo registers'
+logged writes at their samples, and a fallback when the echo window
+overlaps sample data the voices read in the same batch. That frees room in
+the voice stage for publishing ENVX/OUTX/ENDX, "run to sample t", and
+eventually pitch modulation. Next candidate: BRR decode as a pre-pass.
