@@ -716,9 +716,52 @@ it held). Large results go to RDRAM as Red produces them; Blue checks a
 flag in DMEM and takes what is there.
 
 **Register history in RDRAM.** Red appends readable register state indexed
-by sample time: OUTX only (owner, 2026-11-16; ENDX and ENVX are answered by
-the front end on Blue), 8 bytes a sample, about 4 KB a frame, DMA'd a chunk at a time; a ring Blue discards behind its own
+by sample time: OUTX, ENVX and ENDX for every voice (owner, 2026-11-16:
+OUTX for all reads; ENVX and ENDX for voices the front end cannot track,
+those with pitch modulation, and as a cross-check of the front end in test
+builds), 17 bytes a sample, about 9 KB a frame, DMA'd a chunk at a time; a ring Blue discards behind its own
 time. A backward read at sample t then needs only Red's progress to have
 passed t, not Red to stop at t: Blue waits for the progress word and reads
 the entry for t (exact). An HLE build may take the newest entry instead of
 waiting.
+
+## The audio epic, as it stands (owner summary, 2026-11-16)
+
+Goal: move audio processing out of Blue except what only the SPC can do,
+so Blue waits on the RSP only when the SPC asks for something only the
+S-DSP knows.
+
+- **Blue** runs the SPC and, inline in the SPC's loop, the S-DSP front end
+  ("earless DSP"): positions, block decodes, key on/off, ENDX, envelopes on
+  demand; synced to the SPC's clock (a sample every 32 SPC cycles),
+  event-driven (one comparison per sample, work at decodes and key ons).
+  ARAM belongs to the SPC. Blue sends register writes, the decoded blocks'
+  9 bytes and SPC writes into the echo window through the RDRAM queue, each
+  with its sample time, and rings the doorbell (one mailbox word: "valid to
+  entry k, time T"). It answers ENDX and ENVX itself for tracked voices.
+- **Yellow S-DSP on Red** synthesises from the queue: decode, interpolate,
+  envelopes, mixing, echo (in its own copy of the echo window). Its state
+  stays on the RSP side between commands. Each sample it records OUTX,
+  ENVX and ENDX in the register history in RDRAM; after each chunk (about
+  32 samples) it posts "caught up to sample T" and its audio goes to the
+  output ring. It runs as far as Blue has posted, then waits for the next
+  command. Exceptions: pitch-modulated voices read Blue's ARAM through the
+  undo ledger; a block or directory entry inside the echo window comes from
+  Yellow's echo copy.
+- **Green** feeds the AI from finished samples using the progress word;
+  it never forces a sync.
+- **Blue waits only for:** OUTX reads; ENVX/ENDX reads of pitch-modulated
+  voices; SPC reads inside the echo window. To read at sample t it posts
+  the queue up to t, yields to Green if Green has work (else waits), and
+  reads the history entry for t once progress passes it. Yellow is fed
+  continuously, so it is rarely far behind.
+
+Open: how Yellow returns echo-window bytes for SPC reads (DMA its echo
+writes into Blue's ARAM, which Blue reads uncached in the echo window, or
+a short history of echo writes).
+
+Built so far: the no-echo variant (`rsp_snesdsp_ne.S`); the front end's
+positions, blocks and ENDX (`dsp_frontend.c`, exact against `dsp_cycle`).
+Next: envelopes in the front end (lazy ENVX); the front end inline in the
+SPC loop with its cost measured on the N64; then Yellow taking blocks from
+the queue.
