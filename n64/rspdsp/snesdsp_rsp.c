@@ -19,6 +19,7 @@
 #endif
 
 DEFINE_RSP_UCODE(rsp_snesdsp);
+DEFINE_RSP_UCODE(rsp_snesdsp_ne);   /* no-echo variant (rsp_snesdsp_ne.S) */
 /* RSPDSP_PREP=1 (step 2a): register writes are decoded on the RSP
  * (rsp_snesdsp_prep.S) instead of here; the C decode stays the reference. */
 #ifndef RSPDSP_PREP
@@ -32,7 +33,39 @@ static struct __attribute__((aligned(16))) { uint8_t b[RSPPREP_PARAMS_SIZE]; } s
 
 enum { kMaxSamples = 1024, kMaxOps = 4096 };
 
-static uint32_t s_overlay_id;
+static uint32_t s_overlay_id, s_overlay_ne_id;
+static uint32_t s_run_overlay;           /* the variant the next batch runs on */
+uint32_t g_snesdsp_rsp_ne_batches;       /* batches run on the no-echo variant */
+
+/* The no-echo variant (rsp_snesdsp_ne.S) is exact for a batch in which echo
+ * writes are off and both echo volumes are 0 from start to end: echo then
+ * changes neither the output nor ARAM. Checked on the state at the batch's
+ * start and on every logged register write (FLG bit 5 clear turns writes
+ * on; EVOLL/EVOLR non-zero). Game-independent: nothing is assumed about the
+ * driver. */
+static inline bool echo_idle_write(bool reg, unsigned adr, unsigned val) {
+  if (!reg) return true;
+  adr &= 0x7f;
+  if ((adr == 0x2c || adr == 0x3c) && val) return false;
+  if (adr == 0x6c && !(val & 0x20)) return false;
+  return true;
+}
+#define CHOOSE_OVERLAY(dsp, log, n, IS_REG)                                   \
+  do {                                                                        \
+    bool idle_ = !(dsp)->echoWrites && !(dsp)->echoVolumeL && !(dsp)->echoVolumeR; \
+    for (uint32_t i_ = 0; idle_ && i_ < (n); i_++)                            \
+      idle_ = echo_idle_write(IS_REG((log)[i_]), (log)[i_].adr, (log)[i_].val); \
+    IDLE_FORCE(idle_);                                                        \
+    s_run_overlay = idle_ ? s_overlay_ne_id : s_overlay_id;                   \
+    if (idle_) g_snesdsp_rsp_ne_batches++;                                    \
+  } while (0)
+#ifdef RSPDSP_FORCE_NE   /* test only: the check must fail with this */
+#define IDLE_FORCE(x) ((x) = true)
+#else
+#define IDLE_FORCE(x) ((void)0)
+#endif
+#define IS_REG_IN(e) ((e).isReg != 0)
+#define IS_REG_APU(e) ((e).isReg == 1)
 static RspDspState s_block;
 static struct __attribute__((aligned(16))) { int16_t s[kMaxSamples * 2 + 8]; } s_out;
 typedef struct { uint16_t tag; uint8_t kind, pad; uint16_t adr, val; } Op;
@@ -49,6 +82,8 @@ uint32_t g_snesdsp_rsp_ticks, g_snesdsp_rsp_samples;
 static void view_init(void);
 void snesdsp_rsp_init(void) {
   s_overlay_id = rspq_overlay_register(&rsp_snesdsp);
+  s_overlay_ne_id = rspq_overlay_register(&rsp_snesdsp_ne);
+  s_run_overlay = s_overlay_id;
 #if RSPDSP_PREP
   s_prep_id = rspq_overlay_register(&rsp_snesdsp_prep);
 #endif
@@ -392,7 +427,7 @@ static void run(Dsp *dsp, uint8_t *aram, uint32_t aram_len, Op *o, uint32_t samp
   data_cache_hit_writeback_invalidate(aram, aram_len);
   data_cache_hit_writeback_invalidate(&s_out, sizeof s_out);
   const uint32_t t0 = get_ticks();
-  rspq_write(s_overlay_id, 0, PhysicalAddr(&s_block), 0);
+  rspq_write(s_run_overlay, 0, PhysicalAddr(&s_block), 0);
   rspq_wait();
   g_snesdsp_rsp_ticks += get_ticks() - t0;
   g_snesdsp_rsp_samples += samples;
@@ -417,6 +452,7 @@ bool snesdsp_rsp_batch(Dsp *dsp, uint8_t *aram, const SnesDspLogIn *log, uint32_
   Op *o = s_ops.op, *end = s_ops.op + kMaxOps;
   for (uint32_t i = 0; i < n; i++)
     if (!decode(&o, end, log[i].tag, log[i].isReg, log[i].adr, log[i].val, true)) return false;
+  CHOOSE_OVERLAY(dsp, log, n, IS_REG_IN);
   run(dsp, aram, RSPDSP_ARAM_SIZE, o, samples);
   return true;
 }
@@ -433,6 +469,7 @@ bool snesdsp_rsp_apu_batch(Dsp *dsp, uint8_t *aram, const ApuDspLogEntry *log, u
   for (uint32_t i = 0; i < n; i++)
     if (!decode(&o, end, log[i].tag, log[i].isReg == 1, log[i].adr, log[i].val, false))
       return false;
+  CHOOSE_OVERLAY(dsp, log, n, IS_REG_APU);
   run(dsp, aram, 0x10000, o, samples);
   return true;
 }
@@ -631,6 +668,7 @@ static bool launch(Dsp *dsp, uint8_t *aram, const ApuDspLogEntry *log, uint32_t 
   const uint32_t nops = (uint32_t)(o - s_ops.op);
   memset(o, 0, 32 * sizeof *o);
 #endif
+  CHOOSE_OVERLAY(dsp, log, n, IS_REG_APU);
   snesdsp_rsp_pack(dsp, &s_block);
   put(&s_block, RSPDSP_P_SAMPLES, (int)samples);
   put(&s_block, RSPDSP_P_LOGN, (int)nops);
@@ -654,13 +692,13 @@ static bool launch(Dsp *dsp, uint8_t *aram, const ApuDspLogEntry *log, uint32_t 
   const uint32_t pcmd[2] = {s_prep_id | PhysicalAddr(&s_prm), 0};
   rspq_ring_write(pcmd, 2);
 #endif
-  const uint32_t cmd[2] = {s_overlay_id | PhysicalAddr(&s_block), 0};
+  const uint32_t cmd[2] = {s_run_overlay | PhysicalAddr(&s_block), 0};
   rspq_ring_write(cmd, 2);
 #else
 #if RSPDSP_PREP
   rspq_write(s_prep_id, 0, PhysicalAddr(&s_prm), 0);
 #endif
-  rspq_write(s_overlay_id, 0, PhysicalAddr(&s_block), 0);
+  rspq_write(s_run_overlay, 0, PhysicalAddr(&s_block), 0);
   rspq_flush();
 #endif
   g_snesdsp_rsp_submit_ticks += get_ticks() - ts;

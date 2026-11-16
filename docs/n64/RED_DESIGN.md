@@ -563,3 +563,28 @@ run and then its eight SSV stores back to back; interleaving each word's
 stores with the next word's vector work should roughly halve that section.
 Others: the scene command's scalar address math beside vector work, and
 the S-DSP microcode's mixing and echo sections.
+
+## Variants and a paging slot (owner decision, 2026-11-16)
+
+Instead of splitting echo into a separate stage (exactness hazards: SPC
+writes into the echo window and voices reading inside it), the S-DSP gets
+**variants** built from the same source and **a paging slot** for rare code.
+
+**No-echo variant (in).** `rsp_snesdsp_ne.S` builds `rsp_snesdsp.S` with
+`RSPDSP_NO_ECHO`: 3,776 bytes of IMEM against the full variant's 4,096
+(320 free). The CPU picks it per batch (`CHOOSE_OVERLAY`,
+`snesdsp_rsp.c`) when echo writes are off and both echo volumes are 0 at
+the batch's start and no logged write turns them on (FLG bit 5 clear,
+EVOLL/EVOLR non-zero): echo then changes neither the output nor ARAM, so
+the variant only advances the echo position and reads the echo bytes of
+the batch's last eight samples, which are all the FIR history keeps. The
+rule is a property of the S-DSP, not of any game. Tests: `n64/rspdsp/test`
+2,000 random batches identical to the C S-DSP (515 on the variant; a third
+of the random states have echo idle); `RSPDSP_FORCE_NE` (every batch on
+the variant) fails 1,093 of 2,000, so the test sees the difference. SMW in
+ares (`N64_STATE_HASH`): WRAM, ARAM and every output sample identical to
+the C S-DSP build at all 26 checkpoints to frame 1500.
+
+**Paging slot (next).** Rare code (key on, directory entries, ARAM reads,
+and the new publish / run-to-t / pitch-modulation / wrapping-echo paths)
+DMA'd into a fixed IMEM slot when used, so the full variant has room too.

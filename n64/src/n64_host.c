@@ -700,6 +700,8 @@ static int host_main(void) {
                          (unsigned long)frame, (unsigned long)h, (unsigned long)ha,
                          (unsigned long)s_out_hash, (unsigned long)s_out_pos);
 #ifdef N64_RSPDSP
+        { extern uint32_t g_snesdsp_rsp_ne_batches;
+          n64_platform_log("[rspdsp] no-echo variant: %lu batches\n", (unsigned long)g_snesdsp_rsp_ne_batches); }
         { extern uint32_t g_snesdsp_rsp_samples, g_snesdsp_rsp_async, g_snesdsp_rsp_joins,
                           g_snesdsp_rsp_join_wait;
           n64_platform_log("[rspdsp] %lu of %lu samples ran on the RSP; %lu launches, %lu joins, "

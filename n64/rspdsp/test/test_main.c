@@ -50,6 +50,13 @@ static void random_state(Dsp *d, uint8_t *aram) {
     dsp_write(d, (uint8_t)(c * 16 + 3), (uint8_t)(p >> 8));
   }
 #endif
+  /* A third of the states have echo idle (writes off, volumes 0): the
+   * no-echo variant runs those batches unless the log turns echo on. */
+  if (rnd() % 3 == 0) {
+    dsp_write(d, 0x6c, (uint8_t)(rnd() | 0x20));
+    dsp_write(d, 0x2c, 0);
+    dsp_write(d, 0x3c, 0);
+  }
   /* Echo window inside ARAM, not touching $0000-$000F. */
   const unsigned edl = rnd() % 16, pages = edl ? edl * 8 : 1;
   const unsigned esa = 1 + rnd() % (256 - pages);
@@ -173,6 +180,8 @@ int main(void) {
          (unsigned long)((uint64_t)c_ticks * 2 / c_samples),
          (unsigned long)((uint64_t)g_snesdsp_rsp_ticks * 4 / 3 / g_snesdsp_rsp_samples),
          (unsigned long)g_snesdsp_rsp_samples);
+  { extern uint32_t g_snesdsp_rsp_ne_batches;
+    debugf("no-echo variant: %lu batches\n", (unsigned long)g_snesdsp_rsp_ne_batches); }
   debugf("RSPDSP_TEST %s: %d/%d pass, %d fell back to C\n", fails ? "FAIL" : "PASS",
          tests - fails - fallbacks, tests - fallbacks, fallbacks);
   for (;;) {}

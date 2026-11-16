@@ -26,10 +26,11 @@ $(BUILD_DIR)/n64_compat.o: ../../src/n64_compat.c
 	@mkdir -p $(dir $@)
 	$(N64_CC) -c $(CFLAGS) $(N64_CFLAGS) -o $@ $<
 
-$(BUILD_DIR)/rspdsp_test.elf: $(BUILD_DIR)/n64_compat.o $(BUILD_DIR)/test_main.o $(BUILD_DIR)/snesdsp_rsp.o $(BUILD_DIR)/rsp_snesdsp.o $(DSP_OBJS)
+$(BUILD_DIR)/rspdsp_test.elf: $(BUILD_DIR)/n64_compat.o $(BUILD_DIR)/test_main.o $(BUILD_DIR)/snesdsp_rsp.o $(BUILD_DIR)/rsp_snesdsp.o $(BUILD_DIR)/rsp_snesdsp_ne.o $(DSP_OBJS)
 
 rspdsp_test.z64: N64_ROM_TITLE = "RSP DSP test"
-$(BUILD_DIR)/rsp_snesdsp.o: RSPASFLAGS += $(RSP_DEFS)
+$(BUILD_DIR)/rsp_snesdsp.o $(BUILD_DIR)/rsp_snesdsp_ne.o: RSPASFLAGS += $(RSP_DEFS)
+$(BUILD_DIR)/rsp_snesdsp_ne.o: ../rsp_snesdsp.S
 
 clean:
 	rm -rf $(BUILD_DIR) rspdsp_test.z64

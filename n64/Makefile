@@ -49,13 +49,14 @@ ifeq ($(RSPDSP),1)
 N64_CFLAGS += -DSNESRECOMP_APU_DEFER_DSP=1 -DSNESRECOMP_DSP_LAUNCH_HOOK=snesdsp_rsp_apu_launch \
 	-DSNESRECOMP_DSP_JOIN_HOOK=snesdsp_rsp_apu_join -DSNESRECOMP_DSP_HOST_ASYNC=1 \
 	-DN64_RSPDSP=1 -Irspdsp
-OBJS += $(BUILD_DIR)/rspdsp/snesdsp_rsp.o $(BUILD_DIR)/rsp_snesdsp.o
+OBJS += $(BUILD_DIR)/rspdsp/snesdsp_rsp.o $(BUILD_DIR)/rsp_snesdsp.o $(BUILD_DIR)/rsp_snesdsp_ne.o
 $(BUILD_DIR)/rspdsp/snesdsp_rsp.o: rspdsp/snesdsp_rsp.c
 	@mkdir -p $(dir $@)
 	@echo "    [CC] $<"
 	$(CC) -c $(CFLAGS) -o $@ $<
 # libdragon's RSP rule looks in SOURCE_DIR: run it on rspdsp/.
-$(BUILD_DIR)/rsp_snesdsp.o: rspdsp/rsp_snesdsp.S rspdsp/snesdsp_rsp_layout.h rspdsp/rsp_snesdsp_tables.inc
+$(BUILD_DIR)/rsp_snesdsp.o $(BUILD_DIR)/rsp_snesdsp_ne.o: rspdsp/rsp_snesdsp.S rspdsp/rsp_snesdsp_ne.S \
+		rspdsp/snesdsp_rsp_layout.h rspdsp/rsp_snesdsp_tables.inc
 	@$(MAKE) --no-print-directory -f $(N64_INST)/include/n64.mk SOURCE_DIR=rspdsp \
 		BUILD_DIR=$(BUILD_DIR) RSPASFLAGS="$(N64_RSPASFLAGS)" $@
 # RSPDSP_PREP=1 (audio ownership step 2a): register writes are decoded on the

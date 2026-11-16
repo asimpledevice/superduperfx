@@ -914,6 +914,7 @@ B_DECODE:   .half RSPDSP_DECODE + 0 * RSPDSP_DECODE_STRIDE, RSPDSP_DECODE + 1 * 
             .half RSPDSP_DECODE + 6 * RSPDSP_DECODE_STRIDE, RSPDSP_DECODE + 7 * RSPDSP_DECODE_STRIDE
     .text
 
+#ifndef RSPDSP_NO_ECHO
 ########################################################################
 # Echo (dsp_handleEcho). In: $v22/$v23 totals after master volume, $v17/
 # $v18 echo input (all lanes). Out: a0/a1 totals with echo.
@@ -1073,6 +1074,78 @@ Echo_have:
     jr ra
     nop
 
+#else
+########################################################################
+# Echo, no-echo variant (RSPDSP_NO_ECHO, rsp_snesdsp_ne.S): used only for
+# batches where echo writes are off and both echo volumes are 0 from start
+# to end (the CPU checks the state and every logged write: choose_overlay
+# in snesdsp_rsp.c). Echo then changes neither the output nor ARAM; what it
+# leaves behind is its position (indices, as below) and the FIR history,
+# which holds the bytes read at the batch's last eight samples, so only
+# those are read. In: $v22/$v23 totals. Out: a0/a1 = the totals.
+########################################################################
+Echo:
+    sw ra, %lo(SAVE_RA2)
+    mfc2 a0, $v22.e0
+    mfc2 a1, $v23.e0
+    addiu t1, s5, 8
+    slt t1, t1, s6                  # more than eight samples left: no read
+    bnez t1, 2f
+    lhu t1, %lo(DSP + RSPDSP_ECHOINDEX)
+    lhu t3, %lo(DSP + RSPDSP_ECHOADR)
+    sll t1, t1, 2
+    addu t1, t1, t3
+    andi t1, t1, 0xffff
+    sw t1, %lo(ECHO_ADR)
+    lw t3, %lo(DSP + RSPDSP_P_ARAM)
+    li t5, ~7
+    and t5, t1, t5
+    addu s0, t3, t5
+    li s4, %lo(SCR_ECHO)
+    jal DMAIn
+    li t0, DMA_SIZE(8, 1)
+    lw t1, %lo(ECHO_ADR)
+    lhu t6, %lo(DSP + RSPDSP_FIRINDEX)
+    andi t1, t1, 4
+    addiu v1, t1, %lo(SCR_ECHO)
+    sll t6, t6, 1
+    lbu t1, 0(v1)
+    lbu t3, 1(v1)
+    lbu t5, 2(v1)
+    lbu t7, 3(v1)
+    sll t3, t3, 8
+    or t1, t1, t3
+    sll t7, t7, 8
+    or t5, t5, t7
+    sll t1, t1, 16
+    sra t1, t1, 17
+    sll t5, t5, 16
+    sra t5, t5, 17
+    sh t1, %lo(DSP + RSPDSP_FIR_L)(t6)
+    sh t1, %lo(DSP + RSPDSP_FIR_L + 16)(t6)
+    sh t5, %lo(DSP + RSPDSP_FIR_R)(t6)
+    sh t5, %lo(DSP + RSPDSP_FIR_R + 16)(t6)
+2:  # indices (as the full Echo)
+    lhu t1, %lo(DSP + RSPDSP_FIRINDEX)
+    lhu t3, %lo(DSP + RSPDSP_ECHOINDEX)
+    lhu t5, %lo(DSP + RSPDSP_ECHOREMAIN)
+    addiu t1, t1, 1
+    andi t1, t1, 7
+    sh t1, %lo(DSP + RSPDSP_FIRINDEX)
+    addiu t3, t3, 1
+    addiu t5, t5, -1
+    andi t5, t5, 0xffff
+    bnez t5, 3f
+    sh t5, %lo(DSP + RSPDSP_ECHOREMAIN)
+    lhu t5, %lo(DSP + RSPDSP_ECHODELAY)
+    move t3, zero
+    sh t5, %lo(DSP + RSPDSP_ECHOREMAIN)
+3:  sh t3, %lo(DSP + RSPDSP_ECHOINDEX)
+    lw ra, %lo(SAVE_RA2)
+    jr ra
+    nop
+
+#endif
     .data
     .align 2
 ECHO_ADR:   .word 0
