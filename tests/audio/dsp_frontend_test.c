@@ -19,6 +19,7 @@ static uint32_t s_rng = 0x2545F491u;
 static uint32_t rnd(void) { s_rng ^= s_rng << 13; s_rng ^= s_rng >> 17; s_rng ^= s_rng << 5; return s_rng; }
 
 static uint8_t s_aram[0x10000];
+static uint32_t s_truth[0x10000 / 4 / 32];   /* 4-byte units dsp_cycle's echo wrote */
 static struct { int voice; uint32_t sample; uint16_t start; uint8_t b[9]; } s_blk[64];
 static int s_nblk;
 static void on_block(void *ctx, int voice, uint32_t sample, uint16_t start, const uint8_t b[9]) {
@@ -56,12 +57,13 @@ int main(void) {
   static Dsp d;
   static DspFrontEnd fe;
   int fails = 0;
-  uint32_t samples_total = 0, blocks_total = 0, events_total = 0, untracked_voices = 0, env_checks = 0;
+  uint32_t samples_total = 0, blocks_total = 0, events_total = 0, untracked_voices = 0, env_checks = 0, echo_checks = 0;
   for (int t = 0; t < 3000 && fails < 5; t++) {
     for (int i = 0; i < 0x10000; i++) s_aram[i] = (uint8_t)rnd();
     random_state(&d);
     const uint32_t base = rnd() % 1000;
     dsp_fe_init(&fe, &d, s_aram, base, on_block, NULL);
+    memset(s_truth, 0, sizeof s_truth);
     const uint32_t n = 64 + rnd() % 1024;
     for (uint32_t k = 0; k < n && fails < 5; k++) {
       const uint32_t s = base + k;
@@ -71,7 +73,8 @@ int main(void) {
         dsp_fe_advance(&fe, s);
         if (rnd() & 1) {
           static const uint8_t timing[] = {0x02, 0x03, 0x04, 0x4c, 0x5c, 0x7c, 0x5d, 0x2d,
-                                           0x05, 0x06, 0x07, 0x05, 0x06, 0x07, 0x6c};
+                                           0x05, 0x06, 0x07, 0x05, 0x06, 0x07, 0x6c, 0x6c,
+                                           0x6d, 0x7d};
           uint8_t r = timing[rnd() % sizeof timing];
           if (r < 0x0c) r = (uint8_t)(r | (rnd() % 8) << 4);
           uint8_t v = (uint8_t)rnd();
@@ -102,8 +105,26 @@ int main(void) {
             fails++;
             break;
           }
+      if (d.echoWrites) {
+        const uint32_t u = (uint16_t)(d.echoBufferAdr + d.echoBufferIndex * 4) >> 2;
+        s_truth[u >> 5] |= 1u << (u & 31);
+      }
       dsp_cycle(&d);
       samples_total++;
+      /* Echo position and the units echo has written. */
+      if (rnd() % 7 == 0) {
+        uint16_t idx, rem;
+        dsp_fe_echo_position(&fe, &idx, &rem);
+        if (idx != d.echoBufferIndex || rem != d.echoRemain ||
+            memcmp(fe.echo_owned, s_truth, sizeof s_truth)) {
+          if (fails < 5)
+            printf("test %d sample %u: echo index %u/%u remain %u/%u owned %s\n", t, k, idx,
+                   d.echoBufferIndex, rem, d.echoRemain,
+                   memcmp(fe.echo_owned, s_truth, sizeof s_truth) ? "DIFFER" : "same");
+          fails++;
+        }
+        echo_checks++;
+      }
       /* Compare. */
       for (int c = 0; c < 8; c++) {
         if (!dsp_fe_tracked(&fe, c)) continue;
@@ -177,7 +198,7 @@ int main(void) {
   }
   printf("dsp front end: %u samples, %u blocks, work on %u samples (%.1f%%), %u voice-runs untracked (PMON)\n",
          samples_total, blocks_total, events_total, 100.0 * events_total / samples_total, untracked_voices);
-  printf("envelope checks: %u\n", env_checks);
+  printf("envelope checks: %u, echo checks: %u\n", env_checks, echo_checks);
   printf("%s\n", fails ? "FAIL" : "PASS");
   return fails ? 1 : 0;
 }

@@ -21,6 +21,14 @@
  * previous voice's output). Such voices are dropped from tracking
  * (dsp_fe_tracked) and need the S-DSP itself.
  *
+ * Echo position: the echo ring's position (ESA + index * 4, wrapping when
+ * `remain` runs out, a new EDL taking effect at the wrap) is tracked
+ * lazily, and with echo writes on (FLG bit 5 clear) every 4-byte unit the
+ * S-DSP rewrites is marked in echo_owned: those bytes hold the S-DSP's own
+ * output, which this ARAM (the SPC's) does not have. Nothing is unmarked
+ * here; a host that gets the S-DSP's bytes back clears them
+ * (dsp_fe_echo_clear). Query with dsp_fe_echo_owned.
+ *
  * Envelopes are lazy: a voice's envelope (gain, stage, rate counter) is
  * stepped, exactly as dsp_cycleChannel does, only when something needs it:
  * an ENVX read (dsp_fe_envx), a block ending without a loop, a key on, a
@@ -65,6 +73,11 @@ typedef struct DspFrontEnd {
   uint8_t endx;
   uint8_t untracked;   /* voices with pitch modulation (bit per voice) */
   bool reset;          /* FLG bit 7 */
+  /* Echo position, as of the start of sample echo_t. */
+  uint32_t echo_t;
+  uint16_t esa, delay, echo_index, echo_remain;
+  bool echo_writes;
+  uint32_t echo_owned[0x10000 / 4 / 32];   /* bit per 4-byte unit of ARAM */
   DspFeBlockFn *on_block;
   DspFeKeyOnFn *on_keyon;   /* optional */
   DspFeReadFn *on_read;     /* optional */
@@ -88,6 +101,16 @@ uint16_t dsp_fe_counter(const DspFrontEnd *fe, int voice);
 static inline uint8_t dsp_fe_endx(const DspFrontEnd *fe) { return fe->endx; }
 /* ENVX at sample fe->now (gain >> 4): steps the voice's envelope up to now. */
 uint8_t dsp_fe_envx(DspFrontEnd *fe, int voice);
+/* Has the S-DSP's echo rewritten any byte of [adr, adr + len) (mod 64K)?
+ * As of the echo position's time: inside on_read, the sample being read
+ * (its own echo write comes after); elsewhere call dsp_fe_echo_sync first. */
+bool dsp_fe_echo_owned(const DspFrontEnd *fe, uint16_t adr, unsigned len);
+/* Bring the echo position (and echo_owned) up to fe->now. */
+void dsp_fe_echo_sync(DspFrontEnd *fe);
+/* The host has ARAM's copy of [adr, adr + len) from the S-DSP again. */
+void dsp_fe_echo_clear(DspFrontEnd *fe, uint16_t adr, unsigned len);
+/* Echo position at fe->now (index into the ring, samples left before it wraps). */
+void dsp_fe_echo_position(DspFrontEnd *fe, uint16_t *index, uint16_t *remain);
 /* Step a voice's envelope up to fe->now (dsp_fe_envx does this). */
 void dsp_fe_env_sync(DspFrontEnd *fe, int voice);
 static inline bool dsp_fe_tracked(const DspFrontEnd *fe, int voice) {

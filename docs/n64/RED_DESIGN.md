@@ -707,6 +707,20 @@ block is shipped as "read at Red" and Red fills it from its own echo copy
 untracked (Red's fallback). Both are rare and detectable on Blue, which
 knows the window from ESA/EDL and FLG.
 
+**Echo position tracking (2026-11-16).** The front end tracks the echo
+ring exactly (`dsp_frontend.c`: ESA + index × 4, `remain` counting down to
+the wrap, a new EDL taking effect at the wrap, FLG bit 5 for writes), lazily
+and in closed form over whole rings, so it costs nothing per sample. With
+echo writes on it marks every 4-byte unit the S-DSP will have rewritten in
+a 2 KB bitmap (`echo_owned`, 16,384 units). Blue then knows, for any ARAM
+read at any sample, whether those bytes are still the SPC's or are now the
+S-DSP's echo output. Queries: `dsp_fe_echo_owned` (inside the read
+callbacks, current to the sample being read), `dsp_fe_echo_sync` then the
+same elsewhere, `dsp_fe_echo_position`; `dsp_fe_echo_clear` for a host that
+gets the bytes back. Test: `tests/audio/dsp_frontend_test.c` compares index,
+remain and the bitmap against `dsp_cycle` (random ESA/EDL/FLG writes,
+244,485 checks exact); a copy that ignores EDL writes fails.
+
 ### Results back to Blue (owner, 2026-11-16)
 
 Consistency of what Red publishes: Red must never wait on Blue, so a
@@ -810,8 +824,10 @@ one batch's while the SPC fills the next), hands a batch's records over at
 its launch (`g_apu_dsp_records`, `apu_dsp_batch.h`), and marks them invalid
 (the batch runs in C) when the front end was not tracking every voice
 (pitch modulation: the front end is rebuilt once PMON is off), a read
-touched an echo window while echo writes were on (every ESA seen in the
-batch, its longest EDL), or a buffer filled. SMW in ares: 1,810,265 of
+touched bytes the S-DSP's echo has written (exact, from the tracked echo
+position; first version: every ESA seen in the batch with its longest EDL),
+or a buffer filled. The bitmap is cumulative since the front end was built,
+which is conservative: bytes Red has since caught up on are still counted. SMW in ares: 1,810,265 of
 1,810,582 S-DSP samples ran on the RSP from records (317 before the front
 end first started), and the state hashes (WRAM, ARAM, every output sample)
 are identical to the C S-DSP build at all 26 checkpoints to frame 1500.

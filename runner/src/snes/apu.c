@@ -685,10 +685,6 @@ static uint16_t s_feKon[2][kFeMaxKeyons + 32] __attribute__((aligned(16)));
 static uint32_t s_feNblk, s_feNkon;
 static int s_feBuf;
 static bool s_feRecOk;                 /* this batch's records stand for ARAM */
-static uint16_t s_feEsa[4];            /* echo windows seen this batch */
-static int s_feNesa;
-static uint8_t s_feEdlMax;
-static bool s_feEchoOn;
 
 static inline uint8_t apu_feReg(const Apu* apu, uint8_t r) {
 #if SNESRECOMP_APU_DEFER_DSP
@@ -700,10 +696,6 @@ static inline uint8_t apu_feReg(const Apu* apu, uint8_t r) {
 /* A new batch's record state, from the registers at its start. */
 static void apu_feBatchStart(Apu* apu) {
   s_feRecOk = apu->feValid;
-  s_feNesa = 1;
-  s_feEsa[0] = (uint16_t)(apu_feReg(apu, 0x6d) << 8);
-  s_feEdlMax = apu_feReg(apu, 0x7d) & 0xf;
-  s_feEchoOn = !(apu_feReg(apu, 0x6c) & 0x20);
 }
 static void apu_feBlock(void *ctx, int voice, uint32_t sample, uint16_t start, const uint8_t b[9]) {
   (void)ctx; (void)voice; (void)sample;
@@ -718,28 +710,15 @@ static void apu_feKeyOn(void *ctx, int voice, uint32_t sample, uint16_t start) {
   if (s_feNkon == kFeMaxKeyons) { s_feRecOk = false; return; }
   s_feKon[s_feBuf][s_feNkon++] = start;
 }
-/* A read inside an echo window while echo writes may be on reads the
- * S-DSP's own echo output, which ARAM here does not hold yet: such a batch
- * runs in C. Windows: every ESA seen this batch, the longest EDL. */
+/* A read of bytes the S-DSP's echo has written since the front end began
+ * (exactly: the front end tracks the echo position) reads the S-DSP's own
+ * output, which ARAM here may not hold yet: such a batch runs in C. Called
+ * mid-run with echo_owned current to the sample being read. */
 static void apu_feRead(void *ctx, uint16_t adr, unsigned len) {
-  (void)ctx;
-  if (!s_feEchoOn) return;
-  const uint32_t wlen = s_feEdlMax ? 4u * 512u * s_feEdlMax : 4u;
-  for (int i = 0; i < s_feNesa; i++) {
-    const uint32_t off = (uint16_t)(adr - s_feEsa[i]);
-    if (off < wlen || (uint16_t)(s_feEsa[i] - adr) < len) {
-      if (s_feRecOk) g_dsp_fe_echo_conflicts++;
-      s_feRecOk = false;
-      return;
-    }
-  }
-}
-/* A register write the record checks care about (FLG, ESA, EDL). */
-static void apu_feEchoWrite(uint8_t r, uint8_t v) {
-  if (r == 0x6c && !(v & 0x20)) s_feEchoOn = true;
-  if (r == 0x6d && s_feNesa < 4) s_feEsa[s_feNesa++] = (uint16_t)(v << 8);
-  if (r == 0x6d && s_feNesa >= 4) s_feRecOk = false;
-  if (r == 0x7d && (v & 0xf) > s_feEdlMax) s_feEdlMax = v & 0xf;
+  Apu *apu = ctx;
+  if (!dsp_fe_echo_owned(&apu->fe, adr, len)) return;
+  if (s_feRecOk) g_dsp_fe_echo_conflicts++;
+  s_feRecOk = false;
 }
 /* At a batch's launch: hand its records over and start the next set. */
 static void apu_feTakeRecords(Apu* apu) {
@@ -946,7 +925,6 @@ void apu_cpuWrite(Apu* apu, uint16_t adr, uint8_t val) {
       if (apu->dspAdr < 0x80) {
         apu_feNow(apu);
         apu_feCheck(apu);
-        apu_feEchoWrite(apu->dspAdr, val);
         dsp_fe_write(&apu->fe, apu->dspAdr, val);
       }
 #endif

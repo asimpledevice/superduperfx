@@ -42,6 +42,69 @@ static inline void voice_catch_up(DspFeVoice *v, uint32_t s) {
   v->t = s;
 }
 
+/* ---- Echo position (dsp_handleEcho's indexes) --------------------------- */
+
+static void owned_set(DspFrontEnd *fe, uint32_t unit, uint32_t n) {
+  /* units [unit, unit + n) mod 16384 */
+  while (n) {
+    unit &= 0x3fff;
+    const uint32_t w = unit >> 5, b = unit & 31;
+    const uint32_t take = (32 - b) < n ? (32 - b) : n;
+    const uint32_t mask = take == 32 ? 0xffffffffu : ((1u << take) - 1u) << b;
+    fe->echo_owned[w] |= mask;
+    unit += take;
+    n -= take;
+  }
+}
+
+/* Mark `count` samples of echo writes from ring index `index`. */
+static inline void echo_mark(DspFrontEnd *fe, uint32_t index, uint32_t count) {
+  if (fe->echo_writes && count) owned_set(fe, ((uint32_t)fe->esa >> 2) + index, count);
+}
+
+/* Advance the echo position over samples [echo_t, s). */
+static void echo_catch_up(DspFrontEnd *fe, uint32_t s) {
+  if ((int32_t)(s - fe->echo_t) <= 0) return;
+  uint32_t n = s - fe->echo_t;
+  fe->echo_t = s;
+  if (!n) return;
+  /* Up to the next wrap. */
+  uint32_t step = n < fe->echo_remain ? n : fe->echo_remain;
+  echo_mark(fe, fe->echo_index, step);
+  fe->echo_index = (uint16_t)(fe->echo_index + step);
+  fe->echo_remain = (uint16_t)(fe->echo_remain - step);
+  n -= step;
+  if (fe->echo_remain) return;
+  fe->echo_index = 0;
+  fe->echo_remain = fe->delay;
+  if (!n) return;
+  /* Whole rings, then the rest (the delay holds: writes to EDL catch up first). */
+  const uint32_t rest = n % fe->delay;
+  echo_mark(fe, 0, n >= fe->delay ? fe->delay : rest);
+  fe->echo_index = (uint16_t)rest;
+  fe->echo_remain = (uint16_t)(fe->delay - rest);
+}
+
+void dsp_fe_echo_sync(DspFrontEnd *fe) { echo_catch_up(fe, fe->now); }
+
+bool dsp_fe_echo_owned(const DspFrontEnd *fe, uint16_t adr, unsigned len) {
+  const uint32_t first = adr >> 2, last = ((uint32_t)adr + len - 1) >> 2;
+  for (uint32_t u = first; u <= last; u++)
+    if ((fe->echo_owned[(u & 0x3fff) >> 5] >> (u & 31)) & 1) return true;
+  return false;
+}
+
+void dsp_fe_echo_clear(DspFrontEnd *fe, uint16_t adr, unsigned len) {
+  const uint32_t first = adr >> 2, last = ((uint32_t)adr + len - 1) >> 2;
+  for (uint32_t u = first; u <= last; u++) fe->echo_owned[(u & 0x3fff) >> 5] &= ~(1u << (u & 31));
+}
+
+void dsp_fe_echo_position(DspFrontEnd *fe, uint16_t *index, uint16_t *remain) {
+  echo_catch_up(fe, fe->now);
+  *index = fe->echo_index;
+  *remain = fe->echo_remain;
+}
+
 /* ---- Envelope (dsp_cycleChannel / dsp_handleGain) ---------------------- */
 
 static void env_gain(DspFeVoice *v, bool live_gain) {
@@ -110,6 +173,9 @@ uint8_t dsp_fe_envx(DspFrontEnd *fe, int i) {
 
 static void decode(DspFrontEnd *fe, int i, uint32_t s) {
   DspFeVoice *v = &fe->v[i];
+  /* Echo writes of the samples before s are in (this sample's comes after
+   * its decodes), so on_read may ask dsp_fe_echo_owned. */
+  echo_catch_up(fe, s);
   const uint8_t *ram = fe->aram;
   if (v->prev_flags == 1 || v->prev_flags == 3) {   /* loop (and end) */
     const uint16_t p = (uint16_t)(fe->dir + 4 * v->srcn);
@@ -137,6 +203,7 @@ static void voice_sample(DspFrontEnd *fe, int i, uint32_t s) {
     if (v->key_off) {
       v->state = 4;
     } else if (v->key_on) {
+      echo_catch_up(fe, s);
       v->key_on = false;
       v->prev_flags = 0;
       const uint16_t p = (uint16_t)(fe->dir + 4 * v->srcn);
@@ -178,6 +245,12 @@ void dsp_fe_init(DspFrontEnd *fe, const Dsp *d, const uint8_t *aram, uint32_t no
   fe->dir = d->dirPage;
   fe->endx = d->ram[0x7c];
   fe->reset = d->reset;
+  fe->echo_t = now;
+  fe->esa = d->echoBufferAdr;
+  fe->delay = d->echoDelay;
+  fe->echo_index = d->echoBufferIndex;
+  fe->echo_remain = d->echoRemain;
+  fe->echo_writes = d->echoWrites;
   fe->on_block = on_block;
   fe->ctx = ctx;
   for (int i = 0; i < 8; i++) {
@@ -292,6 +365,17 @@ void dsp_fe_write(DspFrontEnd *fe, uint8_t adr, uint8_t val) {
     case 0x6c:
       for (int i = 0; i < 8; i++) VOICE_CHANGE(i, (void)0);   /* envelopes to now first */
       fe->reset = (val & 0x80) != 0;
+      echo_catch_up(fe, fe->now);
+      fe->echo_writes = (val & 0x20) == 0;
+      break;
+    case 0x6d:
+      echo_catch_up(fe, fe->now);
+      fe->esa = (uint16_t)(val << 8);
+      break;
+    case 0x7d:
+      echo_catch_up(fe, fe->now);
+      fe->delay = (uint16_t)((val & 0xf) * 512);
+      if (!fe->delay) fe->delay = 1;
       break;
     default:
       break;
