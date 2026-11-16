@@ -716,8 +716,8 @@ it held). Large results go to RDRAM as Red produces them; Blue checks a
 flag in DMEM and takes what is there.
 
 **Register history in RDRAM.** Red appends readable register state indexed
-by sample time (OUTX for the eight voices is 8 bytes a sample, about 4 KB
-a frame), DMA'd a chunk at a time; a ring Blue discards behind its own
+by sample time: OUTX only (owner, 2026-11-16; ENDX and ENVX are answered by
+the front end on Blue), 8 bytes a sample, about 4 KB a frame, DMA'd a chunk at a time; a ring Blue discards behind its own
 time. A backward read at sample t then needs only Red's progress to have
 passed t, not Red to stop at t: Blue waits for the progress word and reads
 the entry for t (exact). An HLE build may take the newest entry instead of
