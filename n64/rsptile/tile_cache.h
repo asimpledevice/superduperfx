@@ -60,5 +60,9 @@ void n64_tile_cache_tlut(const uint16_t *cgram, unsigned brightness, unsigned ki
 const uint8_t *n64_tile_cache_c2(void);
 const uint8_t *n64_tile_cache_c4(void);
 const uint8_t *n64_tile_cache_c8(void);
+/* Empty-tile bitmaps of the 2bpp and 4bpp caches (RDRAM, written by the
+ * RSP): bit t of byte t / 8 set when tile t is all colour 0. */
+const uint8_t *n64_tile_cache_empty2(void);
+const uint8_t *n64_tile_cache_empty4(void);
 
 #endif

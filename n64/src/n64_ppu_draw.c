@@ -175,7 +175,8 @@ static bool scene_draw_bg_(int layer, bool hi, int a, int b, int sx0, int sx1) {
     const uint8_t *cache = bpp == 4 ? n64_tile_cache_c4() : n64_tile_cache_c2();
 #if N64PPU_SCENE_RSP
     /* The RSP reads the tilemaps and emits the rectangles. */
-    n64_scene_rsp_bg(s_scene_vram, cache, bg.hs, bg.vs, bg.xsc, bpp, bg.tileadr, r0, r1, hi,
+    n64_scene_rsp_bg(s_scene_vram, cache,
+                     bpp == 4 ? n64_tile_cache_empty4() : n64_tile_cache_empty2(), bg.hs, bg.vs, bg.xsc, bpp, bg.tileadr, r0, r1, hi,
                      sx0, sx1, kOx, kOy);
     continue;
 #endif

@@ -60,9 +60,11 @@ OUT2:   .ds.b 4 * TC_CI4_TILE
 OUT4:   .ds.b 2 * TC_CI4_TILE
 OUT8:   .ds.b TC_CI8_TILE
     .align 4
-TLIN:   .ds.b 512 + 16              # CGRAM as read
-    .align 4
-TLOUT:  .ds.b 512
+ZB2:    .ds.b 512                   # empty-tile bitmaps (TCJ_Z2, TCJ_Z4)
+ZB4:    .ds.b 256
+# The TLUT command reuses the sync's buffers.
+#define TLIN  BUFV                  /* 528 bytes: BUFV and BUFA */
+#define TLOUT OUT2                  /* 512 bytes: OUT2, OUT4, OUT8 */
 
     .text
 
@@ -90,6 +92,17 @@ TileCmd_Sync:
     lw s3, %lo(JOB + TCJ_C8)
     lhu k1, %lo(JOB + TCJ_FIRST)
     lhu s7, %lo(JOB + TCJ_NBLOCKS)
+    lw s0, %lo(JOB + TCJ_Z2)
+    beqz s0, 1f
+    li s4, %lo(ZB2)
+    jal DMAIn
+    li t0, DMA_SIZE(512, 1)
+1:  lw s0, %lo(JOB + TCJ_Z4)
+    beqz s0, 1f
+    li s4, %lo(ZB4)
+    jal DMAIn
+    li t0, DMA_SIZE(256, 1)
+1:
     andi k0, s5, 7
     sll t1, k1, 8
     addu s5, s5, t1
@@ -153,6 +166,58 @@ Group_loop:
     li t1, %lo(BUFA)
     sll t2, a1, 6
     addu a2, t1, t2                 # the group's 64 bytes
+
+    # Empty tiles: t5 bit j = unit j all zero.
+    move t5, zero
+    move t3, a2
+    li t6, 1
+2:  lw t1, 0(t3)
+    lw t2, 4(t3)
+    or t1, t1, t2
+    lw t2, 8(t3)
+    or t1, t1, t2
+    lw t2, 12(t3)
+    or t1, t1, t2
+    bnez t1, 3f
+    nop
+    or t5, t5, t6
+3:  sll t6, t6, 1
+    addiu t3, t3, 16
+    li t1, 16
+    bne t6, t1, 2b
+    nop
+    # C2: nibble (group & 1) of byte block * 2 + group / 2.
+    sll t1, k1, 1
+    srl t2, a1, 1
+    addu t1, t1, t2
+    lbu t3, %lo(ZB2)(t1)
+    andi t2, a1, 1
+    sll t2, t2, 2                   # 0 or 4
+    li t4, 0xf
+    sllv t4, t4, t2
+    nor t4, t4, zero
+    and t3, t3, t4
+    sllv t4, t5, t2
+    or t3, t3, t4
+    sb t3, %lo(ZB2)(t1)
+    # C4: bits 2 * group of byte block: tile 0 = units 0 and 1, tile 1 = 2 and 3.
+    andi t2, t5, 3
+    xori t2, t2, 3
+    sltiu t2, t2, 1                 # tile 0 empty
+    andi t4, t5, 12
+    xori t4, t4, 12
+    sltiu t4, t4, 1
+    sll t4, t4, 1
+    or t2, t2, t4                   # 2 bits
+    lbu t3, %lo(ZB4)(k1)
+    sll t1, a1, 1
+    li t4, 3
+    sllv t4, t4, t1
+    nor t4, t4, zero
+    and t3, t3, t4
+    sllv t2, t2, t1
+    or t3, t3, t2
+    sb t3, %lo(ZB4)(k1)
 
     beqz s1, 3f                     # C2: four tiles, one unit each
     nop
@@ -233,6 +298,17 @@ Block_next:
 Sync_done:
     jal DMAWaitIdle
     nop
+    lw s0, %lo(JOB + TCJ_Z2)
+    beqz s0, 1f
+    li s4, %lo(ZB2)
+    jal DMAOut
+    li t0, DMA_SIZE(512, 1)
+1:  lw s0, %lo(JOB + TCJ_Z4)
+    beqz s0, 1f
+    li s4, %lo(ZB4)
+    jal DMAOut
+    li t0, DMA_SIZE(256, 1)
+1:
     sw v1, %lo(JOB + TCJ_RESULT)
     addiu s0, a3, TCJ_PAD
     li s4, %lo(JOB + TCJ_PAD)

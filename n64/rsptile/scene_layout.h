@@ -20,6 +20,7 @@
 #define SCJ_OX      24   /* u16 screen position of SNES x 0 */
 #define SCJ_OY      26   /* u16 screen position of row 0 */
 #define SCJ_RESULT  28   /* u32 written by the RSP: rectangles emitted */
-#define SCJ_SIZE    32
+#define SCJ_EMPTY   32   /* u32 the cache's empty-tile bitmap (512 bytes read), 0: none */
+#define SCJ_SIZE    48
 
 #endif

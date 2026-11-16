@@ -12,7 +12,9 @@
 #define TCJ_NBLOCKS 22   /* u16 blocks */
 #define TCJ_PAD     24   /* u32 */
 #define TCJ_RESULT  28   /* u32 written by the RSP: 64-byte groups converted */
-#define TCJ_SIZE    32
+#define TCJ_Z2      32   /* u32 empty-tile bitmap of C2 (512 bytes, bit t: tile t all zero), 0: off */
+#define TCJ_Z4      36   /* u32 empty-tile bitmap of C4 (256 bytes), 0: off */
+#define TCJ_SIZE    48
 
 #define TC_BLOCK    256  /* VRAM bytes per block */
 

@@ -45,6 +45,8 @@ JOBADR:  .ds.b 4
 TMAP:    .ds.b 2 * 72               # the two screens' tilemap rows (+8: alignment)
     .align 3
 OUTB:    .ds.b OUTB_SIZE
+    .align 3
+ZB:      .ds.b 512                  # empty-tile bitmap
 
     .text
 
@@ -69,6 +71,12 @@ SceneCmd_Bg:
     jal DMAIn
     li t0, DMA_SIZE(SCJ_SIZE, 1)
 
+    lw s0, %lo(JOB + SCJ_EMPTY)
+    beqz s0, 1f
+    li s4, %lo(ZB)
+    jal DMAIn
+    li t0, DMA_SIZE(512, 1)
+1:
     li v1, %lo(OUTB)
     lui t0, 0x2600                  # SYNC_LOAD
     EMIT t0, zero
@@ -190,8 +198,18 @@ Tile_loop:
     lhu t7, %lo(JOB + SCJ_TILEADR)
     addu t3, t3, t7
     andi t3, t3, 0x7fff
-    srlv t3, t3, t6
-    sll t3, t3, 6
+    srlv t3, t3, t6                 # tile index
+    # Empty tiles draw nothing.
+    lw t4, %lo(JOB + SCJ_EMPTY)
+    beqz t4, 1f
+    srl t4, t3, 3
+    lbu t4, %lo(ZB)(t4)
+    andi t6, t3, 7
+    srlv t4, t4, t6
+    andi t4, t4, 1
+    bnez t4, Tile_next
+    nop
+1:  sll t3, t3, 6
     lw t9, %lo(JOB + SCJ_CACHE)
     addu t9, t9, t3
 

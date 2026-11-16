@@ -12,6 +12,7 @@ typedef struct __attribute__((packed, aligned(16))) {
   uint32_t vram, prev, c2, c4, c8;
   uint16_t first, nblocks;
   uint32_t pad, result;
+  uint32_t z2, z4, pad2[2];
 } TileJob;
 _Static_assert(sizeof(TileJob) == TCJ_SIZE, "tile job layout");
 
@@ -24,7 +25,7 @@ _Static_assert(sizeof(TlutJob) == TLJ_SIZE, "tlut job layout");
 enum { kJobs = 4 };   /* jobs in flight (ring) */
 
 static uint32_t s_ovl;
-static uint8_t *s_prev, *s_c2, *s_c4, *s_c8;
+static uint8_t *s_prev, *s_c2, *s_c4, *s_c8, *s_z2, *s_z4;
 static TileJob *s_jobs;
 static TlutJob *s_tjobs;
 static unsigned s_job, s_tjob;
@@ -43,6 +44,13 @@ void n64_tile_cache_init(unsigned formats) {
   if (formats & TC_FMT_2BPP) s_c2 = alloc_zero((size_t)TC_C2_TILES * TC_CI4_TILE);
   if (formats & TC_FMT_4BPP) s_c4 = alloc_zero((size_t)TC_C4_TILES * TC_CI4_TILE);
   if (formats & TC_FMT_8BPP) s_c8 = alloc_zero((size_t)TC_C8_TILES * TC_CI8_TILE);
+  /* Empty-tile bitmaps: everything starts empty (zero VRAM). */
+  s_z2 = alloc_zero(512);
+  s_z4 = alloc_zero(256);
+  memset(s_z2, 0xff, 512);
+  memset(s_z4, 0xff, 256);
+  data_cache_hit_writeback_invalidate(s_z2, 512);
+  data_cache_hit_writeback_invalidate(s_z4, 256);
   s_jobs = (TileJob *)alloc_zero(sizeof(TileJob) * kJobs);
   s_tjobs = (TlutJob *)alloc_zero(sizeof(TlutJob) * kJobs);
 }
@@ -61,6 +69,8 @@ volatile uint32_t *n64_tile_cache_sync(const uint16_t *vram) {
   j->nblocks = 0x10000 / TC_BLOCK;
   j->pad = 0;
   j->result = 0;
+  j->z2 = PhysicalAddr(s_z2);
+  j->z4 = PhysicalAddr(s_z4);
   rspq_write(s_ovl, 0, PhysicalAddr(j));
   return &j->result;
 }
@@ -82,3 +92,5 @@ void n64_tile_cache_tlut(const uint16_t *cgram, unsigned brightness, unsigned ki
 const uint8_t *n64_tile_cache_c2(void) { return s_c2; }
 const uint8_t *n64_tile_cache_c4(void) { return s_c4; }
 const uint8_t *n64_tile_cache_c8(void) { return s_c8; }
+const uint8_t *n64_tile_cache_empty2(void) { return s_z2; }
+const uint8_t *n64_tile_cache_empty4(void) { return s_z4; }

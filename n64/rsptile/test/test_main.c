@@ -5,6 +5,7 @@
  * changes. Results on screen and in the debug log. */
 #include <libdragon.h>
 #include <stdlib.h>
+#include <stdbool.h>
 #include <string.h>
 
 #include "tile_cache.h"
@@ -43,7 +44,14 @@ static int check(int *first_bpp, unsigned *first_tile) {
     const uint8_t *c = UncachedAddr(k[f].c);
     for (unsigned t = 0; t < k[f].n; t++) {
       tc_ref_tile(s_vram, k[f].bpp, t, ref);
-      if (memcmp(ref, c + (size_t)t * k[f].sz, k[f].sz)) {
+      bool empty_bad = false;
+      if (k[f].bpp != 8) {   /* the empty-tile bit */
+        static const uint8_t zero[TC_CI8_TILE];
+        const uint8_t *z = UncachedAddr(k[f].bpp == 2 ? n64_tile_cache_empty2() : n64_tile_cache_empty4());
+        const bool empty = !memcmp(ref, zero, k[f].sz);
+        empty_bad = empty != (((z[t >> 3] >> (t & 7)) & 1) != 0);
+      }
+      if (empty_bad || memcmp(ref, c + (size_t)t * k[f].sz, k[f].sz)) {
         if (!bad) { *first_bpp = k[f].bpp; *first_tile = t; }
         bad++;
       }
@@ -53,13 +61,14 @@ static int check(int *first_bpp, unsigned *first_tile) {
 }
 
 static void mutate(void) {
-  const unsigned kind = rnd() % 4, n = 1 + rnd() % 24;
+  const unsigned kind = rnd() % 5, n = 1 + rnd() % 24;
   for (unsigned i = 0; i < n; i++) {
     const unsigned a = rnd() & 0x7fff;
     switch (kind) {
     case 0: s_vram[a] ^= (uint16_t)(1u << (rnd() % 16)); break;          /* one bit */
     case 1: for (unsigned j = 0; j < 16; j++) s_vram[(a + j) & 0x7fff] = (uint16_t)rnd(); break;
     case 2: for (unsigned j = 0; j < 128; j++) s_vram[((a & ~127u) + j) & 0x7fff] = (uint16_t)rnd(); break;
+    case 3: for (unsigned j = 0; j < 32; j++) s_vram[((a & ~31u) + j) & 0x7fff] = 0; break;   /* empty tiles */
     default: s_vram[a] = (uint16_t)rnd(); break;
     }
   }
@@ -74,7 +83,7 @@ int main(void) {
   int fails = 0;
 
   /* Full conversion. */
-  for (unsigned i = 0; i < 0x8000; i++) s_vram[i] = (uint16_t)rnd();
+  for (unsigned i = 0; i < 0x8000; i++) s_vram[i] = (i & 0x400) ? 0 : (uint16_t)rnd();   /* some empty tiles */
   uint32_t t0 = TICKS_READ();
   volatile uint32_t *res = n64_tile_cache_sync(s_vram);
   rspq_wait();

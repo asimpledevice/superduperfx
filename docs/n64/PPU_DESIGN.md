@@ -395,3 +395,12 @@ commands (sprites, subscreen) behind the RSP, which now converts tiles
 skip empty tiles (a per-tile flag from the tile cache; SMW's sky is mostly
 empty tiles), a cheaper no-change sync, sprites as rectangles (dropping
 the OBJ planes), and then hardware RDP time, which ares does not model.
+
+**Empty tiles.** The tile cache sync also keeps empty-tile bitmaps for the
+2bpp and 4bpp caches (a tile is empty when its VRAM bytes are all zero:
+every pixel colour 0), checked by the tile cache test (including tiles
+emptied later); `SceneCmd_Bg` loads the layer's bitmap and emits nothing
+for empty tiles. RENDER=2 still identical (SMW through frame 660); present's
+command issue in ares went from 12.7 to 11.8 ms, so the number of
+rectangles is not the main cost there. Next is measuring on hardware, where
+the RSP's and the RDP's own time can be seen (ares models neither).

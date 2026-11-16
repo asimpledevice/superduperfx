@@ -18,6 +18,7 @@ typedef struct __attribute__((packed, aligned(16))) {
   uint8_t r0, r1, prio, pad;
   uint16_t sx0, sx1, ox, oy;
   uint32_t result;
+  uint32_t empty, pad2[3];
 } SceneJob;
 _Static_assert(sizeof(SceneJob) == SCJ_SIZE, "scene job layout");
 
@@ -35,7 +36,8 @@ void n64_scene_rsp_init(void) {
   data_cache_hit_writeback_invalidate(s_jobs, sizeof(SceneJob) * kJobs);
 }
 
-void n64_scene_rsp_bg(const uint16_t *vram, const uint8_t *cache, uint16_t hs, uint16_t vs,
+void n64_scene_rsp_bg(const uint16_t *vram, const uint8_t *cache, const uint8_t *empty,
+                      uint16_t hs, uint16_t vs,
                       uint8_t xsc, int bpp, uint16_t tileadr, int r0, int r1, int prio,
                       int sx0, int sx1, int ox, int oy) {
   SceneJob *j = UncachedAddr(&s_jobs[s_next++ % kJobs]);
@@ -55,5 +57,6 @@ void n64_scene_rsp_bg(const uint16_t *vram, const uint8_t *cache, uint16_t hs, u
   j->ox = (uint16_t)ox;
   j->oy = (uint16_t)oy;
   j->result = 0;
+  j->empty = empty ? PhysicalAddr(empty) : 0;
   rspq_write(s_ovl, 0, PhysicalAddr(j));
 }
