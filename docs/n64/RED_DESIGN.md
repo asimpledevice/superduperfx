@@ -363,15 +363,71 @@ stays as the reference, and each is hash-identical to the C core.
   leak into the view. A correct view on the RSP must be kept current by
   applying every write in order, which is 2e. The CPU's view work is only
   0.5 ms a frame (0.26 with the attempt), so it stays on the CPU until 2e.
-- **2c. S-DSP state stays on the RSP.** No pack or unpack per batch; the
-  CPU reads the few fields it needs (marks, ENVX/OUTX/ENDX) from the block,
-  as step 1a did for the SPC.
-- **2d. The join on the RSP.** The S-DSP writes samples into the output
-  ring and DMAs the echo bytes back to ARAM; the CPU's join only notes
-  that the batch is done.
-- **2e. No CPU between the SPC and the S-DSP.** Prep reads the SPC's raw
-  log directly, batch edges are taken on the RSP, and Red hands off from
-  the SPC overlay to prep and the S-DSP itself.
+- **2c-2e as first written (superseded below):** 2c, the S-DSP state stays
+  on the RSP; 2d, the join on the RSP (samples to the output ring, echo
+  bytes back to ARAM); 2e, prep reads the SPC's raw log, batch edges on the
+  RSP. Written while the SPC still ran on the RSP.
+
+## The SPC → S-DSP link, fire and forget (owner, 2026-11-16)
+
+Supersedes 2c-2e above. The SPC is on Blue (the CPU), the S-DSP on Red (the
+RSP). The goal: lockstep results (the reference: the C core with the
+deferred S-DSP off, one S-DSP sample every 32 SPC cycles on one shared
+ARAM), chunked execution, and nothing coming back to the CPU unless the
+SPC itself reads something only the S-DSP knows.
+
+**One queue in RDRAM, a doorbell in the mailbox.**
+- Blue's SPC appends every event the S-DSP depends on to a ring in RDRAM,
+  each with its sample time: "at sample t, DSP register r = v" and "at
+  sample t, ARAM[a] = v". Register and ARAM writes share the ring because
+  the S-DSP must apply them in order. The ring holds a couple of frames,
+  so the SPC never waits for room.
+- At natural points (every N samples, the frame end) Blue writes back the
+  new entries from its data cache and rings the doorbell: one mailbox word,
+  "valid up to entry k, time T". It does not wait. (CPU stores into DMEM
+  are read back: see the lost-store finding in BRINGUP_NOTES. One per post
+  is cheap; the entries themselves never go through DMEM.)
+- Red, between other jobs, reads the new entries by DMA, applies the ARAM
+  writes to its own 64 KB copy of ARAM in time order, renders samples up to
+  T into the output ring, and posts "caught up to sample T" in the mailbox
+  (the up word and its interrupt). The S-DSP's state (voices, envelopes,
+  echo position) stays on the RSP side between batches: no pack, unpack or
+  join on the CPU.
+- Green feeds the AI from finished samples, using the published progress;
+  it never forces a sync.
+
+**Only the backward direction waits.** The S-DSP can never be ahead of the
+SPC (it runs only to times the SPC has posted), so "run to t" is always
+possible. When the SPC reads ENVX, OUTX or ENDX at sample t, or reads ARAM
+inside the echo window (the CPU knows the window from the SPC's own ESA and
+EDL writes), Blue rings the doorbell with "run to t and publish"; Red
+renders to exactly t, writes the readable registers (17 bytes) or the
+requested echo bytes into a small RDRAM block, and posts "caught up to t";
+Blue reads the values. Earlier counts: 0-2 such reads a frame in SMW and
+JM2. SPC writes into the echo window are ordinary queue entries.
+
+**What this deletes on the CPU:** page marks, the ARAM view and its undo,
+pack and unpack, the join before every launch, the C fallback for batches
+the RSP rejected (the RSP must accept every batch: wrapping echo windows,
+pitch modulation, long logs split), and direct register writes outside a
+batch.
+
+**Open questions, to measure before building:**
+- SPC ARAM writes per frame (the queue's size and the CPU's append cost);
+  if logging every write is too dear, log only writes to the S-DSP's hot
+  pages (directory, BRR spans of playing voices, echo window), which needs
+  the footprint published by Red.
+- Backward reads per frame (ENVX/OUTX/ENDX, echo window) per game.
+- How often an ARAM write lands where the S-DSP reads later in the same
+  batch (Red must apply such writes at their sample, splitting the batch:
+  corner case or common?). The S-DSP microcode fills IMEM, so applying
+  ARAM writes is prep's job or needs IMEM freed.
+- Batches the RSP rejects today, and why.
+- How long a backward read waits: Red should take a "run to t" request
+  ahead of graphics work (libdragon's high-priority queue, which needs RSP
+  jobs split small enough to give it a turn), and should keep the S-DSP
+  caught up eagerly as entries arrive, so a read waits for a few samples,
+  not a batch.
 
 ## Independence: where the CPU waits on the RSP today (2026-11-14)
 
