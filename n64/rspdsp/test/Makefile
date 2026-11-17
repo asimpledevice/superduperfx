@@ -26,11 +26,15 @@ $(BUILD_DIR)/n64_compat.o: ../../src/n64_compat.c
 	@mkdir -p $(dir $@)
 	$(N64_CC) -c $(CFLAGS) $(N64_CFLAGS) -o $@ $<
 
-$(BUILD_DIR)/rspdsp_test.elf: $(BUILD_DIR)/n64_compat.o $(BUILD_DIR)/test_main.o $(BUILD_DIR)/snesdsp_rsp.o $(BUILD_DIR)/rsp_snesdsp.o $(BUILD_DIR)/rsp_snesdsp_ne.o $(DSP_OBJS)
+# The voice-major variant (rsp_snesdsp_vm.S) takes the pitch-modulated
+# batches; TEST_CFLAGS=-DRSPDSP_VM_ALL runs every batch on it.
+RSPDSP_VM ?= 1
+N64_CFLAGS += -DRSPDSP_VM=$(RSPDSP_VM)
+$(BUILD_DIR)/rspdsp_test.elf: $(BUILD_DIR)/n64_compat.o $(BUILD_DIR)/test_main.o $(BUILD_DIR)/snesdsp_rsp.o $(BUILD_DIR)/rsp_snesdsp.o $(BUILD_DIR)/rsp_snesdsp_ne.o $(BUILD_DIR)/rsp_snesdsp_vm.o $(DSP_OBJS)
 
 rspdsp_test.z64: N64_ROM_TITLE = "RSP DSP test"
-$(BUILD_DIR)/rsp_snesdsp.o $(BUILD_DIR)/rsp_snesdsp_ne.o: RSPASFLAGS += $(RSP_DEFS)
-$(BUILD_DIR)/rsp_snesdsp_ne.o: ../rsp_snesdsp.S
+$(BUILD_DIR)/rsp_snesdsp.o $(BUILD_DIR)/rsp_snesdsp_ne.o $(BUILD_DIR)/rsp_snesdsp_vm.o: RSPASFLAGS += $(RSP_DEFS)
+$(BUILD_DIR)/rsp_snesdsp_ne.o $(BUILD_DIR)/rsp_snesdsp_vm.o: ../rsp_snesdsp.S ../snesdsp_rsp_layout.h
 
 clean:
 	rm -rf $(BUILD_DIR) rspdsp_test.z64

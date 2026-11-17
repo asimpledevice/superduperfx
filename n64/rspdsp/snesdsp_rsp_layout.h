@@ -92,6 +92,10 @@
 #define RSPDSP_SC_U         0x410  /* lanes: mvolL mvolR evolL evolR fb fb */
 #define RSPDSP_SC_C         0x420
 #define RSPDSP_STATE_SIZE   0x430  /* multiple of 16 */
+/* The voice-major variant (RSPDSP_VM) snapshots the state's first
+ * RSPDSP_VM_SNAP bytes (voices, register file, globals) in RDRAM right after
+ * the state block, so the block is allocated with that much room after it. */
+#define RSPDSP_VM_SNAP      0x380
 
 /* RSPDSP_STREAM (the audio split): the state block is Yellow's own and stays
  * in RDRAM between batches; each batch's parameters come in a separate

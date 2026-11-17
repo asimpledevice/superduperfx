@@ -35,7 +35,9 @@ static void random_state(Dsp *d, uint8_t *aram) {
   d->apu_ram = aram;
   for (int r = 0; r < 0x80; r++) {
     uint8_t v = (uint8_t)rnd();
+#if !RSPDSP_VM
     if (r == 0x2d) v &= 1;                       /* pitch modulation: C path */
+#endif
     if (r == 0x7d) v &= 0x0f;
     if (r == 0x4c || r == 0x5c) v &= (uint8_t)rnd();
     if (r == 0x3d) v &= (uint8_t)rnd() & (uint8_t)rnd();
@@ -94,7 +96,9 @@ static uint32_t random_log(Dsp *d, uint32_t samples) {
     s_log[i].tag = (uint16_t)tag;
     if (rnd() & 1) {
       uint8_t r = (uint8_t)(rnd() & 0x7f), v = (uint8_t)rnd();
+#if !RSPDSP_VM
       if (r == 0x2d) v &= 1;
+#endif
       if (r == 0x6d || r == 0x7d) r = 0x4c;      /* keep the echo window */
       if (r == 0x5d && (rnd() & 1)) r = 0x4c;    /* key on often */
 #ifdef RSPDSP_REAL_PITCH
@@ -189,6 +193,10 @@ int main(void) {
          (unsigned long)g_snesdsp_rsp_samples);
   { extern uint32_t g_snesdsp_rsp_ne_batches;
     debugf("no-echo variant: %lu batches\n", (unsigned long)g_snesdsp_rsp_ne_batches); }
+#if RSPDSP_VM
+  { extern uint32_t g_snesdsp_rsp_vm_batches;
+    debugf("voice-major variant: %lu batches\n", (unsigned long)g_snesdsp_rsp_vm_batches); }
+#endif
   debugf("RSPDSP_TEST %s: %d/%d pass, %d fell back to C\n", fails ? "FAIL" : "PASS",
          tests - fails - fallbacks, tests - fallbacks, fallbacks);
   for (;;) {}

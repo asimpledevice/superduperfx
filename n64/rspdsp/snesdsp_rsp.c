@@ -20,6 +20,11 @@
 
 DEFINE_RSP_UCODE(rsp_snesdsp);
 DEFINE_RSP_UCODE(rsp_snesdsp_ne);   /* no-echo variant (rsp_snesdsp_ne.S) */
+#if RSPDSP_VM
+DEFINE_RSP_UCODE(rsp_snesdsp_vm);   /* voice-major variant (rsp_snesdsp_vm.S) */
+static uint32_t s_overlay_vm_id;
+uint32_t g_snesdsp_rsp_vm_batches;  /* batches run on the voice-major variant */
+#endif
 /* RSPDSP_PREP=1 (step 2a): register writes are decoded on the RSP
  * (rsp_snesdsp_prep.S) instead of here; the C decode stays the reference. */
 #ifndef RSPDSP_PREP
@@ -86,6 +91,9 @@ static void stream_init(void);
 void snesdsp_rsp_init(void) {
   s_overlay_id = rspq_overlay_register(&rsp_snesdsp);
   s_overlay_ne_id = rspq_overlay_register(&rsp_snesdsp_ne);
+#if RSPDSP_VM
+  s_overlay_vm_id = rspq_overlay_register(&rsp_snesdsp_vm);
+#endif
   s_run_overlay = s_overlay_id;
 #if RSPDSP_PREP
   s_prep_id = rspq_overlay_register(&rsp_snesdsp_prep);
@@ -276,6 +284,27 @@ static bool pmod_used(const Dsp *d) {
   for (int c = 1; c < 8; c++) if (d->channel[c].pitchModulation) return true;
   return false;
 }
+/* Pitch modulation at the batch's start or after a logged write: the batch
+ * runs on the voice-major variant (RSPDSP_VM), else on the CPU. */
+static bool s_batch_pmod;
+static inline bool pmod_ok(const Dsp *d) {
+  if (!pmod_used(d)) return true;
+#if RSPDSP_VM
+  s_batch_pmod = true;
+  return true;
+#else
+  return false;
+#endif
+}
+#if RSPDSP_VM
+#ifdef RSPDSP_VM_ALL   /* test only: every batch voice-major */
+#define VM_CHOOSE() (s_run_overlay = s_overlay_vm_id, g_snesdsp_rsp_vm_batches++)
+#else
+#define VM_CHOOSE() (s_batch_pmod ? (s_run_overlay = s_overlay_vm_id, g_snesdsp_rsp_vm_batches++) : 0)
+#endif
+#else
+#define VM_CHOOSE() ((void)0)
+#endif
 
 /* Emit stores for every state field register `reg` assigns, taken from
  * the shadow after dsp_write ran on it. */
@@ -378,7 +407,7 @@ static bool decode(Op **po, Op *end, uint16_t tag, bool isReg, uint16_t adr, uin
   if (o + 24 > end) return false;
   if (isReg) {
     dsp_write(&s_shadow, (uint8_t)adr, val);
-    if (pmod_used(&s_shadow) || (mirror && !echo_ok(&s_shadow))) return false;
+    if (!pmod_ok(&s_shadow) || (mirror && !echo_ok(&s_shadow))) return false;
     o = emit_reg(o, tag, (uint8_t)adr);
   } else {
     o->tag = tag; o->kind = RSPDSP_LOG_ARAM; o->pad = 0;
@@ -396,7 +425,8 @@ static bool decode(Op **po, Op *end, uint16_t tag, bool isReg, uint16_t adr, uin
 static bool batch_ok(const Dsp *dsp, uint32_t samples, bool mirror) {
   if (samples > kMaxSamples || dsp->shadow || dsp->output_filter || dsp->suppressOutput)
     return false;
-  return !pmod_used(dsp) && (!mirror || echo_ok(dsp));
+  s_batch_pmod = false;
+  return pmod_ok(dsp) && (!mirror || echo_ok(dsp));
 }
 
 /* ENVX ($x8) and OUTX ($x9) are left to the CPU: only the last sample's
@@ -525,7 +555,7 @@ static void run(Dsp *dsp, uint8_t *aram, uint32_t aram_len, Op *o, uint32_t samp
   data_cache_hit_writeback(s_blk, (s_nblk + 16) * sizeof s_blk[0]);
   data_cache_hit_writeback(s_kon, (s_nkon + 32) * sizeof s_kon[0]);
 #endif
-  data_cache_hit_writeback_invalidate(&s_block, sizeof s_block);
+  data_cache_hit_writeback_invalidate(&s_block, RSPDSP_STATE_SIZE);
   data_cache_hit_writeback_invalidate(s_ops.op, (nops + 32) * sizeof(Op));
   data_cache_hit_writeback_invalidate(aram, aram_len);
   data_cache_hit_writeback_invalidate(&s_out, sizeof s_out);
@@ -556,6 +586,7 @@ bool snesdsp_rsp_batch(Dsp *dsp, uint8_t *aram, const SnesDspLogIn *log, uint32_
   for (uint32_t i = 0; i < n; i++)
     if (!decode(&o, end, log[i].tag, log[i].isReg, log[i].adr, log[i].val, true)) return false;
   CHOOSE_OVERLAY(dsp, log, n, IS_REG_IN);
+  VM_CHOOSE();
 #if RSPDSP_BLOCKS
   if (!streams_for_batch(dsp, aram, log, n, samples)) return false;
 #endif
@@ -579,6 +610,7 @@ bool snesdsp_rsp_apu_batch(Dsp *dsp, uint8_t *aram, const ApuDspLogEntry *log, u
     if (!decode(&o, end, log[i].tag, log[i].isReg == 1, log[i].adr, log[i].val, false))
       return false;
   CHOOSE_OVERLAY(dsp, log, n, IS_REG_APU);
+  VM_CHOOSE();
   run(dsp, aram, 0x10000, o, samples);
   return true;
 }
@@ -852,7 +884,7 @@ static bool launch(Dsp *dsp, uint8_t *aram, const ApuDspLogEntry *log, uint32_t 
 #endif
   s_seq = (s_seq + 1) & 0xffffffu;
   *(uint32_t *)(s_block.bytes + RSPDSP_P_DONE_MSG) = RED_MSG(RED_MSG_DSP_DONE, s_seq);
-  data_cache_hit_writeback_invalidate(&s_block, sizeof s_block);
+  data_cache_hit_writeback_invalidate(&s_block, RSPDSP_STATE_SIZE);
   /* (RSPDSP_PREP: the RSP writes them; no line may stay in the cache.) */
   data_cache_hit_writeback_invalidate(s_ops.op, (nops + 32) * sizeof(Op));
   /* Only the samples this batch writes; the CPU never writes s_out. */
@@ -1108,7 +1140,7 @@ void apu_yellow_start(const Dsp *dsp, uint8_t *aram, uint32_t at, uint8_t untrac
     }
   put(&s_block, RSPDSP_M_KEYON, getu(&s_block, RSPDSP_M_KEYON) & ~untracked);
   put32(s_block.bytes + RSPDSP_P_ARAM, PhysicalAddr(aram));
-  data_cache_hit_writeback_invalidate(&s_block, sizeof s_block);
+  data_cache_hit_writeback_invalidate(&s_block, RSPDSP_STATE_SIZE);
   memcpy(&s_shadow, dsp, offsetof(Dsp, sampleBuffer));   /* decodes register writes from here on */
   s_posted = s_done_end = s_published = at;
   s_running = true;
@@ -1225,7 +1257,7 @@ const ApuYellowRegs *apu_yellow_regs(void) {
 void apu_yellow_stop(Dsp *dsp) {
   if (!s_running) return;
   wait_all();
-  data_cache_hit_invalidate(&s_block, sizeof s_block);
+  data_cache_hit_invalidate(&s_block, RSPDSP_STATE_SIZE);
   snesdsp_rsp_unpack(dsp, &s_block);
   set_envx_outx(dsp, s_slot[0].ops.op, 0, 1);   /* ENVX/OUTX from the state */
   s_running = false;

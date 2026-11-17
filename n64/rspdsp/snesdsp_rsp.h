@@ -10,6 +10,7 @@ struct Dsp;
 
 typedef struct __attribute__((aligned(16))) RspDspState {
   uint8_t bytes[RSPDSP_STATE_SIZE];
+  uint8_t vm_snap[RSPDSP_VM_SNAP];   /* the voice-major variant's (RSP only) */
 } RspDspState;
 
 /* A logged write, in time order: before sample `tag` of the batch, either
