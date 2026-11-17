@@ -280,6 +280,21 @@ void n64_ppu_scene_tlut(const uint16_t *cgram, const struct Ppu *regs, unsigned 
   const unsigned b = PPU_brightness(regs);
   const uint8_t mflags = (uint8_t)((PPU_subtractColor(regs) ? kMathSubtract : 0) |
                                    (PPU_halfColor(regs) ? kMathHalf : 0));
+  /* math_color one component at a time: for each component k, the result
+   * for every source value, already in its RGBA5551 position. */
+  uint16_t comp[3][32];
+  if (mode != N64PPU_SCENE_TL_BLACK) {
+    const uint16_t bd = mode == N64PPU_SCENE_TL_MATH ? cgram[0] : 0;
+    const uint8_t fl = mode == N64PPU_SCENE_TL_MATH ? mflags : (uint8_t)(mflags & ~kMathHalf);
+    const bool half = mode == N64PPU_SCENE_TL_MATH && (mflags & kMathHalf);
+    for (int k = 0; k < 3; ++k) {
+      const unsigned x = (bd >> (5 * k)) & 31;
+      for (unsigned y = 0; y < 32; ++y) {
+        const unsigned v = (fl & kMathSubtract) ? (x >= y ? x - y : 0) : x + y;
+        comp[k][y] = (uint16_t)(bright(v, b, half) << (11 - 5 * k));
+      }
+    }
+  }
   for (int i = 0; i < 256; ++i) {
     int src;
     if (kind == TC_TLUT_16) src = (i & 15) ? i : -1;
@@ -288,16 +303,9 @@ void n64_ppu_scene_tlut(const uint16_t *cgram, const struct Ppu *regs, unsigned 
       src = (i < 128 && j >= 1 && j <= 3) ? (int)((base + 4u * (unsigned)q + (unsigned)j) & 255) : -1;
     }
     if (src < 0) { out[i] = 0; continue; }
+    if (mode == N64PPU_SCENE_TL_BLACK) { out[i] = 1; continue; }
     const uint16_t raw = cgram[src];
-    switch (mode) {
-      case N64PPU_SCENE_TL_BLACK: out[i] = 1; break;
-      case N64PPU_SCENE_TL_MATH:
-        out[i] = math_color(cgram[0], raw, mflags, b, (mflags & kMathHalf) != 0);
-        break;
-      default:
-        out[i] = math_color(0, raw, (uint8_t)(mflags & ~kMathHalf), b, false);
-        break;
-    }
+    out[i] = (uint16_t)(comp[0][raw & 31] | comp[1][(raw >> 5) & 31] | comp[2][(raw >> 10) & 31] | 1);
   }
 }
 

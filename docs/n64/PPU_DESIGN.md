@@ -405,6 +405,70 @@ command issue in ares went from 12.7 to 11.8 ms, so the number of
 rectangles is not the main cost there. Next is measuring on hardware, where
 the RSP's and the RDP's own time can be seen (ares models neither).
 
+**Sprites (4d, 2026-11-17).** Sprites are drawn as copy-mode rectangles
+from the 4bpp tile cache with the OBJ palettes (8-15 of the 4bpp TLUT), on
+every line where that is exact, and those lines get no OBJ plane rows
+(`N64PpuLine.obj_scene`). Once per frame, at the first such line, the CPU
+turns OAM and OBSEL into strips: one per 8x8 sprite tile and run of rows
+(`N64PpuFrame.obj_strip`, with the tile-cache index, x, rows, first tile
+row and flips). Each priority pass walks the sprites back to front in OAM
+rotation order, clips the strips to the band and span, and queues the
+records (8 bytes each) for `SceneCmd_Tiles` (`rsp_scene.S`). That command
+emits the same per-tile RDP commands as `SceneCmd_Bg`, skips empty tiles,
+and takes at most 256 records per command, under `SCENE_RDP_ROOM`.
+
+A line keeps the planes (`expand_obj`) unless the per-priority drawing
+equals the hardware's sprite pixel, which holds when:
+- no sprite is dropped: at most 32 in range and 34 tiles (range and time
+  over);
+- no sprite overlaps, by on-screen x range, a sprite that is later in
+  rotation and has higher priority. On hardware the front sprite's pixel
+  wins and takes its own, lower, priority, hiding the other sprite there.
+  Front sprites of equal or higher priority are fine: they are drawn later,
+  on top.
+- OAM and OBSEL have not changed since the frame's strips were built.
+
+The verdict is cached while a line's sprite set and rotation repeat.
+
+RENDER=2 in ares: SMW identical through frame 1,380 (43 plane lines),
+Pitfall through 510 (~114 rectangles a frame).
+
+**Subscreen and colour-window passes (2026-11-17).** Subscreen BG layers
+(under backdrop math) and main-screen spans clipped to black are drawn by
+the scene too, through TLUTs in the tile-cache arrangement with the plane
+palettes' colour rules (`n64_ppu_scene_tlut`: black for clipped main
+pixels; backdrop math; math with the backdrop clipped). Sprites in
+clipped spans use the black TLUT. `N64PpuLine.scene_bg` says which
+screens' BG layers the scene draws, so build and draw share one rule. A
+line now needs only BG mode 0 or 1 and no big tiles. RENDER=2: SMW
+identical through frame 1,020 (~9,000 subscreen passes). No scene tested
+so far clips to black (Tetris Attack stays in forced blank in this
+build), so that path is checked only by construction (the same palette
+rule as the planes).
+
+**Sync only what changed (2026-11-17).** The PPU marks each VRAM store's
+256-byte block (`Ppu.vramDirty`, host-only, next to `vramWriteCount`); the
+build hands the marks on with each frame's VRAM snapshot, and the tile
+cache syncs one job per run of dirty blocks (`n64_tile_cache_sync_dirty`:
+gaps of up to two clean blocks joined, at most 16 jobs) instead of
+comparing all 256 blocks. SMW attract: about 5-10 blocks a frame.
+
+**TLUTs on the RSP (2026-11-17).** Plain TLUTs come from `TileCmd_Tlut`.
+Each CGRAM version gets a per-frame copy, because the description's copy
+is rewritten by the next frame's replay. The black and math TLUTs stay on
+the CPU, now as three 32-entry per-component tables per TLUT. CPU time for
+TLUTs, SMW attract: 935 us a frame before, 584 with plain TLUTs on the
+RSP, 260 with the table-driven math TLUTs.
+
+RENDER=2 in ares after all of 4d: SMW, Pitfall and Joe & Mac 2 identical
+on every compared frame. Joe & Mac 2's lines use big tiles, so they keep
+the planes.
+
+**What draws from planes now** (SCENE=1): lines with BG mode 2-7 or big
+tiles; sprite lines that fail the rules above. Software lines are as
+before (mosaic, hires/interlace, layer colour math, subscreen OBJ, direct
+colour).
+
 ## The RSP must never wait on the RDP mid-command (owner, 2026-11-16)
 
 A buffer only absorbs bursts: if the RDP is slower than the frame rate for

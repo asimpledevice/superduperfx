@@ -95,6 +95,9 @@ enum { kSceneTluts = 64 };
 static uint16_t s_scene_tlut[kSceneTluts][256] __attribute__((aligned(16)));
 static struct { int cgram; uint8_t bright, kind, base, mode, mflags; } s_scene_tkey[kSceneTluts];
 static int s_scene_ntlut;
+/* Per CGRAM version, the RSP's copy for this frame's TLUTs. */
+static uint16_t s_scene_cgcopy[N64PPU_DESC_MAX_CGRAMS][256] __attribute__((aligned(16)));
+static uint32_t s_scene_cgcopy_of[N64PPU_DESC_MAX_CGRAMS], s_scene_frame;
 
 static void scene_frame_begin(void) {
   if (!s_scene_init) {
@@ -105,6 +108,7 @@ static void scene_frame_begin(void) {
     s_scene_init = true;
   }
   s_scene_ntlut = 0;
+  s_scene_frame++;
   uint32_t count;
   const uint16_t *snap = n64_bgrsp_snapshot(&count);
   s_scene_vram = snap;
@@ -149,14 +153,24 @@ static const uint16_t *scene_tlut(const N64PpuBand *band, unsigned kind, unsigne
   s_scene_tkey[i].base = (uint8_t)base;
   s_scene_tkey[i].mode = (uint8_t)mode;
   s_scene_tkey[i].mflags = (uint8_t)mflags;
-  /* On the CPU for now: the frame description's CGRAM copy is rewritten by
-   * the next frame's replay before the RSP would get to it. */
   const uint32_t t0 = TICKS_READ();
   const uint16_t *cg = n64_ppu_desc()->cgram[cgram];
-  if (mode == N64PPU_SCENE_TL_PLAIN) tc_ref_tlut(cg, bright, kind, base, 0x100, s_scene_tlut[i]);
-  else n64_ppu_scene_tlut(cg, (const struct Ppu *)regs, kind, base, mode, s_scene_tlut[i]);
+  if (mode == N64PPU_SCENE_TL_PLAIN) {
+    /* On the RSP (TileCmd_Tlut), from this frame's own copy of the CGRAM
+     * version: the description's copy is rewritten by the next frame's
+     * replay, possibly before the RSP gets to it. The RSP writes the TLUT
+     * before it runs the rdpq commands that load it. */
+    if (s_scene_cgcopy_of[cgram] != s_scene_frame) {
+      memcpy(s_scene_cgcopy[cgram], cg, 512);
+      s_scene_cgcopy_of[cgram] = s_scene_frame;
+    }
+    n64_tile_cache_tlut(s_scene_cgcopy[cgram], bright, kind, base, 0x100, s_scene_tlut[i]);
+  } else {
+    /* Black and math palettes (subscreen, clipped spans) on the CPU. */
+    n64_ppu_scene_tlut(cg, (const struct Ppu *)regs, kind, base, mode, s_scene_tlut[i]);
+    data_cache_hit_writeback(s_scene_tlut[i], 512);
+  }
   g_scene_tlut_ticks += TICKS_READ() - t0;
-  data_cache_hit_writeback(s_scene_tlut[i], 512);
   return s_scene_tlut[i];
 }
 
