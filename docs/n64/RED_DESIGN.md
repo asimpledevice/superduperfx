@@ -907,6 +907,56 @@ on), reading every voice from ARAM through the ledger in pitch-modulation
 batches (dropping the record path, about 140 bytes); or a voice-major
 microcode (libultra's structure), where modulation is cheap.
 
+### The voice-major overlay for pitch modulation (owner decision, 2026-11-17)
+
+Decisions (owner): a second S-DSP overlay, voice-major like libdragon's
+mixer, takes the batches where pitch modulation is on; the main
+(sample-major) overlay keeps everything else. Voices untracked by an
+echo-ring conflict stay on the stopgap (silenced).
+
+Why voice-major: the main microcode puts the 8 voices in the vector lanes
+and walks samples, so "this voice's pitch depends on the previous voice's
+output this sample" is a serial chain across lanes. Voice-major puts 8
+samples of one voice in the lanes and walks voices: voice v-1's outputs for
+the chunk are in DMEM before voice v starts, and v's per-sample pitch is a
+few vector operations.
+
+**Mode.** Blue cuts a batch at a PMON write that turns modulation on or off
+(PMON & 0xfe going from zero to non-zero or back), so a batch has
+modulation throughout or not at all; the back end runs the former on the
+voice-major overlay. The front end untracks the modulated voices at that
+write, which starts the undo ledger, so the ledger covers every voice-major
+batch from its first sample. Both overlays use the one persistent state
+block (same layout): switching costs nothing but rspq's overlay load.
+
+**Inside a voice-major batch** (chunks of up to 32 samples):
+1. A chunk ends at the next log entry's tag, so register writes, and the
+   key-on and key-off latches, change only at chunk boundaries (key ons are
+   polled on even samples, as `dsp_cycleChannel`).
+2. Per voice, in order 0-7, over the chunk: pitch for every sample
+   (modulated: `(pitch * ((out[v-1] >> 4) + 0x400)) >> 10`, truncated to 16
+   bits, clamped to 0x3fff, from v-1's output buffer); counters as a running
+   sum; the blocks it crosses decoded from ARAM through the ledger (every
+   voice: no records in these batches); interpolation per sample; envelope
+   (stepped per sample, done in runs between rate ticks); key on at the
+   chunk's first even sample when latched; outputs to the voice's buffer.
+3. Then mixing, echo and output sample by sample over the chunk (the main
+   overlay's code).
+
+**The ledger for the RSP.** Entries and the published tail are written
+uncached (an entry reaches RDRAM before the data it covers can), with a
+per-page table of the newest entry's time; a read at sample t of a page
+whose newest entry is not after t needs no scan.
+
+**Validation.** Bit-exact with the C S-DSP: the RSP test ROM on random
+states with pitch modulation; the N64 split test (`EIP_BASIC=0`) against
+the exact lockstep reference with the conflict stopgap modelled; SMW
+unchanged; then RSP cycles a sample in ares.
+
+**Leaving the mode** resumes front-end tracking through the existing
+handover (the state back to the Dsp to rebuild the front end): a wait on
+Blue, once per modulation episode.
+
 ### Results back to Blue (owner, 2026-11-16)
 
 Consistency of what Red publishes: Red must never wait on Blue, so a
