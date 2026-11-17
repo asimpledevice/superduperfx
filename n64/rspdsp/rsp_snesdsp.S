@@ -1351,14 +1351,39 @@ VM_voice:
     sqv $v11, 0x00, t7
     sqv $v12, 0x10, t7
     move k0, zero
+    li v1, -1                       # (the envelope's rate: select it)
+    # A voice released to gain 0 with no key on latched stays silent all
+    # chunk (key off and reset keep it so, a decode's release too): only
+    # its counter and decodes run.
+    li t1, 4
+    bne s2, t1, VM_sample
+    lhu t3, %lo(DSP + RSPDSP_M_KEYON)
+    bnez s1, VM_sample
+    and t3, t3, fp
+    bnez t3, VM_sample
+    nop
+VM_quiet:
+    lhu t1, %lo(VM_PITCH)(k0)
+    addu t1, k1, t1
+    srl t3, t1, 16
+    beqz t3, 1f
+    andi k1, t1, 0xffff
+    jal Brr_Decode
+    sw k0, %lo(VM_K)
+1:  sh zero, %lo(VM_GAINB)(k0)
+    addiu k0, k0, 2
+    bne k0, s6, VM_quiet
+    nop
+    b VM_voiced
+    nop
 
 VM_sample:
-    sw k0, %lo(VM_K)
     lhu t1, %lo(VM_PITCH)(k0)
     addu t1, k1, t1
     srl t3, t1, 16
     beqz t3, VM_interp              # no wrap: no block
     andi k1, t1, 0xffff
+    sw k0, %lo(VM_K)                # (the chunk sample, for ARAM reads)
     sll t4, a2, 1                   # the decode may release the voice
     sh s1, %lo(DSP + RSPDSP_V_GAIN)(t4)
     jal Brr_Decode
@@ -1366,6 +1391,7 @@ VM_sample:
     sll t4, a2, 1
     lhu s1, %lo(DSP + RSPDSP_V_GAIN)(t4)
     lhu s2, %lo(DSP + RSPDSP_V_ADSRSTATE)(t4)
+    li v1, -1
 VM_interp:
     # Key on/off, even samples. Interpolation waits for the envelope (no
     # need when the gain is 0, or for a noise voice), as in
@@ -1388,7 +1414,7 @@ VM_kon:
     beqz t1, VM_reset
     nop
     jal VM_Interp
-    nop
+    sw k0, %lo(VM_K)
     jal Page_Ensure
     li t1, PG_K
     jal VM_K_KEYON
@@ -1396,6 +1422,7 @@ VM_kon:
     move s1, zero
     move s2, zero
     li t9, 1
+    li v1, -1
 VM_reset:
     lhu t1, %lo(DSP + RSPDSP_RESET)
     beqz t1, VM_env
@@ -1410,32 +1437,20 @@ VM_env:
     li t1, 4
     beq s2, t1, VM_floor            # release: - 8 a sample, floor 0
     addiu t8, s1, -8
-    lhu t3, %lo(DSP + RSPDSP_M_USEGAIN)
-    lhu t5, %lo(DSP + RSPDSP_M_DIRECTGAIN)
-    and t3, t3, fp                  # GAIN (live: not releasing)
-    beqz t3, VM_adsrrate
-    and t5, t5, fp
-    beqz t5, VM_rate
-    lhu t6, %lo(DSP + RSPDSP_V_RATE3)(t4)
-    b VM_out                        # direct gain
-    lhu s1, %lo(DSP + RSPDSP_V_GAINVAL)(t4)
-VM_adsrrate:
-    sltiu t5, s2, 3                 # stage: min(state, 2)
-    bnez t5, 1f
-    move t1, s2
-    li t1, 2
-1:  sll t1, t1, 4
-    addu t1, t1, t4
-    lhu t6, %lo(DSP + RSPDSP_V_RATE0)(t1)
+    bltz v1, VM_rsel                # v1: the rate in use, -1 to select it again
+    nop
 VM_rate:
-    beqz t6, VM_out                 # rate 0: frozen
+    beqz v1, VM_out                 # rate 0: frozen
     addiu t1, s3, 1
     andi s3, t1, 0xffff
-    sltu t1, s3, t6
+    sltu t1, s3, v1
     bnez t1, VM_out
     nop
     move s3, zero
-    # A step (dsp_handleGain, not releasing; t3: GAIN).
+    li v1, -1                       # (the state may change)
+    # A step (dsp_handleGain, not releasing).
+    lhu t3, %lo(DSP + RSPDSP_M_USEGAIN)
+    and t3, t3, fp                  # GAIN (live: not releasing)
     beqz t3, VM_adsrstep
     lhu t1, %lo(DSP + RSPDSP_V_GAINMODE)(t4)
     beqz t1, VM_floor               # 0: linear decrease
@@ -1458,6 +1473,21 @@ VM_adsrstep:
     addiu s1, s1, 32
     b VM_ceil
     addiu s1, s1, 1024 - 32
+VM_rsel:
+    lhu t3, %lo(DSP + RSPDSP_M_USEGAIN)
+    lhu t5, %lo(DSP + RSPDSP_M_DIRECTGAIN)
+    and t3, t3, fp                  # GAIN (live: not releasing)
+    beqz t3, 1f
+    and t5, t5, fp
+    beqz t5, VM_rate
+    lhu v1, %lo(DSP + RSPDSP_V_RATE3)(t4)
+    li v1, -1                       # direct gain (no rate: selected each sample)
+    b VM_out
+    lhu s1, %lo(DSP + RSPDSP_V_GAINVAL)(t4)
+1:  lbu t1, %lo(VM_STAGE)(s2)       # stage min(state, 2), as a RATE0-2 offset
+    addu t1, t1, t4
+    b VM_rate
+    lhu v1, %lo(DSP + RSPDSP_V_RATE0)(t1)
 VM_floor:
     bgez t8, VM_trans
     move s1, t8
@@ -1506,6 +1536,7 @@ VM_out:
 
     # The voice's outputs: (sample * gain) >> 11 (the interpolated sample
     # >> 1, or the noise sample).
+VM_voiced:
     sll t4, a2, 1
     sh k1, %lo(DSP + RSPDSP_V_COUNTER)(t4)
     sh s1, %lo(DSP + RSPDSP_V_GAIN)(t4)
@@ -1803,6 +1834,7 @@ VM_N:       .word 0
 VM_K:       .word 0
 VM_DB:      .word 0
 VM_SAVE:    .word 0, 0, 0, 0, 0
+VM_STAGE:   .byte 0x00, 0x10, 0x20, 0x20   # ADSR states 0-3: RATE0, RATE1, RATE2, RATE2
 PAGE_CUR:   .word PG_E              # the page in the slot (the overlay's own at load)
 PAGE_RA:    .word 0
 VM_DST:     .word 0

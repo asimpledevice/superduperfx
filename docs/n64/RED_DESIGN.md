@@ -1078,6 +1078,21 @@ skipped when the gain is 0 and for noise voices, as `dsp_cycleChannel`
 does (still before a key on, which clears the buffer after the sample is
 taken from it): realistic VM cost 1,300 → 1,198 RSP cycles a sample.
 
+Then, still in resident code: a voice released to gain 0 with no key on
+latched runs a short loop for the chunk (counter and decodes only; key off,
+reset and a decode's release all keep it silent), and the envelope keeps
+its current rate in a register, selected again only after a decode, a key
+on or a step. RSP test ROM, RSP cycles a sample (bit-exact throughout):
+
+| Data | Main overlay | Voice-major |
+|------|--------------|-------------|
+| realistic pitches, many voices released | 893 | 1,300 → 960 |
+| every voice playing (`RSPDSP_ACTIVE`) | 879 | 1,100 → 1,085 |
+
+With every voice playing, what is left above the main overlay is the
+scalar envelope (137) and interpolation (83) per voice and sample; echo
+(179) costs about the same in both.
+
 *A bug the split test found.* Moving the ledger scan left a `jal` in the
 delay slot of the page check's fast-path branch (undefined on MIPS; here
 it sent execution into whatever page was in the slot). The variant's

@@ -105,7 +105,15 @@ static void random_state(Dsp *d, uint8_t *aram) {
     ch->gain = (uint16_t)(rnd() & 0x7ff);
     if ((rnd() & 3) == 0) ch->gain = 0;
     ch->sampleOut = rnd15();
+#ifdef RSPDSP_ACTIVE   /* (timing: every voice playing, none released) */
+    ch->gain = (uint16_t)(0x100 + rnd() % 0x600);
+    ch->adsrState = (uint8_t)(rnd() % 3);
+#endif
   }
+#ifdef RSPDSP_ACTIVE
+  dsp_write(d, 0x5c, 0);
+  dsp_write(d, 0x6c, (uint8_t)(d->ram[0x6c] & 0x7f));   /* no reset */
+#endif
 }
 
 static uint32_t random_log(Dsp *d, uint32_t samples) {
@@ -122,6 +130,9 @@ static uint32_t random_log(Dsp *d, uint32_t samples) {
 #endif
       if (r == 0x6d || r == 0x7d) r = 0x4c;      /* keep the echo window */
       if (r == 0x5d && (rnd() & 1)) r = 0x4c;    /* key on often */
+#ifdef RSPDSP_ACTIVE
+      if (r == 0x5c || r == 0x6c) r = 0x4c;
+#endif
 #ifdef RSPDSP_REAL_PITCH
       if ((r & 0x0e) == 0x02) r = 0x4c;
 #endif
