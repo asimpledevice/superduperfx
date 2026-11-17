@@ -965,13 +965,17 @@ void apu_dspOutput(Apu* apu) {
   if (apu_yellow_running()) apu->dsp->sampleWrite = apu_yellow_publish();
 }
 
-ApuLedgerEntry g_apu_ledger[APU_LEDGER_LEN];
+ApuLedgerEntry g_apu_ledger[APU_LEDGER_LEN] __attribute__((aligned(16)));
 uint32_t g_apu_ledger_head, g_apu_ledger_tail;
+uint32_t g_apu_ledger_tail_pub __attribute__((aligned(16)));
+uint32_t g_apu_ledger_page[256] __attribute__((aligned(16)));
 uint32_t g_apu_stream_ledger_waits;
 /* Entries the S-DSP has passed go. */
 static void apu_streamLedgerDrop(Apu* apu) {
+  /* (Read through the uncached alias, as the entries are written.) */
   while (g_apu_ledger_head != g_apu_ledger_tail &&
-         (int32_t)(g_apu_ledger[g_apu_ledger_head & (APU_LEDGER_LEN - 1)].time - apu->dspAt) <= 0)
+         (int32_t)(((volatile ApuLedgerEntry *)apu_host_uncached(
+                       &g_apu_ledger[g_apu_ledger_head & (APU_LEDGER_LEN - 1)]))->time - apu->dspAt) <= 0)
     g_apu_ledger_head++;
 }
 /* An SPC write to ARAM while a voice is untracked: its old value, for the
@@ -989,12 +993,16 @@ void apu_streamLedger(Apu* apu, uint16_t adr) {
       apu_streamLedgerDrop(apu);
     }
   }
-  ApuLedgerEntry *e = &g_apu_ledger[g_apu_ledger_tail & (APU_LEDGER_LEN - 1)];
+  /* Through the uncached alias, in this order: the entry, the tail, the
+   * page's time; the data itself reaches RDRAM later (or never sooner). */
+  ApuLedgerEntry *e = apu_host_uncached(&g_apu_ledger[g_apu_ledger_tail & (APU_LEDGER_LEN - 1)]);
   e->time = apu->dspEdges;
   e->adr = adr;
   e->old = apu->ram[adr];
   e->pad = 0;
   g_apu_ledger_tail++;
+  *(volatile uint32_t *)apu_host_uncached(&g_apu_ledger_tail_pub) = g_apu_ledger_tail;
+  ((volatile uint32_t *)apu_host_uncached(g_apu_ledger_page))[adr >> 8] = apu->dspEdges;
 }
 
 static void apu_streamPost(Apu* apu) {
@@ -1379,6 +1387,10 @@ void apu_cpuWrite(Apu* apu, uint16_t adr, uint8_t val) {
       /* Every register write goes to the S-DSP in the log (none to the Dsp). */
       if (apu->dspAdr < 0x80) {
         const uint8_t r = apu->dspAdr;
+        /* Pitch modulation turning on or off: a batch has it throughout or
+         * not at all (the back end runs the former on its voice-major path). */
+        if (r == 0x2d && !(apu->dspRegs[0x2d] & 0xfe) != !(val & 0xfe))
+          apu_dspSyncFor(apu, APU_DSP_SYNC_LOG_FULL);
         apu->dspRegs[r] = r == 0x7c ? 0 : val;
         apu->dspRegAt[r] = apu->dspEdges + 1;
         if (apu->dspLogN >= APU_STREAM_LOG_MAX) apu_dspSyncFor(apu, APU_DSP_SYNC_LOG_FULL);

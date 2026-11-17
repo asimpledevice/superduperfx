@@ -190,6 +190,8 @@ bool apu_yellow_running(void) { return y.running; }
 
 const Dsp *apu_yellow_dsp(void) { return &y.dsp; }
 
+void *apu_host_uncached(void *p) { return p; }
+
 const int16_t *apu_yellow_ring(uint32_t *mask) { *mask = APU_STREAM_RING - 1; return y.ring; }
 
 uint32_t apu_yellow_publish(void) { return y.progress; }

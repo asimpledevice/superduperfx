@@ -161,6 +161,9 @@ int main(int argc, char **argv) {
 #ifdef N64_SPLITTEST
   (void)argc; (void)argv;
   debug_init_isviewer();
+#ifdef EIP_WATCHDOG
+  { extern void eip_watchdog_start(void); eip_watchdog_start(); }
+#endif
   rspq_init();
   red_init();
   snesdsp_rsp_init();
@@ -277,9 +280,10 @@ int main(int argc, char **argv) {
 #if SNESRECOMP_DSP_STREAM
 #ifdef N64_SPLITTEST
   { extern uint32_t g_apu_stream_posts, g_apu_stream_waits, g_apu_stream_unsupported, g_snesdsp_rsp_stream_slot_waits;
-    printf("stream: %u posts, %u register waits, %u unsupported, %u slot waits, %u echo conflicts\n",
+    extern uint32_t g_snesdsp_rsp_fallbacks;
+    printf("stream: %u posts, %u register waits, %u unsupported, %u slot waits, %u echo conflicts, %u wait fallbacks\n",
            g_apu_stream_posts, g_apu_stream_waits, g_apu_stream_unsupported, g_snesdsp_rsp_stream_slot_waits,
-           g_dsp_fe_echo_conflicts); }
+           g_dsp_fe_echo_conflicts, g_snesdsp_rsp_fallbacks); }
 #else
   { extern uint32_t g_apu_stream_posts, g_apu_stream_waits, g_apu_stream_unsupported, g_dsp_yellow_c_missing;
     fprintf(stderr, "stream: %u posts, %u register waits, %u unsupported, %u missing records, %u echo conflicts\n",

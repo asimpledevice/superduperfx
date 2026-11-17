@@ -1041,7 +1041,15 @@ static Op *untrack(Op *o, uint16_t tag, uint8_t newly) {
 static ApuYellowRegs s_regs;
 /* The ring is only ever read after its lines are dropped: none may stay
  * dirty from the startup BSS clear. */
-static void stream_init(void) { data_cache_hit_writeback_invalidate(s_ring, sizeof s_ring); }
+static void stream_init(void) {
+  data_cache_hit_writeback_invalidate(s_ring, sizeof s_ring);
+  /* The ledger is written through the uncached alias only: no line of it
+   * may stay in the cache from the startup BSS clear. */
+  data_cache_hit_writeback_invalidate(g_apu_ledger, sizeof g_apu_ledger);
+  data_cache_hit_writeback_invalidate(&g_apu_ledger_tail_pub, 16);
+  data_cache_hit_writeback_invalidate(g_apu_ledger_page, sizeof g_apu_ledger_page);
+}
+void *apu_host_uncached(void *p) { return UncachedAddr(p); }
 uint32_t g_snesdsp_rsp_stream_posts, g_snesdsp_rsp_stream_slot_waits, g_snesdsp_rsp_stream_overflow;
 
 static inline void put32(void *p, uint32_t v) { memcpy(p, &v, 4); }
@@ -1069,6 +1077,9 @@ static void wait_seq(uint32_t seq) {
 #else
     rspq_wait();
 #endif
+    /* Red has run everything posted: every batch is done, whether or not
+     * its message arrived. */
+    if (!red_dsp_done(seq)) g_red_dsp_done = s_seq;
   }
   g_snesdsp_rsp_join_wait += get_ticks() - t0;
   if (blue_is_current()) g_snesdsp_rsp_join_wait_blue += get_ticks() - t0;

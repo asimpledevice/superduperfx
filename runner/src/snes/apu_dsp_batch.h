@@ -121,6 +121,14 @@ typedef struct ApuLedgerEntry {
 #define APU_LEDGER_LEN 4096u
 extern ApuLedgerEntry g_apu_ledger[APU_LEDGER_LEN];
 extern uint32_t g_apu_ledger_head, g_apu_ledger_tail;
+/* For a back end on another processor (the voice-major microcode): entries
+ * are written through apu_host_uncached (an entry reaches RDRAM before the
+ * data it covers can), the tail is published the same way, and per ARAM
+ * page the time of its newest entry: a read at sample t of a page whose
+ * time is not after t needs no scan. The CPU only writes these. */
+extern uint32_t g_apu_ledger_tail_pub;
+extern uint32_t g_apu_ledger_page[256];
+void *apu_host_uncached(void *p);   /* the back end's: identity on the host */
 const int16_t *apu_yellow_ring(uint32_t *mask);
 uint32_t apu_yellow_publish(void);
 #endif

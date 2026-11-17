@@ -42,8 +42,17 @@ $(BUILD_DIR)/n64_compat.o: ../../src/n64_compat.c
 	@mkdir -p $(dir $@)
 	$(N64_CC) -c $(CFLAGS) $(N64_CFLAGS) -o $@ $<
 
+EIP_WATCHDOG ?= 0
+ifeq ($(EIP_WATCHDOG),1)
+EIP_WATCHDOG_DELAY ?= 1
+N64_CFLAGS += -DEIP_WATCHDOG=1 -DEIP_WATCHDOG_DELAY=$(EIP_WATCHDOG_DELAY)
+WD_OBJ = $(BUILD_DIR)/watchdog.o
+endif
+$(BUILD_DIR)/watchdog.o: watchdog.c
+	@mkdir -p $(dir $@)
+	$(N64_CC) -c $(CFLAGS) $(N64_CFLAGS) -o $@ $<
 $(BUILD_DIR)/splittest.elf: $(BUILD_DIR)/n64_compat.o $(BUILD_DIR)/main.o $(BUILD_DIR)/snesdsp_rsp.o \
-	$(BUILD_DIR)/red.o $(BUILD_DIR)/rsp_snesdsp.o $(BUILD_DIR)/rsp_snesdsp_ne.o $(OBJS)
+	$(BUILD_DIR)/red.o $(BUILD_DIR)/rsp_snesdsp.o $(BUILD_DIR)/rsp_snesdsp_ne.o $(OBJS) $(WD_OBJ)
 
 splittest.z64: N64_ROM_TITLE = "Audio split test"
 $(BUILD_DIR)/rsp_snesdsp.o $(BUILD_DIR)/rsp_snesdsp_ne.o: RSPASFLAGS += $(RSP_DEFS)

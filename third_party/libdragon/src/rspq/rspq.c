@@ -648,18 +648,30 @@ static void rspq_sp_interrupt(void)
         data_cache_hit_writeback(&__rspq_syncpoints_done[0], 4);
         if (rspq_syncpoint_hook) rspq_syncpoint_hook();
     }
+    uint32_t up = 0;
+    bool bell = false;
     if (status & SP_STATUS_SIG0) {
         wstatus |= SP_WSTATUS_CLEAR_SIG0;
         if (rdpq_trace_fetch) rdpq_trace_fetch(true);
         /* The mailbox doorbell: the up word is read before SIG0 is cleared
          * below, so RSPQ_MailboxTryPost cannot overwrite it unread. */
-        else if (rspq_mailbox_handler) rspq_mailbox_handler(*RSPQ_MAILBOX_UP_PTR);
+        else if (rspq_mailbox_handler) { up = *RSPQ_MAILBOX_UP_PTR; bell = true; rspq_mailbox_handler(up); }
     }
 
     MEMORY_BARRIER();
 
     if (wstatus)
         *SP_STATUS = wstatus;
+
+    /* RSPQ_MailboxPost (latest wins) may have replaced the word after it was
+     * read and before SIG0 was cleared: that post's signal is gone with the
+     * clear, so read the word once more and hand on a newer one. (A
+     * TryPost user may then see a word twice.) */
+    if (bell) {
+        MEMORY_BARRIER();
+        const uint32_t again = *RSPQ_MAILBOX_UP_PTR;
+        if (again != up) rspq_mailbox_handler(again);
+    }
 }
 
 /** @brief Extract the current overlay index and name from the RSP queue state */
