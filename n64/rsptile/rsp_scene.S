@@ -49,6 +49,8 @@ TMAP:    .ds.b 2 * 72               # the two screens' tilemap rows (+8: alignme
 OUTB:    .ds.b OUTB_SIZE
     .align 3
 ZB:      .ds.b 512                  # empty-tile bitmap
+ROW_SC2:   .ds.b 4                  # SceneCmd_Bg: the row's second-screen offset
+ROW_PWRAP: .ds.b 4                  # SceneCmd_Bg: TMAP address of the column after the wrap
     .align 3
 RECB:    .ds.b 512                  # tile records (SceneCmd_Tiles), 64 at a time
 
@@ -81,11 +83,16 @@ RECB:    .ds.b 512                  # tile records (SceneCmd_Tiles), 64 at a tim
     addiu v1, v1, 8
 .endm
 
-# Registers (RDPQ_Send clobbers s0, s3, s4, a0-a2, t0-t7, sp, at, ra):
-#   s1 row g0      s2 row g1      v0 BG line y0     t8 tile k
-#   a3 palette in tile 0 (-1: none)   k1 rectangles   fp fine scroll
-#   s5 first map column   s6 1 if the map is 64 wide   s7 VRAM & 7
-#   v1 output pointer
+# Registers. Kept across RDPQ_Send (which clobbers s0, s3, s4, a0-a2,
+# t0-t7, sp, at, ra) and the DMA helpers (t2, at, s4):
+#   s1 row g0      s2 row g1      v0 BG line y0      v1 output pointer
+#   a3 palette in tile 0 (-1: none)   k1 rectangles
+#   fp screen x of the current tile (sx)   s5 its tilemap entry in TMAP
+#   s6 the sx at which the map column wraps to the next screen
+#   t8, s7 the row's TEXTURE_RECTANGLE words without the x parts
+# Reloaded by Scene_reload after each RDPQ_Send and the row's DMAs:
+#   a0 priority bit (0 or 0x2000)   a1 sx0   a2 sx1   s0 cache
+#   s3 log2 of the tile's VRAM words   s4 character base
     .func SceneCmd_Bg
 SceneCmd_Bg:
     # Start only with SCENE_RDP_ROOM bytes of room in the RDP buffer: room
@@ -104,12 +111,19 @@ Scene_go:
     jal DMAIn
     li t0, DMA_SIZE(SCJ_SIZE, 1)
 
+    # The empty-tile bitmap; without one, no tile is empty.
     lw s0, %lo(JOB + SCJ_EMPTY)
-    beqz s0, 1f
+    bnez s0, 2f
     li s4, %lo(ZB)
-    jal DMAIn
+    li t0, %lo(ZB) + 512
+1:  addiu s4, s4, 4
+    bne s4, t0, 1b
+    sw zero, -4(s4)
+    b 3f
+    nop
+2:  jal DMAIn
     li t0, DMA_SIZE(512, 1)
-1:
+3:
     li v1, %lo(OUTB)
     lui t0, 0x2600                  # SYNC_LOAD
     EMIT t0, zero
@@ -123,14 +137,6 @@ Scene_go:
     EMIT t0, t1
     li a3, -1
     move k1, zero
-
-    lw t0, %lo(JOB + SCJ_VRAM)
-    andi s7, t0, 7
-    lhu t0, %lo(JOB + SCJ_HS)
-    andi fp, t0, 7
-    srl s5, t0, 3
-    lbu t0, %lo(JOB + SCJ_XSC)
-    andi s6, t0, 1
     lbu s1, %lo(JOB + SCJ_R0)
 
 Row_loop:
@@ -152,6 +158,7 @@ Row_loop:
     # sc = ((xsc & 0xfc) << 8) + (((y0 >> 3) & 31) << 5)
     #    + ((y0 & 0x100) && (xsc & 2) ? (wider ? 0x800 : 0x400) : 0)
     lbu t4, %lo(JOB + SCJ_XSC)
+    andi s6, t4, 1                  # wider (s6 is free until the tile loop)
     andi t5, t4, 0xfc
     sll t5, t5, 8
     srl t6, v0, 3
@@ -171,6 +178,7 @@ Row_loop:
     andi t6, t6, 0x7fff
     sll t5, t5, 1
     sll t6, t6, 1
+    sw t6, %lo(ROW_SC2)
     lw t7, %lo(JOB + SCJ_VRAM)
     addu s0, t7, t5
     li t1, ~7
@@ -179,72 +187,100 @@ Row_loop:
     jal DMAInAsync
     li t0, DMA_SIZE(72, 1)
     lw t7, %lo(JOB + SCJ_VRAM)
+    lw t6, %lo(ROW_SC2)
     addu s0, t7, t6
     li t1, ~7
     and s0, s0, t1
     li s4, %lo(TMAP) + 72
     jal DMAIn
     li t0, DMA_SIZE(72, 1)
+    jal Scene_reload
+    nop
 
-    move t8, zero
-Tile_loop:
-    sll t2, t8, 3
-    subu t2, t2, fp                 # sx
-    slti t3, t2, 256
-    beqz t3, Row_next
-    # The entry: screen ((mx >> 5) & 1 when 64 wide), column mx & 31.
-    addu t3, s5, t8
-    srl t4, t3, 5
+    # The row's rectangle words without x: t8 = TEXTURE_RECTANGLE w0 less
+    # (x1 << 14), s7 = w1 less (x0 << 14).
+    lhu t0, %lo(JOB + SCJ_OX)
+    lhu t1, %lo(JOB + SCJ_OY)
+    addu t2, t1, s2
+    addiu t2, t2, -1
+    sll t2, t2, 2                   # Y1
+    lui t3, 0x2400
+    or t2, t2, t3
+    addiu t3, t0, -1
+    sll t3, t3, 14
+    addu t8, t2, t3                 # w0 = t8 + (x1 << 14), x1 exclusive
+    addu t2, t1, s1
+    sll t2, t2, 2                   # Y0
+    sll t3, t0, 14
+    addu s7, t2, t3                 # w1 = s7 + (x0 << 14)
+
+    # The first tile's entry and where the map wraps: column m = hs >> 3,
+    # screen (m >> 5) & 1 of a 64-wide map, then column 0 of the other
+    # screen (of the same one when 32 wide).
+    lw t0, %lo(JOB + SCJ_VRAM)
+    andi t0, t0, 7
+    addiu t7, t0, %lo(TMAP)         # screen A's column 0
+    lhu t1, %lo(JOB + SCJ_HS)
+    andi t2, t1, 7
+    subu fp, zero, t2               # sx of tile 0 = -fine
+    srl t1, t1, 3                   # m
+    srl t4, t1, 5
     andi t4, t4, 1
-    and t4, t4, s6
-    andi t3, t3, 31
-    sll t3, t3, 1
+    and t4, t4, s6                  # screen of column m
+    xor t9, t4, s6                  # screen after the wrap
+    andi t5, t1, 31
+    sll t6, t5, 1
+    addu s5, t7, t6
     beqz t4, 1f
-    addu t3, t3, s7
-    addiu t3, t3, 72
-1:  lhu t5, %lo(TMAP)(t3)           # entry
+    li t6, 32
+    addiu s5, s5, 72
+1:  beqz t9, 1f
+    subu t6, t6, t5
+    addiu t7, t7, 72
+1:  sw t7, %lo(ROW_PWRAP)
+    sll t6, t6, 3
+    addu s6, t6, fp                 # sx at the wrap
 
+Tile_loop:
+    slti t3, fp, 256
+    beqz t3, Row_next
+    nop
+    bne fp, s6, 1f
+    nop
+    lw s5, %lo(ROW_PWRAP)
+1:  lhu t5, 0(s5)                   # entry
+    addiu s5, s5, 2
     # Priority.
-    srl t6, t5, 13
-    andi t6, t6, 1
-    lbu t7, %lo(JOB + SCJ_PRIO)
-    bne t6, t7, Tile_next
+    andi t6, t5, 0x2000
+    bne t6, a0, Tile_next
     # Clip to the span: x0 = max(sx, sx0), x1 = min(sx + 8, sx1).
-    lhu t6, %lo(JOB + SCJ_SX0)
-    lhu t7, %lo(JOB + SCJ_SX1)
-    move t0, t2
-    slt t3, t0, t6
+    move t0, fp
+    slt t3, fp, a1
     beqz t3, 1f
-    addiu t1, t2, 8
-    move t0, t6
-1:  slt t3, t7, t1
+    addiu t1, fp, 8
+    move t0, a1
+1:  slt t3, a2, t1
     beqz t3, 1f
     nop
-    move t1, t7
+    move t1, a2
 1:  slt t3, t0, t1
     beqz t3, Tile_next
 
-    # Tile address: cache + ((tileadr + (e & 0x3ff) << wsh) & 0x7fff) >> wsh << 6.
+    # Tile index: ((tileadr + (e & 0x3ff) << wsh) & 0x7fff) >> wsh.
     andi t3, t5, 0x3ff
-    lbu t6, %lo(JOB + SCJ_WSH)
-    sllv t3, t3, t6
-    lhu t7, %lo(JOB + SCJ_TILEADR)
-    addu t3, t3, t7
+    sllv t3, t3, s3
+    addu t3, t3, s4
     andi t3, t3, 0x7fff
-    srlv t3, t3, t6                 # tile index
+    srlv t3, t3, s3
     # Empty tiles draw nothing.
-    lw t4, %lo(JOB + SCJ_EMPTY)
-    beqz t4, 1f
     srl t4, t3, 3
     lbu t4, %lo(ZB)(t4)
     andi t6, t3, 7
     srlv t4, t4, t6
     andi t4, t4, 1
     bnez t4, Tile_next
-    nop
-1:  sll t3, t3, 6
-    lw t9, %lo(JOB + SCJ_CACHE)
-    addu t9, t9, t3
+    sll t3, t3, 6
+    addu t9, s0, t3
 
     lui t3, 0x2600                  # SYNC_LOAD
     EMIT t3, zero
@@ -267,65 +303,65 @@ Tile_loop:
     move a3, t6
 1:
     # TEXTURE_RECTANGLE (copy mode: lower right inclusive, DsDx 4.0).
-    lhu t6, %lo(JOB + SCJ_OX)
-    lhu t7, %lo(JOB + SCJ_OY)
-    addu t3, t6, t1
-    addiu t3, t3, -1
-    sll t3, t3, 14                  # X1 << 12 (10.2)
-    addu t4, t7, s2
-    addiu t4, t4, -1
-    sll t4, t4, 2                   # Y1
-    or t3, t3, t4
-    lui t4, 0x2400
-    or t3, t3, t4                   # w0
-    addu t4, t6, t0
-    sll t4, t4, 14                  # X0 << 12; tile 0
-    addu t6, t7, s1
-    sll t6, t6, 2
-    or t4, t4, t6                   # w1
+    sll t3, t1, 14
+    addu t3, t3, t8                 # w0
+    sll t4, t0, 14
+    addu t4, t4, s7                 # w1
     sw t3, 0(v1)
     sw t4, 4(v1)
     # s = (hflip ? 8 : 0) + x0 - sx; t = vflip ? 7 - row : row
-    subu t3, t0, t2
+    subu t3, t0, fp
     andi t6, t5, 0x4000
     beqz t6, 1f
     andi t7, v0, 7
     addiu t3, t3, 8
 1:  andi t6, t5, 0x8000
+    lui t4, 0x1000                  # DsDx 4.0
     beqz t6, 1f
-    li t4, 0x0400                   # DtDy +1.0
-    li t6, 7
-    subu t7, t6, t7
-    li t4, 0xFC00                   # DtDy -1.0
+    ori t4, t4, 0x0400              # DtDy +1.0
+    xori t7, t7, 7                  # 7 - row
+    ori t4, t4, 0xFC00              # DtDy -1.0
 1:  sll t3, t3, 21                  # s << 5 << 16
     sll t7, t7, 5
     or t3, t3, t7
-    lui t6, 0x1000                  # DsDx 4.0
-    or t4, t4, t6
     sw t3, 8(v1)
     sw t4, 12(v1)
     addiu v1, v1, 16
     addiu k1, k1, 1
 
     # Room for another tile (at most 64 bytes)?
-    li t3, %lo(OUTB) + OUTB_SIZE - 64
-    slt t3, v1, t3
+    slti t3, v1, %lo(OUTB) + OUTB_SIZE - 64
     bnez t3, Tile_next
     nop
     li s4, %lo(OUTB)
     jal RDPQ_Send
     move s3, v1
+    jal Scene_reload
     li v1, %lo(OUTB)
 
 Tile_next:
-    addiu t8, t8, 1
-    slti t3, t8, 33
-    bnez t3, Tile_loop
-    nop
+    b Tile_loop
+    addiu fp, fp, 8
 Row_next:
     b Row_loop
     move s1, s2
+    .endfunc
 
+# The pass's values that RDPQ_Send and the DMA helpers clobber (see the
+# register list above SceneCmd_Bg).
+    .func Scene_reload
+Scene_reload:
+    lbu a0, %lo(JOB + SCJ_PRIO)
+    sll a0, a0, 13
+    lhu a1, %lo(JOB + SCJ_SX0)
+    lhu a2, %lo(JOB + SCJ_SX1)
+    lw s0, %lo(JOB + SCJ_CACHE)
+    lbu s3, %lo(JOB + SCJ_WSH)
+    jr ra
+    lhu s4, %lo(JOB + SCJ_TILEADR)
+    .endfunc
+
+    .func Scene_done
 Done:
     lui t0, 0x2600                  # SYNC_LOAD
     EMIT t0, zero

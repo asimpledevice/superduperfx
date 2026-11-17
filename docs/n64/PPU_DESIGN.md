@@ -464,6 +464,26 @@ RENDER=2 in ares after all of 4d: SMW, Pitfall and Joe & Mac 2 identical
 on every compared frame. Joe & Mac 2's lines use big tiles, so they keep
 the planes.
 
+**Where present's time goes (2026-11-17, ares, SMW attract).** With
+`N64_PRESENT_PROF` the RDP-command phase is split by part, and
+`N64_PRESENT_RSPSPLIT` drains the RSP after each part to attribute RSP
+time. Scene build, before the change below: 15.7-16.0 ms a frame, of which
+the CPU's own scene work is ~2.5 ms. The remaining 12.3-12.7 ms is spent
+in `rdpq_detach_wait` waiting for the RSP. RSP time by part:
+`SceneCmd_Bg` 13.5 ms, sprites 0.4 ms, work queued before present (tile
+sync, TLUTs) 1.1-1.4 ms. Planes build: 5.6 ms (3.7 ms of uploads).
+
+`SceneCmd_Bg` register cleanup: the per-pass values (priority, span,
+cache, tile base, depth) stay in registers and are reloaded only after
+`RDPQ_Send` and the row's DMAs. The row's TEXTURE_RECTANGLE words are
+computed without x once per row. The tilemap entry is a pointer that steps
+by two bytes and switches screens once at the column wrap. Result:
+`SceneCmd_Bg` RSP time 13.5 -> 9.8 ms a frame; present's RDP commands
+15.7-16.0 -> 11.7-11.8 ms; present 18.0 -> 14.4 ms. RENDER=2 identical
+(SMW through frame 570, Pitfall 90, Joe & Mac 2 390). Next candidates:
+one tilemap walk for both priorities (each layer is walked twice today),
+and several tiles per TMEM load.
+
 **What draws from planes now** (SCENE=1): lines with BG mode 2-7 or big
 tiles; sprite lines that fail the rules above. Software lines are as
 before (mosaic, hires/interlace, layer colour math, subscreen OBJ, direct
