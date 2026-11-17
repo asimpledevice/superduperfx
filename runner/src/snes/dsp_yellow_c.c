@@ -48,6 +48,7 @@ static struct {
   uint32_t missing;     /* records that ran out (must stay 0) */
   int16_t ring[APU_STREAM_RING * 4];   /* output: 8 bytes a sample */
   uint8_t untracked;    /* voices read from ARAM through the ledger */
+  uint8_t silenced;     /* (SNESRECOMP_DSP_STREAM_STOPGAP) */
   uint32_t sample;      /* the sample being run */
 } y;
 
@@ -84,6 +85,10 @@ static void yellow_run_one(void) {
       if (e->isReg == 1) {
         dsp_write(&y.dsp, (uint8_t)e->adr, e->val);
         if (e->adr == 0x2d) y.untracked |= e->val & 0xfe;   /* as the front end */
+#if SNESRECOMP_DSP_STREAM_STOPGAP
+        if (e->adr == 0x4c)
+          for (int v = 0; v < 8; v++) if ((y.untracked >> v) & 1) y.dsp.channel[v].keyOn = false;
+#endif
       } else if (e->isReg == 3) {
         y.aram[e->adr] = e->val;
       } else if (e->isReg == 4) {
@@ -91,6 +96,19 @@ static void yellow_run_one(void) {
       }
     }
     rec.untracked = y.untracked;
+#if SNESRECOMP_DSP_STREAM_STOPGAP
+    /* The microcode back end's stopgap (n64/rspdsp/snesdsp_rsp.c untrack):
+     * untracked voices silenced, pitch 0, never keyed on. */
+    for (int v = 0; v < 8; v++)
+      if ((y.untracked >> v) & 1) {
+        DspChannel *c = &y.dsp.channel[v];
+        if (!((y.silenced >> v) & 1)) {
+          c->gain = 0; c->adsrState = 4; y.silenced |= (uint8_t)(1u << v);
+          y.dsp.ram[v * 16 + 8] = 0;   /* ENVX follows the gain, as the microcode's handback does */
+        }
+        c->pitch = 0;
+      }
+#endif
     if (k < b->samples) {
       y.sample = y.progress + k;
       dsp_cycle(&y.dsp);
@@ -124,6 +142,10 @@ void apu_yellow_start(const Dsp *dsp, uint8_t *aram, uint32_t at, uint8_t untrac
   y.progress = y.posted = at;
   y.head = y.tail = 0;
   y.untracked = untracked;   /* the front end's */
+  y.silenced = 0;
+#if SNESRECOMP_DSP_STREAM_STOPGAP
+  for (int v = 0; v < 8; v++) if ((untracked >> v) & 1) y.dsp.channel[v].keyOn = false;
+#endif
   y.running = true;
   yellow_regs();
 }

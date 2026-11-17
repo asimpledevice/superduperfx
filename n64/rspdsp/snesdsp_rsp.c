@@ -1015,6 +1015,29 @@ static uint32_t s_head, s_tail;        /* slots posted (tail) and found done (he
 static uint32_t s_posted, s_done_end, s_published;
 static bool s_running;
 static int16_t s_ring[APU_STREAM_RING * 4 + 8] __attribute__((aligned(16)));
+/* Untracked voices (apu_dsp_batch.h): the microcode does not read sample
+ * data from ARAM or do pitch modulation yet. Stopgap (documented in
+ * RED_DESIGN.md): such a voice is silenced, harmlessly for the others: its
+ * pitch is held at 0 (its counter never wraps, so it takes no block
+ * records), its envelope is put in release at gain 0, and KON writes (and
+ * the handover) leave its key-on latch clear. A latch already set when it is
+ * untracked may still key it on: harmless, its decode buffer is cleared and
+ * it never decodes, so it stays silent. */
+static uint8_t s_untracked;
+uint32_t g_snesdsp_rsp_untracked;   /* voices silenced so far */
+#define HALF_OP(o, t, off, value) do { (o)->tag = (t); (o)->kind = RSPDSP_LOG_HALF; (o)->pad = 0; \
+    (o)->adr = (off); (o)->val = (uint16_t)(int16_t)(value); (o)++; } while (0)
+static Op *untrack(Op *o, uint16_t tag, uint8_t newly) {
+  s_untracked |= newly;
+  for (int v = 0; v < 8; v++)
+    if ((newly >> v) & 1) {
+      HALF_OP(o, tag, RSPDSP_V_PITCH + 2 * v, 0);
+      HALF_OP(o, tag, RSPDSP_V_GAIN + 2 * v, 0);
+      HALF_OP(o, tag, RSPDSP_V_ADSRSTATE + 2 * v, 4);
+      g_snesdsp_rsp_untracked++;
+    }
+  return o;
+}
 static ApuYellowRegs s_regs;
 /* The ring is only ever read after its lines are dropped: none may stay
  * dirty from the startup BSS clear. */
@@ -1063,9 +1086,16 @@ static void wait_all(void) {
 }
 
 void apu_yellow_start(const Dsp *dsp, uint8_t *aram, uint32_t at, uint8_t untracked) {
-  (void)untracked;   /* TODO(audio split): untracked voices on the microcode */
   wait_all();
   snesdsp_rsp_pack(dsp, &s_block);
+  s_untracked = untracked;   /* silenced (see untrack) */
+  for (int v = 0; v < 8; v++)
+    if ((untracked >> v) & 1) {
+      put(&s_block, RSPDSP_V_PITCH + 2 * v, 0);
+      put(&s_block, RSPDSP_V_GAIN + 2 * v, 0);
+      put(&s_block, RSPDSP_V_ADSRSTATE + 2 * v, 4);
+    }
+  put(&s_block, RSPDSP_M_KEYON, getu(&s_block, RSPDSP_M_KEYON) & ~untracked);
   put32(s_block.bytes + RSPDSP_P_ARAM, PhysicalAddr(aram));
   data_cache_hit_writeback_invalidate(&s_block, sizeof s_block);
   memcpy(&s_shadow, dsp, offsetof(Dsp, sampleBuffer));   /* decodes register writes from here on */
@@ -1086,8 +1116,18 @@ void apu_yellow_post(const ApuDspLogEntry *log, uint32_t n, uint32_t samples) {
   Op *o = sl->ops.op, *end = sl->ops.op + kMaxOps;
   for (uint32_t i = 0; i < n && o + 24 <= end; i++) {
     if (log[i].isReg == 1) {
-      dsp_write(&s_shadow, (uint8_t)log[i].adr, log[i].val);
-      o = emit_reg(o, log[i].tag, (uint8_t)log[i].adr);
+      const uint8_t r = (uint8_t)log[i].adr;
+      dsp_write(&s_shadow, r, log[i].val);
+      o = emit_reg(o, log[i].tag, r);
+      /* The stopgap for untracked voices (see untrack). */
+      if (r == 0x2d && (log[i].val & 0xfe & ~s_untracked))
+        o = untrack(o, log[i].tag, (uint8_t)(log[i].val & 0xfe & ~s_untracked));
+      else if (r == 0x4c && s_untracked)   /* key ons skip untracked voices */
+        HALF_OP(o, log[i].tag, RSPDSP_M_KEYON, log[i].val & ~s_untracked);
+      else if (((r & 0xf) == 2 || (r & 0xf) == 3) && ((s_untracked >> (r >> 4)) & 1))
+        HALF_OP(o, log[i].tag, RSPDSP_V_PITCH + 2 * (r >> 4), 0);
+    } else if (log[i].isReg == 4) {
+      if ((uint8_t)log[i].adr & ~s_untracked) o = untrack(o, log[i].tag, (uint8_t)(log[i].adr & ~s_untracked));
     } else if (log[i].isReg == 3) {
       o->tag = log[i].tag; o->kind = RSPDSP_LOG_ARAM; o->pad = 0;
       o->adr = log[i].adr; o->val = log[i].val; o++;

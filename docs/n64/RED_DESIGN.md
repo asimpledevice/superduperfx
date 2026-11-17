@@ -874,11 +874,38 @@ entries ignored) all fail. N64: SMW in ares with `RSPDSP_STREAM=1` is
 identical to the C S-DSP build (WRAM, ARAM, every output sample) at all 26
 checkpoints.
 
-**Not yet:** untracked voices on the microcode (pitch modulation needs each
-voice's previous voice's output from the same sample, a serial path the
-vector microcode does not have, and IMEM is full: a separate variant). Until
-then an N64 stream build plays untracked voices wrongly; none of the test
-games has one.
+**Untracked voices on the microcode: stopgap (2026-11-17).** The microcode
+does not read sample data from ARAM or do pitch modulation yet. The N64 back
+end silences an untracked voice harmlessly for the others, with no
+microcode change: when Blue's decode of the log meets an untrack (a PMON
+write, an untrack entry) it adds state stores for that voice: pitch 0 (its
+counter never wraps, so it takes no block records and the other voices'
+records stay in step), envelope in release at gain 0; later pitch writes are
+held at 0 and KON writes leave its latch clear. (A key-on latch already set
+when the voice is untracked may still key it on: harmless, its decode buffer
+is cleared and it never decodes.) Not exact: the voice is missing from the
+mix while untracked. The C model has the same behaviour under
+`SNESRECOMP_DSP_STREAM_STOPGAP`, and the N64 split test
+(`n64/rspdsp/splittest`, `EIP_BASIC=0`: pitch modulation and samples inside
+the echo ring) matches it in ares at all 61 and 172 checkpoints. (The test
+found a bug in the first version: it re-armed every voice's key-on latch
+from the register shadow when silencing one.)
+
+**Why the exact version is hard (2026-11-17).** IMEM: the records microcode
+has 16 bytes free; a variant that reads untracked voices from ARAM through
+the ledger and does pitch modulation needs about 570-620 bytes more, against
+about 284 recoverable (`RSPDSP_COMPACT_BRR`, one BRR filter loop, 208 bytes,
+bit-exact; the echo prefetch, 60). RSP time: the S-DSP takes 1,150-1,340
+RSP cycles a sample (58-69% of the RSP at 32 kHz); exact pitch modulation is
+serial (a voice needs the previous voice's output of the same sample) and
+costs about +200 cycles per modulated voice voice-by-voice, +600 rerunning
+the vector stages. libdragon's mixer (3,912 bytes of IMEM) and libultra do
+no audio-rate modulation: pitch is set by the CPU per round. Options: an HLE
+variant that uses the previous voice's output of the previous sample (one
+sample late; vectorizable, a few cycles; not bit-exact while modulation is
+on), reading every voice from ARAM through the ledger in pitch-modulation
+batches (dropping the record path, about 140 bytes); or a voice-major
+microcode (libultra's structure), where modulation is cheap.
 
 ### Results back to Blue (owner, 2026-11-16)
 
