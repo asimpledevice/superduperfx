@@ -73,7 +73,8 @@ typedef struct ApuDspRecords {
  *
  * start: take over the S-DSP state (`dsp`, current at sample `at`); ARAM is
  *   the one, live ARAM; `untracked`: the voices Blue's front end does not
- *   track (see the ledger below). post: queue `samples` samples with the log's
+ *   track (see the ledger below), `conflict` those of them it stopped
+ *   tracking for a read of echo bytes (isReg 4; the rest by PMON writes). post: queue `samples` samples with the log's
  *   register writes (isReg 1) and diverted SPC writes (isReg 3) at their
  *   tags, and the records in g_apu_dsp_records; returns at once (it may
  *   wait only for a free slot). progress: samples Yellow has run. wait:
@@ -85,7 +86,8 @@ typedef struct ApuYellowRegs {
   uint8_t outx[8], envx[8], endx;
   uint32_t at;
 } ApuYellowRegs;
-void apu_yellow_start(const Dsp *dsp, uint8_t *aram, uint32_t at, uint8_t untracked);
+void apu_yellow_start(const Dsp *dsp, uint8_t *aram, uint32_t at, uint8_t untracked,
+                      uint8_t conflict);
 void apu_yellow_post(const ApuDspLogEntry *log, uint32_t n, uint32_t samples);
 uint32_t apu_yellow_progress(void);
 void apu_yellow_wait(uint32_t sample);
@@ -123,10 +125,11 @@ extern ApuLedgerEntry g_apu_ledger[APU_LEDGER_LEN];
 extern uint32_t g_apu_ledger_head, g_apu_ledger_tail;
 /* For a back end on another processor (the voice-major microcode): entries
  * are written through apu_host_uncached (an entry reaches RDRAM before the
- * data it covers can), the tail is published the same way, and per ARAM
+ * data it covers can), the tail is published the same way (in a cache line
+ * nothing else shares: an eviction must not write a stale copy), and per ARAM
  * page the time of its newest entry: a read at sample t of a page whose
  * time is not after t needs no scan. The CPU only writes these. */
-extern uint32_t g_apu_ledger_tail_pub;
+extern uint32_t g_apu_ledger_tail_pub[4];   /* [0]; alone in its cache line */
 extern uint32_t g_apu_ledger_page[256];
 void *apu_host_uncached(void *p);   /* the back end's: identity on the host */
 const int16_t *apu_yellow_ring(uint32_t *mask);

@@ -929,7 +929,8 @@ write, which starts the undo ledger, so the ledger covers every voice-major
 batch from its first sample. Both overlays use the one persistent state
 block (same layout): switching costs nothing but rspq's overlay load.
 
-**Inside a voice-major batch** (chunks of up to 32 samples):
+**Inside a voice-major batch** (planned; see "As built" below for what
+changed):
 1. A chunk ends at the next log entry's tag, so register writes, and the
    key-on and key-off latches, change only at chunk boundaries (key ons are
    polled on even samples, as `dsp_cycleChannel`).
@@ -956,6 +957,78 @@ unchanged; then RSP cycles a sample in ares.
 **Leaving the mode** resumes front-end tracking through the existing
 handover (the state back to the Dsp to rebuild the front end): a wait on
 Blue, once per modulation episode.
+
+**As built (2026-11-17).** `n64/rspdsp/rsp_snesdsp_vm.S` is
+`rsp_snesdsp.S` built with `RSPDSP_VM`; the N64 build links it with
+`RSPDSP_STREAM=1` (`RSPDSP_VM=0` keeps the stopgap for every untracked
+voice).
+
+- *Which batches.* A batch runs voice-major when any voice is untracked by
+  pitch modulation (rather than by a conflict) at its start, or a PMON write
+  in it untracks one. That holds after PMON goes back to zero too, until the
+  front end's rebuild hands the state back: those voices stay exact. Voices
+  untracked by an echo conflict keep the stopgap on both overlays
+  (`apu_yellow_start` now takes the conflict mask; the front end keeps it
+  in `DspFrontEnd.conflict`).
+- *Chunks* of at most 16 samples, each ending before the next logged write.
+  Per voice: per-sample pitch as a vector (unmodulated voices take the same
+  formula with the modulator masked to 0, which gives the register's
+  pitch), then a scalar loop per sample: counter, decode on a wrap,
+  interpolation (the four taps and Gaussian coefficients into one vector,
+  as phase B), key on/off on even samples, reset, envelope (scalar
+  `dsp_handleGain`). Then the voice's outputs (lanes: samples) are added
+  into the dry and echo sums with the main overlay's saturating order (so
+  phase E disappears from the per-sample path), and become the next
+  voice's modulator. Then per sample: master volume, echo, output (F-H).
+  Noise is run for the chunk first.
+- *Echo hazard.* Echo writes come after all voices of a sample, so a voice
+  that reads bytes an earlier sample of the chunk wrote as echo would need
+  that sample mixed first. While echo writes are on the chunk's state is
+  snapshotted into RDRAM after the state block (`RspDspState.vm_snap`), and
+  a voice read overlapping the echo ring (conservative: the whole ring) at a
+  chunk sample j > 0 restores it and reruns the chunk cut to j samples. No
+  game reads sample data from its echo ring, so this is the rare path.
+- *ARAM at Yellow's sample.* Every directory and block read
+  (`VM_Fetch`): the bytes (a block wrapping past $FFFF reads $0000 on),
+  then the page's newest ledger time; if after the sample being run, the
+  ledger from the tail back to the first entry at or before it, each
+  matching entry's old value written over the byte (the oldest wins).
+  Blue's order (entry, tail, page time, data) against this order means a
+  write whose data was read is always found. The ledger holds at most
+  4095 entries, so the scan always meets an expired entry. Entering
+  voice-major mode the back end writes all of ARAM back from the CPU's
+  cache; each later voice-major post writes back the lines of the ledger's
+  new entries (every SPC write while a voice is untracked).
+- *IMEM.* The stream build of the variant is exactly 4096 bytes. It has no
+  echo prefetch (a synchronous read a sample) and no block or key-on record
+  path; the rest was compacted (shared address computations, a one-test
+  overlap check, a single-page ledger check).
+
+*Results.* RSP test ROM (random states and logs, `n64/rspdsp/test`):
+2000/2000 bit-exact with pitch modulation on (1990 batches voice-major).
+N64 split test (`n64/rspdsp/splittest`, 1200 steps, 172 checkpoints):
+- `EIP_BASIC=0 EIP_NORING=1` (pitch modulation on voices 1-3, no samples in
+  the echo ring): identical to the exact lockstep reference, 273 of 319
+  batches voice-major;
+- `EIP_BASIC=0` (also voices playing from the echo ring: one echo conflict,
+  and a modulated voice looping inside an old ring): identical to the C
+  model with the conflict-only stopgap, 277 of 321 batches voice-major;
+- `EIP_BASIC=1`: identical to lockstep (no voice-major batches).
+The host tests check the C model the same ways (`tests/run_c_tests.sh`).
+
+Two bugs the split test found, both cache coherence: the published ledger
+tail shared a cache line with the CPU's own tail, so evicting that line
+wrote a stale tail over it and the microcode's scan missed the newest
+entries (it now has a line of its own); and the state block's pack cleared
+the snapshot area through the cache (it now clears only the state, and
+the snapshot area is dropped from the cache at start-up).
+
+*Cost.* On the RSP test ROM with realistic pitches and sample data outside
+the echo ring: 1,624 RSP cycles a sample voice-major against 866 for the
+main overlay (both bit-exact): 83% of the RSP at 32 kHz while a game has a
+modulated voice. Most of it is the scalar per-voice-sample loop (about 85
+instructions: counter, interpolation, key on, envelope), then the snapshot
+and the synchronous echo read. Making it cheaper is the next step.
 
 ### Results back to Blue (owner, 2026-11-16)
 

@@ -75,7 +75,8 @@ typedef struct DspFrontEnd {
   uint32_t even_base;  /* a sample index that was an even sample */
   uint16_t dir;
   uint8_t endx;
-  uint8_t untracked;   /* voices with pitch modulation (bit per voice) */
+  uint8_t untracked;   /* voices not tracked (pitch modulation, or conflict below) */
+  uint8_t conflict;    /* voices untracked by dsp_fe_untrack (a read of echo bytes) */
   bool reset;          /* FLG bit 7 */
   /* Echo position, as of the start of sample echo_t. */
   uint32_t echo_t;
@@ -105,6 +106,7 @@ static inline void dsp_fe_advance(DspFrontEnd *fe, uint32_t sample) {
 static inline void dsp_fe_untrack(DspFrontEnd *fe, int voice) {
   fe->v[voice].pmod = true;
   fe->untracked |= (uint8_t)(1u << voice);
+  fe->conflict |= (uint8_t)(1u << voice);
 }
 /* A register write at sample fe->now (call dsp_fe_advance first). */
 void dsp_fe_write(DspFrontEnd *fe, uint8_t adr, uint8_t val);

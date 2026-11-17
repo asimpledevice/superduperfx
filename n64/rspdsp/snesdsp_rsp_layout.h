@@ -109,7 +109,13 @@
 #define RSPDSP_PP_KON       0x10   /* u32 RDRAM address of the key-on records */
 #define RSPDSP_PP_SAMPLES   0x14   /* u16 */
 #define RSPDSP_PP_LOGN      0x16   /* u16 operations */
-#define RSPDSP_PARAMS_SIZE  0x18   /* multiple of 8 */
+/* The voice-major variant's ARAM history (apu_dsp_batch.h, the ledger). */
+#define RSPDSP_PP_START     0x18   /* u32 the batch's first sample (the ledger's time) */
+#define RSPDSP_PP_LEDGER    0x1c   /* u32 RDRAM address of the entries */
+#define RSPDSP_PP_LTAIL     0x20   /* u32 RDRAM address of the published tail */
+#define RSPDSP_PP_LPAGE     0x24   /* u32 RDRAM address of the page times */
+#define RSPDSP_PARAMS_SIZE  0x28   /* multiple of 8 */
+#define APU_LEDGER_LEN_RSP  4096   /* = APU_LEDGER_LEN */
 #define RSPDSP_OUT_SLOT     8      /* bytes per output sample in the ring */
 
 /* Log entries (8 bytes): u16 tag (samples owed when written), u8 kind,

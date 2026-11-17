@@ -28,6 +28,9 @@
 #define SNESRECOMP_DSP_JOIN_HOOK test_join
 #endif
 #include "../../runner/src/snes/apu.c"
+#ifndef EIP_NORING
+#define EIP_NORING 0   /* 1: no voice plays from the echo ring (no echo conflicts) */
+#endif
 #ifdef N64_SPLITTEST
 /* The same script on the N64 with the microcode back end
  * (n64/rspdsp/splittest): its output is compared with the host reference. */
@@ -143,6 +146,22 @@ static void checkpoint(Apu *apu, unsigned step) {
   for (int i = 0; i < 8; i++) { HV(x->firValues[i]); HV(x->firBufferL[i]); HV(x->firBufferR[i]); }
 #undef HV
   printf("step %u: reads %08x ram %08x dsp %08x out %08x (%u)\n", step, h, hr, hd, ho, nout);
+#ifdef EIP_PAGEHASH   /* (debugging) per-page ARAM hashes, then the voices */
+  if (step == EIP_PAGEHASH) {
+    for (int p = 0; p < 256; p++) {
+      uint32_t hp = 2166136261u;
+      for (int i = 0; i < 256; i++) { hp ^= apu->ram[p * 256 + i]; hp *= 16777619u; }
+      printf("page %02x %08x\n", p, hp);
+    }
+    for (int c = 0; c < 8; c++) {
+      const DspChannel *ch = &x->channel[c];
+      printf("voice %d: ctr %04x off %04x pf %u gain %u st %u out %d old %d older %d pitch %04x kon %d\n", c,
+             ch->pitchCounter, ch->decodeOffset, ch->previousFlags, ch->gain, ch->adsrState, ch->sampleOut,
+             ch->old, ch->older, ch->pitch, ch->keyOn);
+    }
+    printf("echo idx %u rem %u endx %02x\n", x->echoBufferIndex, x->echoRemain, x->ram[0x7c]);
+  }
+#endif
   if (getenv("EIP_RAW") && step == (unsigned)atoi(getenv("EIP_RAW"))) {
     FILE *f = fopen(getenv("EIP_RAWF"), "wb");
     fwrite(apu->dsp, sizeof(Dsp), 1, f); fclose(f);
@@ -261,6 +280,7 @@ int main(int argc, char **argv) {
 #if !EIP_BASIC   /* (the audio split's own cases: the echo-in-place stand-in reads samples from ARAM) */
     } else if (r < 97) {         /* pitch modulation on voices 1-3 */
       dspw(apu, 0x2d, (uint8_t)(rnd() & 0x0e));
+#if !EIP_NORING
     } else if (r < 98) {         /* a voice plays sample data inside the echo ring */
       const uint16_t at = (uint16_t)(ring + (rnd() % len) / 9 * 9);
       apu_cpuWrite(apu, 0x1010, (uint8_t)at); apu_cpuWrite(apu, 0x1011, (uint8_t)(at >> 8));
@@ -272,6 +292,7 @@ int main(int argc, char **argv) {
       const uint8_t v = (uint8_t)(rnd() % 4);
       dspw(apu, (uint8_t)(v * 16 + 4), v);
 #endif
+#endif
     }
     drain(apu);
     if (step % every == every - 1) checkpoint(apu, step + 1);
@@ -281,8 +302,14 @@ int main(int argc, char **argv) {
 #ifdef N64_SPLITTEST
   { extern uint32_t g_apu_stream_posts, g_apu_stream_waits, g_apu_stream_unsupported, g_snesdsp_rsp_stream_slot_waits;
     extern uint32_t g_snesdsp_rsp_fallbacks;
-    printf("stream: %u posts, %u register waits, %u unsupported, %u slot waits, %u echo conflicts, %u wait fallbacks\n",
-           g_apu_stream_posts, g_apu_stream_waits, g_apu_stream_unsupported, g_snesdsp_rsp_stream_slot_waits,
+#if RSPDSP_VM
+    extern uint32_t g_snesdsp_rsp_vm_batches;
+    const uint32_t vm = g_snesdsp_rsp_vm_batches;
+#else
+    const uint32_t vm = 0;
+#endif
+    printf("stream: %u posts (%u voice-major), %u register waits, %u unsupported, %u slot waits, %u echo conflicts, %u wait fallbacks\n",
+           g_apu_stream_posts, vm, g_apu_stream_waits, g_apu_stream_unsupported, g_snesdsp_rsp_stream_slot_waits,
            g_dsp_fe_echo_conflicts, g_snesdsp_rsp_fallbacks); }
 #else
   { extern uint32_t g_apu_stream_posts, g_apu_stream_waits, g_apu_stream_unsupported, g_dsp_yellow_c_missing;

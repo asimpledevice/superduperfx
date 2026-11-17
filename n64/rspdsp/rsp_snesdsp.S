@@ -72,7 +72,6 @@ VM_GAINB:   .ds.b 2 * VM_CHUNK  # gain << 5 per sample
 VM_NOISE:   .ds.b 2 * VM_CHUNK  # the noise sample per sample
 VM_VOUT:    .ds.b 2 * VM_CHUNK  # the voice's output (the next voice's modulator)
 VM_TOT:     .ds.b 8 * VM_CHUNK  # per sample: dry L, dry R, echo L, echo R (2 * VM_CHUNK apart)
-VM_KV:      .half 0xfff0, 0x3fff, 0, 0, 0, 0, 0, 0
 #else
 STG_T0:     .ds.b 16        # interpolation taps (doubled samples), per voice
 STG_T1:     .ds.b 16
@@ -93,7 +92,7 @@ STG_MD2:    .ds.b 16
 #endif
 SCR_BRR:    .ds.b 24        # BRR block window (8-byte aligned DMA)
     .align 3
-SCR_DIR:    .ds.b 16
+SCR_DIR:    .ds.b 16                # (VM: 16 bytes are read)
 SCR_RMW:    .ds.b 16
     .align 5
 SCR_ECHO:   .ds.b 32        # two echo buffers (current, prefetch), 16 apart
@@ -144,10 +143,12 @@ SnesDspCmd_Run:
     lhu s2, %lo(PAR(LOGN))
     lw s1, %lo(PAR(LOG))
     sw zero, %lo(LOG_LEFT)
+#ifndef RSPDSP_VM
     li t1, -1
     sw t1, %lo(PREF_ADR)            # no echo prefetch yet
     li t1, %lo(SCR_ECHO)
     sw t1, %lo(PREF_BUF)
+#endif
 #ifdef RSPDSP_BLOCKS
     lw t1, %lo(PAR(BLK))
     sw t1, %lo(BLK_RD)
@@ -179,10 +180,9 @@ Run_loop:
     beqz t5, 2f
     nop
     move t1, t3
-2:  jal VM_Chunk                    # runs the chunk; advances s5
-    sw t1, %lo(VM_N)
-    b Run_loop
-    nop
+2:  sw t1, %lo(VM_N)
+    j VM_Chunk                      # runs the chunk, advances s5, back to Run_loop
+    li ra, %lo(Run_loop)
 #else
 Run_loop:
 #ifndef PROF_NO_LOG
@@ -270,8 +270,10 @@ Log_ret:
 # to $0000-$000F arrive twice from the CPU: once more for the mirror.
 Aram_Rmw:                           # a0: ARAM offset (may be >= $10000), a1: value
     move t7, ra
+#ifndef RSPDSP_VM
     li t1, -1
     sw t1, %lo(PREF_ADR)            # an echo prefetch may be stale
+#endif
     lw t1, %lo(DSP + RSPDSP_P_ARAM)
     li t3, ~7
     and t3, a0, t3
@@ -292,12 +294,9 @@ Aram_Rmw:                           # a0: ARAM offset (may be >= $10000), a1: va
 #ifndef RSPDSP_BLOCKS   /* the front end reads the directory */
 # Read 8 bytes of ARAM containing offset a0 into SCR_DIR; returns the DMEM
 # address of the requested byte in v0. (Used for directory entries.)
+#ifndef RSPDSP_VM
 Aram_Read8:
     move t7, ra
-#ifdef RSPDSP_VM
-    jal VM_Check                    # (directory entries: 4 bytes)
-    li a1, 4
-#endif
     lw t1, %lo(DSP + RSPDSP_P_ARAM)
     li t3, ~7
     and t3, a0, t3
@@ -308,6 +307,7 @@ Aram_Read8:
     andi t3, a0, 7
     jr t7
     addiu v0, t3, %lo(SCR_DIR)
+#endif
 
 # Directory entry for SRCN a2: v0 = start address, v1 = loop address.
 Dir_Entry:
@@ -315,7 +315,13 @@ Dir_Entry:
     lhu a0, %lo(DSP + RSPDSP_DIRPAGE)
     sll t1, a2, 2
     addu a0, a0, t1
+#ifdef RSPDSP_VM
+    li s4, %lo(SCR_DIR)
+    li a1, 4
+    jal VM_Fetch
+#else
     jal Aram_Read8
+#endif
     andi a0, a0, 0xffff
     lbu t1, 0(v0)
     lbu t3, 1(v0)
@@ -721,12 +727,15 @@ C_env:
     sh a0, %lo(OUTBUF + 0)(t1)
     sh a1, %lo(OUTBUF + 2)(t1)
     addiu fp, fp, 1
+#if !(defined(RSPDSP_VM) && defined(RSPDSP_STREAM))   /* (else after each chunk: 8-byte samples, VM_CHUNK <= OUT_FLUSH) */
     li t1, OUT_FLUSH
     bne fp, t1, 1f
     nop
     jal Out_Flush
     nop
-1:  lhu t1, %lo(DSP + RSPDSP_EVENCYCLE)
+1:
+#endif
+    lhu t1, %lo(DSP + RSPDSP_EVENCYCLE)
     xori t1, t1, 1
     sh t1, %lo(DSP + RSPDSP_EVENCYCLE)
     lw ra, %lo(SAVE_RA)
@@ -786,12 +795,10 @@ Noise:
     lh t3, %lo(DSP + RSPDSP_NOISE_SAMPLE)
     srl t4, t3, 1
     xor t5, t3, t4
-    andi t5, t5, 1
+    sll t5, t5, 31                  # the new bit 14, sign-extended
+    sra t5, t5, 17
     andi t4, t4, 0x3fff
-    sll t5, t5, 14
     or t4, t4, t5
-    sll t4, t4, 17
-    sra t4, t4, 17
     sh t4, %lo(DSP + RSPDSP_NOISE_SAMPLE)
     move t1, zero
 1:  sh t1, %lo(DSP + RSPDSP_NOISE_COUNTER)
@@ -808,13 +815,10 @@ Brr_Decode:
     sll t7, a2, 3
     addu t6, t6, t7
     sw t6, %lo(BRR_DEC)
-    # copy samples 16..18 to 0..2
-    lh t1, %lo(DSP + RSPDSP_DECODE + 32)(t6)
-    sh t1, %lo(DSP + RSPDSP_DECODE + 0)(t6)
-    lh t1, %lo(DSP + RSPDSP_DECODE + 34)(t6)
-    sh t1, %lo(DSP + RSPDSP_DECODE + 2)(t6)
-    lh t1, %lo(DSP + RSPDSP_DECODE + 36)(t6)
-    sh t1, %lo(DSP + RSPDSP_DECODE + 4)(t6)
+    # copy samples 16..18 to 0..2 (and 19 to 3, decoded over below)
+    addiu t1, t6, %lo(DSP + RSPDSP_DECODE)
+    ldv $v03, 0, 32, t1
+    sdv $v03, 0, 0, t1
     lhu t1, %lo(DSP + RSPDSP_V_PREVFLAGS)(t4)
     andi t3, t1, 1                  # flags 1 or 3: end of sample, loop
     beqz t3, Brr_block
@@ -874,9 +878,11 @@ Brr_block:
     lhu a0, %lo(DSP + RSPDSP_V_DECOFF)(t4)
     sw t4, %lo(BRR_T4)
 #ifdef RSPDSP_VM
-    jal VM_Check
+    li s4, %lo(SCR_BRR)
+    jal VM_Fetch                    # v0 -> block in DMEM
     li a1, 9
-#endif
+    lw t4, %lo(BRR_T4)
+#else
     lw t1, %lo(DSP + RSPDSP_P_ARAM)
     li t3, ~7
     and t3, a0, t3
@@ -887,6 +893,7 @@ Brr_block:
     lw t4, %lo(BRR_T4)
     andi t3, a0, 7
     addiu v0, t3, %lo(SCR_BRR)      # v0 -> block in DMEM
+#endif
 #endif
     addiu a0, a0, 9
     andi a0, a0, 0xffff
@@ -1155,7 +1162,6 @@ B_DECODE:   .half RSPDSP_DECODE + 0 * RSPDSP_DECODE_STRIDE, RSPDSP_DECODE + 1 * 
 ########################################################################
 
 VM_Chunk:
-    sw ra, %lo(VM_RA)
     sw s1, %lo(VM_SAVE + 0)
     sw s2, %lo(VM_SAVE + 4)
     sw s3, %lo(VM_SAVE + 8)
@@ -1190,9 +1196,8 @@ VM_go:
 
 VM_voice:
     sll t4, a2, 1
-    li t5, 1
-    sllv fp, t5, a2                 # the voice's bit
-    move t5, fp
+    li fp, 1
+    sllv fp, fp, a2                 # the voice's bit
     lhu t1, %lo(B_DECODE)(t4)
     addiu t1, t1, %lo(DSP)
     sw t1, %lo(VM_DB)               # the voice's decode buffer
@@ -1200,39 +1205,35 @@ VM_voice:
     lhu s1, %lo(DSP + RSPDSP_V_GAIN)(t4)
     lhu s2, %lo(DSP + RSPDSP_V_ADSRSTATE)(t4)
     lhu s3, %lo(DSP + RSPDSP_V_RATECTR)(t4)
-    # Pitch per sample: the register, or modulated by the previous voice
-    # (pitch * ((out >> 4) + 0x400)) >> 10, at most 0x3fff, formed exactly
-    # as (pitch * 4) * (((out >> 4) << 4) + 0x4000) >> 16.
+    # Pitch per sample: (pitch * ((out >> 4) + 0x400)) >> 10, at most
+    # 0x3fff, with out the previous voice's outputs when modulated, else 0
+    # (giving the pitch), formed exactly as
+    # (pitch * 4) * ((out & 0xfff0) + 0x4000) >> 16.
     lhu t1, %lo(DSP + RSPDSP_V_PITCH)(t4)
     lhu t3, %lo(DSP + RSPDSP_M_PMOD)
-    li t7, %lo(VM_PITCH)
-    and t3, t3, t5
-    beqz a2, VM_pconst              # voice 0 is never modulated
+    li t7, %lo(VM_VOUT)
+    and t3, t3, fp
+    andi t3, t3, 0xfe               # voice 0 is never modulated
+    sltu t3, zero, t3
+    subu t3, zero, t3
+    andi t3, t3, 0xfff0
     sll t1, t1, 2
-    beqz t3, VM_pconst
-    li t3, %lo(VM_VOUT)
-    li t5, %lo(VM_KV)
     mtc2 t1, $v13.e0
-    lqv $v11, 0x00, t3
-    lqv $v12, 0x10, t3
-    lqv $v14, 0x00, t5
+    mtc2 t3, $v13.e1
+    li t1, 0x3fff
+    mtc2 t1, $v13.e2
+    lqv $v11, 0x00, t7
+    lqv $v12, 0x10, t7
     ctc2 zero, COP2_CTRL_VCO
-    vand $v11, $v11, $v14, e(0)     # & 0xfff0
-    vand $v12, $v12, $v14, e(0)
+    vand $v11, $v11, $v13, e(1)
+    vand $v12, $v12, $v13, e(1)
     vadd $v11, $v11, $v31, e(1)     # + 0x4000
     vadd $v12, $v12, $v31, e(1)
     vmudl $v11, $v11, $v13, e(0)
     vmudl $v12, $v12, $v13, e(0)
-    vlt $v11, $v11, $v14, e(1)      # at most 0x3fff
-    vlt $v12, $v12, $v14, e(1)
-    b VM_pdone
-    nop
-VM_pconst:
-    srl t1, t1, 2
-    mtc2 t1, $v11.e0
-    vor $v11, vzero, $v11, e(0)
-    vor $v12, vzero, $v11, e(0)
-VM_pdone:
+    vlt $v11, $v11, $v13, e(2)      # at most 0x3fff
+    vlt $v12, $v12, $v13, e(2)
+    li t7, %lo(VM_PITCH)
     sqv $v11, 0x00, t7
     sqv $v12, 0x10, t7
     move k0, zero
@@ -1398,26 +1399,23 @@ VM_out:
     sh s2, %lo(DSP + RSPDSP_V_ADSRSTATE)(t4)
     sh s3, %lo(DSP + RSPDSP_V_RATECTR)(t4)
     li t1, %lo(VM_INTERP)
-    lqv $v01, 0x00, t1
-    lqv $v02, 0x10, t1
+    lqv $v01, VM_INTERP - VM_INTERP, t1
+    lqv $v02, VM_INTERP - VM_INTERP + 0x10, t1
     lhu t3, %lo(DSP + RSPDSP_M_NOISE)
     and t3, t3, fp
     vmudm $v01, $v01, $v31, e(0)    # >> 1
-    vmudm $v02, $v02, $v31, e(0)
     beqz t3, 1f
-    li t1, %lo(VM_NOISE)
-    lqv $v01, 0x00, t1
-    lqv $v02, 0x10, t1
-1:  li t1, %lo(VM_GAINB)
-    lqv $v03, 0x00, t1
-    lqv $v04, 0x10, t1
+    vmudm $v02, $v02, $v31, e(0)
+    lqv $v01, VM_NOISE - VM_INTERP, t1
+    lqv $v02, VM_NOISE - VM_INTERP + 0x10, t1
+1:  lqv $v03, VM_GAINB - VM_INTERP, t1
+    lqv $v04, VM_GAINB - VM_INTERP + 0x10, t1
     vmudm $v05, $v01, $v03
     vmudm $v06, $v02, $v04
-    li t1, %lo(VM_VOUT)
-    sqv $v05, 0x00, t1
-    sqv $v06, 0x10, t1
+    sqv $v05, VM_VOUT - VM_INTERP, t1
+    sqv $v06, VM_VOUT - VM_INTERP + 0x10, t1
     addu t3, t1, s6
-    lh t3, -2(t3)                   # the last sample's
+    lh t3, VM_VOUT - VM_INTERP - 2(t3)   # the last sample's
     sh t3, %lo(DSP + RSPDSP_V_SAMPLEOUT)(t4)
     # Its terms (s * vol) >> 6 (exact, as E) into the sums; the echo
     # mask zeroes them for the echo sums of a voice without echo.
@@ -1448,10 +1446,9 @@ VM_out:
     vadd $v20, $v20, $v09
     vadd $v21, $v21, $v10
     vadd $v22, $v22, $v11
-    addiu a2, a2, 1
-    sltiu t1, a2, 8
+    sltiu t1, a2, 7
     bnez t1, VM_voice
-    nop
+    addiu a2, a2, 1
 
     li t1, %lo(VM_TOT)
     sqv $v15, 0x00, t1
@@ -1477,9 +1474,12 @@ VM_mix:
     addiu k0, k0, 2
     bne k0, k1, VM_mix
     addiu s5, s5, 1
-    lw ra, %lo(VM_RA)
-    jr ra
-    nop
+#ifdef RSPDSP_STREAM
+    j Out_Flush                     # (to Run_loop)
+#else
+    j Run_loop
+#endif
+    li ra, %lo(Run_loop)
 
 # A read of a1 bytes at ARAM address a0 by the voice at chunk sample j
 # (VM_K = 2j) is a hazard if it overlaps the echo ring while echo writes
@@ -1494,23 +1494,117 @@ VM_Check:
     beqz t1, 9f
     lhu t5, %lo(DSP + RSPDSP_ECHOREMAIN)
     lhu t1, %lo(DSP + RSPDSP_ECHODELAY)
-    addu t3, t3, t5                 # the ring: max(delay, index + remain)
-    sltu t5, t1, t3
-    beqz t5, 1f
+    addu t1, t1, t3                 # the ring is within delay + index + remain
+    addu t1, t1, t5
     lhu t5, %lo(DSP + RSPDSP_ECHOADR)
-    move t1, t3
-1:  sll t1, t1, 2
-    subu t8, a0, t5                 # [a0, a0 + a1) and [t5, t5 + t1), mod 64K
+    sll t1, t1, 2
+    subu t8, a0, t5                 # a0 within [t5 - 8, t5 + t1), mod 64K
+    addiu t8, t8, 8                 # (a read is at most 9 bytes)
     andi t8, t8, 0xffff
+    addiu t1, t1, 8
     sltu t8, t8, t1
-    bnez t8, VM_Hazard
-    subu t8, t5, a0
-    andi t8, t8, 0xffff
-    sltu t8, t8, a1
     bnez t8, VM_Hazard
     nop
 9:  jr ra
     nop
+
+# The voice stage's ARAM reads: bytes [a0, a0 + a1) (a1 <= 9) as of the
+# sample being run, into DMEM at s4 (16 bytes from a0 & ~7; past $FFFF
+# ARAM wraps). Returns v0 = the DMEM address of byte a0. Keeps t4, t6.
+VM_Fetch:
+    move t7, ra
+    jal VM_Check
+    sw s4, %lo(VM_DST)
+    lw t1, %lo(DSP + RSPDSP_P_ARAM)
+    li t3, ~7
+    and t3, a0, t3
+    addu s0, t1, t3
+    jal DMAIn
+    li t0, DMA_SIZE(16, 1)
+    andi t3, a0, 0xfff8
+    li t1, 0xfff8
+    bne t3, t1, 1f
+    lw s0, %lo(DSP + RSPDSP_P_ARAM)
+    lw s4, %lo(VM_DST)
+    addiu s4, s4, 8
+    jal DMAIn
+    li t0, DMA_SIZE(8, 1)
+1:
+#ifdef RSPDSP_STREAM
+    jal VM_Ledger
+    nop
+#endif
+    lw v0, %lo(VM_DST)
+    andi t3, a0, 7
+    jr t7
+    addu v0, v0, t3
+
+#ifdef RSPDSP_STREAM
+# Undo, in the bytes VM_Fetch read, the SPC's writes after the sample being
+# run (t: the batch's first sample + s5 + the chunk sample): each address
+# takes the old value of its oldest ledger entry with time > t
+# (apu_dsp_batch.h). Blue writes an entry, the tail, the page's time, then
+# the data reaches RDRAM; read here in the other order (data, page times,
+# tail, entries), a write whose data was read is always found. Keeps a0,
+# a1, t6, t7.
+VM_Ledger:
+    sw ra, %lo(VM_LRA)
+    lw t8, %lo(PAR(START))
+    lw t1, %lo(VM_K)
+    addu t8, t8, s5
+    srl t1, t1, 1
+    addu t8, t8, t1                 # t
+    andi t1, a0, 0xff
+    addu t1, t1, a1
+    sltiu t1, t1, 0x101
+    beqz t1, VM_Lscan               # (bytes in two pages: scan)
+    srl t1, a0, 6
+    lw s0, %lo(PAR(LPAGE))
+    li t3, ~7
+    and t3, t1, t3
+    addu s0, s0, t3
+    li s4, %lo(VM_LBUF)
+    jal DMAIn
+    li t0, DMA_SIZE(8, 1)
+    andi t1, t1, 4
+    lw t3, %lo(VM_LBUF)(t1)         # the page's newest write
+    subu t3, t3, t8
+    blez t3, VM_Lret
+VM_Lscan:
+    lw s0, %lo(PAR(LTAIL))
+    li s4, %lo(VM_LBUF)
+    jal DMAIn
+    li t0, DMA_SIZE(8, 1)
+    lw t9, %lo(VM_LBUF)             # newest first, from the tail
+VM_Lent:
+    addiu t9, t9, -1
+    andi t1, t9, APU_LEDGER_LEN_RSP - 1
+    lw s0, %lo(PAR(LEDGER))
+    sll t1, t1, 3
+    addu s0, s0, t1
+    li s4, %lo(VM_LBUF)
+    jal DMAIn
+    li t0, DMA_SIZE(8, 1)
+    lw t3, %lo(VM_LBUF)             # time: at or before t ends the scan
+    subu t3, t3, t8
+    blez t3, VM_Lret
+    lhu t3, %lo(VM_LBUF + 4)
+    subu t3, t3, a0
+    andi t3, t3, 0xffff
+    sltu t5, t3, a1
+    beqz t5, VM_Lent
+    lbu t5, %lo(VM_LBUF + 6)        # (older entries come later: the oldest stays)
+    lw v1, %lo(VM_DST)
+    andi t0, a0, 7
+    addu v1, v1, t0
+    addu v1, v1, t3
+    b VM_Lent
+    sb t5, 0(v1)
+VM_Lret:
+    lw ra, %lo(VM_LRA)
+    jr ra
+    nop
+#endif
 
 # Back to the chunk's start, cut before sample j (j > 0).
 VM_Hazard:
@@ -1526,11 +1620,16 @@ VM_Hazard:
 
     .data
     .align 2
-VM_RA:      .word 0
 VM_N:       .word 0
 VM_K:       .word 0
 VM_DB:      .word 0
 VM_SAVE:    .word 0, 0, 0, 0, 0
+VM_DST:     .word 0
+#ifdef RSPDSP_STREAM
+VM_LRA:     .word 0
+    .align 3
+VM_LBUF:    .ds.b 8
+#endif
     .text
 #endif /* RSPDSP_VM */
 
@@ -1547,6 +1646,9 @@ Echo:
     sll t1, t1, 2
     addu t1, t1, t3
     andi t1, t1, 0xffff
+#ifdef RSPDSP_VM                      /* (no prefetch: read here) */
+    li t4, %lo(SCR_ECHO)
+#else
     sw t1, %lo(ECHO_ADR)
     bne t5, t1, Echo_sync           # no prefetch of this address
     lw t4, %lo(PREF_BUF)
@@ -1554,6 +1656,7 @@ Echo:
     nop
     b Echo_have
     nop
+#endif
 Echo_sync:
     lw t3, %lo(DSP + RSPDSP_P_ARAM)
     li t5, ~7
@@ -1563,7 +1666,9 @@ Echo_sync:
     jal DMAIn
     li t0, DMA_SIZE(8, 1)
 Echo_have:
+#ifndef RSPDSP_VM                     /* (VM: t1, and s0 for the write, kept) */
     lw t1, %lo(ECHO_ADR)
+#endif
     lhu t6, %lo(DSP + RSPDSP_FIRINDEX)
     andi t1, t1, 4
     addu v1, t1, t4                  # v1 -> 4 echo bytes (t4: buffer)
@@ -1648,11 +1753,13 @@ Echo_have:
     sb t1, 3(v1)
     # Written back in the background: DMA runs in order, so later reads
     # of ARAM (BRR, directory, the next prefetch) see it.
+#ifndef RSPDSP_VM
     lw t1, %lo(ECHO_ADR)
     lw t3, %lo(DSP + RSPDSP_P_ARAM)
     li t5, ~7
     and t5, t1, t5
     addu s0, t3, t5
+#endif
     move s4, t4
     jal DMAOutAsync
     li t0, DMA_SIZE(8, 1)
@@ -1674,6 +1781,7 @@ Echo_have:
     move t3, zero
     sh t5, %lo(DSP + RSPDSP_ECHOREMAIN)
 3:  sh t3, %lo(DSP + RSPDSP_ECHOINDEX)
+#ifndef RSPDSP_VM
     # Prefetch the next sample's echo bytes into the other buffer. Used
     # only if the address still matches and no logged ARAM write came first.
     lhu t1, %lo(DSP + RSPDSP_ECHOADR)
@@ -1690,6 +1798,7 @@ Echo_have:
     move s4, t4
     jal DMAInAsync
     li t0, DMA_SIZE(8, 1)
+#endif
     lw ra, %lo(SAVE_RA2)
     jr ra
     nop

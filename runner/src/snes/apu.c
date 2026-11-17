@@ -952,7 +952,7 @@ static void apu_streamEnsure(Apu* apu) {
   if (apu_yellow_running()) return;
   /* The Dsp is current at dspAt, the untracked voices as they were then
    * (later changes are in the log). */
-  apu_yellow_start(apu->dsp, apu->ram, apu->dspAt, apu->dspUntracked);
+  apu_yellow_start(apu->dsp, apu->ram, apu->dspAt, apu->dspUntracked, apu->dspConflict);
   /* The consumer reads the back end's ring from now on, in absolute
    * samples (restarting where it left off when the counts still agree). */
   Dsp *d = apu->dsp;
@@ -967,7 +967,7 @@ void apu_dspOutput(Apu* apu) {
 
 ApuLedgerEntry g_apu_ledger[APU_LEDGER_LEN] __attribute__((aligned(16)));
 uint32_t g_apu_ledger_head, g_apu_ledger_tail;
-uint32_t g_apu_ledger_tail_pub __attribute__((aligned(16)));
+uint32_t g_apu_ledger_tail_pub[4] __attribute__((aligned(16)));   /* (a cache line of its own) */
 uint32_t g_apu_ledger_page[256] __attribute__((aligned(16)));
 uint32_t g_apu_stream_ledger_waits;
 /* Entries the S-DSP has passed go. */
@@ -981,10 +981,12 @@ static void apu_streamLedgerDrop(Apu* apu) {
 /* An SPC write to ARAM while a voice is untracked: its old value, for the
  * S-DSP's reads at earlier samples. */
 void apu_streamLedger(Apu* apu, uint16_t adr) {
-  if (g_apu_ledger_tail - g_apu_ledger_head == APU_LEDGER_LEN) {
+  /* (At most LEN - 1 entries: the slot before the oldest keeps an expired
+   * entry, which ends the microcode's scan back from the tail.) */
+  if (g_apu_ledger_tail - g_apu_ledger_head >= APU_LEDGER_LEN - 1) {
     apu->dspAt = apu_yellow_running() ? apu_yellow_progress() : apu->dspEdges;
     apu_streamLedgerDrop(apu);
-    if (g_apu_ledger_tail - g_apu_ledger_head == APU_LEDGER_LEN) {
+    if (g_apu_ledger_tail - g_apu_ledger_head >= APU_LEDGER_LEN - 1) {
       /* Full: let the S-DSP reach the SPC's time; every entry expires. */
       g_apu_stream_ledger_waits++;
       apu_dspSyncFor(apu, APU_DSP_SYNC_LOG_FULL);
@@ -1001,7 +1003,7 @@ void apu_streamLedger(Apu* apu, uint16_t adr) {
   e->old = apu->ram[adr];
   e->pad = 0;
   g_apu_ledger_tail++;
-  *(volatile uint32_t *)apu_host_uncached(&g_apu_ledger_tail_pub) = g_apu_ledger_tail;
+  *(volatile uint32_t *)apu_host_uncached(&g_apu_ledger_tail_pub[0]) = g_apu_ledger_tail;
   ((volatile uint32_t *)apu_host_uncached(g_apu_ledger_page))[adr >> 8] = apu->dspEdges;
 }
 
@@ -1023,7 +1025,8 @@ static void apu_streamStop(Apu* apu) {
   if (!apu_yellow_running()) return;   /* the Dsp is current already */
   apu_yellow_stop(apu->dsp);
   apu->dspAt = apu->dspEdges;
-  apu->dspUntracked = apu->fe.untracked;   /* (the front end is at dspEdges: posted above) */
+  apu->dspUntracked = apu->fe.untracked;
+    apu->dspConflict = apu->fe.conflict;   /* (the front end is at dspEdges: posted above) */
   apu->dsp->sampleWrite = apu_yellow_publish();   /* every sample, readable (= dspAt) */
   /* ENVX/OUTX the SPC wrote since the last sample read back as written. */
   for (int r = 8; r < 0x80; r += 16)
@@ -1184,6 +1187,7 @@ static void apu_feNow(Apu* apu) {
 #if SNESRECOMP_DSP_STREAM
     apu_streamRegion(apu);
     apu->dspUntracked = apu->fe.untracked;
+    apu->dspConflict = apu->fe.conflict;
 #endif
     apu->feValid = true;
   }

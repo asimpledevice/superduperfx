@@ -71,11 +71,26 @@ static void random_state(Dsp *d, uint8_t *aram) {
   d->evenCycle = rnd() & 1;
   d->noiseSample = rnd15();
   d->noiseCounter = (uint16_t)(rnd() % 64);
+#ifdef RSPDSP_REAL_PITCH
+  /* Sample data outside the echo ring, as in games: the directory's start
+   * and loop addresses, and the voices' block addresses. */
+  const unsigned ring0 = esa << 8, ring1 = ring0 + (edl ? edl * 2048u : 4u);
+#define OUTSIDE(a) ((unsigned)(a) + 64u <= ring0 || (unsigned)(a) >= ring1 + 16u)
+  for (int k = 0; k < 512; k++) {
+    unsigned a;
+    do a = rnd() & 0xfff0; while (!OUTSIDE(a) || a >= 0xff00);
+    aram[(d->dirPage + 2 * k) & 0xffff] = (uint8_t)a;
+    aram[(d->dirPage + 2 * k + 1) & 0xffff] = (uint8_t)(a >> 8);
+  }
+#endif
   for (int c = 0; c < 8; c++) {
     DspChannel *ch = &d->channel[c];
     ch->pitchCounter = (uint16_t)rnd();
     for (int i = 0; i < 19; i++) ch->decodeBuffer[i] = rnd15();
     ch->decodeOffset = (uint16_t)rnd();
+#ifdef RSPDSP_REAL_PITCH
+    while (!OUTSIDE(ch->decodeOffset) || ch->decodeOffset >= 0xff00) ch->decodeOffset = (uint16_t)rnd();
+#endif
     ch->previousFlags = rnd() & 3;
     ch->old = rnd15();
     ch->older = rnd15();
@@ -110,7 +125,9 @@ static uint32_t random_log(Dsp *d, uint32_t samples) {
       switch (rnd() % 4) {
         case 0: a &= 0x1f; break;                                /* incl. mirror */
         case 1: a = (uint16_t)(d->echoBufferAdr + (rnd() & 0xff)); break;
+#ifndef RSPDSP_REAL_PITCH   /* (keeps the directory's targets outside the echo ring) */
         case 2: a = (uint16_t)(d->dirPage + (rnd() & 0x3ff)); break;
+#endif
         default: break;
       }
       s_log[i].isReg = 0; s_log[i].adr = a; s_log[i].val = (uint8_t)rnd();

@@ -93,6 +93,9 @@ void snesdsp_rsp_init(void) {
   s_overlay_ne_id = rspq_overlay_register(&rsp_snesdsp_ne);
 #if RSPDSP_VM
   s_overlay_vm_id = rspq_overlay_register(&rsp_snesdsp_vm);
+  /* The voice-major variant's snapshot area is written by the RSP only: no
+   * line of it may stay dirty in the cache from the startup BSS clear. */
+  data_cache_hit_writeback_invalidate(s_block.vm_snap, sizeof s_block.vm_snap);
 #endif
   s_run_overlay = s_overlay_id;
 #if RSPDSP_PREP
@@ -143,7 +146,7 @@ static void pack_coefficients(const Dsp *dsp, RspDspState *s) {
 }
 
 void snesdsp_rsp_pack(const Dsp *dsp, RspDspState *s) {
-  memset(s, 0, sizeof *s);
+  memset(s->bytes, 0, sizeof s->bytes);   /* (vm_snap is the RSP's: never in the cache) */
   for (int c = 0; c < 8; c++) {
     const DspChannel *ch = &dsp->channel[c];
     const unsigned v = 2u * c;
@@ -1047,20 +1050,27 @@ static uint32_t s_head, s_tail;        /* slots posted (tail) and found done (he
 static uint32_t s_posted, s_done_end, s_published;
 static bool s_running;
 static int16_t s_ring[APU_STREAM_RING * 4 + 8] __attribute__((aligned(16)));
-/* Untracked voices (apu_dsp_batch.h): the microcode does not read sample
- * data from ARAM or do pitch modulation yet. Stopgap (documented in
- * RED_DESIGN.md): such a voice is silenced, harmlessly for the others: its
- * pitch is held at 0 (its counter never wraps, so it takes no block
- * records), its envelope is put in release at gain 0, and KON writes (and
- * the handover) leave its key-on latch clear. A latch already set when it is
- * untracked may still key it on: harmless, its decode buffer is cleared and
- * it never decodes, so it stays silent. */
-static uint8_t s_untracked;
+/* Untracked voices (apu_dsp_batch.h). Those untracked by pitch modulation
+ * run exactly on the voice-major variant (RSPDSP_VM): a batch with any of
+ * them goes there, reading every voice's directory entries and blocks from
+ * ARAM through the ledger (its records unused). Those untracked by an echo
+ * conflict get the stopgap (documented in RED_DESIGN.md), on either
+ * variant: such a voice is silenced, harmlessly for the others: its pitch is
+ * held at 0 (its counter never wraps, so it takes no block records), its
+ * envelope is put in release at gain 0, and KON writes (and the handover)
+ * leave its key-on latch clear. A latch already set when it is untracked
+ * may still key it on: harmless, its decode buffer is cleared and it never
+ * decodes, so it stays silent. Without RSPDSP_VM every untracked voice gets
+ * the stopgap. */
+static uint8_t s_untracked, s_silenced;
+static bool s_vm_mode;              /* the last batch posted was voice-major */
+static uint32_t s_ledger_seen;      /* ledger entries whose lines were written back */
 uint32_t g_snesdsp_rsp_untracked;   /* voices silenced so far */
 #define HALF_OP(o, t, off, value) do { (o)->tag = (t); (o)->kind = RSPDSP_LOG_HALF; (o)->pad = 0; \
     (o)->adr = (off); (o)->val = (uint16_t)(int16_t)(value); (o)++; } while (0)
 static Op *untrack(Op *o, uint16_t tag, uint8_t newly) {
   s_untracked |= newly;
+  s_silenced |= newly;
   for (int v = 0; v < 8; v++)
     if ((newly >> v) & 1) {
       HALF_OP(o, tag, RSPDSP_V_PITCH + 2 * v, 0);
@@ -1078,7 +1088,7 @@ static void stream_init(void) {
   /* The ledger is written through the uncached alias only: no line of it
    * may stay in the cache from the startup BSS clear. */
   data_cache_hit_writeback_invalidate(g_apu_ledger, sizeof g_apu_ledger);
-  data_cache_hit_writeback_invalidate(&g_apu_ledger_tail_pub, 16);
+  data_cache_hit_writeback_invalidate(g_apu_ledger_tail_pub, sizeof g_apu_ledger_tail_pub);
   data_cache_hit_writeback_invalidate(g_apu_ledger_page, sizeof g_apu_ledger_page);
 }
 void *apu_host_uncached(void *p) { return UncachedAddr(p); }
@@ -1128,17 +1138,23 @@ static void wait_all(void) {
   while (s_head != s_tail) { wait_seq(s_slot[s_head % kSlots].seq); reap(); }
 }
 
-void apu_yellow_start(const Dsp *dsp, uint8_t *aram, uint32_t at, uint8_t untracked) {
+void apu_yellow_start(const Dsp *dsp, uint8_t *aram, uint32_t at, uint8_t untracked,
+                      uint8_t conflict) {
   wait_all();
   snesdsp_rsp_pack(dsp, &s_block);
-  s_untracked = untracked;   /* silenced (see untrack) */
+#if !RSPDSP_VM
+  conflict = untracked;
+#endif
+  s_untracked = untracked;
+  s_silenced = conflict;   /* (see untrack) */
+  s_vm_mode = false;
   for (int v = 0; v < 8; v++)
-    if ((untracked >> v) & 1) {
+    if ((conflict >> v) & 1) {
       put(&s_block, RSPDSP_V_PITCH + 2 * v, 0);
       put(&s_block, RSPDSP_V_GAIN + 2 * v, 0);
       put(&s_block, RSPDSP_V_ADSRSTATE + 2 * v, 4);
     }
-  put(&s_block, RSPDSP_M_KEYON, getu(&s_block, RSPDSP_M_KEYON) & ~untracked);
+  put(&s_block, RSPDSP_M_KEYON, getu(&s_block, RSPDSP_M_KEYON) & ~conflict);
   put32(s_block.bytes + RSPDSP_P_ARAM, PhysicalAddr(aram));
   data_cache_hit_writeback_invalidate(&s_block, RSPDSP_STATE_SIZE);
   memcpy(&s_shadow, dsp, offsetof(Dsp, sampleBuffer));   /* decodes register writes from here on */
@@ -1156,21 +1172,28 @@ void apu_yellow_post(const ApuDspLogEntry *log, uint32_t n, uint32_t samples) {
   CHOOSE_OVERLAY(&s_shadow, log, n, IS_REG_APU);   /* on the state at the batch's start */
   /* Register writes (decoded on the shadow, which follows every write) and
    * SPC writes diverted to the S-DSP; other ARAM writes are in ARAM. */
+  bool vm = (s_untracked & ~s_silenced) != 0;
   Op *o = sl->ops.op, *end = sl->ops.op + kMaxOps;
   for (uint32_t i = 0; i < n && o + 24 <= end; i++) {
     if (log[i].isReg == 1) {
       const uint8_t r = (uint8_t)log[i].adr;
       dsp_write(&s_shadow, r, log[i].val);
       o = emit_reg(o, log[i].tag, r);
-      /* The stopgap for untracked voices (see untrack). */
-      if (r == 0x2d && (log[i].val & 0xfe & ~s_untracked))
+      if (r == 0x2d && (log[i].val & 0xfe & ~s_untracked)) {
+#if RSPDSP_VM   /* the voice-major variant (Blue starts a batch at such a write) */
+        s_untracked |= (uint8_t)(log[i].val & 0xfe);
+        vm = true;
+#else
         o = untrack(o, log[i].tag, (uint8_t)(log[i].val & 0xfe & ~s_untracked));
-      else if (r == 0x4c && s_untracked)   /* key ons skip untracked voices */
-        HALF_OP(o, log[i].tag, RSPDSP_M_KEYON, log[i].val & ~s_untracked);
-      else if (((r & 0xf) == 2 || (r & 0xf) == 3) && ((s_untracked >> (r >> 4)) & 1))
+#endif
+      }
+      /* The stopgap for silenced voices (see untrack). */
+      else if (r == 0x4c && s_silenced)   /* key ons skip them */
+        HALF_OP(o, log[i].tag, RSPDSP_M_KEYON, log[i].val & ~s_silenced);
+      else if (((r & 0xf) == 2 || (r & 0xf) == 3) && ((s_silenced >> (r >> 4)) & 1))
         HALF_OP(o, log[i].tag, RSPDSP_V_PITCH + 2 * (r >> 4), 0);
     } else if (log[i].isReg == 4) {
-      if ((uint8_t)log[i].adr & ~s_untracked) o = untrack(o, log[i].tag, (uint8_t)(log[i].adr & ~s_untracked));
+      if ((uint8_t)log[i].adr & ~s_silenced) o = untrack(o, log[i].tag, (uint8_t)(log[i].adr & ~s_silenced));
     } else if (log[i].isReg == 3) {
       o->tag = log[i].tag; o->kind = RSPDSP_LOG_ARAM; o->pad = 0;
       o->adr = log[i].adr; o->val = log[i].val; o++;
@@ -1188,9 +1211,28 @@ void apu_yellow_post(const ApuDspLogEntry *log, uint32_t n, uint32_t samples) {
   memcpy(sl->keyons, r->keyons, nk * RSPDSP_KON_REC);
   memset(sl->keyons + nk, 0, 32 * RSPDSP_KON_REC);
   g_snesdsp_rsp_blocks += nb;
+  uint8_t *aram = s_shadow.apu_ram;
+#if RSPDSP_VM
+  /* A voice-major batch reads ARAM at its own samples: every SPC write
+   * before the batch's end must be in RDRAM (later ones are undone through
+   * the ledger). Entering the mode, all of ARAM; then the lines of the
+   * ledger's new entries (SPC writes are ledgered while a voice is
+   * untracked, which every voice-major batch has). */
+  if (vm) {
+    s_run_overlay = s_overlay_vm_id;
+    g_snesdsp_rsp_vm_batches++;
+    if (!s_vm_mode) data_cache_hit_writeback(aram, 0x10000);
+    else
+      for (uint32_t i = s_ledger_seen; i != g_apu_ledger_tail; i++) {
+        const volatile ApuLedgerEntry *e = UncachedAddr(&g_apu_ledger[i & (APU_LEDGER_LEN - 1)]);
+        data_cache_hit_writeback(aram + (e->adr & ~15u), 16);
+      }
+  }
+  s_vm_mode = vm;
+  s_ledger_seen = g_apu_ledger_tail;
+#endif
   /* The batch's echo lines: the SPC's writes there to RDRAM, none left in
    * the cache (the RSP writes them). */
-  uint8_t *aram = s_shadow.apu_ram;
   if (r->nruns > 16) {
     data_cache_hit_writeback_invalidate(aram, 0x10000);
   } else {
@@ -1211,6 +1253,10 @@ void apu_yellow_post(const ApuDspLogEntry *log, uint32_t n, uint32_t samples) {
   put32(p + RSPDSP_PP_KON, PhysicalAddr(sl->keyons));
   put16(p + RSPDSP_PP_SAMPLES, (uint16_t)samples);
   put16(p + RSPDSP_PP_LOGN, (uint16_t)nops);
+  put32(p + RSPDSP_PP_START, s_posted);
+  put32(p + RSPDSP_PP_LEDGER, PhysicalAddr(g_apu_ledger));
+  put32(p + RSPDSP_PP_LTAIL, PhysicalAddr(g_apu_ledger_tail_pub));
+  put32(p + RSPDSP_PP_LPAGE, PhysicalAddr(g_apu_ledger_page));
   data_cache_hit_writeback(&sl->prm, sizeof sl->prm);
   data_cache_hit_writeback(sl->ops.op, (nops + 32) * sizeof(Op));
   data_cache_hit_writeback(sl->blocks, (nb + 16) * RSPDSP_BLK_REC);
