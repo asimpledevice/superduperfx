@@ -1023,12 +1023,22 @@ entries (it now has a line of its own); and the state block's pack cleared
 the snapshot area through the cache (it now clears only the state, and
 the snapshot area is dropped from the cache at start-up).
 
+SMW (no pitch modulation) on the stream build with the variant linked:
+WRAM, ARAM and every output sample identical to the default build at all
+30 checkpoints to frame 1740 (`N64_STATE_HASH`).
+
 *Cost.* On the RSP test ROM with realistic pitches and sample data outside
-the echo ring: 1,624 RSP cycles a sample voice-major against 866 for the
-main overlay (both bit-exact): 83% of the RSP at 32 kHz while a game has a
-modulated voice. Most of it is the scalar per-voice-sample loop (about 85
-instructions: counter, interpolation, key on, envelope), then the snapshot
-and the synchronous echo read. Making it cheaper is the next step.
+the echo ring: 1,603-1,624 RSP cycles a sample voice-major against 866 for
+the main overlay (both bit-exact): 83% of the RSP at 32 kHz while a game
+has a modulated voice. Leaving one part out at a time (`PROF_VM_*` in
+`rsp_snesdsp.S`; timing only, the results are then wrong): the chunk
+snapshot 402 cycles a sample (an 896-byte synchronous DMA per chunk while
+echo writes are on; the random logs make chunks short), interpolation 269,
+echo 182 (synchronous read, no prefetch), envelope 147. The stream build
+has no IMEM left, so the next step is the paging slot (rare code: ledger
+scan, rollback, ARAM writes, key on, directory entries) to make room for
+skipping the snapshot when no voice can reach the echo ring, the echo
+prefetch, and cheaper interpolation and envelope paths.
 
 ### Results back to Blue (owner, 2026-11-16)
 

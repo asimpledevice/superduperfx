@@ -706,7 +706,7 @@ C_env:
     vmudm $v23, $v16, $v20, e(1)
     vmadh $v23, $v16, $v21, e(1)    # total R
 
-#ifndef PROF_NO_G
+#if !defined(PROF_NO_G) && !defined(PROF_VM_NO_ECHO)
     # --- G: echo -------------------------------------------------------
     jal Echo
     nop
@@ -1168,6 +1168,9 @@ VM_Chunk:
     sw s6, %lo(VM_SAVE + 12)
     sw fp, %lo(VM_SAVE + 16)
     lhu t1, %lo(DSP + RSPDSP_ECHOWRITES)
+#ifdef PROF_VM_NO_SNAP
+    move t1, zero
+#endif
     beqz t1, VM_go                  # no echo writes: no hazard
     addiu s0, s7, RSPDSP_STATE_SIZE
     li s4, %lo(DSP)
@@ -1254,6 +1257,13 @@ VM_sample:
     lhu s2, %lo(DSP + RSPDSP_V_ADSRSTATE)(t4)
 VM_interp:
     # Gaussian interpolation (as phase B, one voice): taps in lanes 0-3.
+#ifdef PROF_VM_NO_INTERP
+    lhu t5, %lo(DSP + RSPDSP_EVENCYCLE)
+    srl t3, k0, 1
+    xor t5, t5, t3
+    b 9f
+    andi t5, t5, 1
+#endif
     srl t1, k1, 11
     andi t1, t1, 0x1e               # sample index * 2
     lw t3, %lo(VM_DB)
@@ -1278,7 +1288,7 @@ VM_interp:
     andi t5, t5, 1
     vadd $v11, $v11, $v10, e(3h)
     ssv $v11, 0, 0, t1
-    # Key on/off, even samples.
+9:  # Key on/off, even samples.
     beqz t5, VM_reset
     lhu t3, %lo(DSP + RSPDSP_M_KEYOFF)
     and t3, t3, fp
@@ -1302,6 +1312,9 @@ VM_reset:
     move s1, zero
 VM_env:
     # Envelope (dsp_cycleChannel, dsp_handleGain), t4 = 2 * voice.
+#ifdef PROF_VM_NO_ENV
+    b VM_out
+#endif
     li t1, 4
     beq s2, t1, VM_floor            # release: - 8 a sample, floor 0
     addiu t8, s1, -8
