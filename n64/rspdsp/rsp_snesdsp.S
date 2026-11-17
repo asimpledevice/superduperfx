@@ -40,6 +40,9 @@
  * page PG_E's build. Resident code reaches a page's routines only through
  * the entry table at the slot's start (VM_*_ENTRY below), and only after
  * Page_Ensure for that page; a page may call resident code. */
+#if defined(RSPDSP_VM) && defined(RSPDSP_VM_ECHO_SYNC)
+#define ECHO_SYNC 1   /* echo bytes read when needed, no prefetch (an A/B for hardware) */
+#endif
 #define PG_E 0      /* echo (each chunk's mixing) */
 #define PG_K 1      /* voice events: key on, loop, directory, ledger scan */
 #define PG_L 2      /* chunk start: logged writes, ARAM writes, chunk setup */
@@ -106,7 +109,9 @@ VM_INTERP:  .ds.b 2 * VM_CHUNK  # interpolated samples (before >> 1)
 VM_GAINB:   .ds.b 2 * VM_CHUNK  # gain << 5 per sample
 VM_NOISE:   .ds.b 2 * VM_CHUNK  # the noise sample per sample
 VM_VOUT:    .ds.b 2 * VM_CHUNK  # the voice's output (the next voice's modulator)
-VM_TOT:     .ds.b 8 * VM_CHUNK  # per sample: dry L, dry R, echo L, echo R (2 * VM_CHUNK apart)
+VM_TOT:     .ds.b 8 * VM_CHUNK  # per sample: dry L, dry R, echo L, echo R (2 * VM_CHUNK apart);
+                                # in the voice stage: the voice's interpolation taps, 8 bytes a sample
+VM_STG_G:   .ds.b 8 * VM_CHUNK  # and its Gaussian coefficients (VM_TOT + 0x80)
 #else
 STG_T0:     .ds.b 16        # interpolation taps (doubled samples), per voice
 STG_T1:     .ds.b 16
@@ -202,7 +207,7 @@ SnesDspCmd_Run:
     lhu s2, %lo(PAR(LOGN))
     lw s1, %lo(PAR(LOG))
     sw zero, %lo(LOG_LEFT)
-#ifndef RSPDSP_VM
+#ifndef ECHO_SYNC
     li t1, -1
     sw t1, %lo(PREF_ADR)            # no echo prefetch yet
     li t1, %lo(SCR_ECHO)
@@ -333,7 +338,7 @@ Log_ret:
 # to $0000-$000F arrive twice from the CPU: once more for the mirror.
 Aram_Rmw:                           # a0: ARAM offset (may be >= $10000), a1: value
     move t7, ra
-#ifndef RSPDSP_VM
+#ifndef ECHO_SYNC
     li t1, -1
     sw t1, %lo(PREF_ADR)            # an echo prefetch may be stale
 #endif
@@ -1356,11 +1361,11 @@ VM_voice:
     # chunk (key off and reset keep it so, a decode's release too): only
     # its counter and decodes run.
     li t1, 4
-    bne s2, t1, VM_sample
+    bne s2, t1, VM_spre
     lhu t3, %lo(DSP + RSPDSP_M_KEYON)
-    bnez s1, VM_sample
+    bnez s1, VM_spre
     and t3, t3, fp
-    bnez t3, VM_sample
+    bnez t3, VM_spre
     nop
 VM_quiet:
     lhu t1, %lo(VM_PITCH)(k0)
@@ -1374,30 +1379,26 @@ VM_quiet:
     addiu k0, k0, 2
     bne k0, s6, VM_quiet
     nop
-    b VM_voiced
+    b VM_qv
     nop
 
+    # The common path falls through and each load is used a few
+    # instructions later (ares and the RSP stall a load used at once, and a
+    # taken branch costs a cycle): t6 is this sample's pitch, loaded the
+    # sample before; a wrap and an envelope step are out of line.
+VM_spre:
+    lhu t6, %lo(VM_PITCH)(k0)
 VM_sample:
-    lhu t1, %lo(VM_PITCH)(k0)
-    addu t1, k1, t1
+    lhu t5, %lo(DSP + RSPDSP_EVENCYCLE)     # (as at the chunk's start)
+    addu t1, k1, t6
     srl t3, t1, 16
-    beqz t3, VM_interp              # no wrap: no block
+    bnez t3, VM_wrap                # a wrap: a block
     andi k1, t1, 0xffff
-    sw k0, %lo(VM_K)                # (the chunk sample, for ARAM reads)
-    sll t4, a2, 1                   # the decode may release the voice
-    sh s1, %lo(DSP + RSPDSP_V_GAIN)(t4)
-    jal Brr_Decode
-    sh s2, %lo(DSP + RSPDSP_V_ADSRSTATE)(t4)
-    sll t4, a2, 1
-    lhu s1, %lo(DSP + RSPDSP_V_GAIN)(t4)
-    lhu s2, %lo(DSP + RSPDSP_V_ADSRSTATE)(t4)
-    li v1, -1
 VM_interp:
     # Key on/off, even samples. Interpolation waits for the envelope (no
     # need when the gain is 0, or for a noise voice), as in
     # dsp_cycleChannel, except on a key on, which clears the decode buffer
     # after the sample is taken from it. t9: interpolated.
-    lhu t5, %lo(DSP + RSPDSP_EVENCYCLE)     # (as at the chunk's start)
     srl t3, k0, 1
     xor t5, t5, t3
     andi t5, t5, 1
@@ -1444,8 +1445,40 @@ VM_rate:
     addiu t1, s3, 1
     andi s3, t1, 0xffff
     sltu t1, s3, v1
-    bnez t1, VM_out
+    beqz t1, VM_step                # a step (rare)
     nop
+VM_out:
+    bnez t9, 1f                     # interpolated already
+    lhu t3, %lo(DSP + RSPDSP_M_NOISE)
+    beqz s1, 1f                     # gain 0: the sample is not used
+    and t3, t3, fp
+    bnez t3, 1f                     # a noise voice takes the noise sample
+    nop
+    jal VM_Interp
+    nop
+1:  sll t1, s1, 5
+    sh t1, %lo(VM_GAINB)(k0)
+    lhu t6, %lo(VM_PITCH) + 2(k0)   # the next sample's pitch
+    addiu k0, k0, 2
+    bne k0, s6, VM_sample
+    nop
+    b VM_voiced
+    nop
+
+VM_wrap:                            # a wrap: decode (out of line)
+    sw k0, %lo(VM_K)                # (the chunk sample, for ARAM reads)
+    sll t4, a2, 1                   # the decode may release the voice
+    sh s1, %lo(DSP + RSPDSP_V_GAIN)(t4)
+    jal Brr_Decode
+    sh s2, %lo(DSP + RSPDSP_V_ADSRSTATE)(t4)
+    sll t4, a2, 1
+    lhu s1, %lo(DSP + RSPDSP_V_GAIN)(t4)
+    lhu s2, %lo(DSP + RSPDSP_V_ADSRSTATE)(t4)
+    li v1, -1
+    b VM_interp
+    lhu t5, %lo(DSP + RSPDSP_EVENCYCLE)
+
+VM_step:                            # an envelope step (out of line)
     move s3, zero
     li v1, -1                       # (the state may change)
     # A step (dsp_handleGain, not releasing).
@@ -1519,24 +1552,18 @@ VM_trans:
     beqz t1, VM_out
     nop
     li s2, 2
-VM_out:
-    bnez t9, 1f                     # interpolated already
-    lhu t3, %lo(DSP + RSPDSP_M_NOISE)
-    beqz s1, 1f                     # gain 0: the sample is not used
-    and t3, t3, fp
-    bnez t3, 1f                     # a noise voice takes the noise sample
-    nop
-    jal VM_Interp
-    nop
-1:  sll t1, s1, 5
-    sh t1, %lo(VM_GAINB)(k0)
-    addiu k0, k0, 2
-    bne k0, s6, VM_sample
+    b VM_out
     nop
 
     # The voice's outputs: (sample * gain) >> 11 (the interpolated sample
     # >> 1, or the noise sample).
 VM_voiced:
+    lw t3, %lo(VM_STAGED)
+    beqz t3, VM_qv                  # no sample needed interpolating
+    sw zero, %lo(VM_STAGED)
+    jal VM_Interp2
+    nop
+VM_qv:
     sll t4, a2, 1
     sh k1, %lo(DSP + RSPDSP_V_COUNTER)(t4)
     sh s1, %lo(DSP + RSPDSP_V_GAIN)(t4)
@@ -1627,16 +1654,19 @@ VM_mix:
 #endif
     li ra, %lo(Run_loop)
 
-# Gaussian interpolation (as phase B, one voice) of the sample at counter
-# k1 into VM_INTERP[k0 / 2]: taps in lanes 0-3. Uses t1, t3, t5, $v08-$v11.
+# Interpolation, first half: the sample at counter k1 (chunk sample k0 / 2)
+# needs these four taps (doubled samples) and Gaussian coefficients; they
+# are copied out now (a later decode or key on changes the buffer) to
+# VM_TOT + 8 * sample and VM_STG_G + 8 * sample. VM_Interp2 does the sums.
+# Uses t1, t3, t5, $v08, $v09.
 VM_Interp:
 #ifdef PROF_VM_NO_INTERP
     jr ra
     nop
 #endif
+    lw t3, %lo(VM_DB)
     srl t1, k1, 11
     andi t1, t1, 0x1e               # sample index * 2
-    lw t3, %lo(VM_DB)
     srl t5, k1, 2
     andi t5, t5, 0x3fc              # offset * 4
     addu t1, t1, t3
@@ -1645,16 +1675,68 @@ VM_Interp:
     addiu t3, t3, %lo(GAUSSP)
     ldv $v08, 0, 0, t1
     llv $v09, 0, 0, t3
+    sll t1, k0, 2
     lsv $v09, 4, 2, t5
+    addiu t1, t1, %lo(VM_TOT)
     lsv $v09, 6, 0, t5
-    vmudm $v10, $v08, $v09
-    addiu t1, k0, %lo(VM_INTERP)
-    vaddc $v11, $v10, $v10, e(1q)
-    vaddc $v11, $v11, $v10, e(2h)
-    ctc2 zero, COP2_CTRL_VCO
-    vadd $v11, $v11, $v10, e(3h)
+    sdv $v08, 0, 0, t1
+    sw t1, %lo(VM_STAGED)           # (non-zero: something to sum)
     jr ra
-    ssv $v11, 0, 0, t1
+    sdv $v09, 0, VM_STG_G - VM_TOT, t1
+
+# Interpolation, second half, for the voice's whole chunk: two samples a
+# vector (taps in lanes 0-3 and 4-7, as phase B's two voices), four vectors
+# at a time so no operation waits for the one before it, and the loads and
+# stores (scalar unit) beside vector operations so they can issue together.
+# p0 + p1 + p2 wrapping, + p3 saturating: lanes 0 and 4 hold the samples,
+# stored to VM_INTERP. (Samples not staged give values nothing uses.)
+# Uses t1, t3, t5, $v01-$v14, $v23, $v24.
+VM_Interp2:
+    lw t3, %lo(VM_N)
+    li t1, %lo(VM_TOT)
+    li t5, %lo(VM_INTERP)
+    sltiu t3, t3, 9                 # samples 0-7, and 8-15 if there are any
+    xori t3, t3, 1
+    addiu t3, t3, 1
+1:  lqv $v01, 0x00, t1
+    lqv $v05, 0x80, t1
+    lqv $v02, 0x10, t1
+    lqv $v06, 0x90, t1
+    lqv $v03, 0x20, t1
+    lqv $v07, 0xa0, t1
+    lqv $v04, 0x30, t1
+    lqv $v08, 0xb0, t1
+    vmudm $v09, $v01, $v05          # floor(2s * 32g / 65536) = (g * s) >> 10
+    addiu t1, t1, 0x40
+    vmudm $v10, $v02, $v06
+    addiu t3, t3, -1
+    vmudm $v11, $v03, $v07
+    vmudm $v12, $v04, $v08
+    vaddc $v13, $v09, $v09, e(1q)   # p0 + p1, p2 + p3 (wrapping)
+    vaddc $v14, $v10, $v10, e(1q)
+    vaddc $v23, $v11, $v11, e(1q)
+    vaddc $v24, $v12, $v12, e(1q)
+    vaddc $v13, $v13, $v09, e(2h)   # + p2
+    vaddc $v14, $v14, $v10, e(2h)
+    vaddc $v23, $v23, $v11, e(2h)
+    vaddc $v24, $v24, $v12, e(2h)
+    ctc2 zero, COP2_CTRL_VCO
+    vadd $v13, $v13, $v09, e(3h)    # + p3, saturating
+    vadd $v14, $v14, $v10, e(3h)
+    vadd $v23, $v23, $v11, e(3h)
+    vadd $v24, $v24, $v12, e(3h)
+    ssv $v13, 0, 0, t5
+    ssv $v13, 8, 2, t5
+    ssv $v14, 0, 4, t5
+    ssv $v14, 8, 6, t5
+    ssv $v23, 0, 8, t5
+    ssv $v23, 8, 10, t5
+    ssv $v24, 0, 12, t5
+    ssv $v24, 8, 14, t5
+    bnez t3, 1b
+    addiu t5, t5, 16
+    jr ra
+    nop
 
 # A read of a1 bytes at ARAM address a0 by the voice at chunk sample j
 # (VM_K = 2j) is a hazard if it overlaps the echo ring while echo writes
@@ -1834,6 +1916,7 @@ VM_N:       .word 0
 VM_K:       .word 0
 VM_DB:      .word 0
 VM_SAVE:    .word 0, 0, 0, 0, 0
+VM_STAGED:  .word 0                 # the voice staged a sample this chunk (VM_Interp)
 VM_STAGE:   .byte 0x00, 0x10, 0x20, 0x20   # ADSR states 0-3: RATE0, RATE1, RATE2, RATE2
 PAGE_CUR:   .word PG_E              # the page in the slot (the overlay's own at load)
 PAGE_RA:    .word 0
@@ -1861,8 +1944,8 @@ Echo:
     sll t1, t1, 2
     addu t1, t1, t3
     andi t1, t1, 0xffff
-#ifdef RSPDSP_VM                      /* (no prefetch: read here) */
-    li t4, %lo(SCR_ECHO)
+#ifdef ECHO_SYNC
+    li t4, %lo(SCR_ECHO)            # (read here)
 #else
     sw t1, %lo(ECHO_ADR)
     bne t5, t1, Echo_sync           # no prefetch of this address
@@ -1881,7 +1964,7 @@ Echo_sync:
     jal DMAIn
     li t0, DMA_SIZE(8, 1)
 Echo_have:
-#ifndef RSPDSP_VM                     /* (VM: t1, and s0 for the write, kept) */
+#ifndef ECHO_SYNC                     /* (else t1, and s0 for the write, kept) */
     lw t1, %lo(ECHO_ADR)
 #endif
     lhu t6, %lo(DSP + RSPDSP_FIRINDEX)
@@ -1968,7 +2051,7 @@ Echo_have:
     sb t1, 3(v1)
     # Written back in the background: DMA runs in order, so later reads
     # of ARAM (BRR, directory, the next prefetch) see it.
-#ifndef RSPDSP_VM
+#ifndef ECHO_SYNC
     lw t1, %lo(ECHO_ADR)
     lw t3, %lo(DSP + RSPDSP_P_ARAM)
     li t5, ~7
@@ -1996,7 +2079,7 @@ Echo_have:
     move t3, zero
     sh t5, %lo(DSP + RSPDSP_ECHOREMAIN)
 3:  sh t3, %lo(DSP + RSPDSP_ECHOINDEX)
-#ifndef RSPDSP_VM
+#ifndef ECHO_SYNC
     # Prefetch the next sample's echo bytes into the other buffer. Used
     # only if the address still matches and no logged ARAM write came first.
     lhu t1, %lo(DSP + RSPDSP_ECHOADR)

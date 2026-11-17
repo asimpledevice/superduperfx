@@ -236,5 +236,20 @@ int main(void) {
 #endif
   debugf("RSPDSP_TEST %s: %d/%d pass, %d fell back to C\n", fails ? "FAIL" : "PASS",
          tests - fails - fallbacks, tests - fallbacks, fallbacks);
+#ifdef RSPDSP_SCREEN   /* hardware runs (EverDrive): the results on screen too */
+#ifndef RSPDSP_LABEL
+#define RSPDSP_LABEL ""
+#endif
+  console_init();
+  console_set_render_mode(RENDER_MANUAL);
+  console_clear();
+  printf("RSP S-DSP test %s\n\n", RSPDSP_LABEL);
+  printf("RSP batch %lu RSP cycles/sample\n(%lu samples)\n\n",
+         (unsigned long)((uint64_t)g_snesdsp_rsp_ticks * 4 / 3 / g_snesdsp_rsp_samples),
+         (unsigned long)g_snesdsp_rsp_samples);
+  printf("C dsp_cycle %lu CPU cycles/sample\n\n", (unsigned long)((uint64_t)c_ticks * 2 / c_samples));
+  printf("%s: %d/%d bit-exact\n", fails ? "FAIL" : "PASS", tests - fails - fallbacks, tests - fallbacks);
+  console_render();
+#endif
   for (;;) {}
 }

@@ -1093,6 +1093,40 @@ With every voice playing, what is left above the main overlay is the
 scalar envelope (137) and interpolation (83) per voice and sample; echo
 (179) costs about the same in both.
 
+*Scheduling for the RSP's two units (2026-11-17).* ares models the RSP
+pipeline: a scalar-unit operation (scalar ALU, loads and stores, vector
+loads and stores included) and a vector-unit operation issue in the same
+cycle when adjacent and independent; a vector result read by the next
+operation stalls 3 cycles (2, 1 for one or two operations between), a load
+used at once 2, a taken branch 1. Changes on that basis:
+- Interpolation in two halves. Per sample that needs it, the four taps and
+  coefficients are copied to DMEM (scalar unit: addresses, vector loads and
+  stores), while the decode buffer still holds them; per voice and chunk
+  the sums run two samples a vector and four vectors at a time, so no
+  vector operation waits on the one before, with loads, stores and loop
+  counters beside vector operations. Skipped when no sample was staged;
+  half when the chunk has at most 8 samples.
+- The voice loop's common path falls through (a wrap's decode and an
+  envelope step are out of line) and its loads are used a few instructions
+  later (the next sample's pitch is loaded at the end of the sample before).
+- Echo prefetch is back (`PG_E` has room: 552 of 576 bytes);
+  `RSPDSP_VM_ECHO_SYNC=1` reads each sample's echo bytes when needed
+  instead.
+
+RSP cycles a sample on the test ROM (bit-exact throughout):
+
+| Data | SM | VM before | VM, echo prefetch | VM, echo read when needed |
+|------|----|-----------|-------------------|---------------------------|
+| every voice playing | 878 | 1,085 | 1,080 | 1,056 |
+| realistic, many released | 893 | 960 | 976 | 948 |
+
+The prefetch loses about 25 cycles in ares because ares charges an RSP
+DMA only its transfer time (3 clocks per 8 bytes) and no RDRAM latency, so
+there is nothing for it to hide; on hardware the latency is real and the
+prefetch may win. That is a question for the EverDrive: the test ROM with
+`RSPDSP_SCREEN` prints its timing on screen (built for VM with prefetch,
+VM reading when needed, and SM, every voice playing).
+
 *A bug the split test found.* Moving the ledger scan left a `jal` in the
 delay slot of the page check's fast-path branch (undefined on MIPS; here
 it sent execution into whatever page was in the slot). The variant's

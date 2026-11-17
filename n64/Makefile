@@ -90,6 +90,12 @@ N64_RSPASFLAGS += -DRSPDSP_STREAM=1
 RSPDSP_VM ?= 1
 ifeq ($(RSPDSP_VM),1)
 N64_CFLAGS += -DRSPDSP_VM=1
+# RSPDSP_VM_ECHO_SYNC=1: the variant reads each sample's echo bytes when it
+# needs them instead of prefetching them (cheaper in ares, whose RSP DMA has
+# no latency; for comparing on hardware).
+ifeq ($(RSPDSP_VM_ECHO_SYNC),1)
+N64_RSPASFLAGS += -DRSPDSP_VM_ECHO_SYNC=1
+endif
 OBJS += $(BUILD_DIR)/rsp_snesdsp_vm.o $(BUILD_DIR)/rsp_snesdsp_vm_pk.o $(BUILD_DIR)/rsp_snesdsp_vm_pl.o
 $(BUILD_DIR)/rsp_snesdsp_vm.o $(BUILD_DIR)/rsp_snesdsp_vm_pk.o $(BUILD_DIR)/rsp_snesdsp_vm_pl.o: rspdsp/rsp_snesdsp_vm.S rspdsp/rsp_snesdsp_vm_pk.S rspdsp/rsp_snesdsp_vm_pl.S rspdsp/rsp_snesdsp.S \
 		rspdsp/snesdsp_rsp_layout.h rspdsp/rsp_snesdsp_tables.inc
