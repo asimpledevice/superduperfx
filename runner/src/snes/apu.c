@@ -1016,7 +1016,7 @@ static void apu_streamStop(Apu* apu) {
   apu_yellow_stop(apu->dsp);
   apu->dspAt = apu->dspEdges;
   apu->dspUntracked = apu->fe.untracked;   /* (the front end is at dspEdges: posted above) */
-  apu->dsp->sampleWrite = apu->dspAt;   /* every sample is in the ring */
+  apu->dsp->sampleWrite = apu_yellow_publish();   /* every sample, readable (= dspAt) */
   /* ENVX/OUTX the SPC wrote since the last sample read back as written. */
   for (int r = 8; r < 0x80; r += 16)
     for (int k = 0; k < 2; k++)

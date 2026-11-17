@@ -28,6 +28,15 @@
 #define SNESRECOMP_DSP_JOIN_HOOK test_join
 #endif
 #include "../../runner/src/snes/apu.c"
+#ifdef N64_SPLITTEST
+/* The same script on the N64 with the microcode back end
+ * (n64/rspdsp/splittest): its output is compared with the host reference. */
+#include <debug.h>   /* (not libdragon.h: its dma.h clashes with the SNES one) */
+void rspq_init(void);
+void red_init(void);
+void snesdsp_rsp_init(void);
+#define printf(...) debugf(__VA_ARGS__)
+#endif
 
 uint64_t g_apu_timer0_total_ticks;
 int snes_frame_counter;
@@ -75,7 +84,7 @@ void test_join(void) {
   }
 }
 #endif
-#if SNESRECOMP_ECHO_IN_PLACE
+#if SNESRECOMP_ECHO_IN_PLACE && !defined(N64_SPLITTEST)
 void apu_echo_cache_drop(const void *p, uint32_t len) { (void)p; (void)len; }
 uint8_t apu_echo_read_uncached(const uint8_t *p) { return *p; }
 #endif
@@ -112,9 +121,27 @@ static void checkpoint(Apu *apu, unsigned step) {
   drain(apu);
   uint32_t hr = 2166136261u, hd = 2166136261u;
   for (int i = 0; i < 0x10000; i++) { hr ^= apu->ram[i]; hr *= 16777619u; }
-  /* The S-DSP's state (its output ring is hashed as drained). */
-  const uint8_t *d = (const uint8_t *)apu->dsp->ram;
-  for (size_t i = 0; i < offsetof(Dsp, sampleBuffer) - offsetof(Dsp, ram); i++) { hd ^= d[i]; hd *= 16777619u; }
+  /* The S-DSP's state, field by field (portable across byte orders; its
+   * output ring is hashed as drained). */
+  const Dsp *x = apu->dsp;
+#define HV(v) do { uint32_t v_ = (uint32_t)(v); for (int b_ = 0; b_ < 4; b_++) { hd ^= (v_ >> (8 * b_)) & 0xff; hd *= 16777619u; } } while (0)
+  for (int i = 0; i < 0x80; i++) HV(x->ram[i]);
+  for (int c = 0; c < 8; c++) {
+    const DspChannel *ch = &x->channel[c];
+    HV(ch->pitch); HV(ch->pitchCounter); HV(ch->pitchModulation);
+    for (int i = 0; i < 19; i++) HV(ch->decodeBuffer[i]);
+    HV(ch->srcn); HV(ch->decodeOffset); HV(ch->previousFlags); HV(ch->old); HV(ch->older); HV(ch->useNoise);
+    for (int i = 0; i < 4; i++) HV(ch->adsrRates[i]);
+    HV(ch->rateCounter); HV(ch->adsrState); HV(ch->sustainLevel); HV(ch->useGain); HV(ch->gainMode);
+    HV(ch->directGain); HV(ch->gainValue); HV(ch->gain); HV(ch->keyOn); HV(ch->keyOff); HV(ch->sampleOut);
+    HV(ch->volumeL); HV(ch->volumeR); HV(ch->echoEnable);
+  }
+  HV(x->dirPage); HV(x->evenCycle); HV(x->mute); HV(x->reset); HV(x->masterVolumeL); HV(x->masterVolumeR);
+  HV(x->noiseSample); HV(x->noiseRate); HV(x->noiseCounter); HV(x->echoWrites); HV(x->echoVolumeL);
+  HV(x->echoVolumeR); HV(x->feedbackVolume); HV(x->echoBufferAdr); HV(x->echoDelay); HV(x->echoRemain);
+  HV(x->echoBufferIndex); HV(x->firBufferIndex);
+  for (int i = 0; i < 8; i++) { HV(x->firValues[i]); HV(x->firBufferL[i]); HV(x->firBufferR[i]); }
+#undef HV
   printf("step %u: reads %08x ram %08x dsp %08x out %08x (%u)\n", step, h, hr, hd, ho, nout);
   if (getenv("EIP_RAW") && step == (unsigned)atoi(getenv("EIP_RAW"))) {
     FILE *f = fopen(getenv("EIP_RAWF"), "wb");
@@ -131,8 +158,17 @@ static void checkpoint(Apu *apu, unsigned step) {
 }
 
 int main(int argc, char **argv) {
+#ifdef N64_SPLITTEST
+  (void)argc; (void)argv;
+  debug_init_isviewer();
+  rspq_init();
+  red_init();
+  snesdsp_rsp_init();
+  const unsigned steps = EIP_STEPS, every = EIP_EVERY;
+#else
   const unsigned steps = argc > 1 ? (unsigned)atoi(argv[1]) : 6000;
   const unsigned every = argc > 2 ? (unsigned)atoi(argv[2]) : 500;
+#endif
   Apu *apu = apu_init();
   apu_reset(apu);
   /* Idle loop at $0400: bra $0400. */
@@ -239,14 +275,25 @@ int main(int argc, char **argv) {
   }
   checkpoint(apu, steps);
 #if SNESRECOMP_DSP_STREAM
+#ifdef N64_SPLITTEST
+  { extern uint32_t g_apu_stream_posts, g_apu_stream_waits, g_apu_stream_unsupported, g_snesdsp_rsp_stream_slot_waits;
+    printf("stream: %u posts, %u register waits, %u unsupported, %u slot waits, %u echo conflicts\n",
+           g_apu_stream_posts, g_apu_stream_waits, g_apu_stream_unsupported, g_snesdsp_rsp_stream_slot_waits,
+           g_dsp_fe_echo_conflicts); }
+#else
   { extern uint32_t g_apu_stream_posts, g_apu_stream_waits, g_apu_stream_unsupported, g_dsp_yellow_c_missing;
     fprintf(stderr, "stream: %u posts, %u register waits, %u unsupported, %u missing records, %u echo conflicts\n",
             g_apu_stream_posts, g_apu_stream_waits, g_apu_stream_unsupported, g_dsp_yellow_c_missing,
             g_dsp_fe_echo_conflicts); }
+#endif
 #elif SNESRECOMP_ECHO_IN_PLACE
   fprintf(stderr, "echo in place: %u batches launched, %u left to C, %u diverted writes, %u echo conflicts\n",
           s_launches, s_rejects, s_diverted, g_dsp_fe_echo_conflicts);
 #endif
   apu_free(apu);
+#ifdef N64_SPLITTEST
+  debugf("SPLITTEST DONE\n");
+  for (;;) {}
+#endif
   return 0;
 }
