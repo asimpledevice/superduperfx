@@ -608,6 +608,17 @@ static int host_main(void) {
                        (unsigned long)(g_present_prof[1] / 60 / 47), (unsigned long)(g_present_prof[2] / 60 / 47),
                        (unsigned long)(g_present_prof[3] / 60 / 47), (unsigned long)(g_present_prof[4] / 60 / 47),
                        (unsigned long)(s_pp_audio / 60));
+      { extern uint32_t g_present_split[5], g_present_rspw[4];
+        n64_platform_log("[present] RDP commands split (us): scene BG %lu, scene OBJ %lu, planes %lu, "
+                         "detach wait %lu, RSP queue-buffer waits %lu; RSP drained: before %lu, BG %lu, "
+                         "OBJ %lu, planes/rest %lu\n",
+                         (unsigned long)(g_present_split[0] / 60 / 47), (unsigned long)(g_present_split[1] / 60 / 47),
+                         (unsigned long)(g_present_split[2] / 60 / 47), (unsigned long)(g_present_split[3] / 60 / 47),
+                         (unsigned long)(g_present_split[4] / 60 / 47), (unsigned long)(g_present_rspw[0] / 60 / 47),
+                         (unsigned long)(g_present_rspw[1] / 60 / 47), (unsigned long)(g_present_rspw[2] / 60 / 47),
+                         (unsigned long)(g_present_rspw[3] / 60 / 47));
+        memset(g_present_split, 0, sizeof(uint32_t) * 5);
+        memset(g_present_rspw, 0, sizeof(uint32_t) * 4); }
 #if N64PPU_SCENE
       { extern uint32_t g_scene_ticks, g_scene_tlut_ticks, g_scene_sync_ticks, g_scene_passes;
 #if N64PPU_SCENE_RSP

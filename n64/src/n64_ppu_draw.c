@@ -7,6 +7,28 @@
 
 enum { kOx = 32, kOy = 8 };   /* SNES picture position in the 320x240 display */
 
+#ifdef N64_PRESENT_PROF
+/* Present's RDP-command phase split (ticks): 0 scene BG passes, 1 scene
+ * sprite passes, 2 plane and software-line uploads, 3 rdpq_detach_wait,
+ * 4 CPU waiting for a free RSP queue buffer during the phase (inside the
+ * others). With N64_PRESENT_RSPSPLIT, the RSP is drained after each part
+ * (g_present_rspw: 0 work queued before the phase, 1 BG, 2 sprites,
+ * 3 planes and the rest), so each wait is that part's RSP time, plus any
+ * audio work Red runs meanwhile. Measurement only. */
+uint32_t g_present_split[5], g_present_rspw[4];
+#define SPLIT_T() TICKS_READ()
+#define SPLIT_ADD(i, t) (g_present_split[i] += TICKS_READ() - (t))
+#ifdef N64_PRESENT_RSPSPLIT
+#define RSPW(i) do { const uint32_t t_ = TICKS_READ(); rspq_wait(); g_present_rspw[i] += TICKS_READ() - t_; } while (0)
+#else
+#define RSPW(i) ((void)0)
+#endif
+#else
+#define SPLIT_T() 0u
+#define SPLIT_ADD(i, t) ((void)(t))
+#define RSPW(i) ((void)0)
+#endif
+
 static bool rows_any(const uint32_t *bits, int a, int b) {
   for (int r = a; r < b; ++r)
     if (bits[r >> 5] & (1u << (r & 31))) return true;
@@ -396,15 +418,23 @@ static void draw_rdp_band(const N64PpuFrame *f, int a, int b) {
         if (!(L->sub_layers & (1 << layer)) || (sp->hide_sub & (1 << layer))) continue;
 #if N64PPU_SCENE
         /* No plane was built for these either (n64_ppu_build_line). */
-        if ((L->scene_bg & 2) && scene_draw_bg(layer, (*o & N64PPU_HI) != 0, a, b, sp->x0, sp->x1,
-                                               sp->clip ? N64PPU_SCENE_TL_MATH_CLIP : N64PPU_SCENE_TL_MATH))
-          continue;
+        if (L->scene_bg & 2) {
+          const uint32_t st = SPLIT_T();
+          const bool done = scene_draw_bg(layer, (*o & N64PPU_HI) != 0, a, b, sp->x0, sp->x1,
+                                          sp->clip ? N64PPU_SCENE_TL_MATH_CLIP : N64PPU_SCENE_TL_MATH);
+          SPLIT_ADD(0, st);
+          RSPW(1);
+          if (done) continue;
+        }
 #endif
         const uint32_t *rows = (*o & N64PPU_HI) ? f->rows_hi[p] : f->rows[p];
         if (!rows_any(rows, a, b)) continue;
         const int sel = n64ppu_entry_sel(L->order, *o);
         use_tlut(f, sp->clip ? L->tl_math_clip[sel] : L->tl_math[sel]);
+        const uint32_t st = SPLIT_T();
         draw_plane(f, p, rows, a, b);
+        SPLIT_ADD(2, st);
+        RSPW(3);
       }
     }
     /* Main screen. */
@@ -415,10 +445,20 @@ static void draw_rdp_band(const N64PpuFrame *f, int a, int b) {
 #if N64PPU_SCENE
       /* No plane was built for these (n64_ppu_build_line, same rule). */
       const unsigned mode = sp->clip ? N64PPU_SCENE_TL_BLACK : N64PPU_SCENE_TL_PLAIN;
-      if (p <= N64PPU_BG4 && (L->scene_bg & 1) && scene_draw_bg(p, (*o & N64PPU_HI) != 0, a, b, sp->x0, sp->x1, mode)) continue;
+      if (p <= N64PPU_BG4 && (L->scene_bg & 1)) {
+        const uint32_t st = SPLIT_T();
+        const bool done = scene_draw_bg(p, (*o & N64PPU_HI) != 0, a, b, sp->x0, sp->x1, mode);
+        SPLIT_ADD(0, st);
+        RSPW(1);
+        if (done) continue;
+      }
       /* Sprites of lines with obj_scene: no plane rows either. */
       if (p >= N64PPU_OBJ0 && p <= N64PPU_OBJ3 && L->obj_scene) {
-        if (!scene_draw_obj(f, p - N64PPU_OBJ0, L->obj_first, a, b, sp->x0, sp->x1, mode)) {
+        const uint32_t st = SPLIT_T();
+        const bool done = scene_draw_obj(f, p - N64PPU_OBJ0, L->obj_first, a, b, sp->x0, sp->x1, mode);
+        SPLIT_ADD(1, st);
+        RSPW(2);
+        if (!done) {
           static int warned;
           if (!warned++) n64_platform_log("[scene] sprite pass without a palette slot\n");
         }
@@ -428,8 +468,11 @@ static void draw_rdp_band(const N64PpuFrame *f, int a, int b) {
       const uint32_t *rows = (*o & N64PPU_HI) ? f->rows_hi[p] : f->rows[p];
       if (!rows_any(rows, a, b)) continue;
       const int sel = n64ppu_entry_sel(L->order, *o);
+      const uint32_t st = SPLIT_T();
       use_tlut(f, sp->clip ? N64PPU_TLUT_BLACK + sel : L->tl_main[sel]);
       draw_plane(f, p, rows, a, b);
+      SPLIT_ADD(2, st);
+      RSPW(3);
     }
   }
 }
@@ -507,6 +550,10 @@ int n64_ppu_draw_and_show(const N64PpuFrame *f, const char *status, int compare_
   data_cache_hit_writeback((void *)f->tlut, sizeof(f->tlut[0]) * (size_t)f->tlut_count);
 
   rdpq_attach(fb, NULL);
+#ifdef N64_PRESENT_PROF
+  const uint32_t s_bufwait0 = rspq_buffer_wait_ticks;
+#endif
+  RSPW(0);
 #if defined(N64_PRESENT_PROF) && defined(N64_PRESENT_RDPWAIT)
   DRAW_WHERE(0x23);
   rspq_wait();                     /* nothing else on the RDP while counting */
@@ -518,7 +565,11 @@ int n64_ppu_draw_and_show(const N64PpuFrame *f, const char *status, int compare_
     int b = a + 1;
     const N64PpuLine *L = &f->line[a];
     while (b < N64PPU_LINES && !memcmp(&f->line[b], L, sizeof *L)) ++b;
-    if (L->kind == N64PPU_LINE_SOFTWARE) draw_software_lines(f, a, b);
+    if (L->kind == N64PPU_LINE_SOFTWARE) {
+      const uint32_t st = SPLIT_T();
+      draw_software_lines(f, a, b);
+      SPLIT_ADD(2, st);
+    }
     else if (L->kind == N64PPU_LINE_RDP) draw_rdp_band(f, a, b);
     /* N64PPU_LINE_BLACK: already black. */
     a = b;
@@ -549,7 +600,12 @@ int n64_ppu_draw_and_show(const N64PpuFrame *f, const char *status, int compare_
     rdpq_texture_rectangle(TILE0, 0, 20, 64, 28, 0, 0);
   }
 #endif
-  rdpq_detach_wait();
+  { const uint32_t st = SPLIT_T();
+    rdpq_detach_wait();
+    SPLIT_ADD(3, st); }
+#ifdef N64_PRESENT_PROF
+  g_present_split[4] += rspq_buffer_wait_ticks - s_bufwait0;
+#endif
 #ifdef N64PPU_DBG_PROBE
   {
     static int n;
