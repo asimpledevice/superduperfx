@@ -850,7 +850,11 @@ Brr_block:
     sll t3, t3, 2
     vmudm $v06, $v06, $v05, e(0)
     vmudm $v07, $v07, $v05, e(0)
+#ifdef RSPDSP_COMPACT_BRR
+    srl a3, t3, 2                   # the filter (one loop for all four)
+#else
     lw a3, %lo(BRR_FILTERS)(t3)     # decode loop for this block's filter
+#endif
     andi t1, t1, 3
     vmudn $v06, $v06, $v05, e(1)    # (x 1, or x 2048 for invalid shifts)
     vmudn $v07, $v07, $v05, e(1)
@@ -864,7 +868,11 @@ Brr_block:
     addiu t6, t6, %lo(DSP + RSPDSP_DECODE + 6)   # output: sample 3
     addiu t7, t6, 32                # end
     li a1, 16                       # input steps: +16, -14, +16, ...
+#ifdef RSPDSP_COMPACT_BRR
+    j Brr_Lg
+#else
     jr a3
+#endif
     li a0, 2
 
 # One loop per filter: s = nibble + prediction from old t8, older t9;
@@ -886,6 +894,45 @@ Brr_block:
     bne t6, t7, \loop
     subu a1, a0, a1
 .endm
+#ifdef RSPDSP_COMPACT_BRR
+# One loop, the filter in a3 (smaller, a few cycles slower per sample).
+Brr_Lg:
+    lh s0, 0(v0)
+    beqz a3, Brr_gt                 # filter 0: no prediction
+    subu t3, zero, t8               # -old
+    li t5, 1
+    bne a3, t5, 2f
+    nop
+    sra t3, t3, 4                   # 1: old + (-old >> 4)
+    b Brr_ga
+    addu t3, t3, t8
+2:  sll s4, t8, 1                   # 2, 3: 2 * old - older + ...
+    li t5, 2
+    bne a3, t5, 3f
+    subu s4, s4, t9
+    sll t5, t3, 1                   # 2: ((3 * -old) >> 5) + (older >> 4)
+    addu t5, t5, t3
+    sra t5, t5, 5
+    sra a2, t9, 4
+    b 4f
+    addu t5, t5, a2
+3:  sll t5, t3, 3                   # 3: ((13 * -old) >> 6) + ((3 * older) >> 4)
+    sll a2, t3, 2
+    addu t5, t5, a2
+    addu t5, t5, t3
+    sra t5, t5, 6
+    sll a2, t9, 1
+    addu a2, a2, t9
+    sra a2, a2, 4
+    addu t5, t5, a2
+4:  addu t3, t5, s4
+Brr_ga:
+    addu s0, s0, t3
+Brr_gt:
+    BRR_TAIL Brr_Lg
+    b Brr_end
+    lw t4, %lo(BRR_T4)
+#else
 Brr_L0:
     lh s0, 0(v0)
     BRR_TAIL Brr_L0
@@ -933,6 +980,7 @@ Brr_L3:                             # s += 2*old + ((13 * -old) >> 6) - older + 
     addu s0, s0, t5
     BRR_TAIL Brr_L3
     lw t4, %lo(BRR_T4)
+#endif
 Brr_end:
     sh t8, %lo(DSP + RSPDSP_V_OLD)(t4)
     sh t9, %lo(DSP + RSPDSP_V_OLDER)(t4)
@@ -944,7 +992,9 @@ Brr_end:
     .data
     .align 2
 BRR_DEC:    .word 0
+#ifndef RSPDSP_COMPACT_BRR
 BRR_FILTERS: .word Brr_L0, Brr_L1, Brr_L2, Brr_L3
+#endif
 BRR_PF:     .word 0
 BRR_T4:     .word 0
     .text
