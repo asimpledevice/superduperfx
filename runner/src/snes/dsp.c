@@ -254,10 +254,22 @@ void dsp_set_output_suppressed(Dsp *dsp, bool suppressed) {
   if (dsp) dsp->suppressOutput = suppressed;
 }
 
+#if SNESRECOMP_DSP_PMOD_HLE
+/* Pitch modulation, HLE (build-time choice; the exact path is the LLE
+ * reference): a modulated voice takes the previous voice's output of the
+ * previous sample instead of this one's, so every voice's pitch is known at
+ * the start of a sample (the S-DSP microcode's RSPDSP_PMOD_HLE variant does
+ * it in its vector pitch stage). Not bit-exact; one sample is 31 us. */
+static int16_t s_pmodPrev[8];
+#endif
+
 void dsp_cycle(Dsp* dsp) {
   int totalL = 0;
   int totalR = 0;
   int echoL = 0, echoR = 0;
+#if SNESRECOMP_DSP_PMOD_HLE
+  for(int i = 0; i < 8; i++) s_pmodPrev[i] = dsp->channel[i].sampleOut;
+#endif
   for(int i = 0; i < 8; i++) {
     dsp_cycleChannel(dsp, i);
 #if SNESRECOMP_DSP_NATIVE_MIX
@@ -420,7 +432,11 @@ static void dsp_cycleChannel(Dsp* dsp, int ch) {
   // handle pitch counter
   uint16_t pitch = c->pitch;
   if(ch > 0 && c->pitchModulation) {
+#if SNESRECOMP_DSP_PMOD_HLE
+    int factor = (s_pmodPrev[ch - 1] >> 4) + 0x400;
+#else
     int factor = (c[-1].sampleOut >> 4) + 0x400;
+#endif
     pitch = (pitch * factor) >> 10;
     if(pitch > 0x3fff) pitch = 0x3fff;
   }

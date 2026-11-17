@@ -358,6 +358,19 @@ echo "     conflict are silenced, so without samples in the echo ring it is exac
 "$OUT/audio_split_stopgap_test" 20000 7 > "$OUT/audio_split_stopgap_test.txt"
 cmp "$OUT/echo_in_place_ref_nr.txt" "$OUT/audio_split_stopgap_test.txt"
 echo "stopgap model without echo-ring samples matches lockstep"
+echo "    (pitch modulation as HLE, SNESRECOMP_DSP_PMOD_HLE: the C model against lockstep built the same way)"
+"$CC" -std=gnu11 -O2 -w -DSNESRECOMP_APU_NATIVE=1 -DEIP_NORING=1 -DSNESRECOMP_DSP_PMOD_HLE=1 \
+    -I "$ROOT/runner/src" -I "$ROOT/runner/src/snes" \
+    "$ROOT/tests/audio/echo_in_place_test.c" "${EIP_SRCS[@]}" -o "$OUT/echo_in_place_ref_hle"
+"$CC" -std=gnu11 -O2 -w -DSNESRECOMP_APU_NATIVE=1 -DSNESRECOMP_APU_DEFER_DSP=1 -DSNESRECOMP_DSP_FRONTEND=1 \
+    -DSNESRECOMP_ECHO_IN_PLACE=1 -DSNESRECOMP_DSP_RECORDS=1 -DSNESRECOMP_DSP_STREAM=1 \
+    -DSNESRECOMP_DSP_PMOD_HLE=1 -DEIP_NORING=1 \
+    -I "$ROOT/runner/src" -I "$ROOT/runner/src/snes" "$ROOT/tests/audio/echo_in_place_test.c" "${EIP_SRCS[@]}" \
+    "$ROOT/runner/src/snes/dsp_yellow_c.c" -o "$OUT/audio_split_hle_test"
+"$OUT/echo_in_place_ref_hle" 20000 7 > "$OUT/echo_in_place_ref_hle.txt"
+"$OUT/audio_split_hle_test" 20000 7 > "$OUT/audio_split_hle_test.txt"
+cmp "$OUT/echo_in_place_ref_hle.txt" "$OUT/audio_split_hle_test.txt"
+echo "HLE pitch modulation: audio split matches lockstep"
 
 echo "=== audio trace history modes ==="
 for mode in 0 1 2 3; do

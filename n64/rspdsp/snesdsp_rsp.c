@@ -20,7 +20,13 @@
 
 DEFINE_RSP_UCODE(rsp_snesdsp);
 DEFINE_RSP_UCODE(rsp_snesdsp_ne);   /* no-echo variant (rsp_snesdsp_ne.S) */
-#if RSPDSP_VM
+#if RSPDSP_VM && RSPDSP_PMOD_HLE
+/* Pitch modulation as HLE (rsp_snesdsp_ph.S, build-time choice): the
+ * batches that would go to the voice-major variant go to it instead. */
+DEFINE_RSP_UCODE(rsp_snesdsp_ph);
+static uint32_t s_overlay_vm_id;
+uint32_t g_snesdsp_rsp_vm_batches;  /* batches run on the pitch-modulation variant */
+#elif RSPDSP_VM
 DEFINE_RSP_UCODE(rsp_snesdsp_vm);   /* voice-major variant (rsp_snesdsp_vm.S) */
 static uint32_t s_overlay_vm_id;
 uint32_t g_snesdsp_rsp_vm_batches;  /* batches run on the voice-major variant */
@@ -110,8 +116,12 @@ void snesdsp_rsp_init(void) {
   s_overlay_id = rspq_overlay_register(&rsp_snesdsp);
   s_overlay_ne_id = rspq_overlay_register(&rsp_snesdsp_ne);
 #if RSPDSP_VM
+#if RSPDSP_PMOD_HLE
+  s_overlay_vm_id = rspq_overlay_register(&rsp_snesdsp_ph);
+#else
   s_overlay_vm_id = rspq_overlay_register(&rsp_snesdsp_vm);
   vm_pages_init();
+#endif
   /* The voice-major variant's snapshot area is written by the RSP only: no
    * line of it may stay dirty in the cache from the startup BSS clear. */
   data_cache_hit_writeback_invalidate(s_block.vm_snap, sizeof s_block.vm_snap);
@@ -166,7 +176,7 @@ static void pack_coefficients(const Dsp *dsp, RspDspState *s) {
 
 void snesdsp_rsp_pack(const Dsp *dsp, RspDspState *s) {
   memset(s->bytes, 0, sizeof s->bytes);   /* (vm_snap is the RSP's: never in the cache) */
-#if RSPDSP_VM
+#if RSPDSP_VM && !RSPDSP_PMOD_HLE
   *(uint32_t *)(s->bytes + RSPDSP_P_PAGES) = PhysicalAddr(s_vm_pages);
 #endif
   for (int c = 0; c < 8; c++) {

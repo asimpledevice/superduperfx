@@ -88,8 +88,21 @@ N64_RSPASFLAGS += -DRSPDSP_STREAM=1
 # voices untracked by pitch modulation; RSPDSP_VM=0 keeps the stopgap
 # (such voices silenced) for comparison.
 RSPDSP_VM ?= 1
+# RSPDSP_PMOD_HLE=1: pitch modulation as HLE instead (rspdsp/rsp_snesdsp_ph.S:
+# the previous voice's output of the previous sample; not bit-exact, the
+# voice-major variant stays the LLE reference).
+RSPDSP_PMOD_HLE ?= 0
 ifeq ($(RSPDSP_VM),1)
 N64_CFLAGS += -DRSPDSP_VM=1
+ifeq ($(RSPDSP_PMOD_HLE),1)
+N64_CFLAGS += -DRSPDSP_PMOD_HLE=1 -DSNESRECOMP_DSP_PMOD_HLE=1
+OBJS += $(BUILD_DIR)/rsp_snesdsp_ph.o
+$(BUILD_DIR)/rsp_snesdsp_ph.o: rspdsp/rsp_snesdsp_ph.S rspdsp/rsp_snesdsp.S \
+		rspdsp/snesdsp_rsp_layout.h rspdsp/rsp_snesdsp_tables.inc
+	@$(MAKE) --no-print-directory -f $(N64_INST)/include/n64.mk SOURCE_DIR=rspdsp \
+		BUILD_DIR=$(BUILD_DIR) RSPASFLAGS="$(N64_RSPASFLAGS)" $@
+	@python3 rspdsp/check_delay_slots.py $(N64_OBJDUMP) $(basename $@).elf
+else
 # RSPDSP_VM_ECHO_SYNC=1: the variant reads each sample's echo bytes when it
 # needs them instead of prefetching them (cheaper in ares, whose RSP DMA has
 # no latency; for comparing on hardware).
@@ -102,6 +115,7 @@ $(BUILD_DIR)/rsp_snesdsp_vm.o $(BUILD_DIR)/rsp_snesdsp_vm_pk.o $(BUILD_DIR)/rsp_
 	@$(MAKE) --no-print-directory -f $(N64_INST)/include/n64.mk SOURCE_DIR=rspdsp \
 		BUILD_DIR=$(BUILD_DIR) RSPASFLAGS="$(N64_RSPASFLAGS)" $@
 	@python3 rspdsp/check_delay_slots.py $(N64_OBJDUMP) $(basename $@).elf
+endif
 endif
 endif
 ifeq ($(RSPDSP_ECHO_IN_PLACE),1)

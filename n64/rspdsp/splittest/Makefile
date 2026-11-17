@@ -50,8 +50,14 @@ $(BUILD_DIR)/n64_compat.o: ../../src/n64_compat.c
 	@mkdir -p $(dir $@)
 	$(N64_CC) -c $(CFLAGS) $(N64_CFLAGS) -o $@ $<
 
+RSPDSP_PMOD_HLE ?= 0
 ifeq ($(RSPDSP_VM),1)
+ifeq ($(RSPDSP_PMOD_HLE),1)
+VM_OBJ = $(BUILD_DIR)/rsp_snesdsp_ph.o
+N64_CFLAGS += -DRSPDSP_PMOD_HLE=1 -DSNESRECOMP_DSP_PMOD_HLE=1
+else
 VM_OBJ = $(BUILD_DIR)/rsp_snesdsp_vm.o $(BUILD_DIR)/rsp_snesdsp_vm_pk.o $(BUILD_DIR)/rsp_snesdsp_vm_pl.o
+endif
 endif
 EIP_WATCHDOG ?= 0
 ifeq ($(EIP_WATCHDOG),1)
@@ -66,8 +72,8 @@ $(BUILD_DIR)/splittest.elf: $(BUILD_DIR)/n64_compat.o $(BUILD_DIR)/main.o $(BUIL
 	$(BUILD_DIR)/red.o $(BUILD_DIR)/rsp_snesdsp.o $(BUILD_DIR)/rsp_snesdsp_ne.o $(VM_OBJ) $(OBJS) $(WD_OBJ)
 
 splittest.z64: N64_ROM_TITLE = "Audio split test"
-$(BUILD_DIR)/rsp_snesdsp.o $(BUILD_DIR)/rsp_snesdsp_ne.o $(BUILD_DIR)/rsp_snesdsp_vm.o $(BUILD_DIR)/rsp_snesdsp_vm_pk.o $(BUILD_DIR)/rsp_snesdsp_vm_pl.o: RSPASFLAGS += $(RSP_DEFS)
-$(BUILD_DIR)/rsp_snesdsp.o $(BUILD_DIR)/rsp_snesdsp_ne.o $(BUILD_DIR)/rsp_snesdsp_vm.o $(BUILD_DIR)/rsp_snesdsp_vm_pk.o $(BUILD_DIR)/rsp_snesdsp_vm_pl.o: ../rsp_snesdsp.S ../rsp_snesdsp_vm.S ../snesdsp_rsp_layout.h
+$(BUILD_DIR)/rsp_snesdsp.o $(BUILD_DIR)/rsp_snesdsp_ne.o $(BUILD_DIR)/rsp_snesdsp_vm.o $(BUILD_DIR)/rsp_snesdsp_vm_pk.o $(BUILD_DIR)/rsp_snesdsp_vm_pl.o $(BUILD_DIR)/rsp_snesdsp_ph.o: RSPASFLAGS += $(RSP_DEFS)
+$(BUILD_DIR)/rsp_snesdsp.o $(BUILD_DIR)/rsp_snesdsp_ne.o $(BUILD_DIR)/rsp_snesdsp_vm.o $(BUILD_DIR)/rsp_snesdsp_vm_pk.o $(BUILD_DIR)/rsp_snesdsp_vm_pl.o $(BUILD_DIR)/rsp_snesdsp_ph.o: ../rsp_snesdsp.S ../rsp_snesdsp_vm.S ../snesdsp_rsp_layout.h
 
 clean:
 	rm -rf $(BUILD_DIR) splittest.z64

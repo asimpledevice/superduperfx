@@ -1132,6 +1132,54 @@ delay slot of the page check's fast-path branch (undefined on MIPS; here
 it sent execution into whatever page was in the slot). The variant's
 builds are now checked for any branch or jump in a delay slot.
 
+### Pitch modulation as HLE, and the sample-major alternative (2026-11-17)
+
+**Where the cost goes.** VM is not slower for being more code: SM runs
+each per-sample stage once for all 8 voices (lanes = voices), VM runs the
+per-voice stages once per voice in scalar code. Pairing scalar and vector
+operations cannot hide much of that (per voice and chunk about 70-100
+vector operations against 600-800 scalar ones, and the scalar loop's
+branches cannot lead a dual-issue pair).
+
+**A sample-major exact variant ("PM", branch `pm-variant-wip`).** SM's
+microcode plus a repair pass for the modulated voices each sample (pitch
+from the previous voice's fresh output, counter, block, interpolation,
+output with the vector envelope's gain; a block release or key on restores
+the envelope's inputs, applies the event and reruns the vector envelope,
+which gives the other voices the same results). It needs no chunks or
+echo rollback, but it keeps all of SM's vector phases and adds ARAM reads,
+the ledger and the repair: 4,696 bytes in the stream build, 600 over IMEM,
+and paging rare code frees only 160-400 bytes. Parked (owner, 2026-11-17:
+keep VM).
+
+**HLE (owner, 2026-11-17).** `RSPDSP_PMOD_HLE=1` (n64/Makefile, the test
+ROM and split test Makefiles) runs batches with modulated voices on
+`rsp_snesdsp_ph.S` instead of VM: SM's microcode with every voice read from
+ARAM through the ledger (no records), where a modulated voice's pitch uses
+the previous voice's output of the *previous* sample. Phase D has not run
+when phase A does, so `V_SAMPLEOUT` still holds those outputs; one
+misaligned load shifts them a lane, and the modulated pitch for all voices
+is about a dozen vector operations. No echo prefetch (no room: 4,040 bytes
+in the stream build). The reference is `dsp.c` with
+`SNESRECOMP_DSP_PMOD_HLE` (the same rule); VM stays the default and the
+exact LLE reference. A 1-sample delay of the modulator (31 us) is not
+expected to be audible; a listening comparison is still to do.
+
+Results: RSP test ROM bit-exact against the HLE `dsp.c`, 2000/2000 (and
+2000/2000 with every batch on the variant); N64 split test identical at
+172/172 against HLE lockstep (no echo-ring samples) and against the HLE C
+model with the conflict stopgap (with them); host: the HLE C model matches
+HLE lockstep. RSP cycles a sample:
+
+| Data | SM | VM (echo read when needed) | HLE |
+|------|----|----------------------------|-----|
+| every voice playing | 878 | 1,056 | 960 |
+| realistic, many released | 893 | 948 | 969 |
+
+HLE is about 10% faster than VM with every voice playing, but not on the
+realistic data, where VM skips released voices and HLE pays its pitch stage
+and per-block ARAM reads every sample.
+
 ### Results back to Blue (owner, 2026-11-16)
 
 Consistency of what Red publishes: Red must never wait on Blue, so a

@@ -31,6 +31,26 @@
 #endif
 #endif
 
+/* RSPDSP_PMOD_HLE (rsp_snesdsp_ph.S): pitch modulation as HLE, the
+ * build-time alternative to the voice-major variant (the LLE reference): a
+ * modulated voice's pitch comes from the previous voice's output of the
+ * previous sample, as dsp.c with SNESRECOMP_DSP_PMOD_HLE, so it is part of
+ * this sample-major microcode's vector pitch stage. Every voice is read from
+ * ARAM through the ledger (no records). */
+#ifdef RSPDSP_PMOD_HLE
+#define RSPDSP_PH 1
+#define ECHO_SYNC 1   /* (echo bytes read when needed: no room for the prefetch) */
+#undef RSPDSP_BLOCKS
+#ifndef RSPDSP_COMPACT_BRR
+#define RSPDSP_COMPACT_BRR 1
+#endif
+#endif
+#if defined(RSPDSP_VM)
+#define ARAM_FETCH VM_Fetch
+#elif defined(RSPDSP_PH)
+#define ARAM_FETCH PH_Fetch
+#endif
+
 /* The paging slot (RSPDSP_VM; docs/n64/RED_DESIGN.md "The paging slot"):
  * the last VM_SLOT_SIZE bytes of IMEM hold one page at a time, DMA'd from
  * RDRAM (P_PAGES, VM_PAGE_STRIDE apart) by Page_Ensure when not there.
@@ -364,7 +384,7 @@ Aram_Rmw:                           # a0: ARAM offset (may be >= $10000), a1: va
 #ifndef RSPDSP_BLOCKS   /* the front end reads the directory */
 # Read 8 bytes of ARAM containing offset a0 into SCR_DIR; returns the DMEM
 # address of the requested byte in v0. (Used for directory entries.)
-#ifndef RSPDSP_VM
+#ifndef ARAM_FETCH
 Aram_Read8:
     move t7, ra
     lw t1, %lo(DSP + RSPDSP_P_ARAM)
@@ -387,10 +407,10 @@ Dir_Entry:
     lhu a0, %lo(DSP + RSPDSP_DIRPAGE)
     sll t1, a2, 2
     addu a0, a0, t1
-#ifdef RSPDSP_VM
+#ifdef ARAM_FETCH
     li s4, %lo(SCR_DIR)
     li a1, 4
-    jal VM_Fetch
+    jal ARAM_FETCH
 #else
     jal Aram_Read8
 #endif
@@ -446,6 +466,30 @@ Dsp_Sample:
     li t1, %lo(DSP + RSPDSP_V_PITCH)
     lqv $v01, 0x00, t1
     lqv $v02, 0x10, t1              # V_COUNTER
+#ifdef RSPDSP_PH
+    # Pitch modulation (HLE): lane v's pitch from voice v-1's output of the
+    # previous sample (phase D has not run yet: V_SAMPLEOUT still holds it),
+    # (pitch * 4) * ((out & 0xfff0) + 0x4000) >> 16, at most 0x3fff.
+    lhu t3, %lo(DSP + RSPDSP_M_PMOD)
+    li t5, %lo(ENV_BITS)
+    andi t3, t3, 0xfe               # voice 0 is never modulated
+    lqv $v03, 0x00, t5
+    mtc2 t3, $v04.e0
+    li t5, %lo(DSP + RSPDSP_V_SAMPLEOUT - 2)
+    lqv $v05, 0x00, t5              # lane v: voice v-1's output (lane 0 unused)
+    lrv $v05, 0x10, t5
+    li t3, %lo(PH_K)
+    lqv $v06, 0x00, t3
+    vand $v04, $v03, $v04, e(0)     # non-zero: modulated
+    vmudn $v07, $v01, $v30, e(5)    # pitch * 4
+    vand $v05, $v05, $v06, e(0)     # & 0xfff0
+    ctc2 zero, COP2_CTRL_VCO
+    vadd $v05, $v05, $v31, e(1)     # + 0x4000
+    vmudl $v05, $v05, $v07
+    vlt $v05, $v05, $v06, e(1)      # at most 0x3fff
+    veq $v04, $v04, vzero           # VCC: not modulated
+    vmrg $v01, $v01, $v05
+#endif
     vaddc $v02, $v02, $v01
     sqv $v02, 0x10, t1
     cfc2 t3, COP2_CTRL_VCO          # bit v: voice v wrapped
@@ -979,9 +1023,9 @@ Brr_block:
     # its first 16 bytes after $FFFF, so a wrapping block is contiguous).
     lhu a0, %lo(DSP + RSPDSP_V_DECOFF)(t4)
     sw t4, %lo(BRR_T4)
-#ifdef RSPDSP_VM
+#ifdef ARAM_FETCH
     li s4, %lo(SCR_BRR)
-    jal VM_Fetch                    # v0 -> block in DMEM
+    jal ARAM_FETCH                  # v0 -> block in DMEM
     li a1, 9
     lw t4, %lo(BRR_T4)
 #else
@@ -1928,6 +1972,115 @@ VM_LBUF:    .ds.b 8
 #endif
     .text
 #endif /* RSPDSP_VM */
+
+#ifdef RSPDSP_PH
+# The voices' ARAM reads (directory entries, blocks): bytes [a0, a0 + a1)
+# (a1 <= 9) as of the sample being run, into DMEM at s4 (16 bytes from
+# a0 & ~7; past $FFFF ARAM wraps). Returns v0 = the DMEM address of byte
+# a0. Keeps t4, t6.
+PH_Fetch:
+    move t7, ra
+    sw s4, %lo(PH_DST)
+    lw t1, %lo(DSP + RSPDSP_P_ARAM)
+    li t3, ~7
+    and t3, a0, t3
+    addu s0, t1, t3
+    jal DMAIn
+    li t0, DMA_SIZE(16, 1)
+    andi t3, a0, 0xfff8
+    li t1, 0xfff8
+    bne t3, t1, 1f
+    lw s0, %lo(DSP + RSPDSP_P_ARAM)
+    lw s4, %lo(PH_DST)
+    addiu s4, s4, 8
+    jal DMAIn
+    li t0, DMA_SIZE(8, 1)
+1:
+#ifdef RSPDSP_STREAM
+    jal PH_Ledger
+    nop
+#endif
+    lw v0, %lo(PH_DST)
+    andi t3, a0, 7
+    jr t7
+    addu v0, v0, t3
+
+#ifdef RSPDSP_STREAM
+# Undo, in the bytes PH_Fetch read, the SPC's writes after the sample
+# being run (t: the batch's first sample + s5): each address takes the old
+# value of its oldest ledger entry with time > t (apu_dsp_batch.h). Blue
+# writes an entry, the tail, the page's time, then the data reaches RDRAM;
+# read here in the other order (data, page time, tail, entries), a write
+# whose data was read is always found. Keeps a0, a1, t4, t6, t7, k0, k1.
+PH_Ledger:
+    sw ra, %lo(PH_LRA)
+    lw t8, %lo(PAR(START))
+    andi t1, a0, 0xff
+    addu t1, t1, a1
+    addu t8, t8, s5                 # t
+    sltiu t1, t1, 0x101
+    beqz t1, PH_Lscan               # (bytes in two pages: scan)
+    srl t1, a0, 6
+    lw s0, %lo(PAR(LPAGE))
+    li t3, ~7
+    and t3, t1, t3
+    addu s0, s0, t3
+    li s4, %lo(PH_LBUF)
+    jal DMAIn
+    li t0, DMA_SIZE(8, 1)
+    andi t1, t1, 4
+    lw t3, %lo(PH_LBUF)(t1)         # the page's newest write
+    subu t3, t3, t8
+    blez t3, PH_Lret
+    nop
+PH_Lscan:
+    lw s0, %lo(PAR(LTAIL))
+    li s4, %lo(PH_LBUF)
+    jal DMAIn
+    li t0, DMA_SIZE(8, 1)
+    lw t9, %lo(PH_LBUF)             # newest first, from the tail
+PH_Lent:
+    addiu t9, t9, -1
+    andi t1, t9, APU_LEDGER_LEN_RSP - 1
+    lw s0, %lo(PAR(LEDGER))
+    sll t1, t1, 3
+    addu s0, s0, t1
+    li s4, %lo(PH_LBUF)
+    jal DMAIn
+    li t0, DMA_SIZE(8, 1)
+    lw t3, %lo(PH_LBUF)             # time: at or before t ends the scan
+    subu t3, t3, t8
+    blez t3, PH_Lret
+    lhu t3, %lo(PH_LBUF + 4)
+    subu t3, t3, a0
+    andi t3, t3, 0xffff
+    sltu t5, t3, a1
+    beqz t5, PH_Lent
+    lbu t5, %lo(PH_LBUF + 6)        # (older entries come later: the oldest stays)
+    lw v1, %lo(PH_DST)
+    andi t0, a0, 7
+    addu v1, v1, t0
+    addu v1, v1, t3
+    b PH_Lent
+    sb t5, 0(v1)
+PH_Lret:
+    lw ra, %lo(PH_LRA)
+    jr ra
+    nop
+#endif
+
+    .data
+    .align 2
+PH_DST:     .word 0
+#ifdef RSPDSP_STREAM
+PH_LRA:     .word 0
+    .align 3
+PH_LBUF:    .ds.b 8
+#endif
+    .align 4
+PH_K:       .half 0xfff0, 0x3fff, 0, 0, 0, 0, 0, 0
+    .text
+#endif /* RSPDSP_PH */
 
 #ifndef RSPDSP_NO_ECHO
 #if PAGED(PG_E)
