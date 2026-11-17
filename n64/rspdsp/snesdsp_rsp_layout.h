@@ -91,7 +91,8 @@
 #define RSPDSP_FIR_C        0x400
 #define RSPDSP_SC_U         0x410  /* lanes: mvolL mvolR evolL evolR fb fb */
 #define RSPDSP_SC_C         0x420
-#define RSPDSP_STATE_SIZE   0x430  /* multiple of 16 */
+#define RSPDSP_P_PAGES      0x430  /* u32 RDRAM address of the voice-major variant's page images */
+#define RSPDSP_STATE_SIZE   0x440  /* multiple of 16 */
 /* The voice-major variant (RSPDSP_VM) snapshots the state's first
  * RSPDSP_VM_SNAP bytes (voices, register file, globals) in RDRAM right after
  * the state block, so the block is allocated with that much room after it. */
@@ -146,5 +147,13 @@
 /* The ARAM view the RSP reads is 64 KB plus a 16-byte mirror of its first
  * 16 bytes, so a BRR block that wraps past $FFFF reads contiguously. */
 #define RSPDSP_ARAM_SIZE    (0x10000 + 16)
+
+/* The voice-major variant's paging slot (rsp_snesdsp.S): page n is the
+ * slot's bytes of the variant built with RSPDSP_VM_PAGE = n (n = 0: the
+ * overlay itself), copied to P_PAGES + (n << RSPDSP_VM_PAGE_SHIFT). */
+#define RSPDSP_VM_PAGES      3
+#define RSPDSP_VM_SLOT_SIZE  0x240
+#define RSPDSP_VM_SLOT_OFF   (0x1000 - RSPDSP_VM_SLOT_SIZE)
+#define RSPDSP_VM_PAGE_SHIFT 10
 
 #endif

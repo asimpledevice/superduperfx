@@ -12,6 +12,7 @@
 
 /* Symbols the DSP's translation units expect from the runtime. */
 int snes_frame_counter;
+uint32_t g_vm_chunks, g_vm_rollbacks;
 void RtlApuLock(void) {}
 void RtlApuUnlock(void) {}
 
@@ -61,7 +62,12 @@ static void random_state(Dsp *d, uint8_t *aram) {
   }
   /* Echo window inside ARAM, not touching $0000-$000F. */
   const unsigned edl = rnd() % 16, pages = edl ? edl * 8 : 1;
+#ifdef RSPDSP_REAL_PITCH   /* (timing: the ring in the upper half, samples and directory below) */
+  const unsigned esa = 0x80 + rnd() % (128 - pages);
+  dsp_write(d, 0x5d, (uint8_t)(1 + rnd() % 0x6c));
+#else
   const unsigned esa = 1 + rnd() % (256 - pages);
+#endif
   dsp_write(d, 0x6d, (uint8_t)esa);
   dsp_write(d, 0x7d, (uint8_t)edl);
   d->echoRemain = (uint16_t)(1 + rnd() % d->echoDelay);
@@ -78,7 +84,7 @@ static void random_state(Dsp *d, uint8_t *aram) {
 #define OUTSIDE(a) ((unsigned)(a) + 64u <= ring0 || (unsigned)(a) >= ring1 + 16u)
   for (int k = 0; k < 512; k++) {
     unsigned a;
-    do a = rnd() & 0xfff0; while (!OUTSIDE(a) || a >= 0xff00);
+    do a = 0x100 + rnd() % 0x6000; while (!OUTSIDE(a));
     aram[(d->dirPage + 2 * k) & 0xffff] = (uint8_t)a;
     aram[(d->dirPage + 2 * k + 1) & 0xffff] = (uint8_t)(a >> 8);
   }
@@ -89,7 +95,7 @@ static void random_state(Dsp *d, uint8_t *aram) {
     for (int i = 0; i < 19; i++) ch->decodeBuffer[i] = rnd15();
     ch->decodeOffset = (uint16_t)rnd();
 #ifdef RSPDSP_REAL_PITCH
-    while (!OUTSIDE(ch->decodeOffset) || ch->decodeOffset >= 0xff00) ch->decodeOffset = (uint16_t)rnd();
+    ch->decodeOffset = (uint16_t)(0x100 + rnd() % 0x6000);
 #endif
     ch->previousFlags = rnd() & 3;
     ch->old = rnd15();
@@ -210,6 +216,9 @@ int main(void) {
          (unsigned long)g_snesdsp_rsp_samples);
   { extern uint32_t g_snesdsp_rsp_ne_batches;
     debugf("no-echo variant: %lu batches\n", (unsigned long)g_snesdsp_rsp_ne_batches); }
+#ifdef PROF_VM_COUNT
+  debugf("voice-major: %lu chunks, %lu rollbacks\n", (unsigned long)g_vm_chunks, (unsigned long)g_vm_rollbacks);
+#endif
 #if RSPDSP_VM
   { extern uint32_t g_snesdsp_rsp_vm_batches;
     debugf("voice-major variant: %lu batches\n", (unsigned long)g_snesdsp_rsp_vm_batches); }

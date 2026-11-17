@@ -24,6 +24,24 @@ DEFINE_RSP_UCODE(rsp_snesdsp_ne);   /* no-echo variant (rsp_snesdsp_ne.S) */
 DEFINE_RSP_UCODE(rsp_snesdsp_vm);   /* voice-major variant (rsp_snesdsp_vm.S) */
 static uint32_t s_overlay_vm_id;
 uint32_t g_snesdsp_rsp_vm_batches;  /* batches run on the voice-major variant */
+/* Its pages (rsp_snesdsp_vm_p*.S builds; page 0 is the overlay's own). */
+extern uint8_t rsp_snesdsp_vm_text_start[], rsp_snesdsp_vm_text_end[];
+extern uint8_t rsp_snesdsp_vm_pk_text_start[], rsp_snesdsp_vm_pk_text_end[];
+extern uint8_t rsp_snesdsp_vm_pl_text_start[], rsp_snesdsp_vm_pl_text_end[];
+static uint8_t s_vm_pages[RSPDSP_VM_PAGES << RSPDSP_VM_PAGE_SHIFT] __attribute__((aligned(16)));
+static void vm_pages_init(void) {
+  uint8_t *const img[RSPDSP_VM_PAGES][2] = {
+    {rsp_snesdsp_vm_text_start, rsp_snesdsp_vm_text_end},
+    {rsp_snesdsp_vm_pk_text_start, rsp_snesdsp_vm_pk_text_end},
+    {rsp_snesdsp_vm_pl_text_start, rsp_snesdsp_vm_pl_text_end},
+  };
+  for (int p = 0; p < RSPDSP_VM_PAGES; p++) {
+    const long n = (img[p][1] - img[p][0]) - RSPDSP_VM_SLOT_OFF;
+    assertf(n > 0 && n <= RSPDSP_VM_SLOT_SIZE, "S-DSP page %d: %ld bytes", p, n);
+    memcpy(s_vm_pages + (p << RSPDSP_VM_PAGE_SHIFT), img[p][0] + RSPDSP_VM_SLOT_OFF, (size_t)n);
+  }
+  data_cache_hit_writeback_invalidate(s_vm_pages, sizeof s_vm_pages);
+}
 #endif
 /* RSPDSP_PREP=1 (step 2a): register writes are decoded on the RSP
  * (rsp_snesdsp_prep.S) instead of here; the C decode stays the reference. */
@@ -93,6 +111,7 @@ void snesdsp_rsp_init(void) {
   s_overlay_ne_id = rspq_overlay_register(&rsp_snesdsp_ne);
 #if RSPDSP_VM
   s_overlay_vm_id = rspq_overlay_register(&rsp_snesdsp_vm);
+  vm_pages_init();
   /* The voice-major variant's snapshot area is written by the RSP only: no
    * line of it may stay dirty in the cache from the startup BSS clear. */
   data_cache_hit_writeback_invalidate(s_block.vm_snap, sizeof s_block.vm_snap);
@@ -147,6 +166,9 @@ static void pack_coefficients(const Dsp *dsp, RspDspState *s) {
 
 void snesdsp_rsp_pack(const Dsp *dsp, RspDspState *s) {
   memset(s->bytes, 0, sizeof s->bytes);   /* (vm_snap is the RSP's: never in the cache) */
+#if RSPDSP_VM
+  *(uint32_t *)(s->bytes + RSPDSP_P_PAGES) = PhysicalAddr(s_vm_pages);
+#endif
   for (int c = 0; c < 8; c++) {
     const DspChannel *ch = &dsp->channel[c];
     const unsigned v = 2u * c;
@@ -567,6 +589,11 @@ static void run(Dsp *dsp, uint8_t *aram, uint32_t aram_len, Op *o, uint32_t samp
   rspq_wait();
   g_snesdsp_rsp_ticks += get_ticks() - t0;
   g_snesdsp_rsp_samples += samples;
+#ifdef PROF_VM_COUNT
+  { extern uint32_t g_vm_chunks, g_vm_rollbacks;
+    uint32_t c, r; memcpy(&c, s_block.bytes + RSPDSP_P_BLK, 4); memcpy(&r, s_block.bytes + RSPDSP_P_KON, 4);
+    g_vm_chunks += c; g_vm_rollbacks += r; }
+#endif
   snesdsp_rsp_unpack(dsp, &s_block);
   set_envx_outx(dsp, s_ops.op, nops, samples);
 

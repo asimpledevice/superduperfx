@@ -1040,6 +1040,49 @@ scan, rollback, ARAM writes, key on, directory entries) to make room for
 skipping the snapshot when no voice can reach the echo ring, the echo
 prefetch, and cheaper interpolation and envelope paths.
 
+### The paging slot (owner decision 2026-11-16, built 2026-11-17)
+
+The voice-major variant had no IMEM left. Its rarely or once-per-chunk run
+code now lives in pages that take turns in one slot at the end of IMEM
+(`RSPDSP_VM_SLOT_SIZE`, 576 bytes):
+
+| Page | Contents | Loaded |
+|------|----------|--------|
+| `PG_E` (0) | echo (`Echo`) | before each chunk's mixing |
+| `PG_K` (1) | key on, directory entries, loop jumps, the ledger scan | at a key on, a loop, a ledger scan |
+| `PG_L` (2) | logged writes and ARAM writes, chunk setup and noise | at each chunk's start, and after a rollback |
+
+*How it is built.* Page n is `rsp_snesdsp.S` assembled with
+`RSPDSP_VM_PAGE = n` (`rsp_snesdsp_vm.S` is page 0 and the overlay
+itself; `rsp_snesdsp_vm_pk.S`, `_pl.S` the others). A paged routine is
+emitted only in its page's build, into GAS subsection 1 after an `.org`
+at the slot's offset, so the resident code and all of DMEM come out
+byte-identical in every build (the assembler refuses if resident code
+grows into the slot). A page can call resident code and use any DMEM
+label directly; resident code reaches a page only through the entry
+table at the slot's start, after `Page_Ensure`. At start-up the CPU copies
+each build's slot bytes into one buffer (`s_vm_pages`, 1 KB apart) whose
+address is in the state block (`P_PAGES`). `Page_Ensure` DMAs a page into
+IMEM when `PAGE_CUR` names another; `PAGE_CUR` starts as page 0 in the
+DMEM image, so it is right again whenever rspq reloads the overlay.
+
+*Rules.* A page routine may only call resident code, or code of its own
+page; a call that loads another page must not return into the caller's
+page. (The rollback loads `PG_L` from inside a `PG_K` routine, but never
+returns.)
+
+*Freed.* The stream build's resident code ends at 0xbe8, against the slot
+at 0xdc0: 472 bytes free, more if the slot shrinks to the largest page
+(448 bytes). The first use: interpolation waits for the envelope and is
+skipped when the gain is 0 and for noise voices, as `dsp_cycleChannel`
+does (still before a key on, which clears the buffer after the sample is
+taken from it): realistic VM cost 1,300 → 1,198 RSP cycles a sample.
+
+*A bug the split test found.* Moving the ledger scan left a `jal` in the
+delay slot of the page check's fast-path branch (undefined on MIPS; here
+it sent execution into whatever page was in the slot). The variant's
+builds are now checked for any branch or jump in a delay slot.
+
 ### Results back to Blue (owner, 2026-11-16)
 
 Consistency of what Red publishes: Red must never wait on Blue, so a

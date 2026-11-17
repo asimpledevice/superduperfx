@@ -31,6 +31,41 @@
 #endif
 #endif
 
+/* The paging slot (RSPDSP_VM; docs/n64/RED_DESIGN.md "The paging slot"):
+ * the last VM_SLOT_SIZE bytes of IMEM hold one page at a time, DMA'd from
+ * RDRAM (P_PAGES, VM_PAGE_STRIDE apart) by Page_Ensure when not there.
+ * Page n is this source built with RSPDSP_VM_PAGE = n: the resident code
+ * and all of DMEM are the same in every build, and the page's code goes
+ * into the slot (GAS subsection 1, after an .org). The overlay itself is
+ * page PG_E's build. Resident code reaches a page's routines only through
+ * the entry table at the slot's start (VM_*_ENTRY below), and only after
+ * Page_Ensure for that page; a page may call resident code. */
+#define PG_E 0      /* echo (each chunk's mixing) */
+#define PG_K 1      /* voice events: key on, loop, directory, ledger scan */
+#define PG_L 2      /* chunk start: logged writes, ARAM writes, chunk setup */
+#define VM_SLOT_SIZE   RSPDSP_VM_SLOT_SIZE
+#define VM_SLOT_OFF    RSPDSP_VM_SLOT_OFF
+#define VM_PAGE_SHIFT  RSPDSP_VM_PAGE_SHIFT   /* stride of the page images in RDRAM */
+#ifdef RSPDSP_VM
+#ifndef RSPDSP_VM_PAGE
+#define RSPDSP_VM_PAGE PG_E
+#endif
+#define PAGED(p) (RSPDSP_VM_PAGE == (p))   /* this build emits page p (into the slot) */
+#define SLOT_IN  .text 1
+#define SLOT_OUT .text
+#else
+#define PAGED(p) 1
+#define SLOT_IN
+#define SLOT_OUT
+#endif
+#define VM_E_ECHO   (VM_Slot)
+#define VM_K_KEYON  (VM_Slot)
+#define VM_K_LOOP   (VM_Slot + 8)
+#define VM_K_LSCAN  (VM_Slot + 16)
+#define VM_L_LOG    (VM_Slot)
+#define VM_L_CHUNK  (VM_Slot + 8)
+#define VM_L_GO     (VM_Slot + 16)
+
 /* Per-batch parameters: in the state block, or (RSPDSP_STREAM) in their own
  * block, loaded from the command's second word. */
 #ifdef RSPDSP_STREAM
@@ -113,6 +148,30 @@ OUTBUF:     .ds.b 32 * 4 + 8
 
     .text
 
+#ifdef RSPDSP_VM
+    SLOT_IN
+    .org VM_SLOT_OFF
+VM_Slot:                            # this build's page (entry table first)
+#if PAGED(PG_K)
+    j Env_KeyOn
+    nop
+    j Brr_Loop
+    nop
+#ifdef RSPDSP_STREAM
+    j VM_Lscan
+    nop
+#endif
+#elif PAGED(PG_L)
+    j Log_ApplyDue
+    nop
+    j VM_Chunk
+    nop
+    j VM_go
+    nop
+#endif                              /* (PG_E: Echo is at the slot's start) */
+    SLOT_OUT
+#endif
+
 #define LOG_CHUNK 32
 
 # Persistent registers during a run:
@@ -164,7 +223,9 @@ SnesDspCmd_Run:
     # Chunks of at most VM_CHUNK samples, each ending before the next
     # logged write (so the voices see no write inside a chunk).
 Run_loop:
-    jal Log_ApplyDue
+    jal Page_Ensure
+    li t1, PG_L
+    jal VM_L_LOG
     nop
     beq s5, s6, Run_done
     subu t1, s6, s5
@@ -181,8 +242,8 @@ Run_loop:
     nop
     move t1, t3
 2:  sw t1, %lo(VM_N)
-    j VM_Chunk                      # runs the chunk, advances s5, back to Run_loop
-    li ra, %lo(Run_loop)
+    j VM_L_CHUNK                    # runs the chunk, advances s5, back to Run_loop
+    nop
 #else
 Run_loop:
 #ifndef PROF_NO_LOG
@@ -214,6 +275,8 @@ Run_done:
 # Logged writes
 ########################################################################
 
+#if PAGED(PG_L)
+    SLOT_IN
 # Apply every log entry whose tag equals s5.
 Log_ApplyDue:
     move v1, ra
@@ -290,6 +353,8 @@ Aram_Rmw:                           # a0: ARAM offset (may be >= $10000), a1: va
     li t0, DMA_SIZE(8, 1)
     jr t7
     nop
+    SLOT_OUT
+#endif
 
 #ifndef RSPDSP_BLOCKS   /* the front end reads the directory */
 # Read 8 bytes of ARAM containing offset a0 into SCR_DIR; returns the DMEM
@@ -309,6 +374,8 @@ Aram_Read8:
     addiu v0, t3, %lo(SCR_DIR)
 #endif
 
+#if PAGED(PG_K)
+    SLOT_IN
 # Directory entry for SRCN a2: v0 = start address, v1 = loop address.
 Dir_Entry:
     move t6, ra
@@ -333,6 +400,8 @@ Dir_Entry:
     or v1, t1, t3                   # loop
     jr t6
     move v0, a3
+    SLOT_OUT
+#endif
 
 #endif
 
@@ -708,7 +777,11 @@ C_env:
 
 #if !defined(PROF_NO_G) && !defined(PROF_VM_NO_ECHO)
     # --- G: echo -------------------------------------------------------
+#ifdef RSPDSP_VM
+    jal VM_E_ECHO
+#else
     jal Echo
+#endif
     nop
 
 #endif
@@ -823,6 +896,23 @@ Brr_Decode:
     andi t3, t1, 1                  # flags 1 or 3: end of sample, loop
     beqz t3, Brr_block
     nop
+#ifdef RSPDSP_VM
+    jal Page_Ensure
+    li t1, PG_K
+    jal VM_K_LOOP
+    nop
+    b Brr_block
+    nop
+#if PAGED(PG_K)
+    SLOT_IN
+# The end of a sample (flags 1 or 3): the loop address from the directory,
+# release on 1, ENDX. t4 = 2 * voice, a2 = voice.
+Brr_Loop:
+    sw ra, %lo(SAVE_RA3)
+    lhu t1, %lo(DSP + RSPDSP_V_PREVFLAGS)(t4)
+#endif
+#endif
+#if !defined(RSPDSP_VM) || PAGED(PG_K)
     sw t1, %lo(BRR_PF)
 #ifndef RSPDSP_BLOCKS   /* with blocks, the record carries the loop address */
     lhu a2, %lo(DSP + RSPDSP_V_SRCN)(t4)
@@ -844,6 +934,13 @@ Brr_Decode:
     sllv t3, t3, a2
     or t1, t1, t3
     sb t1, %lo(DSP + RSPDSP_RAM + 0x7c)
+#ifdef RSPDSP_VM
+    lw ra, %lo(SAVE_RA3)
+    jr ra
+    nop
+    SLOT_OUT
+#endif
+#endif
 Brr_block:
 #ifdef RSPDSP_BLOCKS
     # The next block record (start address, 9 bytes), as the front end
@@ -1073,6 +1170,8 @@ BRR_PF:     .word 0
 BRR_T4:     .word 0
     .text
 
+#if PAGED(PG_K)
+    SLOT_IN
 ########################################################################
 # Key on for voice a2 (even samples, key off clear; dsp_cycleChannel)
 ########################################################################
@@ -1130,6 +1229,8 @@ Env_key_ret:
     lw ra, %lo(SAVE_RA3)
     jr ra
     nop
+    SLOT_OUT
+#endif
 
     .data
     .align 4
@@ -1161,7 +1262,14 @@ B_DECODE:   .half RSPDSP_DECODE + 0 * RSPDSP_DECODE_STRIDE, RSPDSP_DECODE + 1 * 
 # s6 and fp are the run's: saved meanwhile.
 ########################################################################
 
+#if PAGED(PG_L)
+    SLOT_IN
 VM_Chunk:
+#ifdef PROF_VM_COUNT   /* (test builds: chunks and rollbacks into P_BLK, P_KON) */
+    lw t1, %lo(DSP + RSPDSP_P_BLK)
+    addiu t1, t1, 1
+    sw t1, %lo(DSP + RSPDSP_P_BLK)
+#endif
     sw s1, %lo(VM_SAVE + 0)
     sw s2, %lo(VM_SAVE + 4)
     sw s3, %lo(VM_SAVE + 8)
@@ -1195,7 +1303,10 @@ VM_go:
     addiu k0, k0, 2
     bne k0, s6, 1b
     nop
+    j VM_voice
     move a2, zero
+    SLOT_OUT
+#endif
 
 VM_voice:
     sll t4, a2, 1
@@ -1256,40 +1367,16 @@ VM_sample:
     lhu s1, %lo(DSP + RSPDSP_V_GAIN)(t4)
     lhu s2, %lo(DSP + RSPDSP_V_ADSRSTATE)(t4)
 VM_interp:
-    # Gaussian interpolation (as phase B, one voice): taps in lanes 0-3.
-#ifdef PROF_VM_NO_INTERP
-    lhu t5, %lo(DSP + RSPDSP_EVENCYCLE)
-    srl t3, k0, 1
-    xor t5, t5, t3
-    b 9f
-    andi t5, t5, 1
-#endif
-    srl t1, k1, 11
-    andi t1, t1, 0x1e               # sample index * 2
-    lw t3, %lo(VM_DB)
-    srl t5, k1, 2
-    andi t5, t5, 0x3fc              # offset * 4
-    addu t1, t1, t3
-    xori t3, t5, 0x3fc              # (0xff - offset) * 4
-    addiu t5, t5, %lo(GAUSSP)
-    addiu t3, t3, %lo(GAUSSP)
-    ldv $v08, 0, 0, t1
-    llv $v09, 0, 0, t3
-    lsv $v09, 4, 2, t5
-    lsv $v09, 6, 0, t5
-    vmudm $v10, $v08, $v09
-    addiu t1, k0, %lo(VM_INTERP)
+    # Key on/off, even samples. Interpolation waits for the envelope (no
+    # need when the gain is 0, or for a noise voice), as in
+    # dsp_cycleChannel, except on a key on, which clears the decode buffer
+    # after the sample is taken from it. t9: interpolated.
     lhu t5, %lo(DSP + RSPDSP_EVENCYCLE)     # (as at the chunk's start)
-    vaddc $v11, $v10, $v10, e(1q)
     srl t3, k0, 1
-    vaddc $v11, $v11, $v10, e(2h)
     xor t5, t5, t3
-    ctc2 zero, COP2_CTRL_VCO
     andi t5, t5, 1
-    vadd $v11, $v11, $v10, e(3h)
-    ssv $v11, 0, 0, t1
-9:  # Key on/off, even samples.
     beqz t5, VM_reset
+    move t9, zero
     lhu t3, %lo(DSP + RSPDSP_M_KEYOFF)
     and t3, t3, fp
     beqz t3, VM_kon
@@ -1300,10 +1387,15 @@ VM_kon:
     and t1, t1, fp
     beqz t1, VM_reset
     nop
-    jal Env_KeyOn
+    jal VM_Interp
+    nop
+    jal Page_Ensure
+    li t1, PG_K
+    jal VM_K_KEYON
     nop
     move s1, zero
     move s2, zero
+    li t9, 1
 VM_reset:
     lhu t1, %lo(DSP + RSPDSP_RESET)
     beqz t1, VM_env
@@ -1398,7 +1490,15 @@ VM_trans:
     nop
     li s2, 2
 VM_out:
-    sll t1, s1, 5
+    bnez t9, 1f                     # interpolated already
+    lhu t3, %lo(DSP + RSPDSP_M_NOISE)
+    beqz s1, 1f                     # gain 0: the sample is not used
+    and t3, t3, fp
+    bnez t3, 1f                     # a noise voice takes the noise sample
+    nop
+    jal VM_Interp
+    nop
+1:  sll t1, s1, 5
     sh t1, %lo(VM_GAINB)(k0)
     addiu k0, k0, 2
     bne k0, s6, VM_sample
@@ -1473,6 +1573,8 @@ VM_out:
     sqv $v21, 0x60, t1
     sqv $v22, 0x70, t1
     # Then each sample in order: master volume, echo, output (F-H).
+    jal Page_Ensure
+    li t1, PG_E
     lw s1, %lo(VM_SAVE + 0)
     lw s2, %lo(VM_SAVE + 4)
     lw s3, %lo(VM_SAVE + 8)
@@ -1494,6 +1596,35 @@ VM_mix:
 #endif
     li ra, %lo(Run_loop)
 
+# Gaussian interpolation (as phase B, one voice) of the sample at counter
+# k1 into VM_INTERP[k0 / 2]: taps in lanes 0-3. Uses t1, t3, t5, $v08-$v11.
+VM_Interp:
+#ifdef PROF_VM_NO_INTERP
+    jr ra
+    nop
+#endif
+    srl t1, k1, 11
+    andi t1, t1, 0x1e               # sample index * 2
+    lw t3, %lo(VM_DB)
+    srl t5, k1, 2
+    andi t5, t5, 0x3fc              # offset * 4
+    addu t1, t1, t3
+    xori t3, t5, 0x3fc              # (0xff - offset) * 4
+    addiu t5, t5, %lo(GAUSSP)
+    addiu t3, t3, %lo(GAUSSP)
+    ldv $v08, 0, 0, t1
+    llv $v09, 0, 0, t3
+    lsv $v09, 4, 2, t5
+    lsv $v09, 6, 0, t5
+    vmudm $v10, $v08, $v09
+    addiu t1, k0, %lo(VM_INTERP)
+    vaddc $v11, $v10, $v10, e(1q)
+    vaddc $v11, $v11, $v10, e(2h)
+    ctc2 zero, COP2_CTRL_VCO
+    vadd $v11, $v11, $v10, e(3h)
+    jr ra
+    ssv $v11, 0, 0, t1
+
 # A read of a1 bytes at ARAM address a0 by the voice at chunk sample j
 # (VM_K = 2j) is a hazard if it overlaps the echo ring while echo writes
 # are on (conservative: any byte of the ring, written this chunk or not; a
@@ -1507,10 +1638,12 @@ VM_Check:
     beqz t1, 9f
     lhu t5, %lo(DSP + RSPDSP_ECHOREMAIN)
     lhu t1, %lo(DSP + RSPDSP_ECHODELAY)
-    addu t1, t1, t3                 # the ring is within delay + index + remain
-    addu t1, t1, t5
+    addu t3, t3, t5                 # the ring: max(delay, index + remain)
+    sltu t5, t1, t3
+    beqz t5, 1f
     lhu t5, %lo(DSP + RSPDSP_ECHOADR)
-    sll t1, t1, 2
+    move t1, t3
+1:  sll t1, t1, 2
     subu t8, a0, t5                 # a0 within [t5 - 8, t5 + t1), mod 64K
     addiu t8, t8, 8                 # (a read is at most 9 bytes)
     andi t8, t8, 0xffff
@@ -1570,7 +1703,7 @@ VM_Ledger:
     andi t1, a0, 0xff
     addu t1, t1, a1
     sltiu t1, t1, 0x101
-    beqz t1, VM_Lscan               # (bytes in two pages: scan)
+    beqz t1, VM_Lslow               # (bytes in two pages: scan)
     srl t1, a0, 6
     lw s0, %lo(PAR(LPAGE))
     li t3, ~7
@@ -1583,6 +1716,18 @@ VM_Ledger:
     lw t3, %lo(VM_LBUF)(t1)         # the page's newest write
     subu t3, t3, t8
     blez t3, VM_Lret
+    nop
+VM_Lslow:
+    jal Page_Ensure
+    li t1, PG_K
+    j VM_K_LSCAN
+    nop
+VM_Lret:
+    lw ra, %lo(VM_LRA)
+    jr ra
+    nop
+#if PAGED(PG_K)
+    SLOT_IN
 VM_Lscan:
     lw s0, %lo(PAR(LTAIL))
     li s4, %lo(VM_LBUF)
@@ -1613,14 +1758,17 @@ VM_Lent:
     addu v1, v1, t3
     b VM_Lent
     sb t5, 0(v1)
-VM_Lret:
-    lw ra, %lo(VM_LRA)
-    jr ra
-    nop
+    SLOT_OUT
+#endif
 #endif
 
 # Back to the chunk's start, cut before sample j (j > 0).
 VM_Hazard:
+#ifdef PROF_VM_COUNT
+    lw t1, %lo(DSP + RSPDSP_P_KON)
+    addiu t1, t1, 1
+    sw t1, %lo(DSP + RSPDSP_P_KON)
+#endif
     lw t1, %lo(VM_K)
     srl t1, t1, 1
     sw t1, %lo(VM_N)
@@ -1628,7 +1776,25 @@ VM_Hazard:
     li s4, %lo(DSP)
     jal DMAIn
     li t0, DMA_SIZE(RSPDSP_VM_SNAP, 1)
-    j VM_go
+    jal Page_Ensure
+    li t1, PG_L
+    j VM_L_GO
+    nop
+
+# Bring page t1 into the slot. Keeps all but t0, t1, t2, at, s0, s4.
+Page_Ensure:
+    lw t0, %lo(PAGE_CUR)
+    beq t0, t1, 1f
+    sw t1, %lo(PAGE_CUR)
+    sw ra, %lo(PAGE_RA)
+    lw s0, %lo(DSP + RSPDSP_P_PAGES)
+    sll t1, t1, VM_PAGE_SHIFT
+    addu s0, s0, t1
+    li s4, VM_Slot
+    jal DMAIn
+    li t0, DMA_SIZE(VM_SLOT_SIZE, 1)
+    lw ra, %lo(PAGE_RA)
+1:  jr ra
     nop
 
     .data
@@ -1637,6 +1803,8 @@ VM_N:       .word 0
 VM_K:       .word 0
 VM_DB:      .word 0
 VM_SAVE:    .word 0, 0, 0, 0, 0
+PAGE_CUR:   .word PG_E              # the page in the slot (the overlay's own at load)
+PAGE_RA:    .word 0
 VM_DST:     .word 0
 #ifdef RSPDSP_STREAM
 VM_LRA:     .word 0
@@ -1647,6 +1815,8 @@ VM_LBUF:    .ds.b 8
 #endif /* RSPDSP_VM */
 
 #ifndef RSPDSP_NO_ECHO
+#if PAGED(PG_E)
+    SLOT_IN
 ########################################################################
 # Echo (dsp_handleEcho). In: $v22/$v23 totals after master volume, $v17/
 # $v18 echo input (all lanes). Out: a0/a1 totals with echo.
@@ -1815,6 +1985,8 @@ Echo_have:
     lw ra, %lo(SAVE_RA2)
     jr ra
     nop
+    SLOT_OUT
+#endif
 
 #else
 ########################################################################

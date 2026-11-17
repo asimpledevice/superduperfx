@@ -90,11 +90,12 @@ N64_RSPASFLAGS += -DRSPDSP_STREAM=1
 RSPDSP_VM ?= 1
 ifeq ($(RSPDSP_VM),1)
 N64_CFLAGS += -DRSPDSP_VM=1
-OBJS += $(BUILD_DIR)/rsp_snesdsp_vm.o
-$(BUILD_DIR)/rsp_snesdsp_vm.o: rspdsp/rsp_snesdsp_vm.S rspdsp/rsp_snesdsp.S \
+OBJS += $(BUILD_DIR)/rsp_snesdsp_vm.o $(BUILD_DIR)/rsp_snesdsp_vm_pk.o $(BUILD_DIR)/rsp_snesdsp_vm_pl.o
+$(BUILD_DIR)/rsp_snesdsp_vm.o $(BUILD_DIR)/rsp_snesdsp_vm_pk.o $(BUILD_DIR)/rsp_snesdsp_vm_pl.o: rspdsp/rsp_snesdsp_vm.S rspdsp/rsp_snesdsp_vm_pk.S rspdsp/rsp_snesdsp_vm_pl.S rspdsp/rsp_snesdsp.S \
 		rspdsp/snesdsp_rsp_layout.h rspdsp/rsp_snesdsp_tables.inc
 	@$(MAKE) --no-print-directory -f $(N64_INST)/include/n64.mk SOURCE_DIR=rspdsp \
 		BUILD_DIR=$(BUILD_DIR) RSPASFLAGS="$(N64_RSPASFLAGS)" $@
+	@python3 rspdsp/check_delay_slots.py $(N64_OBJDUMP) $(basename $@).elf
 endif
 endif
 ifeq ($(RSPDSP_ECHO_IN_PLACE),1)
