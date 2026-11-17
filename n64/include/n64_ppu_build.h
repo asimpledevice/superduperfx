@@ -31,4 +31,9 @@ void n64_ppu_build_finish(void);
  * the RSP has its snapshot of it. */
 void n64_ppu_build_release_vram(void);
 
+/* Scene builder palettes (N64PPU_SCENE builds; see n64_ppu_build.c). */
+enum { N64PPU_SCENE_TL_PLAIN, N64PPU_SCENE_TL_BLACK, N64PPU_SCENE_TL_MATH, N64PPU_SCENE_TL_MATH_CLIP };
+void n64_ppu_scene_tlut(const uint16_t *cgram, const struct Ppu *regs, unsigned kind, unsigned base,
+                        unsigned mode, uint16_t *out);
+
 #endif

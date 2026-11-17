@@ -266,6 +266,41 @@ static uint8_t get_tlut(N64PpuFrame *f, const Ppu *ppu, uint8_t kind, uint8_t se
 
 
 #if N64PPU_SCENE
+#include "tile_cache_layout.h"
+/* A scene-builder TLUT in the tile cache's arrangement (tile_cache.h:
+ * TC_TLUT_16, or TC_TLUT_2BPP with palette base `base` in the low half)
+ * for the colour rules of n64_ppu_draw.c's plane palettes:
+ * N64PPU_SCENE_TL_BLACK main pixels clipped to black (as
+ * N64PPU_TLUT_BLACK), N64PPU_SCENE_TL_MATH subscreen pixels with backdrop
+ * math (as tl_math), N64PPU_SCENE_TL_MATH_CLIP the same with the backdrop
+ * clipped (tl_math_clip). The registers are the band's; the backdrop is
+ * cgram[0]. (Plain palettes come from tc_ref_tlut.) */
+void n64_ppu_scene_tlut(const uint16_t *cgram, const struct Ppu *regs, unsigned kind, unsigned base,
+                        unsigned mode, uint16_t *out) {
+  const unsigned b = PPU_brightness(regs);
+  const uint8_t mflags = (uint8_t)((PPU_subtractColor(regs) ? kMathSubtract : 0) |
+                                   (PPU_halfColor(regs) ? kMathHalf : 0));
+  for (int i = 0; i < 256; ++i) {
+    int src;
+    if (kind == TC_TLUT_16) src = (i & 15) ? i : -1;
+    else {
+      const int j = i & 15, q = (i >> 4) & 7;
+      src = (i < 128 && j >= 1 && j <= 3) ? (int)((base + 4u * (unsigned)q + (unsigned)j) & 255) : -1;
+    }
+    if (src < 0) { out[i] = 0; continue; }
+    const uint16_t raw = cgram[src];
+    switch (mode) {
+      case N64PPU_SCENE_TL_BLACK: out[i] = 1; break;
+      case N64PPU_SCENE_TL_MATH:
+        out[i] = math_color(cgram[0], raw, mflags, b, (mflags & kMathHalf) != 0);
+        break;
+      default:
+        out[i] = math_color(0, raw, (uint8_t)(mflags & ~kMathHalf), b, false);
+        break;
+    }
+  }
+}
+
 static void obj_scene_frame_begin(void);
 #endif
 
@@ -1054,8 +1089,10 @@ bool n64_ppu_build_line(const Ppu *ppu, int line) {
    * layers off on this line get their row cleared now. */
   const int nbg = PPU_mode(ppu) == 0 ? 4 : 3;
 #if N64PPU_SCENE
-  bool scene_line_ok = PPU_mode(ppu) <= 1 && !(ppu->bgmode & 0xf0);
-  for (int k = 0; k < s->n; ++k) scene_line_ok &= !s->clip[k];
+  /* Clipped spans and the subscreen are drawn by the scene too, through
+   * the black and math palettes (n64_ppu_scene_tlut). */
+  const bool scene_line_ok = PPU_mode(ppu) <= 1 && !(ppu->bgmode & 0xf0);
+  L->scene_bg = scene_line_ok ? 3 : 0;
 #endif
   const uint8_t enabled[2] = {ppu->screenEnabled[0], L->sub_layers};
   for (int screen = 0; screen < 2; ++screen) {
@@ -1066,9 +1103,9 @@ bool n64_ppu_build_line(const Ppu *ppu, int line) {
 #if N64PPU_SCENE
         /* Drawn by the scene builder (n64_ppu_draw.c scene_draw_bg, same
          * rule): no plane. */
-        if (!screen && scene_line_ok) {
+        if (L->scene_bg & (1 << screen)) {
           flush_run(f, screen, layer);
-          L->main_layers |= (uint8_t)(1 << layer);
+          if (!screen) L->main_layers |= (uint8_t)(1 << layer);
           continue;
         }
 #endif

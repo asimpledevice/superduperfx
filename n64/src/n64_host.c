@@ -138,7 +138,13 @@ static void present_rdp_frame(uint32_t frame, const char *line) {
                        (unsigned long)s_rdp_frame->fallback_reasons, diff);
 #if N64PPU_SCENE
   { /* Scene sprites: lines drawn from strips / from planes, rectangles. */
-    extern uint32_t g_scene_obj_lines, g_scene_obj_plane_lines, g_scene_obj_rects;
+    extern uint32_t g_scene_obj_lines, g_scene_obj_plane_lines, g_scene_obj_rects, g_scene_mode_passes[4];
+    if (N64_RENDER == 2 && frame % 30 == 0) {
+      n64_platform_log("[scene] BG passes: plain %lu, clipped %lu, subscreen %lu, subscreen clipped %lu\n",
+                       (unsigned long)g_scene_mode_passes[0], (unsigned long)g_scene_mode_passes[1],
+                       (unsigned long)g_scene_mode_passes[2], (unsigned long)g_scene_mode_passes[3]);
+      memset(g_scene_mode_passes, 0, sizeof g_scene_mode_passes);
+    }
     if (N64_RENDER == 2 && frame % 30 == 0)
       n64_platform_log("[scene] obj lines: scene %lu, planes %lu, rects %lu (last 30 frames); "
                        "frames differing so far %lu\n",

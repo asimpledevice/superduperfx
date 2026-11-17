@@ -98,7 +98,7 @@ typedef struct N64PpuLine {
   uint8_t main_layers;                       /* main screen: BG bits 0-3, OBJ bit 4 */
   uint8_t obj_scene;                         /* sprites drawn from the frame's OBJ strips */
   uint8_t obj_first;                         /* with obj_scene: the OAM rotation's first sprite */
-  uint8_t pad_;
+  uint8_t scene_bg;                          /* BG layers drawn by the scene: 1 main screen, 2 subscreen */
   N64PpuSpan spans[N64PPU_MAX_SPANS];
   uint8_t tl_main[N64PPU_SELS];               /* normal palettes */
   uint8_t tl_math[N64PPU_SELS];               /* subscreen math palettes */
