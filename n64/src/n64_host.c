@@ -128,12 +128,24 @@ static void present_rdp_frame(uint32_t frame, const char *line) {
     }
   }
 #endif
+  static uint32_t s_diff_frames;   /* frames that differed (RENDER=2) */
+  if (diff > 0) s_diff_frames++;
   if (N64_RENDER == 2 && (frame < 8 || frame % 30 == 0 || diff > 0))
-    if (frame < 600 || frame % 30 == 0)
+    if (frame < 600 || frame % 30 == 0 || s_diff_frames <= 20)
       n64_platform_log("[rdp] frame %lu: rdp %d sw %d black %d lines, why %02lx, diff %d px\n",
                        (unsigned long)frame, s_rdp_frame->rdp_lines,
                        s_rdp_frame->software_lines, s_rdp_frame->black_lines,
                        (unsigned long)s_rdp_frame->fallback_reasons, diff);
+#if N64PPU_SCENE
+  { /* Scene sprites: lines drawn from strips / from planes, rectangles. */
+    extern uint32_t g_scene_obj_lines, g_scene_obj_plane_lines, g_scene_obj_rects;
+    if (N64_RENDER == 2 && frame % 30 == 0)
+      n64_platform_log("[scene] obj lines: scene %lu, planes %lu, rects %lu (last 30 frames); "
+                       "frames differing so far %lu\n",
+                       (unsigned long)g_scene_obj_lines, (unsigned long)g_scene_obj_plane_lines,
+                       (unsigned long)g_scene_obj_rects, (unsigned long)s_diff_frames);
+    if (frame % 30 == 0) g_scene_obj_lines = g_scene_obj_plane_lines = g_scene_obj_rects = 0; }
+#endif
 }
 #endif
 

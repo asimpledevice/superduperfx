@@ -25,6 +25,8 @@ _Static_assert(sizeof(SceneJob) == SCJ_SIZE, "scene job layout");
  * tiles, 56 bytes of RDP commands each, plus its own syncs, must fit in the
  * room Red requires before starting it. */
 _Static_assert(5 * 33 * 56 + 64 < SCENE_RDP_ROOM, "a scene command must fit SCENE_RDP_ROOM");
+_Static_assert(SCENE_TILES_MAX * 56 + 64 < SCENE_RDP_ROOM, "a tile list command must fit SCENE_RDP_ROOM");
+_Static_assert(STJ_RESULT == SCJ_RESULT, "both commands report through the same field");
 
 enum { kJobs = 1024 };   /* ring: far more than a frame's passes */
 
@@ -69,4 +71,18 @@ void n64_scene_rsp_bg(const uint16_t *vram, const uint8_t *cache, const uint8_t 
   j->result = 0;
   j->empty = empty ? PhysicalAddr(empty) : 0;
   rspq_write(s_ovl, 0, PhysicalAddr(j));
+}
+
+void n64_scene_rsp_tiles(const void *records, int n, const uint8_t *cache, const uint8_t *empty,
+                         int ox, int oy) {
+  SceneJob *j = UncachedAddr(&s_jobs[s_next++ % kJobs]);
+  uint8_t *b = (uint8_t *)j;
+  memset(b, 0, sizeof *j);
+  *(uint32_t *)(b + STJ_LIST) = PhysicalAddr(records);
+  *(uint32_t *)(b + STJ_CACHE) = PhysicalAddr(cache);
+  *(uint16_t *)(b + STJ_N) = (uint16_t)n;
+  *(uint16_t *)(b + STJ_OX) = (uint16_t)ox;
+  *(uint16_t *)(b + STJ_OY) = (uint16_t)oy;
+  *(uint32_t *)(b + STJ_EMPTY) = empty ? PhysicalAddr(empty) : 0;
+  rspq_write(s_ovl, 1, PhysicalAddr(j));
 }

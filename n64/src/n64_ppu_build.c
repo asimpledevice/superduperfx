@@ -265,6 +265,10 @@ static uint8_t get_tlut(N64PpuFrame *f, const Ppu *ppu, uint8_t kind, uint8_t se
 }
 
 
+#if N64PPU_SCENE
+static void obj_scene_frame_begin(void);
+#endif
+
 void n64_ppu_build_begin(N64PpuFrame *f, const uint32_t *sw_rows) {
   s_state.linepal.valid = false;
   s_state.lastspans.valid = false;
@@ -284,6 +288,9 @@ void n64_ppu_build_begin(N64PpuFrame *f, const uint32_t *sw_rows) {
       f->tlut[N64PPU_TLUT_BLACK + sel][c] = sel_source(sel, c) >= 0 ? 1 : 0;
   f->tlut_count = N64PPU_SELS;
   memset(s_tlut_memo, 0, sizeof s_tlut_memo);   /* slots are per frame */
+#if N64PPU_SCENE
+  obj_scene_frame_begin();
+#endif
 }
 
 /* ---- Windows ------------------------------------------------------------- */
@@ -675,12 +682,16 @@ static int obj_lines_collect(const uint32_t m[4], unsigned first, uint8_t found[
 
 /* Sprites for one line, mirroring ppu_evaluateSprites without widescreen:
  * OAM rotation, 32 sprites and 34 tiles per line, lower index wins. */
-static void expand_obj(N64PpuFrame *f, const Ppu *ppu, int line) {
-  const int r = line - 1;
-  const int eval_line = line - 1;            /* the PPU evaluates line - 1 */
+static inline void obj_lines_ensure(const Ppu *ppu) {
   if (!s_obj_lines.valid || s_obj_lines.ppu != ppu || s_obj_lines.oam_count != ppu->oamWriteCount ||
       s_obj_lines.obj_size != PPU_objSize(ppu))
     obj_lines_build(ppu);
+}
+
+static void expand_obj(N64PpuFrame *f, const Ppu *ppu, int line) {
+  const int r = line - 1;
+  const int eval_line = line - 1;            /* the PPU evaluates line - 1 */
+  obj_lines_ensure(ppu);
   uint8_t found[32];
   const unsigned first = PPU_objPriority(ppu) ? (ppu->oamaddl & 0xfe) >> 1 : 0;
   const int n = obj_lines_collect(s_obj_lines.mask[eval_line], first, found);
@@ -745,6 +756,134 @@ static void expand_obj(N64PpuFrame *f, const Ppu *ppu, int line) {
       bit_set(s_state.dirty[p], r);
     }
 }
+
+#if N64PPU_SCENE
+/* ---- Sprites for the scene builder ---------------------------------------
+ * On a line whose sprites the scene draws (N64PpuLine.obj_scene), every
+ * sprite in range is drawn whole as copy-mode rectangles from the 4bpp tile
+ * cache, one priority pass at a time, back to front in OAM rotation order
+ * (n64_ppu_draw.c scene_draw_obj). That equals expand_obj exactly when
+ *   - no sprite is dropped: at most 32 in range and 34 tiles (range and
+ *     time over), and
+ *   - no sprite is in front of (earlier in rotation than) a sprite of
+ *     higher priority it overlaps: on hardware the front sprite's pixel
+ *     wins and takes its own, lower, priority, hiding the other sprite
+ *     there; per-priority passes would show the back sprite instead.
+ *     (Front sprites of higher or equal priority are fine: they are drawn
+ *     later, over the back one.) Checked conservatively on the sprites'
+ *     on-screen x ranges.
+ * Other lines keep the OBJ planes. The strips come from OAM and OBSEL as
+ * of the frame's first such line; a line after either changes keeps the
+ * planes. The pixels come from the tile cache, synced from the frame's
+ * VRAM snapshot, as for the BG layers. */
+static struct {
+  uint32_t oam_count;
+  uint8_t obsel, built, ok;
+  int8_t vis[128];          /* on-screen tile columns per sprite */
+  int16_t x0[128], x1[128];  /* on-screen x range [x0, x1) */
+  /* The last line's verdict, reused while its sprites and rotation repeat. */
+  uint32_t last_mask[4];
+  uint8_t last_first, last_valid, last_ok;
+} s_objscene;
+uint32_t g_scene_obj_lines, g_scene_obj_plane_lines;
+
+static void obj_scene_frame_begin(void) { s_objscene.built = 0; }
+
+static bool obj_strips_build(N64PpuFrame *f, const Ppu *ppu) {
+  int n = 0;
+  for (unsigned spr = 0; spr < 128; ++spr) {
+    f->obj_start[spr] = (uint16_t)n;
+    const unsigned index = spr * 2;
+    const int size = obj_size_of(ppu, index);
+    const int sx = obj_x_of(ppu, index);
+    const unsigned oam1 = ppu->oam[index + 1];
+    f->obj_prio[spr] = (uint8_t)((oam1 >> 12) & 3);
+    s_objscene.vis[spr] = 0;
+    s_objscene.x0[spr] = (int16_t)(sx < 0 ? 0 : sx);
+    s_objscene.x1[spr] = (int16_t)(sx + size > 256 ? 256 : sx + size);
+    if (sx + size <= 0) continue;                 /* never in range (obj_lines_build) */
+    for (int col = 0; col < size; col += 8)
+      if (col + sx > -8 && col + sx < 256) s_objscene.vis[spr]++;
+    const unsigned y = ppu->oam[index] >> 8;
+    const int obj_adr = (oam1 & 0x100) ? PPU_objTileAdr2(ppu) : PPU_objTileAdr1(ppu);
+    const bool hflip = (oam1 & 0x4000) != 0, vflip = (oam1 & 0x8000) != 0;
+    const uint8_t flags = (uint8_t)(((oam1 >> 9) & 7) | (hflip ? N64PPU_OBJ_HFLIP : 0) |
+                                    (vflip ? N64PPU_OBJ_VFLIP : 0));
+    for (int j = 0; j < size / 8; ++j) {
+      /* Sprite rows 8j..8j+7 sit on screen rows (y + 8j + d) & 255. */
+      const unsigned start = (y + 8u * (unsigned)j) & 255;
+      for (int part = 0; part < 2; ++part) {
+        int r0, r1, d0;
+        if (!part) { r0 = (int)start; r1 = start + 8 > 256 ? 256 : (int)start + 8; d0 = 0; }
+        else if (start + 8 > 256) { r0 = 0; r1 = (int)start + 8 - 256; d0 = 256 - (int)start; }
+        else break;
+        if (r1 > N64PPU_LINES) r1 = N64PPU_LINES;
+        if (r0 >= r1) continue;
+        const int trow = vflip ? size / 8 - 1 - j : j;
+        for (int col = 0; col < size; col += 8) {
+          if (col + sx <= -8 || col + sx >= 256) continue;
+          const int ucol = hflip ? size / 8 - 1 - col / 8 : col / 8;
+          const int tile = ((((oam1 & 0xff) >> 4) + trow) << 4) | (((oam1 & 0xf) + ucol) & 0xf);
+          if (n == N64PPU_MAX_OBJ_STRIPS) return false;
+          N64PpuObjStrip *st = &f->obj_strip[n++];
+          st->tile = (uint16_t)(((obj_adr + tile * 16) & 0x7fff) >> 4);
+          st->x = (int16_t)(sx + col);
+          st->r0 = (uint8_t)r0;
+          st->r1 = (uint8_t)r1;
+          st->d0 = (uint8_t)d0;
+          st->flags = flags;
+        }
+      }
+    }
+  }
+  f->obj_start[128] = (uint16_t)n;
+  return true;
+}
+
+/* Whether the scene draws line r's sprites (see above). */
+static bool obj_line_scene(N64PpuFrame *f, const Ppu *ppu, int r) {
+  if (!s_objscene.built) {
+    s_objscene.built = 1;
+    s_objscene.oam_count = ppu->oamWriteCount;
+    s_objscene.obsel = ppu->obsel;
+    s_objscene.ok = obj_strips_build(f, ppu);
+    s_objscene.last_valid = 0;
+  }
+  if (!s_objscene.ok || s_objscene.oam_count != ppu->oamWriteCount || s_objscene.obsel != ppu->obsel)
+    return false;
+  const uint32_t *m = s_obj_lines.mask[r];
+  const unsigned first = PPU_objPriority(ppu) ? (ppu->oamaddl & 0xfe) >> 1 : 0;
+  if (s_objscene.last_valid && s_objscene.last_first == first &&
+      !memcmp(s_objscene.last_mask, m, sizeof s_objscene.last_mask))
+    return s_objscene.last_ok;
+  bool ok = true;
+  int n = 0, tiles = 0;
+  for (int w = 0; w < 4; ++w) n += __builtin_popcount(m[w]);
+  if (n > 32) ok = false;
+  uint8_t found[32];
+  if (ok) {
+    obj_lines_collect(m, first, found);   /* front to back */
+    for (int i = 0; i < n && ok; ++i) {
+      const unsigned a = found[i] >> 1;
+      tiles += s_objscene.vis[a];
+      for (int k = i + 1; k < n; ++k) {   /* a in front of b */
+        const unsigned b = found[k] >> 1;
+        if (f->obj_prio[a] < f->obj_prio[b] && s_objscene.x0[a] < s_objscene.x1[b] &&
+            s_objscene.x0[b] < s_objscene.x1[a]) {
+          ok = false;
+          break;
+        }
+      }
+    }
+    if (tiles > 34) ok = false;
+  }
+  memcpy(s_objscene.last_mask, m, sizeof s_objscene.last_mask);
+  s_objscene.last_first = (uint8_t)first;
+  s_objscene.last_ok = ok;
+  s_objscene.last_valid = 1;
+  return ok;
+}
+#endif
 
 /* ---- Lines --------------------------------------------------------------- */
 
@@ -946,7 +1085,19 @@ bool n64_ppu_build_line(const Ppu *ppu, int line) {
   /* Sprites: per line (they read OAM and VRAM live). */
   for (int p = N64PPU_OBJ0; p <= N64PPU_OBJ3; ++p) clear_if_dirty(f, p, r);
   if (ppu->screenEnabled[0] & 0x10) {
+#if N64PPU_SCENE
+    obj_lines_ensure(ppu);
+    if (scene_line_ok && obj_line_scene(f, ppu, r)) {
+      L->obj_scene = 1;
+      L->obj_first = (uint8_t)(PPU_objPriority(ppu) ? (ppu->oamaddl & 0xfe) >> 1 : 0);
+      g_scene_obj_lines++;
+    } else {
+      expand_obj(f, ppu, line);
+      g_scene_obj_plane_lines++;
+    }
+#else
     expand_obj(f, ppu, line);
+#endif
     L->main_layers |= 0x10;
   }
   f->rdp_lines++;

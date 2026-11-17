@@ -95,7 +95,10 @@ static inline int n64ppu_plane_layer(int plane) {
  * N64PpuLine compares equal are drawn as one band. */
 typedef struct N64PpuLine {
   uint8_t kind, order, nspans, sub_layers;   /* sub_layers: subscreen BG mask */
-  uint8_t main_layers, pad_[3];              /* main screen: BG bits 0-3, OBJ bit 4 */
+  uint8_t main_layers;                       /* main screen: BG bits 0-3, OBJ bit 4 */
+  uint8_t obj_scene;                         /* sprites drawn from the frame's OBJ strips */
+  uint8_t obj_first;                         /* with obj_scene: the OAM rotation's first sprite */
+  uint8_t pad_;
   N64PpuSpan spans[N64PPU_MAX_SPANS];
   uint8_t tl_main[N64PPU_SELS];               /* normal palettes */
   uint8_t tl_math[N64PPU_SELS];               /* subscreen math palettes */
@@ -103,6 +106,21 @@ typedef struct N64PpuLine {
   uint16_t fill, fill_clip;                   /* backdrop without math */
   uint16_t fill_math, fill_math_clip;         /* backdrop with fixed-colour math */
 } N64PpuLine;
+
+/* A sprite's 8x8 tile over a run of rows (the scene builder's sprites,
+ * N64PpuLine.obj_scene): C4 tile-cache index, screen x of its left column
+ * (-7..255), screen rows [r0, r1), the tile row shown at r0 before any
+ * flip (d0), and flags. Built once per frame from OAM (n64_ppu_build.c). */
+typedef struct N64PpuObjStrip {
+  uint16_t tile;
+  int16_t x;
+  uint8_t r0, r1, d0, flags;   /* flags: palette 0-7, N64PPU_OBJ_HFLIP, N64PPU_OBJ_VFLIP */
+} N64PpuObjStrip;
+enum {
+  N64PPU_OBJ_HFLIP = 0x40,
+  N64PPU_OBJ_VFLIP = 0x80,
+  N64PPU_MAX_OBJ_STRIPS = 2048,
+};
 
 typedef struct N64PpuFrame {
   uint8_t *plane[N64PPU_PLANES];        /* N64PPU_LINES rows of N64PPU_STRIDE */
@@ -118,6 +136,12 @@ typedef struct N64PpuFrame {
   int tlut_count;
 
   const uint32_t *sw_rows;              /* XRGB8888, 256 wide, for SOFTWARE lines */
+
+  /* Sprites for lines with obj_scene: strips of sprite s are
+   * obj_strip[obj_start[s] .. obj_start[s + 1]), its priority obj_prio[s]. */
+  N64PpuObjStrip obj_strip[N64PPU_MAX_OBJ_STRIPS];
+  uint16_t obj_start[129];
+  uint8_t obj_prio[128];
 
   /* Statistics for the current frame. */
   int rdp_lines, software_lines, black_lines;

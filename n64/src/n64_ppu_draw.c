@@ -76,6 +76,7 @@ static void use_tlut(const N64PpuFrame *f, int t) {
 #include "n64_ppu_scene.h"
 #include "snes/ppu.h"
 #include "tile_cache.h"
+#include "scene_layout.h"
 #if N64PPU_SCENE_RSP
 #include "scene_rsp.h"
 #endif
@@ -215,6 +216,110 @@ static bool scene_draw_bg_(int layer, bool hi, int a, int b, int sx0, int sx1) {
   }
   return true;
 }
+
+/* Sprites of priority `prio` over rows [a, b) of lines with obj_scene, in
+ * the current span: each strip (N64PpuObjStrip, n64_ppu_build.c) clipped to
+ * the rows and the span, back to front in OAM rotation order from `first`
+ * (lower rotation index on top), as copy-mode rectangles from the 4bpp tile
+ * cache with the OBJ palettes (8-15 of the 4bpp TLUT). */
+#define kObjRecs 4096    /* ring of tile records (32 KB): several frames of sprites */
+static uint8_t s_obj_rec[kObjRecs * 8 + 512] __attribute__((aligned(16)));
+static unsigned s_obj_next;
+uint32_t g_scene_obj_rects;
+
+static void scene_obj_flush(uint8_t *recs, int n) {
+#if N64PPU_SCENE_RSP
+  data_cache_hit_writeback(recs, (size_t)n * 8);
+  n64_scene_rsp_tiles(recs, n, n64_tile_cache_c4(), n64_tile_cache_empty4(), kOx, kOy);
+#else
+  const uint8_t *cache = n64_tile_cache_c4();
+  for (int i = 0; i < n; ++i) {
+    const uint8_t *r = recs + 8 * i;
+    const unsigned tile = (unsigned)r[0] << 8 | r[1];
+    surface_t t = surface_make((void *)(cache + (size_t)tile * TC_CI4_TILE), FMT_CI4, 16, 8, 8);
+    rdpq_tex_upload(TILE0, &t, &(rdpq_texparms_t){.palette = r[7] >> 4});
+    const bool v = (r[6] & 0x80) != 0;
+    __rdpq_texture_rectangle_raw_fx(TILE0, (kOx + r[2]) * 4, (kOy + r[4]) * 4,
+                                    (kOx + r[3] + 1) * 4, (kOy + r[5] + 1) * 4,
+                                    (r[6] & 0x7f) * 32, (r[7] & 7) * 32, 1024, v ? -1024 : 1024);
+  }
+#endif
+}
+
+static bool scene_draw_obj(const N64PpuFrame *f, int prio, unsigned first, int a, int b,
+                           int sx0, int sx1) {
+  if (!s_scene_vram) return false;
+  const uint32_t t0 = TICKS_READ();
+  const N64PpuDesc *d = n64_ppu_desc();
+  bool copy_mode = false, ok = true;
+  for (int k = 0; k < d->nbands && ok; ++k) {
+    const N64PpuBand *band = &d->band[k];
+    const int r0 = band->y0 - 1 > a ? band->y0 - 1 : a;
+    const int r1 = band->y1 < b ? band->y1 : b;
+    if (r0 >= r1) continue;
+    const Ppu *regs = (const Ppu *)&band->regs;
+    const uint16_t *tl = scene_tlut(band->cgram, PPU_brightness(regs), TC_TLUT_16, 0);
+    if (!tl) { ok = false; break; }
+    int n = 0;
+    uint8_t *recs = NULL;
+    for (int i = 127; i >= 0; --i) {
+      const unsigned spr = (first + (unsigned)i) & 127;
+      if (f->obj_prio[spr] != prio) continue;
+      for (unsigned j = f->obj_start[spr]; j < f->obj_start[spr + 1]; ++j) {
+        const N64PpuObjStrip *st = &f->obj_strip[j];
+        const int y0 = st->r0 > r0 ? st->r0 : r0;
+        const int y1 = st->r1 < r1 ? st->r1 : r1;
+        if (y0 >= y1) continue;
+        const int x0 = st->x > sx0 ? st->x : sx0;
+        const int x1 = st->x + 8 < sx1 ? st->x + 8 : sx1;
+        if (x0 >= x1) continue;
+        if (!copy_mode) {
+          rdpq_set_mode_copy(true);
+          rdpq_mode_tlut(TLUT_RGBA16);
+          copy_mode = true;
+        }
+        if (!recs) {
+          rdpq_tex_upload_tlut((uint16_t *)tl, 0, 256);
+          s_loaded_tlut = -1;
+          if (s_obj_next + SCENE_TILES_MAX > kObjRecs) s_obj_next = 0;
+          recs = s_obj_rec + (size_t)s_obj_next * 8;
+        }
+        const int dr = st->d0 + (y0 - st->r0);   /* row within the tile, before flips */
+        const bool vflip = (st->flags & N64PPU_OBJ_VFLIP) != 0;
+        uint8_t *r = recs + 8 * n;
+        r[0] = (uint8_t)(st->tile >> 8);
+        r[1] = (uint8_t)st->tile;
+        r[2] = (uint8_t)x0;
+        r[3] = (uint8_t)(x1 - 1);
+        r[4] = (uint8_t)y0;
+        r[5] = (uint8_t)(y1 - 1);
+        r[6] = (uint8_t)(((st->flags & N64PPU_OBJ_HFLIP) ? 8 : 0) + x0 - st->x) | (vflip ? 0x80 : 0);
+        r[7] = (uint8_t)((vflip ? 7 - dr : dr) | (8 + (st->flags & 7)) << 4);
+        g_scene_obj_rects++;
+        if (++n == SCENE_TILES_MAX) {
+          scene_obj_flush(recs, n);
+          s_obj_next += (unsigned)n;
+          if (s_obj_next + SCENE_TILES_MAX > kObjRecs) s_obj_next = 0;
+          recs = s_obj_rec + (size_t)s_obj_next * 8;
+          n = 0;
+        }
+      }
+    }
+    if (n) {
+      scene_obj_flush(recs, n);
+      s_obj_next += (unsigned)n;
+    }
+  }
+  if (copy_mode) {
+    rdpq_set_mode_standard();
+    rdpq_mode_tlut(TLUT_RGBA16);
+    rdpq_mode_alphacompare(1);
+    rdpq_mode_combiner(RDPQ_COMBINER_TEX);
+    rdpq_mode_filter(FILTER_POINT);
+  }
+  g_scene_ticks += TICKS_READ() - t0;
+  return ok;
+}
 #endif
 
 static void draw_rdp_band(const N64PpuFrame *f, int a, int b) {
@@ -261,6 +366,14 @@ static void draw_rdp_band(const N64PpuFrame *f, int a, int b) {
 #if N64PPU_SCENE
       /* No plane was built for these (n64_ppu_build_line, same rule). */
       if (p <= N64PPU_BG4 && !sp->clip && scene_draw_bg(p, (*o & N64PPU_HI) != 0, a, b, sp->x0, sp->x1)) continue;
+      /* Sprites of lines with obj_scene: no plane rows either. */
+      if (p >= N64PPU_OBJ0 && p <= N64PPU_OBJ3 && L->obj_scene) {
+        if (!scene_draw_obj(f, p - N64PPU_OBJ0, L->obj_first, a, b, sp->x0, sp->x1)) {
+          static int warned;
+          if (!warned++) n64_platform_log("[scene] sprite pass without a palette slot\n");
+        }
+        continue;
+      }
 #endif
       const uint32_t *rows = (*o & N64PPU_HI) ? f->rows_hi[p] : f->rows[p];
       if (!rows_any(rows, a, b)) continue;

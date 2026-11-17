@@ -16,5 +16,11 @@ void n64_scene_rsp_bg(const uint16_t *vram, const uint8_t *cache, const uint8_t 
                       uint16_t hs, uint16_t vs,
                       uint8_t xsc, int bpp, uint16_t tileadr, int r0, int r1, int prio,
                       int sx0, int sx1, int ox, int oy);
+/* Queue a list of n tile records (scene_layout.h, ST_REC; at most
+ * SCENE_TILES_MAX, 8-aligned, written back from the data cache, with
+ * 512 readable bytes from `records` on) drawn from the CI4 cache `cache`,
+ * under the same conditions as n64_scene_rsp_bg. */
+void n64_scene_rsp_tiles(const void *records, int n, const uint8_t *cache, const uint8_t *empty,
+                         int ox, int oy);
 
 #endif
