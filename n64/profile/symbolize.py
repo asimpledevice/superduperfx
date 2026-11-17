@@ -22,6 +22,27 @@ for line in subprocess.run([a.nm, "-n", "--defined-only", a.elf], capture_output
 syms.sort()
 addrs = [s[0] for s in syms]
 
+# Code-cache modules ("PROFMOD <base> <bytes> <name>", n64_host.c): samples
+# inside one are named "cc:<routine>".
+mods = []
+with open(a.log, errors="replace") as f:
+    for line in f:
+        if line.startswith("PROFMOD "):
+            p = line.split()
+            mods.append((int(p[1], 16) & 0xffffffff, int(p[2]), p[3]))
+mods.sort()
+mod_addrs = [m[0] for m in mods]
+text_end = addrs[-1] + 0x10000 if addrs else 0
+
+def name_of(pc):
+    j = bisect.bisect_right(mod_addrs, pc) - 1
+    if j >= 0 and pc < mods[j][0] + mods[j][1]:
+        return "cc:" + mods[j][2]
+    i = bisect.bisect_right(addrs, pc) - 1
+    if i < 0 or pc > text_end:
+        return "?(outside .text)"
+    return syms[i][1]
+
 counts = collections.Counter()
 total = 0
 with open(a.log, errors="replace") as f:
@@ -31,11 +52,12 @@ with open(a.log, errors="replace") as f:
             if a.phase is not None and (int(p[2]) if len(p) > 2 else 0) != a.phase:
                 continue
             pc = int(p[1], 16)
-            i = bisect.bisect_right(addrs, pc) - 1
-            counts[syms[i][1] if i >= 0 else "?"] += 1
+            counts[name_of(pc)] += 1
             total += 1
 if not total:
     sys.exit("no samples")
 print(f"{total} samples")
+cc = sum(n for k, n in counts.items() if k.startswith("cc:"))
+print(f"compiled game code (code cache): {100.0 * cc / total:.2f}%")
 for name, n in counts.most_common(a.top):
     print(f"{100.0 * n / total:6.2f}%  {n:6d}  {name}")

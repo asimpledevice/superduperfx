@@ -683,7 +683,19 @@ static int host_main(void) {
     acc_present += t3 - t2;
 #ifdef N64_PROFILE_FRAMES
     if (frame == N64_PROFILE_START) n64_platform_profile_start(N64_PROFILE_US);
-    if (frame == N64_PROFILE_START + N64_PROFILE_FRAMES) n64_platform_profile_stop_and_dump();
+    if (frame == N64_PROFILE_START + N64_PROFILE_FRAMES) {
+      n64_platform_profile_stop_and_dump();
+#if N64_CODE_CACHE
+      /* Where the resident compiled routines are, so symbolize.py can name
+       * samples in code-cache modules: "PROFMOD <base> <bytes> <name>". */
+      for (unsigned i = 0; i < g_recomp_routine_count; ++i) {
+        const RecompRoutine *rt = g_recomp_routines[i];
+        if (rt->fn && rt->host)
+          n64_platform_log("PROFMOD %08lx %lu %s\n", (unsigned long)(uintptr_t)rt->host,
+                 (unsigned long)rt->size, rt->name);
+      }
+#endif
+    }
 #endif
     /* Data-cache miss profile window for ares's local profiler (see
      * n64/profile/dcache_report.py): heap objects first, then markers.
