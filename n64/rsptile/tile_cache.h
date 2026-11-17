@@ -54,6 +54,11 @@ void n64_tile_cache_init(unsigned formats);
  * the command runs; the caller keeps it unchanged until then). Returns the
  * job's result slot: groups converted, valid after rspq_wait. */
 volatile uint32_t *n64_tile_cache_sync(const uint16_t *vram);
+/* The same for the 256-byte blocks (TC_BLOCK) set in `dirty` (bit b & 31
+ * of word b >> 5: block b), which must cover every block that differs from
+ * the last sync. Queues one job per run of blocks; returns the blocks
+ * queued. */
+unsigned n64_tile_cache_sync_dirty(const uint16_t *vram, const uint32_t dirty[8]);
 /* Queue a TLUT build into dst (256 entries, 8-aligned). */
 void n64_tile_cache_tlut(const uint16_t *cgram, unsigned brightness, unsigned kind,
                          unsigned base_lo, unsigned base_hi, uint16_t *dst);

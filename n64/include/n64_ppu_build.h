@@ -23,7 +23,10 @@ bool n64_ppu_build_line(const struct Ppu *ppu, int line);
 
 /* End the frame's lines: expand (or queue on the RSP) the background runs
  * still deferred. */
-void n64_ppu_build_end(void);
+void n64_ppu_build_end(struct Ppu *ppu);
+/* Scene builds: the VRAM blocks (Ppu.vramDirty form) stored to up to the
+ * last frame's snapshot that no caller has taken yet; clears them. */
+void n64_ppu_build_take_vram_dirty(uint32_t out[8]);
 /* Complete the frame description: wait for the RSP's background rows and
  * merge their row flags. Call before drawing the frame. */
 void n64_ppu_build_finish(void);

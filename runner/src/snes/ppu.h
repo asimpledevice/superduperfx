@@ -356,8 +356,21 @@ struct Ppu {
   uint16_t vram[0x8000];
   // -- END OF SNAPSHOT
 
+  /* Host-only, with vramWriteCount: bit (b & 31) of word b >> 5 is set when
+   * a store reached 256-byte VRAM block b (word address >> 7), so a host
+   * that mirrors VRAM can revisit only those blocks; the host clears bits
+   * it has consumed. All set on reset and on a save-state load that
+   * changed VRAM. Not guest state; never serialized. */
+  uint32_t vramDirty[8];
+
 
 };
+
+/* Record a store to VRAM word address adr (Ppu.vramDirty). */
+static inline void ppu_markVramDirty(Ppu *ppu, unsigned adr) {
+  ppu->vramDirty[(adr >> 12) & 7] |= 1u << ((adr >> 7) & 31);
+}
+
 
 /* Both C and C++ consumers verify every field and the following device state.
  * The capture/serializer layout does not change with the compact interface. */

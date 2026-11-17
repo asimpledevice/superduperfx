@@ -1141,11 +1141,26 @@ bool n64_ppu_build_line(const Ppu *ppu, int line) {
   return true;
 }
 
-void n64_ppu_build_end(void) {
+#if N64PPU_SCENE
+/* VRAM blocks stored to up to the last snapshot and not yet taken. */
+static uint32_t s_vram_dirty[8];
+
+void n64_ppu_build_take_vram_dirty(uint32_t out[8]) {
+  memcpy(out, s_vram_dirty, sizeof s_vram_dirty);
+  memset(s_vram_dirty, 0, sizeof s_vram_dirty);
+}
+#endif
+
+void n64_ppu_build_end(struct Ppu *ppu) {
   flush_all(s_state.frame);
 #if N64_RSPBG
 #if N64PPU_SCENE   /* the scene draws from this frame's VRAM: snapshot it */
-  n64_bgrsp_sync_vram(s_state.ppu->vram, s_state.ppu->vramWriteCount);
+  n64_bgrsp_sync_vram(ppu->vram, ppu->vramWriteCount);
+  /* The snapshot holds every store marked so far: hand the marks on. */
+  for (int i = 0; i < 8; ++i) {
+    s_vram_dirty[i] |= ppu->vramDirty[i];
+    ppu->vramDirty[i] = 0;
+  }
 #endif
   n64_bgrsp_kick();
 #endif

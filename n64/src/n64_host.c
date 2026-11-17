@@ -97,7 +97,7 @@ static void draw_frame_rdp(bool software_every_line) {
     else ppu_runLineState(g_ppu, line);
     dma_doHdma(g_snes->dma);
   }
-  n64_ppu_build_end();
+  n64_ppu_build_end(g_ppu);
   n64_ppu_desc_end(g_ppu);
   ppu_rasterRenderEnd(g_ppu);
 }
@@ -140,9 +140,13 @@ static void present_rdp_frame(uint32_t frame, const char *line) {
   { /* Scene sprites: lines drawn from strips / from planes, rectangles. */
     extern uint32_t g_scene_obj_lines, g_scene_obj_plane_lines, g_scene_obj_rects, g_scene_mode_passes[4];
     if (N64_RENDER == 2 && frame % 30 == 0) {
-      n64_platform_log("[scene] BG passes: plain %lu, clipped %lu, subscreen %lu, subscreen clipped %lu\n",
+      extern uint32_t g_scene_sync_blocks;
+      n64_platform_log("[scene] BG passes: plain %lu, clipped %lu, subscreen %lu, subscreen clipped %lu; "
+                       "VRAM blocks synced %lu\n",
                        (unsigned long)g_scene_mode_passes[0], (unsigned long)g_scene_mode_passes[1],
-                       (unsigned long)g_scene_mode_passes[2], (unsigned long)g_scene_mode_passes[3]);
+                       (unsigned long)g_scene_mode_passes[2], (unsigned long)g_scene_mode_passes[3],
+                       (unsigned long)g_scene_sync_blocks);
+      g_scene_sync_blocks = 0;
       memset(g_scene_mode_passes, 0, sizeof g_scene_mode_passes);
     }
     if (N64_RENDER == 2 && frame % 30 == 0)

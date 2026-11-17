@@ -122,6 +122,7 @@ void ppu_reset(Ppu* ppu) {
     memcpy(ppu->overlayRenderBuffer, overlayBuffer, sizeof(overlayBuffer));
   }
   ppu->vramIncrement = 1;
+  memset(ppu->vramDirty, 0xff, sizeof(ppu->vramDirty));   /* VRAM was cleared */
   ppu->wsOamMotionGraceOn = 1;
   ppu->wsOamMotionLastLine = -1;
 }
@@ -143,7 +144,10 @@ void ppu_saveload(Ppu *ppu, SaveLoadInfo *sli) {
   memcpy(oam_before, ppu->oam, sizeof(oam_before));
   memcpy(high_before, ppu->highOam, sizeof(high_before));
   sli->func(sli, &ppu->cgram, PPU_SAVESTATE_MEM_SIZE);
-  if (memcmp(vram_before, ppu->vram, sizeof(vram_before)) != 0) ppu->vramWriteCount++;
+  if (memcmp(vram_before, ppu->vram, sizeof(vram_before)) != 0) {
+    ppu->vramWriteCount++;
+    memset(ppu->vramDirty, 0xff, sizeof(ppu->vramDirty));
+  }
   if (memcmp(oam_before, ppu->oam, sizeof(oam_before)) != 0 ||
       memcmp(high_before, ppu->highOam, sizeof(high_before)) != 0)
     ppu->oamWriteCount++;
@@ -3888,6 +3892,7 @@ void ppu_write(Ppu* ppu, uint8_t adr, uint8_t val) {
       uint16_t vramAdr = ppu_getVramRemap(ppu);
       ppu->vram[vramAdr & 0x7fff] = (ppu->vram[vramAdr & 0x7fff] & 0xff00) | val;
       ppu->vramWriteCount++;
+      ppu_markVramDirty(ppu, vramAdr);
       // $2118 == low byte of word; byte_addr = word << 1.
       debug_server_on_vram_write(((uint32_t)(vramAdr & 0x7fff) << 1), val);
       if (s_vram_write_log_hook)
@@ -3904,6 +3909,7 @@ void ppu_write(Ppu* ppu, uint8_t adr, uint8_t val) {
       uint16_t vramAdr = ppu_getVramRemap(ppu);
       ppu->vram[vramAdr & 0x7fff] = (ppu->vram[vramAdr & 0x7fff] & 0x00ff) | (val << 8);
       ppu->vramWriteCount++;
+      ppu_markVramDirty(ppu, vramAdr);
       // $2119 == high byte of word; byte_addr = (word << 1) + 1.
       debug_server_on_vram_write(((uint32_t)(vramAdr & 0x7fff) << 1) + 1, val);
       if (s_vram_write_log_hook)

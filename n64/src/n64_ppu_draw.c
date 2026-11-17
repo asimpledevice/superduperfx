@@ -85,7 +85,8 @@ static void use_tlut(const N64PpuFrame *f, int t) {
 static bool s_scene_init;
 static uint32_t s_scene_vram_count = ~0u;
 static const uint16_t *s_scene_vram;
-uint32_t g_scene_mode_passes[4];   /* BG passes per N64PPU_SCENE_TL_* */
+uint32_t g_scene_mode_passes[4];
+uint32_t g_scene_sync_blocks;   /* VRAM blocks the tile cache revisited */   /* BG passes per N64PPU_SCENE_TL_* */
 uint32_t g_scene_quads, g_scene_passes, g_scene_ticks, g_scene_tlut_ticks, g_scene_sync_ticks;
 /* TLUTs for this frame: [cgram version][kind]: TC_TLUT_16 for 4bpp
  * layers, TC_TLUT_2BPP with the OBJ half for 2bpp (palette base in the low
@@ -112,7 +113,14 @@ static void scene_frame_begin(void) {
   /* The RDP may still be drawing from the caches: let it finish first. */
   const uint32_t t0 = TICKS_READ();
   rdpq_fence();
-  n64_tile_cache_sync(snap);
+  /* Only the blocks stored to since the last sync (the first sync takes
+   * everything: the caches start from zero VRAM). */
+  static bool s_synced;
+  uint32_t dirty[8];
+  n64_ppu_build_take_vram_dirty(dirty);
+  if (!s_synced) memset(dirty, 0xff, sizeof dirty);
+  s_synced = true;
+  g_scene_sync_blocks += n64_tile_cache_sync_dirty(snap, dirty);
   data_cache_hit_invalidate((void *)((uintptr_t)snap & ~15u), 0x10000 + 16);
   g_scene_sync_ticks += TICKS_READ() - t0;
 }

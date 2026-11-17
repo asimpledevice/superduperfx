@@ -22,7 +22,7 @@ typedef struct __attribute__((packed, aligned(16))) {
 } TlutJob;
 _Static_assert(sizeof(TlutJob) == TLJ_SIZE, "tlut job layout");
 
-enum { kJobs = 4 };   /* jobs in flight (ring) */
+enum { kJobs = 64 };   /* jobs in flight (ring): a frame queues at most kMaxRuns + TLUTs */
 
 static uint32_t s_ovl;
 static uint8_t *s_prev, *s_c2, *s_c4, *s_c8, *s_z2, *s_z4;
@@ -57,22 +57,48 @@ void n64_tile_cache_init(unsigned formats) {
 
 static uint32_t phys_or_0(const void *p) { return p ? PhysicalAddr(p) : 0; }
 
-volatile uint32_t *n64_tile_cache_sync(const uint16_t *vram) {
+static volatile uint32_t *sync_range(const uint16_t *vram, unsigned first, unsigned nblocks) {
   TileJob *j = UncachedAddr(&s_jobs[s_job++ % kJobs]);
-  data_cache_hit_writeback(vram, 0x10000);
+  data_cache_hit_writeback((const uint8_t *)vram + first * TC_BLOCK, nblocks * TC_BLOCK);
   j->vram = PhysicalAddr(vram);
   j->prev = PhysicalAddr(s_prev);
   j->c2 = phys_or_0(s_c2);
   j->c4 = phys_or_0(s_c4);
   j->c8 = phys_or_0(s_c8);
-  j->first = 0;
-  j->nblocks = 0x10000 / TC_BLOCK;
+  j->first = (uint16_t)first;
+  j->nblocks = (uint16_t)nblocks;
   j->pad = 0;
   j->result = 0;
   j->z2 = PhysicalAddr(s_z2);
   j->z4 = PhysicalAddr(s_z4);
   rspq_write(s_ovl, 0, PhysicalAddr(j));
   return &j->result;
+}
+
+volatile uint32_t *n64_tile_cache_sync(const uint16_t *vram) {
+  return sync_range(vram, 0, 0x10000 / TC_BLOCK);
+}
+
+unsigned n64_tile_cache_sync_dirty(const uint16_t *vram, const uint32_t dirty[8]) {
+  /* Runs of dirty blocks, joined across gaps of up to kGap clean blocks (a
+   * job costs more than comparing a few clean blocks); past kMaxRuns runs,
+   * the last job covers everything to the last dirty block. */
+  enum { kBlocks = 0x10000 / TC_BLOCK, kGap = 2, kMaxRuns = 16 };
+  unsigned runs = 0, total = 0;
+  int b = 0;
+  while (b < kBlocks) {
+    if (!((dirty[b >> 5] >> (b & 31)) & 1)) { ++b; continue; }
+    const int first = b;
+    int last = b, clean = 0;
+    for (++b; b < kBlocks; ++b) {
+      if ((dirty[b >> 5] >> (b & 31)) & 1) { last = b; clean = 0; }
+      else if (++clean > kGap && runs + 1 < kMaxRuns) break;
+    }
+    sync_range(vram, (unsigned)first, (unsigned)(last + 1 - first));
+    total += (unsigned)(last + 1 - first);
+    runs++;
+  }
+  return total;
 }
 
 void n64_tile_cache_tlut(const uint16_t *cgram, unsigned brightness, unsigned kind,
