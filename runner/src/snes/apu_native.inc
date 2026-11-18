@@ -306,20 +306,56 @@ static void apu_runCycles_native(Apu *apu, uint32_t clocks) {
 #else
     if (!sample_phase) { APU_NATIVE_DSP_CYCLE(apu->dsp); APU_FE_EDGE(apu); }
 #endif
-    uint32_t span = apu->cpuCyclesLeft;
-    unsigned to_sample = 32u - sample_phase;
-    if (span > to_sample) span = to_sample;
-    if (span > clocks) span = clocks;
+    /* The window to the next event: the next sample edge, the next queued
+     * CPU port write, or the end of the run. Inside it nothing but the SPC
+     * itself happens, so the instructions that start in it run back to back
+     * here, each with apu->cycles at its own start, as the loop above would
+     * run them one iteration at a time. */
+    uint32_t win = 32u - sample_phase;
+    if (win > clocks) win = clocks;
     if (apu->portQHead != apu->portQTail) {
       const ApuPortWrite *write =
           &apu->portQueue[apu->portQHead & (APU_PORT_QUEUE_LEN - 1u)];
       uint64_t distance = write->target_cycle - apu->portClock;
-      if (span > distance) span = (uint32_t)distance;
+      if (win > distance) win = (uint32_t)distance;
     }
-    apu->cpuCyclesLeft -= (uint8_t)span;
-    apu->cycles += span;
-    apu->portClock += span;
-    clocks -= span;
+    uint32_t left = apu->cpuCyclesLeft;
+    uint32_t used = left < win ? left : win;
+    left -= used;
+#if !SNESRECOMP_SPC_DIAGNOSTICS
+    if (!left && used < win) {
+      const uint32_t c0 = apu->cycles;
+      Spc *const spc = apu->spc;
+      do {
+#if SNESRECOMP_SPC_WAIT_SKIP
+        /* A possible wait loop: back to the loop above, which looks for a
+         * skip (or runs the instruction). */
+        if (wait_check && apu_native_waitCandidate(apu)) break;
+#endif
+        apu->cycles = c0 + used;
+        const uint16_t ppc = spc->pc;
+        left = (uint32_t)spc_runOpcode(spc);
+#if SNESRECOMP_SPC_WAIT_SKIP
+        wait_check = spc->pc < ppc;
+#endif
+#ifdef SNESRECOMP_SPC_PC_PROFILE
+        g_spc_pc_cycles[ppc] += left;
+        g_spc_run_cycles += left;
+#else
+        (void)ppc;
+#endif
+        const uint32_t room = win - used;
+        const uint32_t step = left < room ? left : room;
+        left -= step;
+        used += step;
+      } while (!left && used < win);
+      apu->cycles = c0;
+    }
+#endif
+    apu->cpuCyclesLeft = (uint8_t)left;
+    apu->cycles += used;
+    apu->portClock += used;
+    clocks -= used;
   }
   apu_native_timers_sync(apu);
 }

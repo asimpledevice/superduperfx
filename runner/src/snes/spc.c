@@ -31,7 +31,7 @@ static const int cyclesPerOpcode[256] = {
 
 static inline uint8_t spc_read(Spc* spc, uint16_t adr);
 static inline void spc_write(Spc* spc, uint16_t adr, uint8_t val);
-static uint8_t spc_readOpcode(Spc* spc);
+static inline uint8_t spc_readOpcode(Spc* spc);
 static uint16_t spc_readOpcodeWord(Spc* spc);
 static uint8_t spc_getFlags(Spc* spc);
 static void spc_setFlags(Spc* spc, uint8_t value);
@@ -133,10 +133,21 @@ static uint32_t s_spc_trace_head = 0;
 static uint32_t s_spc_trace_count = 0;
 static int s_spc_trace_on = -1;
 
+/* SNESRECOMP_SPC_HALT_TRACE=0 (the N64 build) drops the trace ring and its
+ * per-instruction environment check. */
+#ifndef SNESRECOMP_SPC_HALT_TRACE
+#define SNESRECOMP_SPC_HALT_TRACE 1
+#endif
+
 int spc_runOpcode(Spc* spc) {
   spc->cyclesUsed = 0;
   if(spc->stopped) return 1;
   uint8_t opcode = spc_readOpcode(spc);
+#if !SNESRECOMP_SPC_HALT_TRACE
+  spc->cyclesUsed = cyclesPerOpcode[opcode];
+  spc_doOpcode(spc, opcode);
+  return spc->cyclesUsed;
+#else
   if (s_spc_trace_on < 0)
     s_spc_trace_on = getenv("SNESRECOMP_SPC_TRACE") ? 1 : 0;
   if (s_spc_trace_on) {
@@ -162,9 +173,10 @@ int spc_runOpcode(Spc* spc) {
     s_spc_trace_count = 0;  /* dump once */
   }
   return spc->cyclesUsed;
+#endif
 }
 
-static uint8_t spc_readOpcode(Spc* spc) {
+static inline uint8_t spc_readOpcode(Spc* spc) {
   return spc_read(spc, spc->pc++);
 }
 

@@ -305,6 +305,9 @@ AUTOVARINIT ?= uninitialized
 # Interpreter cores compiled compactly so their working set fits the 16 KB
 # I-cache (runner/src/snes/interp816.c, spc.c).
 N64_CFLAGS += -DSNESRECOMP_COMPACT_INTERP=1
+# No SPC halt trace (runner/src/snes/spc.c): it checks an environment
+# variable on every SPC instruction.
+N64_CFLAGS += -DSNESRECOMP_SPC_HALT_TRACE=0
 # SPC catch-up by guest time only, without the per-checkpoint catch-up in
 # the interpreter bridge (runner/src/snes/interp_bridge.c): the SPC runs in
 # fewer, longer batches and keeps running through overrunning frames. ares,
