@@ -5,23 +5,30 @@ the state hashes (WRAM, ARAM, S-DSP output) match the interpreter's.
 
 ## Where it stands (2026-11-18, SMW attract, ares)
 
-Run phase per frame, frames 360-2700, same measurement for every row
-(`runphase.sh`: the mean of the `[n64] frame N: run` lines):
+**SPC catch-up time per frame** (`APUTIME=1`, frames 360-1650, the three
+builds run side by side):
 
-| Build | Run phase |
-|---|---|
-| Interpreter (B wait skip + A run loop) | 76.1 ms |
-| Translator, blocks chained (step 1) | 73.0 ms |
-| One frame per run, patched links, countdown budget (steps 2-4) | 75.6 ms |
-| + blocks only at control-flow targets | 74.7 ms |
-| + superblocks, inline RET, fewer epochs (step 5) | 68.7 ms |
-| + blocks end at a full store-range table instead of failing | **65.3 ms** |
+| Build | SPC time | Run phase |
+|---|---|---|
+| Interpreter (B wait skip + A run loop) | 32.75 ms | 77.1 ms |
+| Translator (steps 1-5, coverage fix) | 24.73 ms | 72.3 ms |
+| + leave before wait loops the skip handles | **24.25 ms** | 71.9 ms |
+
+The run phase alone is not a reliable measure between translator builds:
+builds with identical SPC behaviour moved by up to 4 ms (65.3 vs 69.0 ms)
+because the I-cache layout (trained without the translator) no longer
+matches the code. The history, by run phase (frames 360-2700, one build
+each, so read with that in mind): interpreter 76.1 ms; step 1 73.0;
+steps 2-4 75.6; blocks only at targets 74.7; superblocks 68.7; full
+store-range table ends the block 65.3.
 
 - Exact: S-DSP output marks (a hash at every 65536 samples, independent
   of how far the SPC has run at a checkpoint) and WRAM/ARAM hashes match
   the interpreter.
 - Interpreted SPC cycles: ~0.58M per 300 frames (~6%); the rest is
-  translated. No translation in steady state (0 blocks made per 60
+  translated or wait-skipped.
+- Pitfall and Joe & Mac 2: S-DSP marks and states match the interpreter
+  too (7 marks / 14 states, 24 marks / 28 states). No translation in steady state (0 blocks made per 60
   frames, no flushes).
 - Lessons from the bugs found on the way: DIV used t8 (the budget) as a
   temporary; the shared routines were never written back to memory (it
