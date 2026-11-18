@@ -737,6 +737,8 @@ static int host_main(void) {
         const int16_t *p = d->outRing + 4u * (s_out_pos & d->outMask);
         s_out_hash = (s_out_hash ^ (uint16_t)p[0]) * 16777619u;
         s_out_hash = (s_out_hash ^ (uint16_t)p[1]) * 16777619u;
+        if (!((s_out_pos + 1) & 0xffff))   /* at fixed counts: independent of the SPC's lead */
+          n64_platform_log("[dspmark] %lu %08lx\n", (unsigned long)(s_out_pos + 1), (unsigned long)s_out_hash);
       }
 #else
       apu_dspSync(g_snes->apu);  /* all samples so far, also with async batches */
@@ -745,6 +747,8 @@ static int host_main(void) {
         const uint32_t w = s_out_pos & (DSP_SAMPLE_RING - 1);
         s_out_hash = (s_out_hash ^ (uint16_t)d->sampleBuffer[w * 2]) * 16777619u;
         s_out_hash = (s_out_hash ^ (uint16_t)d->sampleBuffer[w * 2 + 1]) * 16777619u;
+        if (!((s_out_pos + 1) & 0xffff))
+          n64_platform_log("[dspmark] %lu %08lx\n", (unsigned long)(s_out_pos + 1), (unsigned long)s_out_hash);
       }
 #endif
 #ifndef N64_STATE_HASH_PERIOD
@@ -757,6 +761,9 @@ static int host_main(void) {
         n64_platform_log("[state] frame %lu wram %08lx aram %08lx dsp-out %08lx (%lu samples)\n",
                          (unsigned long)frame, (unsigned long)h, (unsigned long)ha,
                          (unsigned long)s_out_hash, (unsigned long)s_out_pos);
+        n64_platform_log("[spctime] frame %lu cycles %lu edges %lu pc %04x\n", (unsigned long)frame,
+                         (unsigned long)g_snes->apu->cycles, (unsigned long)g_snes->apu->dspEdges,
+                         g_snes->apu->spc->pc);
 #ifdef N64_RSPDSP
         { extern uint32_t g_snesdsp_rsp_ne_batches;
           n64_platform_log("[rspdsp] no-echo variant: %lu batches\n", (unsigned long)g_snesdsp_rsp_ne_batches); }
@@ -821,11 +828,11 @@ static int host_main(void) {
                          (unsigned long)g_spc_dbt_code_flushes);
         memset(g_spc_dbt_refused, 0, sizeof g_spc_dbt_refused);
         extern uint32_t g_spc_dbt_chainend[8];
-        n64_platform_log("[spcdbt]   block ends: no-chain exit %lu, no map %lu, no block %lu, stale %lu, "
-                         "no time %lu, chained %lu\n",
+        n64_platform_log("[spcdbt]   links (slow path): patched %lu, no block %lu, not valid %lu, no time %lu, "
+                         "went on %lu\n",
                          (unsigned long)g_spc_dbt_chainend[0], (unsigned long)g_spc_dbt_chainend[1],
                          (unsigned long)g_spc_dbt_chainend[2], (unsigned long)g_spc_dbt_chainend[3],
-                         (unsigned long)g_spc_dbt_chainend[4], (unsigned long)g_spc_dbt_chainend[5]);
+                         (unsigned long)g_spc_dbt_chainend[5]);
         memset(g_spc_dbt_chainend, 0, sizeof g_spc_dbt_chainend);
         g_spc_dbt_code_flushes = 0; }
       memset(g_spc_dbt_stats, 0, sizeof g_spc_dbt_stats);

@@ -53,9 +53,10 @@ void **g_spc_dbt_map[256];
 uint32_t g_spc_dbt_stats[8];   /* blocks made, flushes, runs, cycles run, refused, no-fit, failed, bytes */
 uint32_t g_spc_dbt_refused[4];   /* direct page, watched read, watched write, code */
 
-enum { kCodeWords = 32768, kBlocks = 1536, kMaxInsns = 24, kMapPages = 48 };
+enum { kCodeWords = 65536, kBlocks = 1536, kMaxInsns = 24, kMapPages = 48 };
 static uint32_t s_code[kCodeWords] __attribute__((aligned(32)));
-static uint32_t s_ncode, s_epilogue, s_exit, s_edge, s_fe, s_prologue, s_chain;
+static uint32_t s_ncode, s_epilogue, s_exit, s_edge, s_fe, s_enter, s_link, s_dyn;
+static void *s_target;   /* the block s_enter starts */
 /* Bumped whenever a block's entry conditions may have changed (page marks,
  * the direct page, translated code): a block validated in the current
  * epoch may be entered without checking again, so blocks chain. */
@@ -65,7 +66,8 @@ uint32_t g_spc_dbt_epoch = 1;
  * left, 5 chained. 6: edges that ended a block (batch change). */
 uint32_t g_spc_dbt_chainend[8];
 static bool s_have_epilogue;
-typedef uint32_t (*BlockFn)(Spc *spc, uint32_t c0, uint32_t edge0, uint32_t limit);
+typedef void (*BlockFn)(void);   /* entered by jumping (s_enter, links), never called */
+typedef uint32_t (*EnterFn)(Spc *spc, uint32_t c0, uint32_t edge0, uint32_t limit);
 typedef struct {
   BlockFn fn;
   uint32_t epoch;                /* validated in this epoch */
@@ -83,7 +85,9 @@ static uint32_t s_npages;
 static const int *s_cyc;
 static const uint8_t *s_mode, *s_op;
 
+static bool s_flushed;   /* a flush happened during this run: no links or translation */
 void spc_dbt_flush(void) {
+  s_flushed = true;
   memset(g_spc_dbt_map, 0, sizeof g_spc_dbt_map);
   memset(g_spc_dbt_code, 0, sizeof g_spc_dbt_code);
   s_ncode = s_nblocks = s_npages = 0;
@@ -113,10 +117,17 @@ enum { ZERO = 0, AT = 1, V0 = 2, V1 = 3, A0 = 4, A1 = 5, A2 = 6, A3 = 7,
        T8 = 24, T9 = 25, SP = 29, S8 = 30, RA = 31 };
 /* SPC state in callee-saved registers. */
 enum { RSPC = S0, RA_ = S1, RX = S2, RY = S3, RSP_ = S4, RC = S5, RZ = S6, RN = S7, RRAM = S8,
-       REDGE = T9 };
-/* The frame: 32 bytes of argument home, saved registers, then locals. */
-enum { FRAME = 160, F_C0 = 112, F_EDGE = 116, F_FE = 120, F_TMP = 124, F_RET = 128,
-       F_SAVE0 = 132, F_SAVE3 = 136, F_LIMIT = 148, F_USED = 152, F_CHAIN = 156 };   /* F_TMP + 20: edge flag */
+       RBUD = T8, REDGE = T9 };
+/* Time, for one entry from C (a run of chained blocks): t8 is the budget
+ * left at the current block's start (cycles until the run's end or the
+ * next queued CPU write); t9 is the budget value at which the next sample
+ * edge falls. An instruction at offset o in its block starts after an edge
+ * when t8 - t9 < o; the edge's cycle is F_END - t9. Both are kept in the
+ * frame too (t8 and t9 do not survive calls). */
+/* The frame (one per entry from C): 32 bytes of argument home, saved
+ * registers, then locals. */
+enum { FRAME = 176, F_END = 112, F_LIMIT = 116, F_T8 = 120, F_T9 = 124, F_FE = 128,
+       F_TMP = 132, F_RET = 136, F_SAVE0 = 140, F_SAVE3 = 144, F_FLAG = 148, F_TMP2 = 152 };
 
 static bool s_full;
 static void put(uint32_t w) {
@@ -191,6 +202,8 @@ static void br(int op, int rs, int rt, int l) {   /* BEQ 4, BNE 5 */
 static const int kSaved[] = { S0, S1, S2, S3, S4, S5, S6, S7, S8, RA };
 
 static int spc_dbt_valid(void *block, Spc *spc);
+static void *spc_dbt_link(Spc *spc, uint32_t *stub, uint32_t pc, uint32_t budget);
+static void *spc_dbt_may_run(void *block, Spc *spc, uint32_t budget);
 
 /* A branch to a fixed word of the buffer (the shared routines). */
 static void br_to(int op, int rs, int rt, uint32_t to) {
@@ -201,15 +214,22 @@ static void jal_code(uint32_t word_index) {
 }
 
 /* The routines every block shares, at the start of the buffer:
- *   epilogue  stores the SPC registers, returns v0 (pc already stored)
- *   exit      t0 = pc << 16 | cycles: stores pc, handles a sample edge
- *             before that cycle, then the epilogue
- *   edge      (jal) t0 = next pc << 16 | its cycle: handles the sample edge
- *             at t9; returns, or ends the block at that instruction when
- *             the edge started or synced an S-DSP batch
- *   fe        (jal) catches the S-DSP front end up before an ARAM store
- *   prologue  (jal, after the block saved ra) saves s0-s8 and loads the
- *             SPC state: a0 spc, a1 the start cycle, a2 the first edge */
+ *   epilogue  v0 = cycles run (pc already stored): stores the SPC state,
+ *             returns to C
+ *   exit      t0 = pc << 16 | o: end the run at the instruction at offset
+ *             o of the current block (not run): the sample edges before it,
+ *             then the epilogue
+ *   edge      (jal) t0 = pc << 16 | o: the sample edges before offset o; if
+ *             one started or synced an S-DSP batch, end the run there (the
+ *             page marks may have changed); else return
+ *   fe        (jal) catch the S-DSP front end up before an ARAM store
+ *   enter     (called from C) a0 spc, a1 start cycle, a2 cycles to the
+ *             first sample edge, a3 the budget; starts s_target
+ *   link      (jal from an exit's stub, ra = the stub's word 13) t0 = pc <<
+ *             16: links the stub to the block at pc (spc_dbt_link) and goes
+ *             on there, or ends the run
+ *   dyn       t0 = pc << 16 (a computed target, budget already charged):
+ *             goes on at the block for pc if it may run, or ends the run */
 static void emit_shared(void) {
   s_epilogue = s_ncode;
   SB(RA_, offsetof(Spc, a), RSPC);
@@ -226,187 +246,102 @@ static void emit_shared(void) {
   JR(RA);
   ADDIU(SP, SP, FRAME);
 
-  /* exit: every sample edge before the exit cycle, then the epilogue. */
-  /* exit and chain share the edge loop; exit then returns the cycles of
-   * the whole chain. */
+  /* exit */
   s_exit = s_ncode;
-  SW(ZERO, F_CHAIN, SP);           /* no chaining */
-  const uint32_t exit_common = s_ncode;
   SRL(T2, T0, 16);
   SH(T2, offsetof(Spc, pc), RSPC);
-  ANDI(V0, T0, 0xffff);
-  SW(V0, F_TMP, SP);
+  ANDI(T3, T0, 0xffff);
+  SW(T3, F_TMP, SP);
   const uint32_t exit_loop = s_ncode;
-  LW(V0, F_TMP, SP);
-  SLT(T1, REDGE, V0);
+  LW(T3, F_TMP, SP);
+  SUBU(T1, RBUD, REDGE);
+  SLT(T1, T1, T3);
   const uint32_t exit_test = s_ncode;
-  i_(4, T1, ZERO, 0);                /* beq t1, zero, edges done (patched) */
+  i_(4, T1, ZERO, 0);                /* beq: edges done (patched) */
   NOP();
-  LW(A1, F_C0, SP);
-  ADDU(A1, A1, REDGE);
-  ADDIU(REDGE, REDGE, 32);
-  SW(REDGE, F_EDGE, SP);
+  LW(A1, F_END, SP);
+  SUBU(A1, A1, REDGE);
+  ADDIU(REDGE, REDGE, -32);
+  SW(REDGE, F_T9, SP);
   LW(A0, offsetof(Spc, apu), RSPC);
   jal((void *)spc_dbt_edge);
   NOP();
-  LW(REDGE, F_EDGE, SP);
+  LW(RBUD, F_T8, SP);
+  LW(REDGE, F_T9, SP);
   br_to(4, ZERO, ZERO, exit_loop);
   NOP();
   s_code[exit_test] |= (uint32_t)(s_ncode - (exit_test + 1)) & 0xffff;
-  /* Edges done: v0 = this block's cycles. Chain to the next block if it is
-   * translated, valid in this epoch and fits in the time left. */
-  LW(T1, F_USED, SP);
-  ADDU(T1, T1, V0);                  /* the chain's cycles */
-  LW(T2, F_CHAIN, SP);
-  const uint32_t no_chain0 = s_ncode;
-  i_(4, T2, ZERO, 0);                /* beq: exits do not chain */
-  NOP();
-  LHU_(T2, offsetof(Spc, pc), RSPC);
-  SRL(T4, T2, 8);
-  SLL(T4, T4, 2);
-  li(T5, (uint32_t)(uintptr_t)g_spc_dbt_map);
-  ADDU(T5, T5, T4);
-  LW(T5, 0, T5);                     /* the map page */
-  const uint32_t no_chain1 = s_ncode;
-  i_(4, T5, ZERO, 0);
-  NOP();
-  ANDI(T4, T2, 0xff);
-  SLL(T4, T4, 2);
-  ADDU(T5, T5, T4);
-  LW(T5, 0, T5);                     /* the block, or NULL / 1 */
-  SLTIU(T6, T5, 2);
-  const uint32_t no_chain2 = s_ncode;
-  i_(5, T6, ZERO, 0);
-  NOP();
-  LW(T6, offsetof(Block, epoch), T5);
-  li(T7, (uint32_t)(uintptr_t)&g_spc_dbt_epoch);
-  LW(T7, 0, T7);
-  const uint32_t no_chain3 = s_ncode;
-  i_(5, T6, T7, 0);
-  NOP();
-  const uint32_t fits_check = s_ncode;
-  LHU_(T6, offsetof(Block, max_cycles), T5);
-  LW(T7, F_LIMIT, SP);
-  SUBU(T7, T7, T1);                  /* time left */
-  SLTU(T7, T7, T6);
-  const uint32_t no_chain4 = s_ncode;
-  i_(5, T7, ZERO, 0);
-  NOP();
-  SW(T1, F_USED, SP);
-  LW(T7, F_C0, SP);
-  ADDU(T7, T7, V0);
-  SW(T7, F_C0, SP);
-  SUBU(REDGE, REDGE, V0);
-  SW(REDGE, F_EDGE, SP);
-  li(T7, (uint32_t)(uintptr_t)&g_spc_dbt_chainend[5]);
-  LW(T6, 0, T7);
-  ADDIU(T6, T6, 1);
-  SW(T6, 0, T7);
-  LW(T5, offsetof(Block, fn), T5);
-  ADDIU(T5, T5, 16);                 /* past its prologue call */
-  JR(T5);
-  NOP();
-  /* Why chains end (statistics): one counter per branch above. */
-  const uint32_t fix[] = { no_chain0, no_chain1, no_chain2, no_chain3, no_chain4 };
-  uint32_t reason_at[5];
-  for (int i = 0; i < 5; i++) {
-    reason_at[i] = s_ncode;
-    li(T7, (uint32_t)(uintptr_t)&g_spc_dbt_chainend[i]);
-    LW(T6, 0, T7);
-    ADDIU(T6, T6, 1);
-    SW(T6, 0, T7);
-    MOVE(V0, T1);
-    j_(s_epilogue);
-    NOP();
-  }
-  /* A stale block: validate it now (spc_dbt_valid) instead of leaving
-   * translated code; chain on if it may run. */
-  const uint32_t stale = s_ncode;
-  SW(T1, F_SAVE0, SP);
-  SW(T5, F_SAVE3, SP);
-  MOVE(A0, T5);
-  MOVE(A1, RSPC);
-  jal((void *)spc_dbt_valid);
-  NOP();
-  MOVE(T6, V0);
-  LW(T1, F_SAVE0, SP);
-  LW(T5, F_SAVE3, SP);
-  LW(V0, F_TMP, SP);
-  LW(REDGE, F_EDGE, SP);
-  br_to(4, T6, ZERO, reason_at[3]);
-  NOP();
-  br_to(4, ZERO, ZERO, fits_check);
-  NOP();
-  for (int i = 0; i < 5; i++)
-    s_code[fix[i]] |= (uint32_t)((i == 3 ? stale : reason_at[i]) - (fix[i] + 1)) & 0xffff;
-  s_chain = s_ncode;
-  ORI(T1, ZERO, 1);
-  SW(T1, F_CHAIN, SP);
-  br_to(4, ZERO, ZERO, exit_common);
-  NOP();
-
-  /* edge (jal): every sample edge before t0's cycle; if one started or
-   * synced an S-DSP batch, the block ends at t0's instruction (not run). */
-  s_edge = s_ncode;
-  SW(RA, F_RET, SP);
-  SW(T0, F_TMP, SP);
-  SW(ZERO, F_TMP + 20, SP);     /* any batch change */
-  const uint32_t edge_loop = s_ncode;
-  LW(T0, F_TMP, SP);
-  ANDI(T0, T0, 0xffff);
-  SLT(T1, REDGE, T0);
-  const uint32_t edge_test = s_ncode;
-  i_(4, T1, ZERO, 0);           /* beq t1, zero, done (patched below) */
-  NOP();
-  LW(A1, F_C0, SP);
-  ADDU(A1, A1, REDGE);
-  ADDIU(REDGE, REDGE, 32);
-  SW(REDGE, F_EDGE, SP);
-  LW(A0, offsetof(Spc, apu), RSPC);
-  jal((void *)spc_dbt_edge);
-  NOP();
-  LW(T1, F_TMP + 20, SP);
-  OR(T1, T1, V0);
-  SW(T1, F_TMP + 20, SP);
-  LW(REDGE, F_EDGE, SP);
-  ORI(T1, ZERO, 1);
-  SW(T1, F_FE, SP);
-  br_to(4, ZERO, ZERO, edge_loop);
-  NOP();
-  s_code[edge_test] |= (uint32_t)(s_ncode - (edge_test + 1)) & 0xffff;
-  LW(T1, F_TMP + 20, SP);
-  i_(5, T1, ZERO, 3);           /* bne t1, zero, +3: a batch changed: end here */
-  LW(RA, F_RET, SP);
-  JR(RA);
-  NOP();
-  LW(T0, F_TMP, SP);
-  SRL(T2, T0, 16);
-  SH(T2, offsetof(Spc, pc), RSPC);
-  ANDI(V0, T0, 0xffff);
-  LW(T1, F_USED, SP);
-  ADDU(V0, V0, T1);
+  LW(V0, F_LIMIT, SP);
+  SUBU(V0, V0, RBUD);
+  LW(T3, F_TMP, SP);
+  ADDU(V0, V0, T3);                  /* cycles of the whole run */
   j_(s_epilogue);
   NOP();
 
+  /* edge */
+  s_edge = s_ncode;
+  SW(RA, F_RET, SP);
+  SW(T0, F_TMP2, SP);
+  SW(ZERO, F_FLAG, SP);
+  const uint32_t edge_loop = s_ncode;
+  LW(T0, F_TMP2, SP);
+  ANDI(T3, T0, 0xffff);
+  SUBU(T1, RBUD, REDGE);
+  SLT(T1, T1, T3);
+  const uint32_t edge_test = s_ncode;
+  i_(4, T1, ZERO, 0);                /* beq: edges done (patched) */
+  NOP();
+  LW(A1, F_END, SP);
+  SUBU(A1, A1, REDGE);
+  ADDIU(REDGE, REDGE, -32);
+  SW(REDGE, F_T9, SP);
+  LW(A0, offsetof(Spc, apu), RSPC);
+  jal((void *)spc_dbt_edge);
+  NOP();
+  LW(T1, F_FLAG, SP);
+  OR(T1, T1, V0);
+  SW(T1, F_FLAG, SP);
+  ORI(T1, ZERO, 1);
+  SW(T1, F_FE, SP);
+  LW(RBUD, F_T8, SP);
+  LW(REDGE, F_T9, SP);
+  br_to(4, ZERO, ZERO, edge_loop);
+  NOP();
+  s_code[edge_test] |= (uint32_t)(s_ncode - (edge_test + 1)) & 0xffff;
+  LW(T1, F_FLAG, SP);
+  i_(5, T1, ZERO, 3);                /* bne: a batch changed: end the run here */
+  LW(RA, F_RET, SP);
+  JR(RA);
+  NOP();
+  LW(T0, F_TMP2, SP);
+  j_(s_exit);
+  NOP();
+
+  /* fe */
   s_fe = s_ncode;
   SW(RA, F_RET, SP);
   LW(A0, offsetof(Spc, apu), RSPC);
   jal((void *)spc_dbt_fe);
   NOP();
   SW(ZERO, F_FE, SP);
-  LW(REDGE, F_EDGE, SP);
+  LW(RBUD, F_T8, SP);
+  LW(REDGE, F_T9, SP);
   LW(RA, F_RET, SP);
   JR(RA);
   NOP();
 
-  s_prologue = s_ncode;
-  for (int i = 0; i < 9; i++) SD(kSaved[i], 32 + 8 * i, SP);
+  /* enter */
+  s_enter = s_ncode;
+  ADDIU(SP, SP, -FRAME);
+  for (int i = 0; i < 10; i++) SD(kSaved[i], 32 + 8 * i, SP);
   MOVE(RSPC, A0);
-  SW(A1, F_C0, SP);
-  MOVE(REDGE, A2);
-  SW(A2, F_EDGE, SP);
+  ADDU(T0, A1, A3);
+  SW(T0, F_END, SP);
   SW(A3, F_LIMIT, SP);
-  SW(ZERO, F_USED, SP);
+  MOVE(RBUD, A3);
+  SW(RBUD, F_T8, SP);
+  SUBU(REDGE, A3, A2);
+  SW(REDGE, F_T9, SP);
   ORI(T0, ZERO, 1);
   SW(T0, F_FE, SP);
   LBU(RA_, offsetof(Spc, a), RSPC);
@@ -420,8 +355,71 @@ static void emit_shared(void) {
   SLL(RN, T0, 7);
   LW(T0, offsetof(Spc, apu), RSPC);
   li(T1, (uint32_t)offsetof(Apu, ram) + 0x8000u);
-  JR(RA);
   ADDU(RRAM, T0, T1);
+  li(T0, (uint32_t)(uintptr_t)&s_target);
+  LW(T0, 0, T0);
+  JR(T0);
+  NOP();
+
+  /* link */
+  s_link = s_ncode;
+  SW(T0, F_TMP2, SP);
+  ADDIU(A1, RA, -52);                /* the stub's first word */
+  SRL(A2, T0, 16);
+  MOVE(A0, RSPC);
+  MOVE(A3, RBUD);
+  jal((void *)spc_dbt_link);
+  NOP();
+  LW(RBUD, F_T8, SP);
+  LW(REDGE, F_T9, SP);
+  i_(4, V0, ZERO, 3);                /* beq: no block to go on with: end the run */
+  NOP();
+  JR(V0);
+  NOP();
+  LW(T0, F_TMP2, SP);
+  j_(s_exit);
+  NOP();
+
+  /* dyn */
+  s_dyn = s_ncode;
+  SW(T0, F_TMP2, SP);
+  SRL(T2, T0, 16);
+  SRL(T4, T2, 8);
+  SLL(T4, T4, 2);
+  li(T5, (uint32_t)(uintptr_t)g_spc_dbt_map);
+  ADDU(T5, T5, T4);
+  LW(T5, 0, T5);
+  const uint32_t d0 = s_ncode;
+  i_(4, T5, ZERO, 0);                /* no map page */
+  NOP();
+  ANDI(T4, T2, 0xff);
+  SLL(T4, T4, 2);
+  ADDU(T5, T5, T4);
+  LW(T5, 0, T5);
+  SLTIU(T6, T5, 2);
+  const uint32_t d1 = s_ncode;
+  i_(5, T6, ZERO, 0);                /* no block */
+  NOP();
+  SW(T5, F_SAVE3, SP);
+  MOVE(A0, T5);
+  MOVE(A1, RSPC);
+  MOVE(A2, RBUD);
+  jal((void *)spc_dbt_may_run);      /* valid in this epoch and fits */
+  NOP();
+  LW(RBUD, F_T8, SP);
+  LW(REDGE, F_T9, SP);
+  const uint32_t d2 = s_ncode;
+  i_(4, V0, ZERO, 0);
+  NOP();
+  JR(V0);
+  NOP();
+  const uint32_t dexit = s_ncode;
+  s_code[d0] |= (uint32_t)(dexit - (d0 + 1)) & 0xffff;
+  s_code[d1] |= (uint32_t)(dexit - (d1 + 1)) & 0xffff;
+  s_code[d2] |= (uint32_t)(dexit - (d2 + 1)) & 0xffff;
+  LW(T0, F_TMP2, SP);
+  j_(s_exit);
+  NOP();
 }
 
 /* ---- Translation --------------------------------------------------------- */
@@ -460,12 +458,16 @@ static inline bool is_rom(uint16_t adr) { return adr >= 0xffc0; }
 /* Call a runtime helper with apu in a0, the instruction's start cycle in
  * a3 (io_write) or a2 (io_read). Callers have set a1/a2. */
 static void call_cycle(Ctx *c, void *fn, int cyc_reg) {
-  LW(cyc_reg, F_C0, SP);
-  ADDIU(cyc_reg, cyc_reg, c->o);
+  LW(cyc_reg, F_END, SP);
+  SUBU(cyc_reg, cyc_reg, RBUD);
+  ADDIU(cyc_reg, cyc_reg, c->o);      /* F_END - t8 + o: this instruction's cycle */
   LW(A0, offsetof(Spc, apu), RSPC);
   jal(fn);
   NOP();
-  LW(REDGE, F_EDGE, SP);   /* t9 does not survive calls */
+  LW(RBUD, F_T8, SP);                 /* t8 and t9 do not survive calls */
+  LW(REDGE, F_T9, SP);
+  ORI(T1, ZERO, 1);                   /* the access may move the front end: */
+  SW(T1, F_FE, SP);                   /* catch it up again before a store */
 }
 
 typedef struct { int kind, label, resume; uint16_t pc, o, adr; uint8_t where, src; } Stub;
@@ -479,7 +481,8 @@ static void edge_sync(Ctx *c) {
   if (c->edges_synced) return;
   c->edges_synced = true;
   const int cold = new_label(), back = new_label();
-  SLTI(T1, REDGE, c->o);
+  SUBU(T1, RBUD, REDGE);
+  SLTI(T1, T1, c->o);
   BNE(T1, ZERO, cold);
   NOP();
   bind(back);
@@ -656,19 +659,53 @@ static void wr(Ctx *c, const Addr *a, int src) {
 }
 static void set_zn(int r) { MOVE(RZ, r); MOVE(RN, r); }
 
-/* Ends the block: pc (in t0, 16 bits) and the cycles used; the shared
- * exit handles a sample edge before that cycle. */
-static void exit_to(Ctx *c, uint32_t used) {
+/* The sample edges before the end of the block (offset `used`), out of
+ * line; a batch change ends the run with pc at `pc` (not run). Then the
+ * budget pays for the block. */
+static void exit_edges(Ctx *c, uint16_t pc, uint32_t used, bool dyn) {
+  const int cold = new_label(), back = new_label();
+  SUBU(T1, RBUD, REDGE);
+  SLTI(T1, T1, (int)used);
+  BNE(T1, ZERO, cold);
+  NOP();
+  bind(back);
+  if (s_nstub < (int)(sizeof s_stub / sizeof s_stub[0])) {
+    Stub *x = &s_stub[s_nstub++];
+    x->kind = dyn ? 4 : 1; x->label = cold; x->resume = back; x->pc = pc; x->o = (uint16_t)used;
+  } else {
+    s_full = true;
+  }
   (void)c;
+  ADDIU(RBUD, RBUD, -(int)used);
+  SW(RBUD, F_T8, SP);
+}
+
+/* Ends the block going to a computed pc (in t0, 16 bits): kept as pc << 16
+ * | used in F_SAVE0 for the edges' stub (a batch change ends the run there). */
+static void exit_to(Ctx *c, uint32_t used) {
   SLL(T0, T0, 16);
   ORI(T0, T0, (int)used);
-  j_(s_chain);
+  SW(T0, F_SAVE0, SP);
+  exit_edges(c, 0, used, true);
+  LW(T0, F_SAVE0, SP);
+  SRL(T0, T0, 16);
+  SLL(T0, T0, 16);
+  j_(s_dyn);
   NOP();
 }
+
+/* Ends the block going to pc: a link stub, 13 words, unlinked at first (a
+ * branch to its last three words, which call s_link); spc_dbt_link
+ * rewrites it to check the epoch and the time left and jump straight into
+ * the target block (gpSP links its blocks the same way). */
+enum { kStubWords = 13 };
 static void exit_const(Ctx *c, uint16_t pc, uint32_t used) {
-  (void)c;
-  li(T0, (uint32_t)pc << 16 | used);
-  j_(s_chain);
+  exit_edges(c, pc, used, false);
+  i_(4, ZERO, ZERO, 9);              /* b word 10 */
+  NOP();
+  for (int i = 0; i < 8; i++) NOP();
+  LUI(T0, pc);
+  jal_code(s_link);
   NOP();
 }
 
@@ -1106,10 +1143,11 @@ static void **map_page(uint8_t page) {
 }
 
 /* Translate the block at pc for direct page p; NULL if nothing could be. */
-static Block *translate(Apu *apu, uint16_t pc, uint8_t p) {
+static Block *translate(Apu *apu, uint16_t pc, uint8_t p, bool may_flush) {
   if (!s_cyc) spc_tables(&s_cyc, &s_mode, &s_op);
   if (pc < 0x200 || pc >= 0xff00) return NULL;
   if (s_nblocks == kBlocks || s_ncode + 1024 > kCodeWords) {
+    if (!may_flush) return NULL;   /* translated code is running: no flush */
 #ifdef SPC_DBT_DUMP
     { extern void n64_platform_log(const char *fmt, ...);
       static int n;
@@ -1130,11 +1168,6 @@ static Block *translate(Apu *apu, uint16_t pc, uint8_t p) {
   s_full = false;
   s_nlabels = s_nfix = 0;
   Ctx c = { b, apu->ram, p, pc, 0, 0, false, false };
-  /* Prologue: the frame, ra, then the shared part. */
-  ADDIU(SP, SP, -FRAME);
-  SD(RA, 32 + 8 * 9, SP);
-  jal_code(s_prologue);
-  NOP();
   s_nstub = 0;
 
   int n = 0, ended = 0;
@@ -1197,8 +1230,9 @@ static Block *translate(Apu *apu, uint16_t pc, uint8_t p) {
       li(T0, (uint32_t)st->pc << 16 | st->o);
       j_(s_exit);
       NOP();
-    } else if (st->kind == 1) {   /* the sample edges before an instruction */
-      li(T0, (uint32_t)st->pc << 16 | st->o);
+    } else if (st->kind == 1 || st->kind == 4) {   /* the sample edges before a point */
+      if (st->kind == 1) li(T0, (uint32_t)st->pc << 16 | st->o);
+      else LW(T0, F_SAVE0, SP);
       jal_code(s_edge);
       NOP();
       B(st->resume);
@@ -1210,12 +1244,16 @@ static Block *translate(Apu *apu, uint16_t pc, uint8_t p) {
       else if (st->where == 1) MOVE(A1, T0);
       else ADDIU(A1, RSP_, 0x100);
       MOVE(A2, st->src);
-      LW(A3, F_C0, SP);
+      LW(A3, F_END, SP);
+      SUBU(A3, A3, RBUD);
       ADDIU(A3, A3, st->o);
       LW(A0, offsetof(Spc, apu), RSPC);
       jal((void *)spc_dbt_slow_write);
       NOP();
-      LW(REDGE, F_EDGE, SP);
+      LW(RBUD, F_T8, SP);
+      LW(REDGE, F_T9, SP);
+      ORI(T1, ZERO, 1);
+      SW(T1, F_FE, SP);
       LW(T0, F_SAVE0, SP);
       LW(T3, F_SAVE3, SP);
       B(st->resume);
@@ -1287,12 +1325,57 @@ static int spc_dbt_valid(void *block, Spc *spc) {
 }
 
 /* Translate at pc and record the result (or that there is none) in the map. */
-static Block *translate_at(Apu *apu, uint16_t pc, uint8_t p) {
-  Block *b = translate(apu, pc, p);
+static Block *translate_at(Apu *apu, uint16_t pc, uint8_t p, bool may_flush) {
+  Block *b = translate(apu, pc, p, may_flush);
   void **pg = map_page((uint8_t)(pc >> 8));   /* a flush may have cleared the map */
   if (!pg) return NULL;
   pg[pc & 255] = b ? (void *)b : (void *)1;
   return b;
+}
+
+/* Whether block b may start now with `budget` cycles left: valid in this
+ * epoch (checked again if not) and short enough. Returns its code or NULL. */
+static void *spc_dbt_may_run(void *block, Spc *spc, uint32_t budget) {
+  Block *const b = (Block *)block;
+  if (s_flushed) { g_spc_dbt_chainend[1]++; return NULL; }
+  if (b->epoch != g_spc_dbt_epoch && !spc_dbt_valid(b, spc)) { g_spc_dbt_chainend[2]++; return NULL; }
+  if (b->max_cycles > budget) { g_spc_dbt_chainend[3]++; return NULL; }
+  g_spc_dbt_chainend[5]++;
+  return (void *)b->fn;
+}
+
+/* An exit's stub reached its call to s_link: find (or translate, without a
+ * flush) the block at pc, rewrite the stub to go straight to it, and say
+ * whether to go on there now. */
+static void *spc_dbt_link(Spc *spc, uint32_t *stub, uint32_t pc, uint32_t budget) {
+  if (s_flushed) { g_spc_dbt_chainend[1]++; return NULL; }
+  void **pg = map_page((uint8_t)(pc >> 8));
+  if (!pg) { g_spc_dbt_chainend[1]++; return NULL; }
+  Block *b = (Block *)pg[pc & 255];
+  if (!b) b = translate_at(spc->apu, (uint16_t)pc, spc->p, false);
+  if (!b || (void *)b == (void *)1) { g_spc_dbt_chainend[1]++; return NULL; }
+  /* The linked stub: epoch check, time check, jump; its words 10-12 stay
+   * the call to s_link (taken when either check fails). */
+  const uint32_t ea = (uint32_t)(uintptr_t)&b->epoch, ga = (uint32_t)(uintptr_t)&g_spc_dbt_epoch;
+  const uint32_t w[10] = {
+    15u << 26 | (uint32_t)T2 << 16 | (((ea + 0x8000u) >> 16) & 0xffff),            /* lui t2, %hi(&b->epoch) */
+    0x23u << 26 | (uint32_t)T2 << 21 | (uint32_t)T2 << 16 | (ea & 0xffff),         /* lw t2, %lo(t2) */
+    15u << 26 | (uint32_t)T3 << 16 | (((ga + 0x8000u) >> 16) & 0xffff),            /* lui t3, %hi(&epoch) */
+    0x23u << 26 | (uint32_t)T3 << 21 | (uint32_t)T3 << 16 | (ga & 0xffff),         /* lw t3, %lo(t3) */
+    5u << 26 | (uint32_t)T2 << 21 | (uint32_t)T3 << 16 | 5u,                        /* bne t2, t3, word 10 */
+    10u << 26 | (uint32_t)RBUD << 21 | (uint32_t)T1 << 16 | b->max_cycles,          /* slti t1, t8, max */
+    5u << 26 | (uint32_t)T1 << 21 | 3u,                                             /* bne t1, zero, word 10 */
+    0,
+    2u << 26 | (((uint32_t)(uintptr_t)b->fn >> 2) & 0x03ffffff),                   /* j the block */
+    0,
+  };
+  if (stub[8] != w[8] || stub[5] != w[5]) {
+    for (int i = 0; i < 10; i++) stub[i] = w[i];
+    data_cache_hit_writeback(stub, 40);
+    inst_cache_hit_invalidate(stub, 40);
+    g_spc_dbt_chainend[0]++;
+  }
+  return spc_dbt_may_run(b, spc, budget);
 }
 
 uint32_t spc_dbt_run(Apu *apu, uint32_t limit) {
@@ -1303,7 +1386,7 @@ uint32_t spc_dbt_run(Apu *apu, uint32_t limit) {
   Block *b = (Block *)pg[pc & 255];
   if (!b) {
     const uint32_t flushes = g_spc_dbt_stats[1];
-    b = translate_at(apu, pc, spc->p);
+    b = translate_at(apu, pc, spc->p, true);
     if (!b) { g_spc_dbt_stats[6]++; return 0; }
     (void)flushes;
   }
@@ -1312,7 +1395,9 @@ uint32_t spc_dbt_run(Apu *apu, uint32_t limit) {
   if (b->epoch != g_spc_dbt_epoch && !spc_dbt_valid(b, spc)) return 0;
   const uint32_t c0 = apu->cycles;
   const uint32_t edge0 = (32u - (c0 & 31u)) & 31u;
-  const uint32_t used = b->fn(spc, c0, edge0, limit);
+  s_target = (void *)b->fn;
+  s_flushed = false;
+  const uint32_t used = ((EnterFn)(void *)&s_code[s_enter])(spc, c0, edge0, limit);
 #ifdef SPC_DBT_DUMP
   { extern void n64_platform_log(const char *fmt, ...);
     static int runs;
