@@ -285,6 +285,10 @@ void spc_dbt_slow_write(Apu *apu, uint32_t adr, uint32_t val, uint32_t cycle) {
   apu->cycles = cycle;
   apu_dspWriteSlow(apu, (uint16_t)adr, (uint8_t)val);
 }
+uint32_t spc_dbt_read_any(Apu *apu, uint32_t adr, uint32_t cycle) {
+  apu->cycles = cycle;   /* a read of a page the S-DSP may write: it syncs */
+  return apu_spcReadRam(apu, (uint16_t)adr);
+}
 uint32_t spc_dbt_io_read(Apu *apu, uint32_t adr, uint32_t cycle) {
   apu->cycles = cycle;   /* (a sync it causes starts a new epoch itself) */
   return apu_cpuRead(apu, (uint16_t)adr);
@@ -301,7 +305,9 @@ uint32_t g_spc_dbt_total;   /* SPC cycles run (statistics) */
  * interpreter reached by stepping through straight-line code (a block that
  * did not fit in the time left, say) gets no block of its own: every
  * suffix of a block would. */
+bool g_spc_dbt_enabled = true;   /* (the translator's self-test runs a reference with it off) */
 static inline bool apu_native_dbtWants(uint16_t pc, bool at_target) {
+  if (__builtin_expect(!g_spc_dbt_enabled, 0)) return false;
   void **const pg = g_spc_dbt_map[pc >> 8];
   if (!pg) return at_target;
   void *const e = pg[pc & 255];

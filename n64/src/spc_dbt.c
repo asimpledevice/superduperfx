@@ -571,8 +571,8 @@ static void fe_check(Ctx *c) {
 /* Addresses. Static ones are known now; dynamic ones are computed into t0
  * (0-$FFFF), with a run-time check that leaves the block if they land in
  * the I/O page or the IPL ROM's range. */
-typedef struct { bool dyn; uint16_t adr; bool io; } Addr;   /* io: t0 may be in $F0-$FF */
-enum { M_DP = 1, M_ABS = 2, M_IND = 3, M_IMM = 5, M_DPX = 6, M_ABX = 7, M_ABY = 8, M_DPY = 10 };
+typedef struct { bool dyn; uint16_t adr; bool io, any; } Addr;   /* io: t0 may be in $F0-$FF; any: anywhere */
+enum { M_DP = 1, M_ABS = 2, M_IND = 3, M_IDX = 4, M_IMM = 5, M_DPX = 6, M_ABX = 7, M_ABY = 8, M_IDY = 9, M_DPY = 10 };
 
 /* Returns false if the mode is not supported. len receives the operand
  * bytes. flag: 1 read, 2 written, 3 both. */
@@ -581,7 +581,7 @@ static bool addr_of(Ctx *c, int mode, Addr *a, int *len, uint8_t flag) {
   const uint8_t *ram = c->ram;
   const uint16_t pc = c->pc, pg = (uint16_t)(c->p << 8);
   const uint8_t b1 = ram[(uint16_t)(pc + 1)], b2 = ram[(uint16_t)(pc + 2)];
-  a->io = false;
+  a->io = a->any = false;
   switch (mode) {
     case M_DP:
       a->dyn = false; a->adr = (uint16_t)(pg | b1); *len = 1;
@@ -612,6 +612,44 @@ static bool addr_of(Ctx *c, int mode, Addr *a, int *len, uint8_t flag) {
         ORI(T0, T0, 0x100);
       }
       add_range(c->b, pg, (uint16_t)(pg | 0xff), flag);
+      return true;
+    }
+    case M_IDX: case M_IDY: {
+      /* [dp+X] / [dp]+Y: a pointer in the direct page, then anywhere: the
+       * target is checked at run time (rd/wr), not by the block's pages.
+       * Edges first: rd's slow read calls C, which clobbers t0. */
+      edge_sync(c);
+      a->dyn = true; a->any = true; *len = 1;
+      if (mode == M_IDX) {
+        ADDIU(T0, RX, b1);
+        ANDI(T0, T0, 0xff);
+        if (!c->p) {   /* the pointer's bytes must not be I/O registers */
+          SLTIU(T1, T0, 0xef);
+          BEQ(T1, ZERO, c->bail);
+          c->bail_used = true;
+          NOP();
+        } else {
+          ORI(T0, T0, 0x100);
+        }
+        ADDU(T1, RRAM, T0);
+        LBU(T2, -0x8000, T1);
+        ADDIU(T1, T0, 1);
+        ANDI(T1, T1, 0xff);
+        if (c->p) ORI(T1, T1, 0x100);
+        ADDU(T1, RRAM, T1);
+        LBU(T4, -0x8000, T1);
+        add_range(c->b, pg, (uint16_t)(pg | 0xff), 1);
+      } else {
+        const uint16_t lo = (uint16_t)(pg | b1), hi = (uint16_t)(pg | ((b1 + 1) & 0xff));
+        if (is_io(lo) || is_io(hi)) return false;
+        LBU(T2, (int)lo - 0x8000, RRAM);
+        LBU(T4, (int)hi - 0x8000, RRAM);
+        add_range(c->b, lo, lo, 1);
+        add_range(c->b, hi, hi, 1);
+      }
+      SLL(T4, T4, 8);
+      OR(T0, T2, T4);
+      if (mode == M_IDY) { ADDU(T0, T0, RY); ANDI(T0, T0, 0xffff); }
       return true;
     }
     case M_ABX: case M_ABY: {
@@ -702,8 +740,42 @@ static void io_cold(Ctx *c, int kind, int reg, bool dummy, int cold, int back) {
     s_full = true;
   }
 }
+/* A target anywhere ([dp+X], [dp]+Y): I/O registers and the IPL ROM's
+ * range leave before the instruction; a page the S-DSP may write (a sync
+ * mark) reads through the runtime (kind 7); else a plain load. */
+static void rd_any(Ctx *c, int dst) {
+  ADDIU(T1, T0, -0xf0);
+  SLTIU(T1, T1, 0x10);
+  BNE(T1, ZERO, c->bail);
+  NOP();
+  SLTIU(T1, T0, 0xffc0);
+  BEQ(T1, ZERO, c->bail);
+  NOP();
+  c->bail_used = true;
+  SRL(T1, T0, 11);
+  ADDU(T1, RSPC, T1);
+  LBU(T1, offsetof(Spc, dspWatchSync), T1);
+  SRL(T2, T0, 8);
+  ANDI(T2, T2, 7);
+  r_(T2, T1, T1, 0, 6);              /* srlv t1, t1, t2 */
+  ANDI(T1, T1, 1);
+  const int cold = new_label(), back = new_label();
+  BNE(T1, ZERO, cold);
+  NOP();
+  ADDU(T1, RRAM, T0);
+  LBU(dst, -0x8000, T1);
+  bind(back);
+  if (s_nstub < (int)(sizeof s_stub / sizeof s_stub[0])) {
+    Stub *x = &s_stub[s_nstub++];
+    x->kind = 7; x->label = cold; x->resume = back; x->o = c->o; x->src = (uint8_t)dst;
+  } else {
+    s_full = true;
+  }
+}
 static void rd(Ctx *c, const Addr *a, int dst) {
-  if (a->dyn && a->io) {   /* (addr_of synced the edges before computing t0) */
+  if (a->dyn && a->any) {
+    rd_any(c, dst);
+  } else if (a->dyn && a->io) {   /* (addr_of synced the edges before computing t0) */
     const int cold = new_label(), back = new_label();
     ADDIU(T1, T0, -0xf0);
     SLTIU(T1, T1, 0x10);
@@ -730,7 +802,29 @@ static void rd(Ctx *c, const Addr *a, int dst) {
 /* Write src to a (src must not be a t-register a helper call clobbers when
  * a is in the I/O page: pass t3 or an s-register; it is moved to a2 first). */
 static void wr_dummy(Ctx *c, const Addr *a, int src, bool dummy) {
-  if (a->dyn && a->io) {   /* (addr_of synced the edges before computing t0) */
+  if (a->dyn && a->any) {
+    /* I/O registers, and lines holding translated code (the interpreter's
+     * store flushes the translations), leave before the instruction; the
+     * store then goes through st's mark checks. (A store's dummy read of
+     * plain memory has no effect.) */
+    (void)dummy;
+    ADDIU(T1, T0, -0xf0);
+    SLTIU(T1, T1, 0x10);
+    BNE(T1, ZERO, c->bail);
+    NOP();
+    SRL(T1, T0, 8);
+    li(T2, (uint32_t)(uintptr_t)g_spc_dbt_code);
+    ADDU(T2, T2, T1);
+    LBU(T2, 0, T2);
+    SRL(T1, T0, 5);
+    ANDI(T1, T1, 7);
+    r_(T1, T2, T2, 0, 6);            /* srlv t2, t2, t1 */
+    ANDI(T2, T2, 1);
+    BNE(T2, ZERO, c->bail);
+    NOP();
+    c->bail_used = true;
+    st(c, 1, 0, src);
+  } else if (a->dyn && a->io) {   /* (addr_of synced the edges before computing t0) */
     const int cold = new_label(), back = new_label();
     ADDIU(T1, T0, -0xf0);
     SLTIU(T1, T1, 0x10);
@@ -976,6 +1070,42 @@ static bool dp_word(Ctx *c, uint16_t *lo, uint16_t *hi, uint8_t flag) {
   return true;
 }
 
+/* The two-operand ALU forms on the direct page: op dp,dp ($x9) and op
+ * dp,#imm ($x8), x = OR, AND, EOR, CMP, ADC, SBC (spc.c's spc_orm and
+ * friends: read the source, read the destination, write it unless CMP). */
+static bool emit_dp2(Ctx *c, uint8_t op, int *len) {
+  if ((op & 0x0f) != 0x09 && (op & 0x0f) != 0x08) return false;
+  if (op >= 0xc0 || ((op & 0x0f) == 0x08 && !(op & 0x10)) || ((op & 0x0f) == 0x09 && (op & 0x10)))
+    return false;
+  const unsigned k = op >> 5;   /* 0 OR, 1 AND, 2 EOR, 3 CMP, 4 ADC, 5 SBC */
+  const uint8_t b1 = c->ram[(uint16_t)(c->pc + 1)], b2 = c->ram[(uint16_t)(c->pc + 2)];
+  const uint16_t pg = (uint16_t)(c->p << 8);
+  const bool imm = (op & 0x0f) == 0x08;
+  Addr s = { false, imm ? (uint16_t)(c->pc + 1) : (uint16_t)(pg | b1), false, false };
+  Addr d = { false, (uint16_t)(pg | b2), false, false };
+  const bool store = k != 3;
+  if (store && is_io(d.adr) && (d.adr == 0xf1 || d.adr == 0xf2 || d.adr == 0xf3 || d.adr >= 0xfd)) return false;
+  if (store) fe_check(c);
+  if (!imm) add_range(c->b, s.adr, s.adr, 1);
+  add_range(c->b, d.adr, d.adr, store ? 3 : 1);
+  rd(c, &s, T3);
+  SW(T3, F_SAVE3, SP);               /* (an I/O read of d calls C) */
+  rd(c, &d, T5);
+  MOVE(T7, T5);
+  LW(T3, F_SAVE3, SP);
+  switch (k) {
+    case 0: OR(T7, T7, T3); set_zn(T7); break;
+    case 1: AND(T7, T7, T3); set_zn(T7); break;
+    case 2: XOR(T7, T7, T3); set_zn(T7); break;
+    case 3: cmp_with(T7, T3); break;
+    case 4: adc_into(T7, T3); break;
+    default: XORI(T3, T3, 0xff); adc_into(T7, T3); break;
+  }
+  if (store) wr(c, &d, T7);
+  *len = 3;
+  return true;
+}
+
 /* One instruction. Returns: 0 not translated, 1 translated (the block
  * goes on, or ends after it when c->exit_after is set), 2 translated and
  * ends the block (it emitted its exits). */
@@ -984,6 +1114,7 @@ static int emit_insn(Ctx *c, uint8_t op, int *len) {
   const uint32_t cyc = (uint32_t)s_cyc[op];
   *len = 0;
   if (emit_generic(c, op, len)) { (*len)++; return 1; }
+  if (emit_dp2(c, op, len)) return 1;
   *len = 1;
   switch (op) {
     case 0x5d: MOVE(RX, RA_); set_zn(RX); return 1;          /* mov x,a */
@@ -1473,6 +1604,14 @@ static Block *translate(Apu *apu, uint16_t pc, uint8_t p, bool may_flush) {
       SW(T1, F_FE, SP);
       LW(T0, F_SAVE0, SP);
       LW(T3, F_SAVE3, SP);
+      B(st->resume);
+      NOP();
+    } else if (st->kind == 7) {   /* a read of a page the S-DSP may write */
+      SW(T0, F_SAVE0, SP);
+      MOVE(A1, T0);
+      call_cycle_at(st->o, (void *)spc_dbt_read_any, A2);
+      MOVE(st->src, V0);
+      LW(T0, F_SAVE0, SP);
       B(st->resume);
       NOP();
     } else if (st->kind == 5 || st->kind == 6) {   /* a computed address in $F0-$FF */

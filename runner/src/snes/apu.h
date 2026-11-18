@@ -268,6 +268,7 @@ int spc_dbt_edge(Apu* apu, uint32_t cycle);
 void spc_dbt_fe(Apu* apu);
 void spc_dbt_slow_write(Apu* apu, uint32_t adr, uint32_t val, uint32_t cycle);
 uint32_t spc_dbt_io_read(Apu* apu, uint32_t adr, uint32_t cycle);
+uint32_t spc_dbt_read_any(Apu* apu, uint32_t adr, uint32_t cycle);
 void spc_dbt_io_write(Apu* apu, uint32_t adr, uint32_t val, uint32_t cycle);
 /* The translator's side: run a block at the SPC's pc if one fits in
  * `limit` cycles (returns the cycles it ran, 0: none ran); forget every
@@ -278,6 +279,7 @@ uint32_t spc_dbt_run(Apu* apu, uint32_t limit);
 extern uint32_t g_spc_dbt_exit_o;
 /* Bits by pc: a wait loop the run loop's wait skip handles starts there. */
 extern uint8_t g_spc_dbt_wait[8192];
+extern bool g_spc_dbt_enabled;   /* run-time switch (spc_dbt_test.c) */
 /* Page bits (as Spc.dspWatchSync): some translated block reads the page. */
 extern uint8_t g_spc_dbt_rpages[32];
 void spc_dbt_flush(void);

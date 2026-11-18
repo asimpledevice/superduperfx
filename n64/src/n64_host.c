@@ -478,6 +478,9 @@ static int host_main(void) {
   n64_platform_init();
   if (!n64_platform_has_expansion_pak())
     Die("This build needs the Expansion Pak (8 MB).");
+#ifdef N64_SPC_DBT_TEST
+  { extern void spc_dbt_test(void); spc_dbt_test(); }   /* (does not return) */
+#endif
 
   int rom_size = 0;
   uint8_t *rom = NULL;

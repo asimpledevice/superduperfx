@@ -173,6 +173,14 @@ ifeq ($(SPCDBT),1)
 N64_CFLAGS += -DSNESRECOMP_SPC_DBT=1
 OBJS += $(BUILD_DIR)/spc_dbt.o
 endif
+# SPCDBT_TEST=1 (with SPCDBT=1): the ROM runs the translator's differential
+# test (src/spc_dbt_test.c: random SPC programs, translated against
+# interpreted) and prints the result instead of starting the game.
+SPCDBT_TEST ?= 0
+ifeq ($(SPCDBT_TEST),1)
+N64_CFLAGS += -DN64_SPC_DBT_TEST
+OBJS += $(BUILD_DIR)/spc_dbt_test.o
+endif
 
 # SCENE=1: the scene builder (docs/n64/PPU_DESIGN.md step 4): main-screen
 # BG layers drawn from the tile cache (n64/rsptile) as texture rectangles.
