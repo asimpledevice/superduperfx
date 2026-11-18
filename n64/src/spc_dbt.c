@@ -96,6 +96,7 @@ void spc_dbt_flush(void) {
   g_spc_dbt_stats[1]++;
 }
 
+uint32_t g_spc_dbt_exit_o;
 uint32_t g_spc_dbt_code_flushes;
 void spc_dbt_code_written(uint16_t adr) {
 #ifdef SPC_DBT_DUMP
@@ -252,6 +253,8 @@ static void emit_shared(void) {
   SH(T2, offsetof(Spc, pc), RSPC);
   ANDI(T3, T0, 0xffff);
   SW(T3, F_TMP, SP);
+  li(T1, (uint32_t)(uintptr_t)&g_spc_dbt_exit_o);
+  SW(T3, 0, T1);                     /* 0: left at a block boundary */
   const uint32_t exit_loop = s_ncode;
   LW(T3, F_TMP, SP);
   SUBU(T1, RBUD, REDGE);
@@ -1159,6 +1162,9 @@ static Block *translate(Apu *apu, uint16_t pc, uint8_t p, bool may_flush) {
     s_full = false;
     emit_shared();
     s_have_epilogue = true;
+    /* Out of the D-cache and into the I-cache, as for every block. */
+    data_cache_hit_writeback(&s_code[0], s_ncode * 4);
+    inst_cache_hit_invalidate(&s_code[0], s_ncode * 4);
 #ifdef N64_PROFILE_START
     { /* The profiler names samples in these (n64/profile/symbolize.py). */
       extern void n64_platform_log(const char *fmt, ...);
@@ -1297,7 +1303,10 @@ static Block *translate(Apu *apu, uint16_t pc, uint8_t p, bool may_flush) {
   { /* Debug: the first blocks' code, for an offline disassembly. */
     extern void n64_platform_log(const char *fmt, ...);
     static int dumped;
-    if (dumped++ < 0) {
+#ifndef SPC_DBT_DUMP_BLOCKS
+#define SPC_DBT_DUMP_BLOCKS 0
+#endif
+    if (dumped++ < SPC_DBT_DUMP_BLOCKS) {
       n64_platform_log("DBTBLOCK pc %04x at %08lx words %lu epi %08lx spc", pc, (unsigned long)(uintptr_t)&s_code[start],
                        (unsigned long)(s_ncode - start), (unsigned long)(uintptr_t)&s_code[s_epilogue]);
       for (uint16_t a = pc; a != end_pc; a++) n64_platform_log(" %02x", c.ram[a]);
@@ -1420,6 +1429,12 @@ uint32_t spc_dbt_run(Apu *apu, uint32_t limit) {
 #endif
   const uint32_t used = ((EnterFn)(void *)&s_code[s_enter])(spc, c0, edge0, limit);
 #ifdef SPC_DBT_SELFCHECK
+  if (used > limit) {
+    extern void n64_platform_log(const char *fmt, ...);
+    static int over;
+    if (over++ < 10) n64_platform_log("[dbtcheck] over: pc %04x -> %04x limit %lu used %lu\n", pc, spc->pc,
+                                      (unsigned long)limit, (unsigned long)used);
+  }
   { /* Self-check: the edges run are those at cycles in [c0, c0 + used). */
     const uint32_t want = used ? ((c0 + used - 1) >> 5) - ((c0 + 31) >> 5) + 1 : 0;
     const uint32_t got = g_spc_dbt_edges - e0;

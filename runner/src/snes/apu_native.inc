@@ -294,10 +294,22 @@ void spc_dbt_io_write(Apu *apu, uint32_t adr, uint32_t val, uint32_t cycle) {
 }
 uint32_t g_spc_dbt_total;   /* SPC cycles run (statistics) */
 /* Whether the run loop should hand the instruction at pc to the
- * translator: a block is there, or nobody has tried yet. */
-static inline bool apu_native_dbtWants(uint16_t pc) {
+ * translator: a block is there, or nobody has tried yet and pc is where a
+ * block may start, a control-flow target (reached by a jump, branch, call
+ * or return, or where translated code left at a block boundary). A pc the
+ * interpreter reached by stepping through straight-line code (a block that
+ * did not fit in the time left, say) gets no block of its own: every
+ * suffix of a block would. */
+static inline bool apu_native_dbtWants(uint16_t pc, bool at_target) {
   void **const pg = g_spc_dbt_map[pc >> 8];
-  return !pg || pg[pc & 255] != (void *)1;
+  if (!pg) return at_target;
+  void *const e = pg[pc & 255];
+  return e ? e != (void *)1 : at_target;
+}
+/* After the interpreter ran the instruction at ppc: whether it transferred
+ * control (SPC instructions are 1-3 bytes long). */
+static inline bool apu_native_dbtTransfer(uint16_t ppc, uint16_t pc) {
+  return (uint16_t)(pc - ppc) > 3u;
 }
 #endif
 
@@ -310,6 +322,9 @@ static void apu_runCycles_native(Apu *apu, uint32_t clocks) {
    * stopped inside the loop) or by a taken branch back to it: only then is
    * it looked for, and only with room for a pass (at least 7 cycles). */
   bool wait_check = true;
+#endif
+#if SNESRECOMP_SPC_DBT
+  bool at_target = false;   /* (a catch-up starts wherever the last one stopped) */
 #endif
   while (clocks) {
     apu_drainPortQueue(apu);
@@ -331,7 +346,7 @@ static void apu_runCycles_native(Apu *apu, uint32_t clocks) {
     /* A translated block: it runs to its end or an exit, handling the sample
      * edges inside it itself, but never past a queued CPU write or the end
      * of the run. */
-    if (!apu->cpuCyclesLeft && !apu->spc->stopped && apu_native_dbtWants(apu->spc->pc)) {
+    if (!apu->cpuCyclesLeft && !apu->spc->stopped && apu_native_dbtWants(apu->spc->pc, at_target)) {
       uint32_t limit = clocks;
       if (apu->portQHead != apu->portQTail) {
         const ApuPortWrite *write =
@@ -342,6 +357,7 @@ static void apu_runCycles_native(Apu *apu, uint32_t clocks) {
       const uint16_t bpc = apu->spc->pc;
       const uint32_t c0 = apu->cycles;
       const uint32_t ran = spc_dbt_run(apu, limit);
+      at_target = g_spc_dbt_exit_o == 0;   /* left at a block boundary */
       if (ran) {
         apu->cycles = c0 + ran;
         apu->portClock += ran;
@@ -364,6 +380,9 @@ static void apu_runCycles_native(Apu *apu, uint32_t clocks) {
       apu->cpuCyclesLeft = spc_runOpcode(apu->spc);
 #if SNESRECOMP_SPC_WAIT_SKIP
       wait_check = apu->spc->pc < ppc;
+#endif
+#if SNESRECOMP_SPC_DBT
+      at_target = apu_native_dbtTransfer(ppc, apu->spc->pc);
 #endif
 #ifdef SNESRECOMP_SPC_PC_PROFILE
       g_spc_pc_cycles[ppc] += apu->cpuCyclesLeft;
@@ -403,13 +422,16 @@ static void apu_runCycles_native(Apu *apu, uint32_t clocks) {
         if (wait_check && apu_native_waitCandidate(apu)) break;
 #endif
 #if SNESRECOMP_SPC_DBT
-        if (apu_native_dbtWants(spc->pc)) break;   /* a translated block, or one to try */
+        if (apu_native_dbtWants(spc->pc, at_target)) break;   /* a translated block, or one to try */
 #endif
         apu->cycles = c0 + used;
         const uint16_t ppc = spc->pc;
         left = (uint32_t)spc_runOpcode(spc);
 #if SNESRECOMP_SPC_WAIT_SKIP
         wait_check = spc->pc < ppc;
+#endif
+#if SNESRECOMP_SPC_DBT
+        at_target = apu_native_dbtTransfer(ppc, spc->pc);
 #endif
 #ifdef SNESRECOMP_SPC_PC_PROFILE
         g_spc_pc_cycles[ppc] += left;

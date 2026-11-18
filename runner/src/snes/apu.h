@@ -273,6 +273,9 @@ void spc_dbt_io_write(Apu* apu, uint32_t adr, uint32_t val, uint32_t cycle);
  * `limit` cycles (returns the cycles it ran, 0: none ran); forget every
  * block; an SPC store hit translated code. */
 uint32_t spc_dbt_run(Apu* apu, uint32_t limit);
+/* The offset (cycles into its block) of the instruction the last run
+ * stopped before: 0 when it left at a block boundary. */
+extern uint32_t g_spc_dbt_exit_o;
 void spc_dbt_flush(void);
 void spc_dbt_code_written(uint16_t adr);
 /* Bit (adr >> 5) & 7 of byte adr >> 8: a 32-byte line holds translated
