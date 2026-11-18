@@ -159,6 +159,13 @@ $(BUILD_DIR)/rsp_bg.o: rspbg/rsp_bg.S rspbg/bg_rsp_layout.h rspbg/rsp_bg_full.in
 		BUILD_DIR=$(BUILD_DIR) RSPASFLAGS="$(N64_RSPASFLAGS)" $@
 endif
 
+# APUTIME=1: log the time spent in SPC catch-ups per frame ("[aputime]"),
+# which other code's layout disturbs less than the frame's run time.
+APUTIME ?= 0
+ifeq ($(APUTIME),1)
+N64_CFLAGS += -DSNESRECOMP_APU_TIME
+endif
+
 # SPCDBT=1: SPC700 code translated to MIPS at run time (src/spc_dbt.c),
 # prototype; off by default.
 SPCDBT ?= 0

@@ -678,6 +678,16 @@ static int host_main(void) {
     if (frame < 8 || frame % 50 == 0)
       n64_platform_log("[n64] frame %lu: run %lu us, ppu %lu us\n", (unsigned long)frame,
                        (unsigned long)(t1 - t0), (unsigned long)(t2 - t1p));
+#ifdef SNESRECOMP_APU_TIME
+    { /* SPC catch-up time in this frame (APUTIME=1 builds). */
+      extern uint32_t n64_platform_apu_us(void);
+      static uint32_t s_apu_last;
+      const uint32_t now = n64_platform_apu_us();
+      if (frame % 50 == 0)
+        n64_platform_log("[aputime] frame %lu: %lu us\n", (unsigned long)frame, (unsigned long)(now - s_apu_last));
+      s_apu_last = now;
+    }
+#endif
     acc_run += t1 - t0;
     acc_draw += t2 - t1p;
     acc_present += t3 - t2;
@@ -829,10 +839,10 @@ static int host_main(void) {
         memset(g_spc_dbt_refused, 0, sizeof g_spc_dbt_refused);
         extern uint32_t g_spc_dbt_chainend[8];
         n64_platform_log("[spcdbt]   links (slow path): patched %lu, no block %lu, not valid %lu, no time %lu, "
-                         "went on %lu\n",
+                         "wait loop %lu, went on %lu\n",
                          (unsigned long)g_spc_dbt_chainend[0], (unsigned long)g_spc_dbt_chainend[1],
                          (unsigned long)g_spc_dbt_chainend[2], (unsigned long)g_spc_dbt_chainend[3],
-                         (unsigned long)g_spc_dbt_chainend[5]);
+                         (unsigned long)g_spc_dbt_chainend[4], (unsigned long)g_spc_dbt_chainend[5]);
         memset(g_spc_dbt_chainend, 0, sizeof g_spc_dbt_chainend);
         g_spc_dbt_code_flushes = 0; }
       memset(g_spc_dbt_stats, 0, sizeof g_spc_dbt_stats);

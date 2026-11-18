@@ -520,3 +520,10 @@ void hang_probe_start(void) {
   new_timer(TICKS_FROM_US(250000), TF_CONTINUOUS, hang_tick);
 }
 #endif
+
+#ifdef SNESRECOMP_APU_TIME
+/* runner/src/snes/apu.c's measurement builds: time in SPC catch-ups. */
+uint64_t g_apu_time_ticks;
+uint32_t snesrecomp_apu_ticks(void) { return TICKS_READ(); }
+uint32_t n64_platform_apu_us(void) { return (uint32_t)TICKS_TO_US(g_apu_time_ticks); }
+#endif

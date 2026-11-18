@@ -90,6 +90,7 @@ void spc_dbt_flush(void) {
   s_flushed = true;
   memset(g_spc_dbt_map, 0, sizeof g_spc_dbt_map);
   memset(g_spc_dbt_code, 0, sizeof g_spc_dbt_code);
+  memset(g_spc_dbt_wait, 0, sizeof g_spc_dbt_wait);
   s_ncode = s_nblocks = s_npages = 0;
   s_have_epilogue = false;
   g_spc_dbt_epoch++;
@@ -1565,7 +1566,8 @@ static int spc_dbt_valid(void *block, Spc *spc) {
   }
   for (int i = 0; i < b->nw; i++)
     if (code_in(b->wlo[i], b->whi[i])) { g_spc_dbt_stats[4]++; g_spc_dbt_refused[3]++; return 0; }
-  b->epoch = g_spc_dbt_epoch;
+  /* (A wait loop's block stays stale, so links into it ask C each time.) */
+  if (!(g_spc_dbt_wait[b->pc >> 3] & (1u << (b->pc & 7)))) b->epoch = g_spc_dbt_epoch;
   return 1;
 }
 
@@ -1583,6 +1585,7 @@ static Block *translate_at(Apu *apu, uint16_t pc, uint8_t p, bool may_flush) {
 static void *spc_dbt_may_run(void *block, Spc *spc, uint32_t budget) {
   Block *const b = (Block *)block;
   if (s_flushed) { g_spc_dbt_chainend[1]++; return NULL; }
+  if (g_spc_dbt_wait[b->pc >> 3] & (1u << (b->pc & 7))) { g_spc_dbt_chainend[4]++; return NULL; }   /* wait loop */
   if (b->epoch != g_spc_dbt_epoch && !spc_dbt_valid(b, spc)) { g_spc_dbt_chainend[2]++; return NULL; }
   if (b->max_cycles > budget) { g_spc_dbt_chainend[3]++; return NULL; }
   g_spc_dbt_chainend[5]++;

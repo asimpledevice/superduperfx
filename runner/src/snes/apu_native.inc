@@ -264,6 +264,7 @@ uint32_t g_spc_skip_cycles, g_spc_skip_count, g_spc_run_cycles;
 #if SNESRECOMP_SPC_DBT
 /* The runtime's side of the SPC translator (apu.h). */
 uint32_t g_spc_dbt_edges;   /* edges run by translated code (self-check) */
+uint8_t g_spc_dbt_wait[8192];   /* pcs where the wait skip fast-forwarded a loop */
 int spc_dbt_edge(Apu *apu, uint32_t cycle) {
   apu->cycles = cycle;
   g_spc_dbt_edges++;
@@ -337,6 +338,16 @@ static void apu_runCycles_native(Apu *apu, uint32_t clocks) {
         !apu->spc->stopped) {
       const uint32_t skipped = apu_native_waitSkip(apu, clocks);
       if (skipped) {
+#if SNESRECOMP_SPC_DBT
+        /* A wait loop the skip handles: translated code leaves before it
+         * (spc_dbt_may_run), so the skip gets to fast-forward it. */
+        const uint16_t wpc = apu->spc->pc;
+        if (!(g_spc_dbt_wait[wpc >> 3] & (1u << (wpc & 7)))) {
+          g_spc_dbt_wait[wpc >> 3] |= (uint8_t)(1u << (wpc & 7));
+          g_spc_dbt_epoch++;   /* links into it go back through C */
+        }
+        at_target = true;      /* (the loop's pc: a branch target) */
+#endif
 #ifdef SNESRECOMP_SPC_PC_PROFILE
         g_spc_skip_cycles += skipped;
         g_spc_skip_count++;
@@ -367,7 +378,10 @@ static void apu_runCycles_native(Apu *apu, uint32_t clocks) {
         apu->portClock += ran;
         clocks -= ran;
 #if SNESRECOMP_SPC_WAIT_SKIP
-        wait_check = apu->spc->pc <= bpc;
+        { /* (or it stopped before a wait loop the skip handled before) */
+          const uint16_t npc = apu->spc->pc;
+          wait_check = npc <= bpc || (g_spc_dbt_wait[npc >> 3] & (1u << (npc & 7)));
+        }
 #endif
         continue;
       }

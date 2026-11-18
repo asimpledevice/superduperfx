@@ -276,6 +276,8 @@ uint32_t spc_dbt_run(Apu* apu, uint32_t limit);
 /* The offset (cycles into its block) of the instruction the last run
  * stopped before: 0 when it left at a block boundary. */
 extern uint32_t g_spc_dbt_exit_o;
+/* Bits by pc: a wait loop the run loop's wait skip handles starts there. */
+extern uint8_t g_spc_dbt_wait[8192];
 void spc_dbt_flush(void);
 void spc_dbt_code_written(uint16_t adr);
 /* Bit (adr >> 5) & 7 of byte adr >> 8: a 32-byte line holds translated
