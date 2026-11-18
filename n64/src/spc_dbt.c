@@ -190,6 +190,8 @@ static void br(int op, int rs, int rt, int l) {   /* BEQ 4, BNE 5 */
 
 static const int kSaved[] = { S0, S1, S2, S3, S4, S5, S6, S7, S8, RA };
 
+static int spc_dbt_valid(void *block, Spc *spc);
+
 /* A branch to a fixed word of the buffer (the shared routines). */
 static void br_to(int op, int rs, int rt, uint32_t to) {
   i_(op, rs, rt, (int)(to - (s_ncode + 1)));
@@ -282,6 +284,7 @@ static void emit_shared(void) {
   const uint32_t no_chain3 = s_ncode;
   i_(5, T6, T7, 0);
   NOP();
+  const uint32_t fits_check = s_ncode;
   LHU_(T6, offsetof(Block, max_cycles), T5);
   LW(T7, F_LIMIT, SP);
   SUBU(T7, T7, T1);                  /* time left */
@@ -316,7 +319,26 @@ static void emit_shared(void) {
     j_(s_epilogue);
     NOP();
   }
-  for (int i = 0; i < 5; i++) s_code[fix[i]] |= (uint32_t)(reason_at[i] - (fix[i] + 1)) & 0xffff;
+  /* A stale block: validate it now (spc_dbt_valid) instead of leaving
+   * translated code; chain on if it may run. */
+  const uint32_t stale = s_ncode;
+  SW(T1, F_SAVE0, SP);
+  SW(T5, F_SAVE3, SP);
+  MOVE(A0, T5);
+  MOVE(A1, RSPC);
+  jal((void *)spc_dbt_valid);
+  NOP();
+  MOVE(T6, V0);
+  LW(T1, F_SAVE0, SP);
+  LW(T5, F_SAVE3, SP);
+  LW(V0, F_TMP, SP);
+  LW(REDGE, F_EDGE, SP);
+  br_to(4, T6, ZERO, reason_at[3]);
+  NOP();
+  br_to(4, ZERO, ZERO, fits_check);
+  NOP();
+  for (int i = 0; i < 5; i++)
+    s_code[fix[i]] |= (uint32_t)((i == 3 ? stale : reason_at[i]) - (fix[i] + 1)) & 0xffff;
   s_chain = s_ncode;
   ORI(T1, ZERO, 1);
   SW(T1, F_CHAIN, SP);
@@ -1245,6 +1267,25 @@ static bool code_in(uint16_t lo, uint16_t hi) {
   return false;
 }
 
+/* Whether block b may run with the current page marks and direct page;
+ * records the epoch it was checked in. Also called by the shared chain
+ * code for a stale successor. */
+static int spc_dbt_valid(void *block, Spc *spc) {
+  Block *const b = (Block *)block;
+  if (spc->p != b->p) { g_spc_dbt_stats[4]++; g_spc_dbt_refused[0]++; return 0; }
+  for (int i = 0; i < b->npages; i++) {
+    const uint16_t adr = (uint16_t)(b->page[i] << 8);
+    if ((b->pflag[i] & 1) && APU_DSP_PAGE_BIT(spc->dspWatchSync, adr)) {
+      g_spc_dbt_stats[4]++; g_spc_dbt_refused[1]++;
+      return 0;
+    }
+  }
+  for (int i = 0; i < b->nw; i++)
+    if (code_in(b->wlo[i], b->whi[i])) { g_spc_dbt_stats[4]++; g_spc_dbt_refused[3]++; return 0; }
+  b->epoch = g_spc_dbt_epoch;
+  return 1;
+}
+
 /* Translate at pc and record the result (or that there is none) in the map. */
 static Block *translate_at(Apu *apu, uint16_t pc, uint8_t p) {
   Block *b = translate(apu, pc, p);
@@ -1264,30 +1305,11 @@ uint32_t spc_dbt_run(Apu *apu, uint32_t limit) {
     const uint32_t flushes = g_spc_dbt_stats[1];
     b = translate_at(apu, pc, spc->p);
     if (!b) { g_spc_dbt_stats[6]++; return 0; }
-    /* Its direct successors too, so chains do not stop at first visits
-     * (gpSP translates every direct target with the block). */
-    for (int i = 0; i < b->ntgt; i++) {
-      void **tp = map_page((uint8_t)(b->tgt[i] >> 8));
-      if (tp && !tp[b->tgt[i] & 255]) translate_at(apu, b->tgt[i], spc->p);
-      if (g_spc_dbt_stats[1] != flushes) return 0;   /* a flush: b is gone */
-    }
-    if (g_spc_dbt_stats[1] != flushes) return 0;
+    (void)flushes;
   }
   if ((void *)b == (void *)1) return 0;
   if (b->max_cycles > limit) { g_spc_dbt_stats[5]++; return 0; }
-  if (b->epoch != g_spc_dbt_epoch) {
-    if (spc->p != b->p) { g_spc_dbt_stats[4]++; g_spc_dbt_refused[0]++; return 0; }
-    for (int i = 0; i < b->npages; i++) {
-      const uint16_t adr = (uint16_t)(b->page[i] << 8);
-      if ((b->pflag[i] & 1) && APU_DSP_PAGE_BIT(spc->dspWatchSync, adr)) {
-        g_spc_dbt_stats[4]++; g_spc_dbt_refused[1]++;
-        return 0;
-      }
-    }
-    for (int i = 0; i < b->nw; i++)
-      if (code_in(b->wlo[i], b->whi[i])) { g_spc_dbt_stats[4]++; g_spc_dbt_refused[3]++; return 0; }
-    b->epoch = g_spc_dbt_epoch;
-  }
+  if (b->epoch != g_spc_dbt_epoch && !spc_dbt_valid(b, spc)) return 0;
   const uint32_t c0 = apu->cycles;
   const uint32_t edge0 = (32u - (c0 & 31u)) & 31u;
   const uint32_t used = b->fn(spc, c0, edge0, limit);
