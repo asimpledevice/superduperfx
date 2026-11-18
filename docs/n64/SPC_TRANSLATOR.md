@@ -5,17 +5,32 @@ the state hashes (WRAM, ARAM, S-DSP output) match the interpreter's.
 
 ## Where it stands (2026-11-18, SMW attract, ares)
 
-| | Run phase per frame |
-|---|---|
-| Interpreter (B wait skip + A run loop) | 74.2 ms |
-| Translator, blocks chained | 70.4 ms |
+Run phase per frame, frames 360-2700, same measurement for every row
+(`runphase.sh`: the mean of the `[n64] frame N: run` lines):
 
-- Translated code covers about 90% of SPC cycles; opcodes not covered are
-  2-4% of cycles in SMW, Pitfall and Joe & Mac 2.
-- Per 60 frames: ~100k chained block ends, ~48k stale epoch, ~7k next block
-  not translated, ~3.5k exits that never chain, ~1.2k out of cycles.
-- Half of the time in translated code is in the shared exit/chain/prologue
-  routines; blocks average ~3 SPC instructions.
+| Build | Run phase |
+|---|---|
+| Interpreter (B wait skip + A run loop) | 76.1 ms |
+| Translator, blocks chained (step 1) | 73.0 ms |
+| One frame per run, patched links, countdown budget (steps 2-4) | 75.6 ms |
+| + blocks only at control-flow targets | 74.7 ms |
+| + superblocks, inline RET, fewer epochs (step 5) | 68.7 ms |
+| + blocks end at a full store-range table instead of failing | **65.3 ms** |
+
+- Exact: S-DSP output marks (a hash at every 65536 samples, independent
+  of how far the SPC has run at a checkpoint) and WRAM/ARAM hashes match
+  the interpreter.
+- Interpreted SPC cycles: ~0.58M per 300 frames (~6%); the rest is
+  translated. No translation in steady state (0 blocks made per 60
+  frames, no flushes).
+- Lessons from the bugs found on the way: DIV used t8 (the budget) as a
+  temporary; the shared routines were never written back to memory (it
+  worked while later block flushes covered them); branches left the
+  instruction length at 1, harmless until fall-through continued after
+  them; a refused block made the interpreter step one instruction and
+  every suffix of the block got translated (~450 blocks hot).
+- An opt-in self-check (`EXTRA_CFLAGS=-DSPC_DBT_SELFCHECK`) checks that
+  every run handles exactly the sample edges in its cycles.
 
 ## What other translators do (read for ideas only; all GPL)
 
@@ -45,21 +60,21 @@ Each step: state hashes against the interpreter (SMW, then Pitfall and Joe
 the chain-end counters. The I-cache layout retrain (scheduled separately)
 makes later timings comparable.
 
-1. **Stale epochs** (largest chain breaker). apu_dspSyncFor/Join bump the
+1. *(done; the worklist half was reverted: it doubled the blocks)* **Stale epochs** (largest chain breaker). apu_dspSyncFor/Join bump the
    epoch on every call; bump only when they clear marks that were set.
    **Untranslated targets**: translate a block's direct targets when it is
    translated (gpSP's worklist), so chains do not stop at first visits.
-2. **One frame per run.** Save s0-s8 once when C enters translated code;
+2. *(done)* **One frame per run.** Save s0-s8 once when C enters translated code;
    blocks lose their prologue/epilogue; C helpers spill only what they
    clobber.
-3. **Patched direct links.** A direct exit becomes: epoch compare, cycle
+3. *(done)* **Patched direct links.** A direct exit becomes: epoch compare, cycle
    check, `j target` patched once the target exists; links reset on flush.
    Indirect exits (RET) keep the map lookup. Replaces the shared chain
    routine (~40 instructions per hop).
-4. **Countdown budget in a register** (cycles to the end of the run or the
+4. *(done)* **Countdown budget in a register** (cycles to the end of the run or the
    next queued CPU write), replacing the limit/used bookkeeping; sample
    edges keep their exact handling before stores, I/O and exits.
-5. **Superblocks.** Continue through conditional branches (the taken side
+5. *(done)* **Superblocks.** Continue through conditional branches (the taken side
    is an inline exit); branches back into the block become direct jumps
    behind the budget check, so driver loops stay in one block. Needs edge
    timing from a running cycle register instead of static offsets.
@@ -68,6 +83,10 @@ makes later timings comparable.
    loads per store; dead N/Z/C write elimination within a block.
 7. **Coverage.** The remaining opcodes ([dp+X], [dp]+Y, dp,dp and dp,#imm
    ALU forms, PSW push/pop, TCALL/PCALL, BRK/RETI).
+   What the interpreter still runs in SMW (0.58M cycles per 300 frames):
+   the CPU handshake loop at $05A9-$05C0, whose abs+X accesses land in
+   the I/O page (computed I/O addresses leave the block today: they need
+   a run-time path to the I/O helpers), and $10A1-$10E4 ([dp+X] forms).
 8. **Validation and default.** An SPC test ROM for the N64 (the native
    core's random-program contract, apu_native_test, run against the
    translator); all three games' hashes; EverDrive timing; then decide
