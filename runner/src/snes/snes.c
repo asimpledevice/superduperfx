@@ -7,6 +7,7 @@
 #include <stddef.h>
 #include <assert.h>
 #include <time.h>
+#include "../time_cats.h"
 #include "snes.h"
 #include "cpu.h"
 #include "apu.h"
@@ -51,7 +52,16 @@ bool snes_next_irq_master(const Snes *snes, uint64_t now, uint64_t *out) {
 }
 
 uint8_t snes_readReg(Snes* snes, uint16_t adr);
+#ifdef N64_TIME_CATS   /* (measurement builds wrap these at the end of the file) */
+uint8_t snes_readReg_raw(Snes* snes, uint16_t adr);
+#else
+#define snes_readReg_raw snes_readReg
+#define snes_writeReg_raw snes_writeReg
+#endif
 void snes_writeReg(Snes* snes, uint16_t adr, uint8_t val);
+#ifdef N64_TIME_CATS
+void snes_writeReg_raw(Snes* snes, uint16_t adr, uint8_t val);
+#endif
 
 #if SNESRECOMP_TRACE
 static void snes_trace_direct_wram_write(uint32_t off, uint8_t old, uint8_t val) {
@@ -562,8 +572,10 @@ static uint32_t snes_advance_beam(Snes *snes, uint32_t clocks, bool check_irq) {
 }
 
 void snes_advance_master_cycles(Snes *snes, uint32_t clocks) {
+  const uint32_t tcat_prev = tcat_enter(TCAT_BEAM);
   uint32_t consumed = snes_advance_beam(snes, clocks, true);
   snes->beamMasterLast += consumed;
+  tcat_leave(tcat_prev);
 }
 
 /* Master clocks from the beam's current position to the start of scanline
@@ -683,7 +695,7 @@ void snes_sync_master_clock(Snes *snes, uint64_t master_clock) {
   }
 }
 
-uint8_t snes_readReg(Snes* snes, uint16_t adr) {
+uint8_t snes_readReg_raw(Snes* snes, uint16_t adr) {
   switch(adr) {
     case 0x4210: {
       uint8_t val = 0x2; // CPU version (4 bit)
@@ -783,7 +795,7 @@ static int snes_reg_trace_enabled(void) {
   return v;
 }
 
-void snes_writeReg(Snes* snes, uint16_t adr, uint8_t val) {
+void snes_writeReg_raw(Snes* snes, uint16_t adr, uint8_t val) {
   switch(adr) {
     case 0x4016:
       joypad_write_strobe(snes, val);
@@ -1045,3 +1057,18 @@ void snes_write(Snes* snes, uint32_t adr, uint8_t val) {
   // write to cart
   cart_write(snes->cart, bank, adr, val);
 }
+
+#ifdef N64_TIME_CATS
+/* (Time categories, time_cats.h: I/O register accesses, DMA included.) */
+uint8_t snes_readReg(Snes* snes, uint16_t adr) {
+  const uint32_t prev = tcat_enter(TCAT_IO);
+  const uint8_t v = snes_readReg_raw(snes, adr);
+  tcat_leave(prev);
+  return v;
+}
+void snes_writeReg(Snes* snes, uint16_t adr, uint8_t val) {
+  const uint32_t prev = tcat_enter(TCAT_IO);
+  snes_writeReg_raw(snes, adr, val);
+  tcat_leave(prev);
+}
+#endif

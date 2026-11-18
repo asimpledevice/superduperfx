@@ -7,6 +7,7 @@
 #include <stddef.h>
 
 
+#include "../time_cats.h"
 #include "apu.h"
 #include "snes.h"
 #include "spc.h"
@@ -769,6 +770,7 @@ void apu_cycle(Apu* apu) {
 }
 
 void apu_runCycles(Apu* apu, uint32_t clocks) {
+  const uint32_t tcat_prev = tcat_enter(TCAT_APU);
 #ifdef N64_PHASE0
   g_apu_catchups++;
   if (g_apu_port_burst > g_apu_port_burst_max) g_apu_port_burst_max = g_apu_port_burst;
@@ -789,6 +791,7 @@ void apu_runCycles(Apu* apu, uint32_t clocks) {
 #ifdef SNESRECOMP_APU_TIME
   g_apu_time_ticks += (uint32_t)(snesrecomp_apu_ticks() - t0);
 #endif
+  tcat_leave(tcat_prev);
 }
 
 const char *apu_time_implementation(void) {

@@ -1,6 +1,7 @@
 /* The Blue thread: the 65816 on its own host stack, switched cooperatively
  * with Green (the frame driver and everything else on the CPU). See
  * blue_thread.h. */
+#include "time_cats.h"
 #include "blue_thread.h"
 
 #include <stdlib.h>
@@ -86,7 +87,12 @@ static void ctx_init(void *stack_lo, void *stack_top) {
   thread_park_init(top - 64 /* argument space */, (uintptr_t)blue_trampoline);
 }
 static inline void switch_to_blue(void) { thread_park_swap(); }
-static inline void switch_to_green(void) { thread_park_swap(); }
+/* (Time categories: while the guest is paused the driver's time is its own.) */
+static inline void switch_to_green(void) {
+  const uint32_t prev = tcat_enter(TCAT_OTHER);
+  thread_park_swap();
+  tcat_leave(prev);
+}
 
 
 /* ---- Runs and pauses ----------------------------------------------------- */

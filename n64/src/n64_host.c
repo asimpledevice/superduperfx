@@ -15,6 +15,7 @@
  * Audio: not output yet. The APU still runs, because guest code talks to it.
  */
 
+#include "time_cats.h"
 #include "n64_platform.h"
 #include "blue_thread.h"
 #include <stdbool.h>
@@ -678,6 +679,33 @@ static int host_main(void) {
 #endif
     uint64_t t3 = n64_platform_time_us() + (t1p - t1);   /* present: both parts */
 
+#ifdef N64_TIME_CATS
+    { /* Exclusive time by category over the frame (time_cats.h), in us. */
+      extern uint64_t g_tcat_acc[];
+      static uint64_t s_tc_sum[7];
+      static uint32_t s_tc_it, s_tc_op;
+      static uint32_t s_tc_frames;
+      (void)tcat_enter(TCAT_OTHER);
+      for (int k = 0; k < 7; k++) { s_tc_sum[k] += g_tcat_acc[k]; g_tcat_acc[k] = 0; }
+      s_tc_it += g_tcat_iters; s_tc_op += g_tcat_ops; g_tcat_iters = g_tcat_ops = 0;
+      { extern unsigned long long g_interp_bridge_bounces; static unsigned long long s_b0;
+        if (frame >= 360 && s_tc_frames == 59)
+          n64_platform_log("[tcat] bounces into compiled bodies: %lu per frame\n",
+                           (unsigned long)((g_interp_bridge_bounces - s_b0) / 60));
+        if (s_tc_frames == 59 || frame < 360) s_b0 = g_interp_bridge_bounces; }
+      if (frame >= 360 && ++s_tc_frames == 60) {
+        n64_platform_log("[tcat] frame %lu, per frame: interp %lu us, compiled %lu us, spc %lu us, io %lu us, "
+                         "beam %lu us, other %lu us; opcodes %lu us (%lu ops, %lu loop iterations)\n", (unsigned long)frame,
+                         (unsigned long)(s_tc_sum[1] * 8 / 375 / 60), (unsigned long)(s_tc_sum[2] * 8 / 375 / 60),
+                         (unsigned long)(s_tc_sum[3] * 8 / 375 / 60), (unsigned long)(s_tc_sum[4] * 8 / 375 / 60),
+                         (unsigned long)(s_tc_sum[5] * 8 / 375 / 60), (unsigned long)(s_tc_sum[0] * 8 / 375 / 60),
+                         (unsigned long)(s_tc_sum[6] * 8 / 375 / 60), (unsigned long)(s_tc_op / 60),
+                         (unsigned long)(s_tc_it / 60));
+        s_tc_frames = 0;
+      }
+      if (s_tc_frames == 0) { for (int k = 0; k < 7; k++) s_tc_sum[k] = 0; s_tc_it = s_tc_op = 0; }
+    }
+#endif
     if (frame < 8 || frame % 50 == 0)
       n64_platform_log("[n64] frame %lu: run %lu us, ppu %lu us\n", (unsigned long)frame,
                        (unsigned long)(t1 - t0), (unsigned long)(t2 - t1p));

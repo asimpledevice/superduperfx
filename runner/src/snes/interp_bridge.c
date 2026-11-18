@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include "../time_cats.h"
 #include "interp_bridge.h"
 #include "../blue_thread.h"
 #include "cpu_fast_map.h"
@@ -2737,6 +2738,9 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
     struct { uint16_t s_after; uint8_t size; uint32_t ret_pc24; } tail_frames[16];
     int tail_n = 0;
     for (; steps < step_cap; steps++) {
+#ifdef N64_TIME_CATS
+        g_tcat_iters++;
+#endif
         RtlGuestScopeCheckpoint();
         const uint32_t pc_before = ((uint32_t)in.k << 16) | in.pc;
         /* Settle the DRAM refresh tax owed by clocks generated code charged
@@ -3262,7 +3266,12 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
 #ifdef N64_INTERP_REPORT
         const uint32_t rep_mx = (uint32_t)(in.mf ? 1u << 25 : 0) | (in.xf ? 1u << 24 : 0);
 #endif
+        const uint32_t tcat_op = tcat_enter(TCAT_OPCODE);
         int _cyc = interp816_runOpcode(&in);   /* executes the opcode; pushes/pops frames */
+        tcat_leave(tcat_op);
+#ifdef N64_TIME_CATS
+        g_tcat_ops++;
+#endif
 #ifdef N64_INTERP_REPORT
         s_rep_total += (uint32_t)_cyc;
         s_rep_insns++;
@@ -3811,11 +3820,13 @@ static int interp_bridge_run_ex2(CpuState *cpu, uint32_t entry_pc24,
     extern uint32_t snesrecomp_apu_ticks(void);
     const uint32_t rep_t0 = snesrecomp_apu_ticks();
 #endif
+    const uint32_t tcat_prev = tcat_enter(TCAT_INTERP);
     int _r = _interp_run_core(cpu, entry_pc24, s_exit, out_landing,
                               out_return_pc, yield_pc,
                               yield_flag_addr, yield_flag_value,
                               reset_cap_on_bounce, stop_pcs, n_stop,
                               stop_on_rti);
+    tcat_leave(tcat_prev);
 #ifdef N64_INTERP_REPORT
     s_rep_ticks += snesrecomp_apu_ticks() - rep_t0;
     s_rep_calls++;

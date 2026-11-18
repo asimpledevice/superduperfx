@@ -1,3 +1,8 @@
+#include "../time_cats.h"
+#ifndef N64_TIME_CATS   /* (measurement builds wrap these at the end of the file) */
+#define ppu_read_raw ppu_read
+#define ppu_write_raw ppu_write
+#endif
 #include "ppu.h"
 #include "hd_jobs_internal.h"
 #include "mode7_hd.h"
@@ -3305,7 +3310,7 @@ static uint16_t ppu_getVramRemap(Ppu* ppu) {
   return adr;
 }
 
-uint8_t ppu_read(Ppu* ppu, uint8_t adr) {
+uint8_t ppu_read_raw(Ppu* ppu, uint8_t adr) {
   switch(adr) {
   case 0x34:
   case 0x35:
@@ -3766,7 +3771,7 @@ int ppu_rasterDebugDump(char *out, int cap) {
   return pos;
 }
 
-void ppu_write(Ppu* ppu, uint8_t adr, uint8_t val) {
+void ppu_write_raw(Ppu* ppu, uint8_t adr, uint8_t val) {
   ppu_wlog_note(adr, val);
   /* Every path into the PPU -- CPU stores, DMA, beam HDMA -- is history the
    * raster journal must see; recording here rather than in one caller is
@@ -4007,3 +4012,18 @@ void ppu_write(Ppu* ppu, uint8_t adr, uint8_t val) {
       break;
   }
 }
+
+#ifdef N64_TIME_CATS
+/* (Time categories, time_cats.h: PPU register accesses count as I/O.) */
+uint8_t ppu_read(Ppu* ppu, uint8_t adr) {
+  const uint32_t prev = tcat_enter(TCAT_IO);
+  const uint8_t v = ppu_read_raw(ppu, adr);
+  tcat_leave(prev);
+  return v;
+}
+void ppu_write(Ppu* ppu, uint8_t adr, uint8_t val) {
+  const uint32_t prev = tcat_enter(TCAT_IO);
+  ppu_write_raw(ppu, adr, val);
+  tcat_leave(prev);
+}
+#endif

@@ -433,6 +433,16 @@ bool cpu_read8_plain_rom(CpuState *cpu, uint8 bank, uint16 addr, uint8 *out) {
 /* Lean generated code's addressing-mode helpers (cpu_lean_access.h). */
 #define CPU_LEAN_ACCESS_DEFINE
 #include "cpu_lean_access.h"
+#include "time_cats.h"
+#ifdef N64_TIME_CATS   /* (the wrappers at the end of the file time compiled bodies) */
+#define cpu_dispatch_pc_from cpu_dispatch_pc_from_raw
+#define cpu_dispatch_pc cpu_dispatch_pc_raw
+#define cpu_dispatch_pc_paired cpu_dispatch_pc_paired_raw
+RecompReturn cpu_dispatch_pc_from_raw(CpuState *cpu, uint32 pc24, uint16 entry_s_for_miss_restore,
+                                      uint32 source_pc24);
+RecompReturn cpu_dispatch_pc_raw(CpuState *cpu, uint32 pc24, uint16 entry_s_for_miss_restore);
+RecompReturn cpu_dispatch_pc_paired_raw(CpuState *cpu, uint32 pc24, uint8 frame_size);
+#endif
 
 uint8 cpu_read8(CpuState *cpu, uint32 bank_arg, uint32 addr_arg) { uint8 bank = (uint8)bank_arg; uint16 addr = (uint16)addr_arg;
     if (g_snes && g_snes->cart)
@@ -1356,3 +1366,31 @@ void cpu_state_init(CpuState *cpu) {
  * The generated dispatch_v2.c always defines it (sentinel row when the game
  * declares no ram_routine), and any weak-symbol fallback in the engine is
  * actively harmful on PE/COFF — see the contract note in cpu_state.h. */
+
+#ifdef N64_TIME_CATS
+#undef cpu_dispatch_pc_from
+#undef cpu_dispatch_pc
+#undef cpu_dispatch_pc_paired
+uint32_t g_tcat_cur, g_tcat_t;
+uint64_t g_tcat_acc[TCAT_N];
+uint32_t g_tcat_iters, g_tcat_ops;
+RecompReturn cpu_dispatch_pc_from(CpuState *cpu, uint32 pc24, uint16 entry_s_for_miss_restore,
+                                  uint32 source_pc24) {
+    const uint32_t prev = tcat_enter(TCAT_COMPILED);
+    const RecompReturn r = cpu_dispatch_pc_from_raw(cpu, pc24, entry_s_for_miss_restore, source_pc24);
+    tcat_leave(prev);
+    return r;
+}
+RecompReturn cpu_dispatch_pc(CpuState *cpu, uint32 pc24, uint16 entry_s_for_miss_restore) {
+    const uint32_t prev = tcat_enter(TCAT_COMPILED);
+    const RecompReturn r = cpu_dispatch_pc_raw(cpu, pc24, entry_s_for_miss_restore);
+    tcat_leave(prev);
+    return r;
+}
+RecompReturn cpu_dispatch_pc_paired(CpuState *cpu, uint32 pc24, uint8 frame_size) {
+    const uint32_t prev = tcat_enter(TCAT_COMPILED);
+    const RecompReturn r = cpu_dispatch_pc_paired_raw(cpu, pc24, frame_size);
+    tcat_leave(prev);
+    return r;
+}
+#endif

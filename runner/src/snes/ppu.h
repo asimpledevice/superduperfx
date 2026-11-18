@@ -600,6 +600,10 @@ void ppu_sec_read(double *eval, double *line, double *bg, double *spr,
                   double *compose, double *hdma);
 uint8_t ppu_read(Ppu* ppu, uint8_t adr);
 void ppu_write(Ppu* ppu, uint8_t adr, uint8_t val);
+#ifdef N64_TIME_CATS
+uint8_t ppu_read_raw(Ppu* ppu, uint8_t adr);
+void ppu_write_raw(Ppu* ppu, uint8_t adr, uint8_t val);
+#endif
 /* Notified on every CPU write to VRAM through $2118/$2119, with the BYTE
  * address written and the value. Mirrors snes_set_wram_write_log_hook():
  * a host can name the instruction responsible, which the AOT-side
