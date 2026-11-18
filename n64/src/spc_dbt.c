@@ -53,7 +53,7 @@ void **g_spc_dbt_map[256];
 uint32_t g_spc_dbt_stats[8];   /* blocks made, flushes, runs, cycles run, refused, no-fit, failed, bytes */
 uint32_t g_spc_dbt_refused[4];   /* direct page, watched read, watched write, code */
 
-enum { kCodeWords = 65536, kBlocks = 1536, kMaxInsns = 24, kMapPages = 48 };
+enum { kCodeWords = 65536, kBlocks = 1536, kMaxInsns = 32, kMapPages = 48 };
 static uint32_t s_code[kCodeWords] __attribute__((aligned(32)));
 static uint32_t s_ncode, s_epilogue, s_exit, s_edge, s_fe, s_enter, s_link, s_dyn;
 static void *s_target;   /* the block s_enter starts */
@@ -403,11 +403,26 @@ static void emit_shared(void) {
   const uint32_t d1 = s_ncode;
   i_(5, T6, ZERO, 0);                /* no block */
   NOP();
+  /* Fast path: valid in this epoch and fits: straight in. */
+  LW(T6, offsetof(Block, epoch), T5);
+  li(T7, (uint32_t)(uintptr_t)&g_spc_dbt_epoch);
+  LW(T7, 0, T7);
+  const uint32_t dslow = s_ncode;
+  i_(5, T6, T7, 0);                  /* bne: stale: ask C (patched) */
+  LHU_(T6, offsetof(Block, max_cycles), T5);
+  SLT(T6, RBUD, T6);
+  const uint32_t dslow2 = s_ncode;
+  i_(5, T6, ZERO, 0);                /* bne: no time: ask C, which says so (patched) */
+  LW(T6, offsetof(Block, fn), T5);
+  JR(T6);
+  NOP();
+  s_code[dslow] |= (uint32_t)(s_ncode - (dslow + 1)) & 0xffff;
+  s_code[dslow2] |= (uint32_t)(s_ncode - (dslow2 + 1)) & 0xffff;
   SW(T5, F_SAVE3, SP);
   MOVE(A0, T5);
   MOVE(A1, RSPC);
   MOVE(A2, RBUD);
-  jal((void *)spc_dbt_may_run);      /* valid in this epoch and fits */
+  jal((void *)spc_dbt_may_run);      /* valid in this epoch (checked again) and fits */
   NOP();
   LW(RBUD, F_T8, SP);
   LW(REDGE, F_T9, SP);
@@ -438,13 +453,41 @@ typedef struct {
   bool fe_checked;      /* this instruction caught the front end up */
   bool edges_synced;    /* this instruction handled the sample edges before it */
   bool bail_used;       /* a run-time check may leave before this instruction */
+  bool io;              /* it accessed the I/O page */
+  bool cont;            /* a conditional branch: the block goes on at its fall-through */
+  bool jumped;          /* bra/jmp followed: the block goes on at jump_to */
+  uint16_t jump_to;
+  uint8_t branch_len;   /* a conditional branch's length (branch_end) */
 } Ctx;
+
+/* Superblocks: the trace of instructions in the block (a conditional
+ * branch's taken side leaves, its fall-through goes on; bra/jmp are
+ * followed), cut into segments at the conditional branches. Each segment
+ * after the first checks at its start that its longest path fits in the
+ * time left (t8 >= its end, as an offset from the block's start): the
+ * block's own max_cycles covers only the first. A branch back to an
+ * instruction of the trace rebases t8 to that instruction's offset and
+ * jumps there behind the same check, so driver loops stay in one block. */
+static uint16_t s_tr_pc[kMaxInsns], s_tr_o[kMaxInsns];
+static uint8_t s_tr_seg[kMaxInsns], s_tr_len[kMaxInsns];
+static bool s_tr_io[kMaxInsns];
+static int s_tr_label[kMaxInsns], s_ntr;
+static int32_t s_seg_at[kMaxInsns + 1];   /* the slti to patch with the end (or -1) */
+static uint16_t s_seg_end[kMaxInsns + 1];
+static int s_nseg;
+static struct { uint32_t at; uint8_t seg; } s_bp[kMaxInsns];
+static int s_nbp;
+static bool s_pages_full;
+static int trace_find(uint16_t pc) {
+  for (int i = 0; i < s_ntr; i++) if (s_tr_pc[i] == pc) return i;
+  return -1;
+}
 
 static void add_page(Block *b, uint8_t page, uint8_t flag) {
   for (int i = 0; i < b->npages; i++)
     if (b->page[i] == page) { b->pflag[i] |= flag; return; }
   if (b->npages < 10) { b->page[b->npages] = page; b->pflag[b->npages++] = flag; }
-  else s_full = true;   /* too many pages: give up on the block */
+  else s_pages_full = true;   /* too many pages: the block ends before this instruction */
 }
 static void add_range(Block *b, uint16_t lo, uint16_t hi, uint8_t flag) {
   add_page(b, (uint8_t)(lo >> 8), flag);
@@ -474,7 +517,7 @@ static void call_cycle(Ctx *c, void *fn, int cyc_reg) {
 }
 
 typedef struct { int kind, label, resume; uint16_t pc, o, adr; uint8_t where, src; } Stub;
-static Stub s_stub[160];
+static Stub s_stub[320];
 static int s_nstub;
 
 /* The sample edges before this instruction, before its first store or I/O
@@ -638,6 +681,7 @@ static void rd(Ctx *c, const Addr *a, int dst) {
   } else if (is_io(a->adr)) {
     edge_sync(c);
     li(A1, a->adr);
+    c->io = true;
     call_cycle(c, (void *)spc_dbt_io_read, A2);
     MOVE(dst, V0);
     if (a->adr >= 0xf1 && a->adr <= 0xf3) c->exit_after = true;
@@ -654,6 +698,7 @@ static void wr(Ctx *c, const Addr *a, int src) {
     edge_sync(c);
     MOVE(A2, src);
     li(A1, a->adr);
+    c->io = true;
     call_cycle(c, (void *)spc_dbt_io_write, A3);
     if (a->adr >= 0xf1 && a->adr <= 0xf3) c->exit_after = true;
   } else {
@@ -717,16 +762,46 @@ static void exit_const(Ctx *c, uint16_t pc, uint32_t used) {
 static void add_tgt(Block *b, uint16_t pc) {
   if (b->ntgt < 2) b->tgt[b->ntgt++] = pc;
 }
+/* Leaves for target after `used` cycles: back into the trace when target is
+ * one of its instructions (and the loop does no I/O: polling loops go back
+ * to the run loop, whose wait skip handles them), else a link stub. */
+static void taken_exit(Ctx *c, uint16_t target, uint32_t used) {
+  const int i = trace_find(target);
+  bool io = c->io;
+  if (i >= 0) for (int k = i; k < s_ntr; k++) io |= s_tr_io[k];
+#ifdef SPC_DBT_NO_BACKEDGE
+  io = true;
+#endif
+  if (i < 0 || io || s_nbp == kMaxInsns || s_nstub >= (int)(sizeof s_stub / sizeof s_stub[0])) {
+    exit_const(c, target, used);
+    return;
+  }
+  exit_edges(c, target, used, false);
+  ADDIU(RBUD, RBUD, s_tr_o[i]);      /* target's offset from the rebased start */
+  SW(RBUD, F_T8, SP);
+  s_bp[s_nbp].at = s_ncode;
+  s_bp[s_nbp].seg = s_tr_seg[i];
+  s_nbp++;
+  SLTI(T1, RBUD, 0);                 /* < its segment's end (patched) */
+  const int bail = new_label();
+  BNE(T1, ZERO, bail);
+  NOP();
+  BEQ(ZERO, ZERO, s_tr_label[i]);
+  NOP();
+  Stub *x = &s_stub[s_nstub++];
+  x->kind = 0; x->label = bail; x->pc = target; x->o = s_tr_o[i];
+}
 static void branch_end(Ctx *c, int len, int8_t rel, uint32_t base_cycles, bool want_set) {
   const uint16_t next = (uint16_t)(c->pc + len), target = (uint16_t)(next + rel);
+  c->branch_len = (uint8_t)len;
   add_tgt(c->b, next);
   add_tgt(c->b, target);
-  const int taken = new_label();
-  if (want_set) BNE(T1, ZERO, taken); else BEQ(T1, ZERO, taken);
+  const int fall = new_label();
+  if (want_set) BEQ(T1, ZERO, fall); else BNE(T1, ZERO, fall);
   NOP();
-  exit_const(c, next, c->o + base_cycles);
-  bind(taken);
-  exit_const(c, target, c->o + base_cycles + 2);
+  taken_exit(c, target, c->o + base_cycles + 2);
+  bind(fall);
+  c->cont = true;                    /* the block goes on at next */
 }
 
 /* The generic opcodes (spc.c's k_spc_mode/k_spc_op): an addressing mode
@@ -1040,14 +1115,23 @@ static int emit_insn(Ctx *c, uint8_t op, int *len) {
       branch_end(c, 2, (int8_t)b1, cyc, (op >> 5) & 1);
       return 2;
     }
-    case 0x2f:                                               /* bra */
-      add_tgt(c->b, (uint16_t)(c->pc + 2 + (int8_t)b1));
-      exit_const(c, (uint16_t)(c->pc + 2 + (int8_t)b1), c->o + cyc);
+    case 0x2f: case 0x5f: {                                  /* bra, jmp !abs */
+      const uint16_t t = op == 0x2f ? (uint16_t)(c->pc + 2 + (int8_t)b1)
+                                    : (uint16_t)(b1 | c->ram[(uint16_t)(c->pc + 2)] << 8);
+#ifdef SPC_DBT_NO_FOLLOW
+      if (0) {
+#else
+      if (trace_find(t) < 0 && t >= 0x200 && t < 0xff00) {   /* followed */
+#endif
+        c->jumped = true;
+        c->jump_to = t;
+        *len = op == 0x2f ? 2 : 3;
+        return 1;
+      }
+      add_tgt(c->b, t);
+      taken_exit(c, t, c->o + cyc);
       return 2;
-    case 0x5f:                                               /* jmp !abs */
-      add_tgt(c->b, (uint16_t)(b1 | c->ram[(uint16_t)(c->pc + 2)] << 8));
-      exit_const(c, (uint16_t)(b1 | c->ram[(uint16_t)(c->pc + 2)] << 8), c->o + cyc);
-      return 2;
+    }
     case 0xfe:                                               /* dbnz y */
       ADDIU(RY, RY, -1);
       ANDI(RY, RY, 0xff);
@@ -1149,7 +1233,7 @@ static void **map_page(uint8_t page) {
 static Block *translate(Apu *apu, uint16_t pc, uint8_t p, bool may_flush) {
   if (!s_cyc) spc_tables(&s_cyc, &s_mode, &s_op);
   if (pc < 0x200 || pc >= 0xff00) return NULL;
-  if (s_nblocks == kBlocks || s_ncode + 1024 > kCodeWords) {
+  if (s_nblocks == kBlocks || s_ncode + 2048 > kCodeWords) {
     if (!may_flush) return NULL;   /* translated code is running: no flush */
 #ifdef SPC_DBT_DUMP
     { extern void n64_platform_log(const char *fmt, ...);
@@ -1196,32 +1280,63 @@ static Block *translate(Apu *apu, uint16_t pc, uint8_t p, bool may_flush) {
   int n = 0, ended = 0;
   uint32_t max = 0;
   uint16_t end_pc = pc;
+  (void)end_pc;   /* (the dump below) */
+  s_ntr = 0;
+  s_nseg = 1;
+  s_seg_at[0] = -1;
+  s_nbp = 0;
+  bool open_seg = false;   /* a segment starts at this instruction: check its time */
 
   while (n < kMaxInsns) {
     const uint8_t op = c.ram[c.pc];
-    if (c.pc >= 0xff00) break;
+    if (c.pc >= 0xff00 || c.pc < 0x200) break;
     c.bail = new_label();
     c.exit_after = false;
     c.fe_checked = false;
     c.edges_synced = false;
     c.bail_used = false;
+    c.io = c.cont = c.jumped = false;
+    s_pages_full = false;
     const uint32_t ncode0 = s_ncode;
     const int nfix0 = s_nfix;
     const uint8_t npages0 = b->npages, nw0 = b->nw;
-    const int nstub0 = s_nstub;
+    const int nstub0 = s_nstub, nbp0 = s_nbp;
+    const int tri = s_ntr;
+    s_tr_pc[tri] = c.pc;
+    s_tr_o[tri] = c.o;
+    s_tr_seg[tri] = (uint8_t)(s_nseg - 1);
+    s_tr_io[tri] = false;
+    s_tr_label[tri] = new_label();
+    bind(s_tr_label[tri]);
+    s_ntr++;
+    if (open_seg) {               /* the segment's longest path must fit */
+      s_seg_at[s_nseg - 1] = (int32_t)s_ncode;
+      SLTI(T1, RBUD, 0);
+      BNE(T1, ZERO, c.bail);
+      NOP();
+      c.bail_used = true;
+    }
     int len = 0;
-    const int r = emit_insn(&c, op, &len);
-    if (!r) {                     /* not covered: drop what it emitted */
+    c.branch_len = 0;
+    int r = emit_insn(&c, op, &len);
+    if (c.branch_len) len = c.branch_len;   /* (the branch cases leave len at 1) */
+    /* The instruction's code bytes are read from ARAM. */
+    if (r) add_range(b, c.pc, (uint16_t)(c.pc + len - 1), 1);
+    if (!r || s_pages_full) {     /* not covered (or one page too many): drop it */
       s_ncode = ncode0;
       s_nfix = nfix0;
       b->npages = npages0;
       b->nw = nw0;
       s_nstub = nstub0;
+      s_nbp = nbp0;
+      s_ntr = tri;
+      if (open_seg) s_seg_at[s_nseg - 1] = -1;
+      s_pages_full = false;
       break;
     }
-    /* The instruction's code bytes are read from ARAM. */
-    add_range(b, c.pc, (uint16_t)(c.pc + len - 1), 1);
-    const uint16_t next = (uint16_t)(c.pc + len);
+    s_tr_io[tri] = c.io;
+    s_tr_len[tri] = (uint8_t)len;
+    const uint16_t next = c.jumped ? c.jump_to : (uint16_t)(c.pc + len);
     const uint32_t o_next = c.o + (uint32_t)s_cyc[op];
     max = o_next + (is_end(op) && op != 0x2f && op != 0x5f && op != 0x3f && op != 0x6f ? 2u : 0u);
     if (c.bail_used) {
@@ -1232,7 +1347,18 @@ static Block *translate(Apu *apu, uint16_t pc, uint8_t p, bool may_flush) {
       s_nstub++;
     }
     n++;
-    end_pc = next;
+    end_pc = (uint16_t)(c.pc + len);
+    open_seg = false;
+    if (c.cont) {                 /* a conditional branch: the fall-through goes on */
+      s_seg_end[s_nseg - 1] = (uint16_t)max;
+      s_seg_at[s_nseg] = -1;
+      s_nseg++;
+      open_seg = true;
+      c.pc = next;
+      c.o = (uint16_t)o_next;
+      continue;
+    }
+    if (c.jumped) { c.pc = next; c.o = (uint16_t)o_next; continue; }
     if (r == 2 || is_end(op)) { ended = 1; break; }
     c.pc = next;
     c.o = (uint16_t)o_next;
@@ -1243,8 +1369,13 @@ static Block *translate(Apu *apu, uint16_t pc, uint8_t p, bool may_flush) {
     return NULL;
   }
   if (!ended) { add_tgt(b, c.pc); exit_const(&c, c.pc, c.o); }
-  /* The longest path: a block never runs unless it fits in the time left. */
-  b->max_cycles = (uint16_t)(ended ? max : c.o);
+  /* The longest path of each segment: the block never starts unless its
+   * first fits in the time left; each later one checks at its start. */
+  s_seg_end[s_nseg - 1] = (uint16_t)(ended ? max : c.o);
+  b->max_cycles = s_seg_end[0];
+  for (int i = 1; i < s_nseg; i++)
+    if (s_seg_at[i] >= 0) s_code[s_seg_at[i]] |= s_seg_end[i];
+  for (int i = 0; i < s_nbp; i++) s_code[s_bp[i].at] |= s_seg_end[s_bp[i].seg];
   /* The cold paths. */
   for (int i = 0; i < s_nstub; i++) {
     const Stub *st = &s_stub[i];
@@ -1316,10 +1447,17 @@ static Block *translate(Apu *apu, uint16_t pc, uint8_t p, bool may_flush) {
   }
 #endif
   /* Mark its code lines, so stores to them flush. */
-  for (uint16_t a = pc; a != end_pc; a++)
-    g_spc_dbt_code[a >> 8] |= (uint8_t)(1u << ((a >> 5) & 7));
+  uint8_t new_lines = 0;
+  for (int i = 0; i < s_ntr; i++)
+    for (uint16_t a = s_tr_pc[i], k = 0; k < s_tr_len[i]; a++, k++) {
+      const uint8_t bit = (uint8_t)(1u << ((a >> 5) & 7));
+      new_lines |= bit & ~g_spc_dbt_code[a >> 8];
+      g_spc_dbt_code[a >> 8] |= bit;
+    }
   s_nblocks++;
-  g_spc_dbt_epoch++;   /* its code lines are new: stores elsewhere must recheck */
+  /* New code lines: blocks validated before may store to them. (Lines
+   * already marked were part of every validation since.) */
+  if (new_lines) g_spc_dbt_epoch++;
   g_spc_dbt_stats[0]++;
   g_spc_dbt_stats[7] += (s_ncode - start) * 4;
   return b;
