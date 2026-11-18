@@ -73,6 +73,18 @@ makes later timings comparable.
    translator); all three games' hashes; EverDrive timing; then decide
    whether SPCDBT becomes the default.
 
+Options to weigh along the way (from the same projects):
+
+- **Interpreter to the exact event** (beebjit): a budget check that fails
+  before a run of code means nothing in it has executed, so the interpreter
+  steps to the exact event; could replace part of the per-block edge
+  handling in step 5.
+- **Self-patching memory calls** (gpSP): an access whose region is not known
+  at translation calls a patcher that rewrites the call to the right fast
+  path (plain ARAM or the I/O page).
+- **Constant propagation** (beebjit): known register and carry values within
+  a block (ADC with C known 0 becomes an add; stores of known values).
+
 Not adopted: sodium64's accuracy shortcuts; beebjit's fixed host slot per
 guest byte (64 KB x 64 bytes would not fit) and per-instruction
 invalidation (whole-cache flush is enough so far).

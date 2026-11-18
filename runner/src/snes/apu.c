@@ -16,7 +16,7 @@
 #if SNESRECOMP_APU_DEFER_DSP
 static inline void apu_dspJoin(Apu* apu);
 /* The SPC translator caches which blocks may run against the page marks:
- * any change to them starts a new epoch (n64/src/spc_dbt.c). */
+ * a new sync mark starts a new epoch (apu_dspMark; n64/src/spc_dbt.c). */
 #if SNESRECOMP_SPC_DBT
 #define SPC_DBT_MARKS_CHANGED() (g_spc_dbt_epoch++)
 #else
@@ -346,7 +346,6 @@ uint32_t g_apu_dsp_join_why[8];
 static unsigned s_join_why;
 /* Wait for a batch running elsewhere and take its results. */
 static inline void apu_dspJoin(Apu* apu) {
-  SPC_DBT_MARKS_CHANGED();
 #ifdef SNESRECOMP_DSP_JOIN_HOOK
   if (!apu->dspInFlight) return;
   g_apu_dsp_join_why[s_join_why & 7]++;
@@ -380,7 +379,6 @@ static inline void apu_dspJoin(Apu* apu) {
  * two batches of BRR data per voice, the directory entries of every SRCN in
  * play, and the echo window (writes logged, reads synced). */
 static void apu_dspMarkAfterLaunch(Apu* apu, uint32_t n) {
-  SPC_DBT_MARKS_CHANGED();
   const Dsp *d = apu->dsp;
   apu_dspMark(apu, d->dirPage, 0x400u, APU_DSP_WATCH_LOG);
   for (int v = 0; v < 8; v++) {
@@ -409,7 +407,6 @@ static void apu_feBatchStart(Apu* apu);
 static void apu_streamPost(Apu* apu);
 #endif
 static void apu_dspSyncFor(Apu* apu, unsigned reason) {
-  SPC_DBT_MARKS_CHANGED();
 #if SNESRECOMP_DSP_STREAM
   /* The audio split: post what is owed to the S-DSP; never wait. */
   if (!apu->dspPending && !apu->dspLogN) return;
@@ -527,9 +524,11 @@ static void apu_dspMark(Apu* apu, uint16_t start, uint32_t len, uint8_t bits) {
   for (uint32_t p = first; p <= last; p++) {
     const uint8_t bit = (uint8_t)(1u << (p & 7));
 #if SNESRECOMP_SPC_DBT
-    if (((bits & APU_DSP_WATCH_LOG) && !(apu->spc->dspWatchLog[(p >> 3) & 31] & bit)) ||
-        ((bits & APU_DSP_WATCH_SYNC) && !(apu->spc->dspWatchSync[(p >> 3) & 31] & bit)))
-      SPC_DBT_MARKS_CHANGED();   /* a new mark */
+    /* Translated blocks were checked against the sync marks (their reads);
+     * log marks are checked by every store and clearing marks never makes
+     * a block invalid, so only a new sync mark starts an epoch. */
+    if ((bits & APU_DSP_WATCH_SYNC) && !(apu->spc->dspWatchSync[(p >> 3) & 31] & bit))
+      SPC_DBT_MARKS_CHANGED();
 #endif
     if (bits & APU_DSP_WATCH_LOG) apu->spc->dspWatchLog[(p >> 3) & 31] |= bit;
     if (bits & APU_DSP_WATCH_SYNC) apu->spc->dspWatchSync[(p >> 3) & 31] |= bit;
@@ -585,7 +584,6 @@ static void apu_dspMarkRegWindows(Apu* apu) {
  * EDL and DIR writes extend the marks when they make new pages reachable
  * (apu_dspMarkRegWindows). */
 static void apu_dspStartBatch(Apu* apu) {
-  SPC_DBT_MARKS_CHANGED();
 #if SNESRECOMP_DSP_FRONTEND
   apu_feBatchStart(apu);
 #endif

@@ -73,6 +73,8 @@ typedef struct {
   uint8_t p, npages, nw, pad;
   uint8_t page[10], pflag[10];   /* pflag: 1 read, 2 written */
   uint16_t wlo[6], whi[6];       /* byte ranges stores may touch */
+  uint16_t tgt[2];               /* direct successors, translated with it */
+  uint8_t ntgt;
 } Block;
 static Block s_blocks[kBlocks];
 static uint32_t s_nblocks;
@@ -650,8 +652,13 @@ static void exit_const(Ctx *c, uint16_t pc, uint32_t used) {
 
 /* A conditional branch at the end of the block: taken when t1 != 0
  * (want_set) or t1 == 0. */
+static void add_tgt(Block *b, uint16_t pc) {
+  if (b->ntgt < 2) b->tgt[b->ntgt++] = pc;
+}
 static void branch_end(Ctx *c, int len, int8_t rel, uint32_t base_cycles, bool want_set) {
   const uint16_t next = (uint16_t)(c->pc + len), target = (uint16_t)(next + rel);
+  add_tgt(c->b, next);
+  add_tgt(c->b, target);
   const int taken = new_label();
   if (want_set) BNE(T1, ZERO, taken); else BEQ(T1, ZERO, taken);
   NOP();
@@ -972,9 +979,11 @@ static int emit_insn(Ctx *c, uint8_t op, int *len) {
       return 2;
     }
     case 0x2f:                                               /* bra */
+      add_tgt(c->b, (uint16_t)(c->pc + 2 + (int8_t)b1));
       exit_const(c, (uint16_t)(c->pc + 2 + (int8_t)b1), c->o + cyc);
       return 2;
     case 0x5f:                                               /* jmp !abs */
+      add_tgt(c->b, (uint16_t)(b1 | c->ram[(uint16_t)(c->pc + 2)] << 8));
       exit_const(c, (uint16_t)(b1 | c->ram[(uint16_t)(c->pc + 2)] << 8), c->o + cyc);
       return 2;
     case 0xfe:                                               /* dbnz y */
@@ -1032,6 +1041,7 @@ static int emit_insn(Ctx *c, uint8_t op, int *len) {
       st(c, 2, 0, T3);
       ADDIU(RSP_, RSP_, -1);
       ANDI(RSP_, RSP_, 0xff);
+      add_tgt(c->b, dst);
       exit_const(c, dst, c->o + cyc);
       return 2;
     }
@@ -1154,7 +1164,7 @@ static Block *translate(Apu *apu, uint16_t pc, uint8_t p) {
     s_ncode = start;
     return NULL;
   }
-  if (!ended) exit_const(&c, c.pc, c.o);
+  if (!ended) { add_tgt(b, c.pc); exit_const(&c, c.pc, c.o); }
   /* The longest path: a block never runs unless it fits in the time left. */
   b->max_cycles = (uint16_t)(ended ? max : c.o);
   /* The cold paths. */
@@ -1235,6 +1245,15 @@ static bool code_in(uint16_t lo, uint16_t hi) {
   return false;
 }
 
+/* Translate at pc and record the result (or that there is none) in the map. */
+static Block *translate_at(Apu *apu, uint16_t pc, uint8_t p) {
+  Block *b = translate(apu, pc, p);
+  void **pg = map_page((uint8_t)(pc >> 8));   /* a flush may have cleared the map */
+  if (!pg) return NULL;
+  pg[pc & 255] = b ? (void *)b : (void *)1;
+  return b;
+}
+
 uint32_t spc_dbt_run(Apu *apu, uint32_t limit) {
   Spc *const spc = apu->spc;
   const uint16_t pc = spc->pc;
@@ -1242,11 +1261,17 @@ uint32_t spc_dbt_run(Apu *apu, uint32_t limit) {
   if (!pg) return 0;
   Block *b = (Block *)pg[pc & 255];
   if (!b) {
-    b = translate(apu, pc, spc->p);
-    pg = map_page((uint8_t)(pc >> 8));   /* a flush may have cleared the map */
-    if (!pg) return 0;
-    pg[pc & 255] = b ? (void *)b : (void *)1;
+    const uint32_t flushes = g_spc_dbt_stats[1];
+    b = translate_at(apu, pc, spc->p);
     if (!b) { g_spc_dbt_stats[6]++; return 0; }
+    /* Its direct successors too, so chains do not stop at first visits
+     * (gpSP translates every direct target with the block). */
+    for (int i = 0; i < b->ntgt; i++) {
+      void **tp = map_page((uint8_t)(b->tgt[i] >> 8));
+      if (tp && !tp[b->tgt[i] & 255]) translate_at(apu, b->tgt[i], spc->p);
+      if (g_spc_dbt_stats[1] != flushes) return 0;   /* a flush: b is gone */
+    }
+    if (g_spc_dbt_stats[1] != flushes) return 0;
   }
   if ((void *)b == (void *)1) return 0;
   if (b->max_cycles > limit) { g_spc_dbt_stats[5]++; return 0; }
