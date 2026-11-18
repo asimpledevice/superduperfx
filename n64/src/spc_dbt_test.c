@@ -223,7 +223,13 @@ void spc_dbt_test(void) {
        * share the RSP.) */
       run_ref(ref, clocks);
       const uint32_t t0 = g_spc_dbt_stats[3];
+#ifdef SPC_DBT_TEST_BOTH_INTERP   /* (checks the harness: both APUs interpreted) */
+      g_spc_dbt_enabled = false;
+#endif
       apu_runCycles(dbt, clocks);
+#ifdef SPC_DBT_TEST_BOTH_INTERP
+      g_spc_dbt_enabled = true;
+#endif
       apu_dspSync(dbt);
       translated += g_spc_dbt_stats[3] - t0;
       total += clocks;

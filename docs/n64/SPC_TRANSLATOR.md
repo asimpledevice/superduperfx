@@ -5,14 +5,17 @@ the state hashes (WRAM, ARAM, S-DSP output) match the interpreter's.
 
 ## Where it stands (2026-11-18, SMW attract, ares)
 
-**SPC catch-up time per frame** (`APUTIME=1`, frames 360-1650, the three
-builds run side by side):
+**SPC catch-up time per frame** (`APUTIME=1`, frames 360-1000, builds run
+side by side):
 
 | Build | SPC time | Run phase |
 |---|---|---|
-| Interpreter (B wait skip + A run loop) | 32.75 ms | 77.1 ms |
-| Translator (steps 1-5, coverage fix) | 24.73 ms | 72.3 ms |
-| + leave before wait loops the skip handles | **24.25 ms** | 71.9 ms |
+| Interpreter (B wait skip + A run loop) | 35.5 ms | 76.8 ms |
+| Translator, end of steps 1-5 + wait loops | 27.6 ms | 72.1 ms |
+| + epoch follows P (6a), dp,dp / dp,#imm (7), exactness fixes | **25.7 ms** | 75.0 ms |
+
+(Frames 360-1650 for the earlier rows: 32.75 / 24.73 / 24.25 ms; the
+window matters because the attract demo's music changes.)
 
 The run phase alone is not a reliable measure between translator builds:
 builds with identical SPC behaviour moved by up to 4 ms (65.3 vs 69.0 ms)
@@ -121,8 +124,14 @@ makes later timings comparable.
      interpreted APU and compares ARAM, ports, timers, registers and the
      S-DSP after every slice. It found the missing code-store check (see
      below) on its first full run.
+     Result: 256 programs passed without the live S-DSP; with it (half
+     the programs), 128 passed, then program 138 differs only in the echo
+     buffer, and does so with both APUs interpreted too
+     (`-DSPC_DBT_TEST_BOTH_INTERP`): a harness limit (two APUs share
+     global S-DSP state), not the translator.
    - SMW, Pitfall, Joe & Mac 2: S-DSP output marks and WRAM/ARAM states
-     match the interpreter. (Pitfall's own run is not reproducible between
+     match the interpreter (SMW 69 marks / 74 states, Pitfall 44 states,
+     Joe & Mac 2 17 marks / 20 states). (Pitfall's own run is not reproducible between
      builds after ~frame 800, translator or not, so it compares against a
      no-translator run of the same source.)
    - Not done: EverDrive timing (the owner's hardware).
