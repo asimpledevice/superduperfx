@@ -494,7 +494,7 @@ static void add_range(Block *b, uint16_t lo, uint16_t hi, uint8_t flag) {
   if ((lo >> 8) != (hi >> 8)) add_page(b, (uint8_t)(hi >> 8), flag);
   if (flag & 2) {
     if (b->nw < 6) { b->wlo[b->nw] = lo; b->whi[b->nw++] = hi; }
-    else s_full = true;
+    else s_pages_full = true;   /* the block ends before this instruction */
   }
 }
 
@@ -1322,6 +1322,10 @@ static Block *translate(Apu *apu, uint16_t pc, uint8_t p, bool may_flush) {
     if (c.branch_len) len = c.branch_len;   /* (the branch cases leave len at 1) */
     /* The instruction's code bytes are read from ARAM. */
     if (r) add_range(b, c.pc, (uint16_t)(c.pc + len - 1), 1);
+    if (!r && n) {                /* no block can start here: the run loop starts one after it */
+      void **const pg = map_page((uint8_t)(c.pc >> 8));
+      if (pg && !pg[c.pc & 255]) pg[c.pc & 255] = (void *)1;
+    }
     if (!r || s_pages_full) {     /* not covered (or one page too many): drop it */
       s_ncode = ncode0;
       s_nfix = nfix0;

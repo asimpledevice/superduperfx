@@ -306,10 +306,14 @@ static inline bool apu_native_dbtWants(uint16_t pc, bool at_target) {
   void *const e = pg[pc & 255];
   return e ? e != (void *)1 : at_target;
 }
-/* After the interpreter ran the instruction at ppc: whether it transferred
- * control (SPC instructions are 1-3 bytes long). */
+/* After the interpreter ran the instruction at ppc: whether pc may start a
+ * block: ppc transferred control (SPC instructions are 1-3 bytes long), or
+ * ppc is one the translator does not cover (marked (void *)1), so a block
+ * stopped before it. */
 static inline bool apu_native_dbtTransfer(uint16_t ppc, uint16_t pc) {
-  return (uint16_t)(pc - ppc) > 3u;
+  if ((uint16_t)(pc - ppc) > 3u) return true;
+  void **const pg = g_spc_dbt_map[ppc >> 8];
+  return pg && pg[ppc & 255] == (void *)1;
 }
 #endif
 
