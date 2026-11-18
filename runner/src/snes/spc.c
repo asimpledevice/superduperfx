@@ -198,6 +198,9 @@ static uint8_t spc_getFlags(Spc* spc) {
 }
 
 static void spc_setFlags(Spc* spc, uint8_t val) {
+#if SNESRECOMP_SPC_DBT
+  g_spc_dbt_epoch++;   /* the direct page may change */
+#endif
   spc->n = val & 0x80;
   spc->v = val & 0x40;
   spc->p = val & 0x20;
@@ -592,6 +595,14 @@ static const uint8_t k_spc_op2[256] = {
    0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  /* F0 */
 };
 
+/* For the dynamic translator (SNESRECOMP_SPC_DBT): cycles per opcode and
+ * the generic opcodes' addressing mode and operation. */
+void spc_tables(const int** cycles, const uint8_t** mode, const uint8_t** op) {
+  *cycles = cyclesPerOpcode;
+  *mode = k_spc_mode;
+  *op = k_spc_op;
+}
+
 static void spc_doOpcode(Spc* spc, uint8_t opcode) {
   switch(opcode) {
     case 0x00: { // nop imp
@@ -975,6 +986,9 @@ static void spc_doOpcode(Spc* spc, uint8_t opcode) {
       break;
     }
     case 0x20: case 0x40: case 0x60: case 0x80: case 0xa0: case 0xc0: { // clrp setp clrc setc ei di
+#if SNESRECOMP_SPC_DBT
+      if (opcode <= 0x40) g_spc_dbt_epoch++;   /* the direct page changes */
+#endif
       bool* const f = opcode <= 0x40 ? &spc->p : opcode <= 0x80 ? &spc->c : &spc->i;
       *f = opcode == 0x40 || opcode == 0x80 || opcode == 0xa0;
       break;

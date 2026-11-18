@@ -15,6 +15,13 @@
 
 #if SNESRECOMP_APU_DEFER_DSP
 static inline void apu_dspJoin(Apu* apu);
+/* The SPC translator caches which blocks may run against the page marks:
+ * any change to them starts a new epoch (n64/src/spc_dbt.c). */
+#if SNESRECOMP_SPC_DBT
+#define SPC_DBT_MARKS_CHANGED() (g_spc_dbt_epoch++)
+#else
+#define SPC_DBT_MARKS_CHANGED() ((void)0)
+#endif
 #endif
 #if SNESRECOMP_DSP_FRONTEND
 static void apu_feNow(Apu* apu);
@@ -60,6 +67,9 @@ void apu_free(Apu* apu) {
 void apu_reset(Apu* apu) {
 #if SNESRECOMP_APU_DEFER_DSP
   apu_dspJoin(apu);
+#endif
+#if SNESRECOMP_SPC_DBT
+  spc_dbt_flush();   /* ARAM is about to change wholesale */
 #endif
   apu->romReadable = true; // before resetting spc, because it reads reset vector from it
   spc_reset(apu->spc);
@@ -336,6 +346,7 @@ uint32_t g_apu_dsp_join_why[8];
 static unsigned s_join_why;
 /* Wait for a batch running elsewhere and take its results. */
 static inline void apu_dspJoin(Apu* apu) {
+  SPC_DBT_MARKS_CHANGED();
 #ifdef SNESRECOMP_DSP_JOIN_HOOK
   if (!apu->dspInFlight) return;
   g_apu_dsp_join_why[s_join_why & 7]++;
@@ -369,6 +380,7 @@ static inline void apu_dspJoin(Apu* apu) {
  * two batches of BRR data per voice, the directory entries of every SRCN in
  * play, and the echo window (writes logged, reads synced). */
 static void apu_dspMarkAfterLaunch(Apu* apu, uint32_t n) {
+  SPC_DBT_MARKS_CHANGED();
   const Dsp *d = apu->dsp;
   apu_dspMark(apu, d->dirPage, 0x400u, APU_DSP_WATCH_LOG);
   for (int v = 0; v < 8; v++) {
@@ -397,6 +409,7 @@ static void apu_feBatchStart(Apu* apu);
 static void apu_streamPost(Apu* apu);
 #endif
 static void apu_dspSyncFor(Apu* apu, unsigned reason) {
+  SPC_DBT_MARKS_CHANGED();
 #if SNESRECOMP_DSP_STREAM
   /* The audio split: post what is owed to the S-DSP; never wait. */
   if (!apu->dspPending && !apu->dspLogN) return;
@@ -509,6 +522,7 @@ void apu_dspEchoRead(Apu* apu) { apu_dspSyncFor(apu, APU_DSP_SYNC_ECHO_READ); }
 _Static_assert(APU_DSP_MAX_PENDING * 0x3fffu / 0x10000u + 1u <= 65u, "BRR span");
 
 static void apu_dspMark(Apu* apu, uint16_t start, uint32_t len, uint8_t bits) {
+  SPC_DBT_MARKS_CHANGED();
   if (!len) return;
   const uint32_t first = start >> 8, last = ((uint32_t)start + len - 1u) >> 8;
   for (uint32_t p = first; p <= last; p++) {
@@ -567,6 +581,7 @@ static void apu_dspMarkRegWindows(Apu* apu) {
  * EDL and DIR writes extend the marks when they make new pages reachable
  * (apu_dspMarkRegWindows). */
 static void apu_dspStartBatch(Apu* apu) {
+  SPC_DBT_MARKS_CHANGED();
 #if SNESRECOMP_DSP_FRONTEND
   apu_feBatchStart(apu);
 #endif
@@ -665,6 +680,9 @@ void apu_saveload(Apu *apu, SaveLoadInfo *sli) {
 #endif
   sli->func(sli, apu->ram, offsetof(Apu, pad) + 6 - offsetof(Apu, ram));
   apu_dspViewStale(apu);  /* a load replaced ARAM */
+#if SNESRECOMP_SPC_DBT
+  spc_dbt_flush();
+#endif
   apu->timerSyncCycle = apu->cycles;  /* after a load, timers match cycles */
   dsp_saveload(apu->dsp, sli);
 #if SNESRECOMP_APU_DEFER_DSP

@@ -159,6 +159,14 @@ $(BUILD_DIR)/rsp_bg.o: rspbg/rsp_bg.S rspbg/bg_rsp_layout.h rspbg/rsp_bg_full.in
 		BUILD_DIR=$(BUILD_DIR) RSPASFLAGS="$(N64_RSPASFLAGS)" $@
 endif
 
+# SPCDBT=1: SPC700 code translated to MIPS at run time (src/spc_dbt.c),
+# prototype; off by default.
+SPCDBT ?= 0
+ifeq ($(SPCDBT),1)
+N64_CFLAGS += -DSNESRECOMP_SPC_DBT=1
+OBJS += $(BUILD_DIR)/spc_dbt.o
+endif
+
 # SCENE=1: the scene builder (docs/n64/PPU_DESIGN.md step 4): main-screen
 # BG layers drawn from the tile cache (n64/rsptile) as texture rectangles.
 # Needs RSPBG=1 (the VRAM snapshot) and the frame description.

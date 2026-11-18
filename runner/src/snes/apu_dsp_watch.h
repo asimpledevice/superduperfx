@@ -22,6 +22,10 @@ static inline bool apu_streamLate(const Apu* apu, uint32_t stamp) {
 void apu_streamLedger(Apu* apu, uint16_t adr);
 static inline void apu_spcWriteRam(Apu* apu, uint16_t adr, uint8_t val) {
   APU_FE_BEFORE_ARAM_WRITE(apu);
+#if SNESRECOMP_SPC_DBT
+  if (__builtin_expect(g_spc_dbt_code[adr >> 8] & (1u << ((adr >> 5) & 7)), 0))
+    spc_dbt_code_written(adr);
+#endif
   APU_FE_ECHO_LOG(apu, adr, 1);
   const uint32_t p = adr >> 8;
   if (__builtin_expect(((apu->echoRegion[p >> 3] >> (p & 7)) & 1) ||

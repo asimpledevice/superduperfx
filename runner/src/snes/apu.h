@@ -252,6 +252,36 @@ void apu_runCycles(Apu* apu, uint32_t clocks);
 const char *apu_time_implementation(void);
 uint8_t apu_cpuRead(Apu* apu, uint16_t adr);
 void apu_cpuWrite(Apu* apu, uint16_t adr, uint8_t val);
+
+/* SPC700 dynamic translation (SNESRECOMP_SPC_DBT, the N64 host's
+ * n64/src/spc_dbt.c): the runtime's side. The translator runs blocks of SPC
+ * code compiled to MIPS from apu_runCycles_native, and they call back here
+ * for what only the runtime may do, with apu->cycles set as the interpreter
+ * would have it: a sample edge (returns nonzero when it started or synced a
+ * deferred S-DSP batch, so the page marks may have changed), the S-DSP front
+ * end's catch-up before an ARAM write, and I/O-page accesses. */
+#ifndef SNESRECOMP_SPC_DBT
+#define SNESRECOMP_SPC_DBT 0
+#endif
+#if SNESRECOMP_SPC_DBT
+int spc_dbt_edge(Apu* apu, uint32_t cycle);
+void spc_dbt_fe(Apu* apu);
+void spc_dbt_slow_write(Apu* apu, uint32_t adr, uint32_t val, uint32_t cycle);
+uint32_t spc_dbt_io_read(Apu* apu, uint32_t adr, uint32_t cycle);
+void spc_dbt_io_write(Apu* apu, uint32_t adr, uint32_t val, uint32_t cycle);
+/* The translator's side: run a block at the SPC's pc if one fits in
+ * `limit` cycles (returns the cycles it ran, 0: none ran); forget every
+ * block; an SPC store hit translated code. */
+uint32_t spc_dbt_run(Apu* apu, uint32_t limit);
+void spc_dbt_flush(void);
+void spc_dbt_code_written(uint16_t adr);
+/* Bit (adr >> 5) & 7 of byte adr >> 8: a 32-byte line holds translated
+ * code. g_spc_dbt_map[page][offset]: NULL not tried yet, (void *)1 not
+ * translatable, else a block. */
+extern uint8_t g_spc_dbt_code[256];
+extern uint32_t g_spc_dbt_epoch;
+extern void **g_spc_dbt_map[256];
+#endif
 void apu_saveload(Apu *apu, SaveLoadInfo *sli);
 
 /* Immediate visibility is reserved for boot and synchronous protocol code

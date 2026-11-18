@@ -803,6 +803,28 @@ static int host_main(void) {
       n64_platform_log("[dspsync] 60 frames, syncs/samples:%s\n", b);
     }
 #endif
+#if SNESRECOMP_SPC_DBT
+    if (frame % 60 == 59) {
+      extern uint32_t g_spc_dbt_stats[8], g_spc_dbt_total;
+      n64_platform_log("[spcdbt] 60 frames: SPC cycles %lu; blocks made %lu (%lu KB), flushes %lu, runs %lu, cycles %lu; "
+                       "refused %lu, no room %lu, untranslatable %lu\n",
+                       (unsigned long)g_spc_dbt_total,
+                       (unsigned long)g_spc_dbt_stats[0], (unsigned long)(g_spc_dbt_stats[7] >> 10),
+                       (unsigned long)g_spc_dbt_stats[1], (unsigned long)g_spc_dbt_stats[2],
+                       (unsigned long)g_spc_dbt_stats[3], (unsigned long)g_spc_dbt_stats[4],
+                       (unsigned long)g_spc_dbt_stats[5], (unsigned long)g_spc_dbt_stats[6]);
+      { extern uint32_t g_spc_dbt_refused[4], g_spc_dbt_code_flushes;
+        n64_platform_log("[spcdbt]   refused: direct page %lu, watched read %lu, watched write %lu, code %lu; "
+                         "flushes by code stores %lu\n",
+                         (unsigned long)g_spc_dbt_refused[0], (unsigned long)g_spc_dbt_refused[1],
+                         (unsigned long)g_spc_dbt_refused[2], (unsigned long)g_spc_dbt_refused[3],
+                         (unsigned long)g_spc_dbt_code_flushes);
+        memset(g_spc_dbt_refused, 0, sizeof g_spc_dbt_refused);
+        g_spc_dbt_code_flushes = 0; }
+      memset(g_spc_dbt_stats, 0, sizeof g_spc_dbt_stats);
+      g_spc_dbt_total = 0;
+    }
+#endif
 #ifdef SNESRECOMP_SPC_PC_PROFILE
     if (frame % 300 == 299) {
       extern uint32_t g_spc_pc_cycles[0x10000], g_spc_skip_cycles, g_spc_skip_count, g_spc_run_cycles;
@@ -810,6 +832,25 @@ static int host_main(void) {
                        (unsigned long)g_spc_run_cycles, (unsigned long)g_spc_skip_cycles,
                        (unsigned long)g_spc_skip_count);
       const uint8_t *ram = g_snes->apu->ram;
+      { /* Executed cycles by opcode (the opcode now at each address), with
+         * the running share: which opcodes a translator must cover. */
+        static uint64_t by_op[256];
+        uint64_t total = 0;
+        memset(by_op, 0, sizeof by_op);
+        for (int pc = 0; pc < 0x10000; pc++) { by_op[ram[pc]] += g_spc_pc_cycles[pc]; total += g_spc_pc_cycles[pc]; }
+        uint64_t run = 0;
+        char line[200]; int o = 0;
+        for (int k = 0; k < 256 && total; k++) {
+          int best = 0;
+          for (int op = 1; op < 256; op++) if (by_op[op] > by_op[best]) best = op;
+          if (!by_op[best]) break;
+          run += by_op[best];
+          o += snprintf(line + o, sizeof line - o, " %02x:%lu", best, (unsigned long)(run * 100 / total));
+          by_op[best] = 0;
+          if (o > 150) { n64_platform_log("[spcops]%s\n", line); o = 0; }
+        }
+        if (o) n64_platform_log("[spcops]%s\n", line);
+      }
       for (int k = 0; k < 24; k++) {
         uint32_t best = 0; int bpc = -1;
         for (int pc = 0; pc < 0x10000; pc++) if (g_spc_pc_cycles[pc] > best) { best = g_spc_pc_cycles[pc]; bpc = pc; }
