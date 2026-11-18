@@ -458,6 +458,7 @@ typedef struct {
   bool jumped;          /* bra/jmp followed: the block goes on at jump_to */
   uint16_t jump_to;
   uint8_t branch_len;   /* a conditional branch's length (branch_end) */
+  bool io_ok;           /* computed addresses may reach the I/O page (rd/wr check) */
 } Ctx;
 
 /* Superblocks: the trace of instructions in the block (a conditional
@@ -503,10 +504,10 @@ static inline bool is_rom(uint16_t adr) { return adr >= 0xffc0; }
 
 /* Call a runtime helper with apu in a0, the instruction's start cycle in
  * a3 (io_write) or a2 (io_read). Callers have set a1/a2. */
-static void call_cycle(Ctx *c, void *fn, int cyc_reg) {
+static void call_cycle_at(uint32_t o, void *fn, int cyc_reg) {
   LW(cyc_reg, F_END, SP);
   SUBU(cyc_reg, cyc_reg, RBUD);
-  ADDIU(cyc_reg, cyc_reg, c->o);      /* F_END - t8 + o: this instruction's cycle */
+  ADDIU(cyc_reg, cyc_reg, (int)o);    /* F_END - t8 + o: this instruction's cycle */
   LW(A0, offsetof(Spc, apu), RSPC);
   jal(fn);
   NOP();
@@ -515,8 +516,9 @@ static void call_cycle(Ctx *c, void *fn, int cyc_reg) {
   ORI(T1, ZERO, 1);                   /* the access may move the front end: */
   SW(T1, F_FE, SP);                   /* catch it up again before a store */
 }
+static void call_cycle(Ctx *c, void *fn, int cyc_reg) { call_cycle_at(c->o, fn, cyc_reg); }
 
-typedef struct { int kind, label, resume; uint16_t pc, o, adr; uint8_t where, src; } Stub;
+typedef struct { int kind, label, resume, bail; uint16_t pc, o, adr; uint8_t where, src; } Stub;
 static Stub s_stub[320];
 static int s_nstub;
 
@@ -566,15 +568,17 @@ static void fe_check(Ctx *c) {
 /* Addresses. Static ones are known now; dynamic ones are computed into t0
  * (0-$FFFF), with a run-time check that leaves the block if they land in
  * the I/O page or the IPL ROM's range. */
-typedef struct { bool dyn; uint16_t adr; } Addr;
+typedef struct { bool dyn; uint16_t adr; bool io; } Addr;   /* io: t0 may be in $F0-$FF */
 enum { M_DP = 1, M_ABS = 2, M_IND = 3, M_IMM = 5, M_DPX = 6, M_ABX = 7, M_ABY = 8, M_DPY = 10 };
 
 /* Returns false if the mode is not supported. len receives the operand
  * bytes. flag: 1 read, 2 written, 3 both. */
+static inline uint16_t hi_of(uint16_t base) { return (uint16_t)(base + 255); }
 static bool addr_of(Ctx *c, int mode, Addr *a, int *len, uint8_t flag) {
   const uint8_t *ram = c->ram;
   const uint16_t pc = c->pc, pg = (uint16_t)(c->p << 8);
   const uint8_t b1 = ram[(uint16_t)(pc + 1)], b2 = ram[(uint16_t)(pc + 2)];
+  a->io = false;
   switch (mode) {
     case M_DP:
       a->dyn = false; a->adr = (uint16_t)(pg | b1); *len = 1;
@@ -591,9 +595,12 @@ static bool addr_of(Ctx *c, int mode, Addr *a, int *len, uint8_t flag) {
     case M_IND: case M_DPX: case M_DPY: {
       const int idx = mode == M_DPY ? RY : RX;
       a->dyn = true; *len = mode == M_IND ? 0 : 1;
+      if (!c->p && c->io_ok) edge_sync(c);   /* before t0: its helper calls clobber it */
       if (mode == M_IND) MOVE(T0, idx);
       else { ADDIU(T0, idx, b1); ANDI(T0, T0, 0xff); }
-      if (!c->p) {   /* page 0: the I/O registers are at $F0-$FF */
+      if (!c->p && c->io_ok) {
+        a->io = true;   /* rd/wr reach the I/O registers at run time */
+      } else if (!c->p) {   /* page 0: the I/O registers are at $F0-$FF */
         SLTIU(T1, T0, 0xf0);
         BEQ(T1, ZERO, c->bail);
         c->bail_used = true;
@@ -607,12 +614,16 @@ static bool addr_of(Ctx *c, int mode, Addr *a, int *len, uint8_t flag) {
     case M_ABX: case M_ABY: {
       const uint16_t base = (uint16_t)(b1 | b2 << 8);
       a->dyn = true; *len = 2;
+      if (c->io_ok && (hi_of(base) < base || (base <= 0xff && hi_of(base) >= 0xf0)))
+        edge_sync(c);                        /* before t0: its helper calls clobber it */
       li(T1, base);
       ADDU(T0, mode == M_ABY ? RY : RX, T1);
       ANDI(T0, T0, 0xffff);
       const uint16_t hi = (uint16_t)(base + 255);
       const bool wraps = hi < base;
-      if (wraps || (base <= 0xff && hi >= 0xf0)) {   /* can reach the I/O page */
+      if ((wraps || (base <= 0xff && hi >= 0xf0)) && c->io_ok) {
+        a->io = true;
+      } else if (wraps || (base <= 0xff && hi >= 0xf0)) {   /* can reach the I/O page */
         ADDIU(T1, T0, -0xf0);
         SLTIU(T1, T1, 0x10);
         BNE(T1, ZERO, c->bail);
@@ -674,8 +685,32 @@ static void st(Ctx *c, int where, uint16_t adr, int src) {
 }
 
 /* Read the byte at a into dst. */
+/* A computed address that may be in the I/O page: plain ARAM inline; $F4-
+ * $FF through the runtime out of line (kinds 5 read, 6 write); $F0-$F3
+ * (they can sync the S-DSP or end the block) leave before the instruction. */
+static void io_cold(Ctx *c, int kind, int reg, bool dummy, int cold, int back) {
+  c->io = true;   /* (a loop through it goes back to the run loop: see taken_exit) */
+  if (s_nstub < (int)(sizeof s_stub / sizeof s_stub[0])) {
+    Stub *x = &s_stub[s_nstub++];
+    x->kind = kind; x->label = cold; x->resume = back; x->bail = c->bail; x->o = c->o;
+    x->src = (uint8_t)reg; x->where = dummy;
+    c->bail_used = true;
+  } else {
+    s_full = true;
+  }
+}
 static void rd(Ctx *c, const Addr *a, int dst) {
-  if (a->dyn) {
+  if (a->dyn && a->io) {   /* (addr_of synced the edges before computing t0) */
+    const int cold = new_label(), back = new_label();
+    ADDIU(T1, T0, -0xf0);
+    SLTIU(T1, T1, 0x10);
+    BNE(T1, ZERO, cold);
+    NOP();
+    ADDU(T1, RRAM, T0);
+    LBU(dst, -0x8000, T1);
+    bind(back);
+    io_cold(c, 5, dst, false, cold, back);
+  } else if (a->dyn) {
     ADDU(T1, RRAM, T0);
     LBU(dst, -0x8000, T1);
   } else if (is_io(a->adr)) {
@@ -691,8 +726,17 @@ static void rd(Ctx *c, const Addr *a, int dst) {
 }
 /* Write src to a (src must not be a t-register a helper call clobbers when
  * a is in the I/O page: pass t3 or an s-register; it is moved to a2 first). */
-static void wr(Ctx *c, const Addr *a, int src) {
-  if (a->dyn) {
+static void wr_dummy(Ctx *c, const Addr *a, int src, bool dummy) {
+  if (a->dyn && a->io) {   /* (addr_of synced the edges before computing t0) */
+    const int cold = new_label(), back = new_label();
+    ADDIU(T1, T0, -0xf0);
+    SLTIU(T1, T1, 0x10);
+    BNE(T1, ZERO, cold);
+    NOP();
+    st(c, 1, 0, src);
+    bind(back);
+    io_cold(c, 6, src, dummy, cold, back);
+  } else if (a->dyn) {
     st(c, 1, 0, src);
   } else if (is_io(a->adr)) {
     edge_sync(c);
@@ -705,6 +749,7 @@ static void wr(Ctx *c, const Addr *a, int src) {
     st(c, 0, a->adr, src);
   }
 }
+static void wr(Ctx *c, const Addr *a, int src) { wr_dummy(c, a, src, false); }
 static void set_zn(int r) { MOVE(RZ, r); MOVE(RN, r); }
 
 /* The sample edges before the end of the block (offset `used`), out of
@@ -860,7 +905,18 @@ static bool emit_generic(Ctx *c, uint8_t op, int *len) {
     fe_check(c);
   }
   Addr a;
-  if (!addr_of(c, mode, &a, len, flag)) return false;
+  /* SPC_DBT_DYN_IO=1: computed addresses in $F4-$FF go through the I/O
+   * helpers instead of leaving the block. Off: in SMW the hot case is the
+   * CPU handshake (a polling loop through abs+X), which the run loop's
+   * wait skip fast-forwards when interpreted; translated it spins (69.4 ms
+   * against 65.3 ms run phase). */
+#ifndef SPC_DBT_DYN_IO
+#define SPC_DBT_DYN_IO 0
+#endif
+  c->io_ok = SPC_DBT_DYN_IO;
+  const bool ok = addr_of(c, mode, &a, len, flag);
+  c->io_ok = false;
+  if (!ok) return false;
   switch (o) {
     case O_MOV: case O_MOVX: case O_MOVY: {
       const int r = o == O_MOV ? RA_ : o == O_MOVX ? RX : RY;
@@ -886,7 +942,7 @@ static bool emit_generic(Ctx *c, uint8_t op, int *len) {
     case O_MOVS: case O_MOVSX: case O_MOVSY: {
       const int r = o == O_MOVS ? RA_ : o == O_MOVSX ? RX : RY;
       if (!a.dyn && is_io(a.adr)) rd(c, &a, T3);   /* the dummy read reaches I/O */
-      wr(c, &a, r);
+      wr_dummy(c, &a, r, true);                    /* (computed: in its cold path) */
       return true;
     }
     default: {   /* read-modify-write on plain memory */
@@ -1414,6 +1470,27 @@ static Block *translate(Apu *apu, uint16_t pc, uint8_t p, bool may_flush) {
       SW(T1, F_FE, SP);
       LW(T0, F_SAVE0, SP);
       LW(T3, F_SAVE3, SP);
+      B(st->resume);
+      NOP();
+    } else if (st->kind == 5 || st->kind == 6) {   /* a computed address in $F0-$FF */
+      ADDIU(T1, T0, -0xf4);
+      SLTIU(T1, T1, 12);
+      BEQ(T1, ZERO, st->bail);    /* $F0-$F3: the interpreter runs it */
+      NOP();
+      SW(T0, F_SAVE0, SP);
+      if (st->kind == 6) SW(st->src, F_SAVE3, SP);
+      if (st->kind == 5 || st->where) {   /* the read (or a store's dummy read) */
+        MOVE(A1, T0);
+        call_cycle_at(st->o, (void *)spc_dbt_io_read, A2);
+        if (st->kind == 5) MOVE(st->src, V0);
+        LW(T0, F_SAVE0, SP);
+      }
+      if (st->kind == 6) {
+        LW(A2, F_SAVE3, SP);
+        MOVE(A1, T0);
+        call_cycle_at(st->o, (void *)spc_dbt_io_write, A3);
+        LW(T0, F_SAVE0, SP);
+      }
       B(st->resume);
       NOP();
     } else {                      /* the front end before a store */
