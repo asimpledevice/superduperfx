@@ -761,8 +761,8 @@ static int host_main(void) {
         n64_platform_log("[state] frame %lu wram %08lx aram %08lx dsp-out %08lx (%lu samples)\n",
                          (unsigned long)frame, (unsigned long)h, (unsigned long)ha,
                          (unsigned long)s_out_hash, (unsigned long)s_out_pos);
-        n64_platform_log("[spctime] frame %lu cycles %lu edges %lu pc %04x\n", (unsigned long)frame,
-                         (unsigned long)g_snes->apu->cycles, (unsigned long)g_snes->apu->dspEdges,
+        n64_platform_log("[spctime] frame %lu cycles %lu samples %lu pc %04x\n", (unsigned long)frame,
+                         (unsigned long)g_snes->apu->cycles, (unsigned long)s_out_pos,
                          g_snes->apu->spc->pc);
 #ifdef N64_RSPDSP
         { extern uint32_t g_snesdsp_rsp_ne_batches;

@@ -899,8 +899,8 @@ static int emit_insn(Ctx *c, uint8_t op, int *len) {
       XORI(T7, T7, 1);
       SB(T7, offsetof(Spc, v), RSPC);                       /* v = result > 0xff */
       ANDI(T7, RX, 0xf);
-      ANDI(T8, RY, 0xf);
-      SLTU(T7, T8, T7);
+      ANDI(T4, RY, 0xf);                                     /* (t8/t9 hold the budget) */
+      SLTU(T7, T4, T7);
       XORI(T7, T7, 1);
       SB(T7, offsetof(Spc, h), RSPC);                       /* h = (x & 15) <= (y & 15) */
       ANDI(RA_, T5, 0xff);
@@ -1159,6 +1159,23 @@ static Block *translate(Apu *apu, uint16_t pc, uint8_t p, bool may_flush) {
     s_full = false;
     emit_shared();
     s_have_epilogue = true;
+#ifdef N64_PROFILE_START
+    { /* The profiler names samples in these (n64/profile/symbolize.py). */
+      extern void n64_platform_log(const char *fmt, ...);
+      static bool logged;
+      if (!logged) {
+        logged = true;
+        const struct { uint32_t at; const char *name; } r[] = {
+          { s_epilogue, "dbt_epilogue" }, { s_exit, "dbt_exit" }, { s_edge, "dbt_edge" }, { s_fe, "dbt_fe" },
+          { s_enter, "dbt_enter" }, { s_link, "dbt_link" }, { s_dyn, "dbt_dyn" }, { s_ncode, "dbt_blocks" } };
+        for (int i = 0; i < 8; i++) {
+          const uint32_t end = i < 7 ? r[i + 1].at : kCodeWords;
+          n64_platform_log("PROFMOD %08lx %lu %s\n", (unsigned long)(uintptr_t)&s_code[r[i].at],
+                           (unsigned long)((end - r[i].at) * 4), r[i].name);
+        }
+      }
+    }
+#endif
   }
   const uint32_t start = s_ncode;
   Block *b = &s_blocks[s_nblocks];
@@ -1397,7 +1414,29 @@ uint32_t spc_dbt_run(Apu *apu, uint32_t limit) {
   const uint32_t edge0 = (32u - (c0 & 31u)) & 31u;
   s_target = (void *)b->fn;
   s_flushed = false;
+#ifdef SPC_DBT_SELFCHECK
+  extern uint32_t g_spc_dbt_edges;
+  const uint32_t e0 = g_spc_dbt_edges;
+#endif
   const uint32_t used = ((EnterFn)(void *)&s_code[s_enter])(spc, c0, edge0, limit);
+#ifdef SPC_DBT_SELFCHECK
+  { /* Self-check: the edges run are those at cycles in [c0, c0 + used). */
+    const uint32_t want = used ? ((c0 + used - 1) >> 5) - ((c0 + 31) >> 5) + 1 : 0;
+    const uint32_t got = g_spc_dbt_edges - e0;
+    static int bad;
+    if (got != (used && ((c0 + 31) >> 5) <= ((c0 + used - 1) >> 5) ? want : 0) && bad++ < 30) {
+      extern void n64_platform_log(const char *fmt, ...);
+      n64_platform_log("[dbtcheck] pc %04x -> %04x c0 %lu limit %lu used %lu edges %lu want %lu\n", pc, spc->pc,
+                       (unsigned long)c0, (unsigned long)limit, (unsigned long)used, (unsigned long)got,
+                       (unsigned long)want);
+      if (bad < 4) {
+        n64_platform_log("[dbtcheck]  bytes");
+        for (uint16_t a = pc; a != (uint16_t)(spc->pc + 4); a++) n64_platform_log(" %02x", apu->ram[a]);
+        n64_platform_log("\n");
+      }
+    }
+  }
+#endif
 #ifdef SPC_DBT_DUMP
   { extern void n64_platform_log(const char *fmt, ...);
     static int runs;

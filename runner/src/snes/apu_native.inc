@@ -263,8 +263,10 @@ uint32_t g_spc_skip_cycles, g_spc_skip_count, g_spc_run_cycles;
 
 #if SNESRECOMP_SPC_DBT
 /* The runtime's side of the SPC translator (apu.h). */
+uint32_t g_spc_dbt_edges;   /* edges run by translated code (self-check) */
 int spc_dbt_edge(Apu *apu, uint32_t cycle) {
   apu->cycles = cycle;
+  g_spc_dbt_edges++;
 #if SNESRECOMP_APU_DEFER_DSP
   const uint32_t pending = apu->dspPending;
   apu_dspEdge(apu);
