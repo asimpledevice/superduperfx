@@ -823,6 +823,9 @@ static int host_main(void) {
       n64_platform_log("[dspsync] 60 frames, syncs/samples:%s\n", b);
     }
 #endif
+#ifdef N64_INTERP_REPORT
+    if (frame % 300 == 299) { extern void interp_report_dump(void); interp_report_dump(); }
+#endif
 #if SNESRECOMP_SPC_DBT
     if (frame % 60 == 59) {
       extern uint32_t g_spc_dbt_stats[8], g_spc_dbt_total;

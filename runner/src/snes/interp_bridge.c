@@ -1740,6 +1740,55 @@ static uint8_t tier2_entry_mx(const CpuState *cpu);
  * the return-past-entry watermark exit is DISABLED, because such loops reset
  * their own stack (MMX: LDX #$02FF; TXS at $8099), which would otherwise trip
  * the is_ret watermark on the first task RTS. */
+#ifdef N64_INTERP_REPORT
+/* Measurement builds (n64 EXTRA_CFLAGS=-DN64_INTERP_REPORT): interpreted
+ * CPU cycles by guest PC and by the routine the interpreter was entered for
+ * (with M/X), dumped by interp_report_dump (the n64 host, every 300
+ * frames): which code runs interpreted, and from which entries. */
+typedef struct { uint32_t key; uint32_t cycles; } InterpRepEnt;
+enum { kInterpRepPc = 16384, kInterpRepEntry = 4096 };
+static InterpRepEnt s_rep_pc[kInterpRepPc], s_rep_entry[kInterpRepEntry];
+static uint32_t s_rep_total, s_rep_lost, s_rep_insns, s_rep_calls;
+static uint64_t s_rep_ticks;
+static void interp_rep_add(InterpRepEnt *t, uint32_t cap, uint32_t key, uint32_t cyc) {
+    uint32_t h = (key * 2654435761u) & (cap - 1);
+    for (uint32_t i = 0; i < 64; i++) {
+        InterpRepEnt *e = &t[(h + i) & (cap - 1)];
+        if (e->key == key + 1) { e->cycles += cyc; return; }
+        if (!e->key) { e->key = key + 1; e->cycles = cyc; return; }
+    }
+    s_rep_lost += cyc;
+}
+static void interp_rep_top(const char *what, InterpRepEnt *t, uint32_t cap, int n) {
+    extern void n64_platform_log(const char *fmt, ...);
+    for (int k = 0; k < n; k++) {
+        uint32_t best = 0, bi = 0;
+        for (uint32_t i = 0; i < cap; i++) if (t[i].cycles > best) { best = t[i].cycles; bi = i; }
+        if (!best) break;
+        const uint32_t key = t[bi].key - 1;
+        n64_platform_log("[interp-%s] %06lx m%u x%u %lu cycles (%lu.%lu%%)\n", what,
+                         (unsigned long)(key & 0xffffff), (unsigned)(key >> 25) & 1, (unsigned)(key >> 24) & 1,
+                         (unsigned long)best, (unsigned long)((uint64_t)best * 100 / s_rep_total),
+                         (unsigned long)((uint64_t)best * 1000 / s_rep_total % 10));
+        t[bi].cycles = 0;
+    }
+}
+void interp_report_dump(void) {
+    extern void n64_platform_log(const char *fmt, ...);
+    if (!s_rep_total) return;
+    n64_platform_log("[interp-total] %lu cycles interpreted, %lu not tabled; %lu instructions, %lu entries, "
+                     "%lu us inside (nested compiled bodies included)\n", (unsigned long)s_rep_total,
+                     (unsigned long)s_rep_lost, (unsigned long)s_rep_insns, (unsigned long)s_rep_calls,
+                     (unsigned long)(s_rep_ticks * 8 / 375));
+    s_rep_insns = s_rep_calls = 0; s_rep_ticks = 0;
+    interp_rep_top("entry", s_rep_entry, kInterpRepEntry, 60);
+    interp_rep_top("pc", s_rep_pc, kInterpRepPc, 80);
+    memset(s_rep_pc, 0, sizeof s_rep_pc);
+    memset(s_rep_entry, 0, sizeof s_rep_entry);
+    s_rep_total = s_rep_lost = 0;
+}
+#endif
+
 #ifdef SNESRECOMP_INTERP_PROFILE
 /* Dev-only per-PC histogram of interpreted steps. Compiled ONLY when the
  * cosim toolchain passes -DSNESRECOMP_INTERP_PROFILE; production builds
@@ -3210,7 +3259,16 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
             g_interp_bridge_pc_hook(pc_before & 0xFFFFFFu,
                                     in.mf ? 1 : 0, in.xf ? 1 : 0);
         if (s_idle_poll_count) s_idle_poll_now = bridge_is_idle_poll(pc_before);
+#ifdef N64_INTERP_REPORT
+        const uint32_t rep_mx = (uint32_t)(in.mf ? 1u << 25 : 0) | (in.xf ? 1u << 24 : 0);
+#endif
         int _cyc = interp816_runOpcode(&in);   /* executes the opcode; pushes/pops frames */
+#ifdef N64_INTERP_REPORT
+        s_rep_total += (uint32_t)_cyc;
+        s_rep_insns++;
+        interp_rep_add(s_rep_pc, kInterpRepPc, (pc_before & 0xffffff) | rep_mx, (uint32_t)_cyc);
+        interp_rep_add(s_rep_entry, kInterpRepEntry, (entry_pc24 & 0xffffff) | rep_mx, (uint32_t)_cyc);
+#endif
         s_idle_poll_now = 0;
         if (SNESRECOMP_INTERP_DIAG && s_interp_pctrace && steps < 4)
             fprintf(stderr, "[pctrace] step=%ld post-runOpcode cyc=%d pc=%02X:%04X\n",
@@ -3749,11 +3807,19 @@ static int interp_bridge_run_ex2(CpuState *cpu, uint32_t entry_pc24,
     const char *_scope_name = interp_scope_name(entry_pc24);
     g_last_recomp_func = _scope_name;
     RecompStackPushInterpreter(_scope_name);
+#ifdef N64_INTERP_REPORT
+    extern uint32_t snesrecomp_apu_ticks(void);
+    const uint32_t rep_t0 = snesrecomp_apu_ticks();
+#endif
     int _r = _interp_run_core(cpu, entry_pc24, s_exit, out_landing,
                               out_return_pc, yield_pc,
                               yield_flag_addr, yield_flag_value,
                               reset_cap_on_bounce, stop_pcs, n_stop,
                               stop_on_rti);
+#ifdef N64_INTERP_REPORT
+    s_rep_ticks += snesrecomp_apu_ticks() - rep_t0;
+    s_rep_calls++;
+#endif
     bridge_beam_catchup(cpu);  /* lazy beam: hand back a beam that is current */
     g_interp_wlog_pc24 = 0;  /* control returns to compiled code */
     RecompStackPop();
