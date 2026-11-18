@@ -278,12 +278,17 @@ uint32_t spc_dbt_run(Apu* apu, uint32_t limit);
 extern uint32_t g_spc_dbt_exit_o;
 /* Bits by pc: a wait loop the run loop's wait skip handles starts there. */
 extern uint8_t g_spc_dbt_wait[8192];
+/* Page bits (as Spc.dspWatchSync): some translated block reads the page. */
+extern uint8_t g_spc_dbt_rpages[32];
 void spc_dbt_flush(void);
 void spc_dbt_code_written(uint16_t adr);
 /* Bit (adr >> 5) & 7 of byte adr >> 8: a 32-byte line holds translated
  * code. g_spc_dbt_map[page][offset]: NULL not tried yet, (void *)1 not
  * translatable, else a block. */
 extern uint8_t g_spc_dbt_code[256];
+/* Translated blocks' validity epoch: += 2 when page marks, code lines or
+ * wait loops change; bit 0 flips with the direct page (P), so a block
+ * validated under one P is current again when P flips back. */
 extern uint32_t g_spc_dbt_epoch;
 extern void **g_spc_dbt_map[256];
 #endif

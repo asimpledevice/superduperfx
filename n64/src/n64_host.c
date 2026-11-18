@@ -830,6 +830,9 @@ static int host_main(void) {
                        (unsigned long)g_spc_dbt_stats[1], (unsigned long)g_spc_dbt_stats[2],
                        (unsigned long)g_spc_dbt_stats[3], (unsigned long)g_spc_dbt_stats[4],
                        (unsigned long)g_spc_dbt_stats[5], (unsigned long)g_spc_dbt_stats[6]);
+      { static uint32_t s_epoch0;
+        n64_platform_log("[spcdbt]   epochs %lu\n", (unsigned long)(g_spc_dbt_epoch - s_epoch0));
+        s_epoch0 = g_spc_dbt_epoch; }
       { extern uint32_t g_spc_dbt_refused[4], g_spc_dbt_code_flushes;
         n64_platform_log("[spcdbt]   refused: direct page %lu, watched read %lu, watched write %lu, code %lu; "
                          "flushes by code stores %lu\n",

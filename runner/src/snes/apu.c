@@ -18,7 +18,7 @@ static inline void apu_dspJoin(Apu* apu);
 /* The SPC translator caches which blocks may run against the page marks:
  * a new sync mark starts a new epoch (apu_dspMark; n64/src/spc_dbt.c). */
 #if SNESRECOMP_SPC_DBT
-#define SPC_DBT_MARKS_CHANGED() (g_spc_dbt_epoch++)
+#define SPC_DBT_MARKS_CHANGED() (g_spc_dbt_epoch += 2)   /* (bit 0 follows P: spc.c) */
 #else
 #define SPC_DBT_MARKS_CHANGED() ((void)0)
 #endif
@@ -527,7 +527,8 @@ static void apu_dspMark(Apu* apu, uint16_t start, uint32_t len, uint8_t bits) {
     /* Translated blocks were checked against the sync marks (their reads);
      * log marks are checked by every store and clearing marks never makes
      * a block invalid, so only a new sync mark starts an epoch. */
-    if ((bits & APU_DSP_WATCH_SYNC) && !(apu->spc->dspWatchSync[(p >> 3) & 31] & bit))
+    if ((bits & APU_DSP_WATCH_SYNC) && !(apu->spc->dspWatchSync[(p >> 3) & 31] & bit) &&
+        (g_spc_dbt_rpages[(p >> 3) & 31] & bit))   /* (a page no block reads: none to recheck) */
       SPC_DBT_MARKS_CHANGED();
 #endif
     if (bits & APU_DSP_WATCH_LOG) apu->spc->dspWatchLog[(p >> 3) & 31] |= bit;

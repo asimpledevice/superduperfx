@@ -199,7 +199,7 @@ static uint8_t spc_getFlags(Spc* spc) {
 
 static void spc_setFlags(Spc* spc, uint8_t val) {
 #if SNESRECOMP_SPC_DBT
-  g_spc_dbt_epoch++;   /* the direct page may change */
+  if (spc->p != ((val & 0x20) != 0)) g_spc_dbt_epoch ^= 1;   /* the direct page changes (apu.h) */
 #endif
   spc->n = val & 0x80;
   spc->v = val & 0x40;
@@ -987,7 +987,7 @@ static void spc_doOpcode(Spc* spc, uint8_t opcode) {
     }
     case 0x20: case 0x40: case 0x60: case 0x80: case 0xa0: case 0xc0: { // clrp setp clrc setc ei di
 #if SNESRECOMP_SPC_DBT
-      if (opcode <= 0x40) g_spc_dbt_epoch++;   /* the direct page changes */
+      if (opcode <= 0x40 && spc->p != (opcode == 0x40)) g_spc_dbt_epoch ^= 1;   /* the direct page changes */
 #endif
       bool* const f = opcode <= 0x40 ? &spc->p : opcode <= 0x80 ? &spc->c : &spc->i;
       *f = opcode == 0x40 || opcode == 0x80 || opcode == 0xa0;

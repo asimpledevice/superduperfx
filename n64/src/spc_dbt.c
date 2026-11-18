@@ -91,13 +91,15 @@ void spc_dbt_flush(void) {
   memset(g_spc_dbt_map, 0, sizeof g_spc_dbt_map);
   memset(g_spc_dbt_code, 0, sizeof g_spc_dbt_code);
   memset(g_spc_dbt_wait, 0, sizeof g_spc_dbt_wait);
+  memset(g_spc_dbt_rpages, 0, sizeof g_spc_dbt_rpages);
   s_ncode = s_nblocks = s_npages = 0;
   s_have_epilogue = false;
-  g_spc_dbt_epoch++;
+  g_spc_dbt_epoch += 2;
   g_spc_dbt_stats[1]++;
 }
 
 uint32_t g_spc_dbt_exit_o;
+uint8_t g_spc_dbt_rpages[32];
 uint32_t g_spc_dbt_code_flushes;
 void spc_dbt_code_written(uint16_t adr) {
 #ifdef SPC_DBT_DUMP
@@ -1528,6 +1530,9 @@ static Block *translate(Apu *apu, uint16_t pc, uint8_t p, bool may_flush) {
     }
   }
 #endif
+  /* Its read pages: a new sync mark on one starts an epoch (apu_dspMark). */
+  for (int i = 0; i < b->npages; i++)
+    if (b->pflag[i] & 1) g_spc_dbt_rpages[b->page[i] >> 3] |= (uint8_t)(1u << (b->page[i] & 7));
   /* Mark its code lines, so stores to them flush. */
   uint8_t new_lines = 0;
   for (int i = 0; i < s_ntr; i++)
@@ -1539,7 +1544,7 @@ static Block *translate(Apu *apu, uint16_t pc, uint8_t p, bool may_flush) {
   s_nblocks++;
   /* New code lines: blocks validated before may store to them. (Lines
    * already marked were part of every validation since.) */
-  if (new_lines) g_spc_dbt_epoch++;
+  if (new_lines) g_spc_dbt_epoch += 2;
   g_spc_dbt_stats[0]++;
   g_spc_dbt_stats[7] += (s_ncode - start) * 4;
   return b;

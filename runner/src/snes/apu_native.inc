@@ -344,7 +344,7 @@ static void apu_runCycles_native(Apu *apu, uint32_t clocks) {
         const uint16_t wpc = apu->spc->pc;
         if (!(g_spc_dbt_wait[wpc >> 3] & (1u << (wpc & 7)))) {
           g_spc_dbt_wait[wpc >> 3] |= (uint8_t)(1u << (wpc & 7));
-          g_spc_dbt_epoch++;   /* links into it go back through C */
+          g_spc_dbt_epoch += 2;   /* links into it go back through C */
         }
         at_target = true;      /* (the loop's pc: a branch target) */
 #endif
