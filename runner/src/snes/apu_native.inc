@@ -268,9 +268,7 @@ int spc_dbt_edge(Apu *apu, uint32_t cycle) {
 #if SNESRECOMP_APU_DEFER_DSP
   const uint32_t pending = apu->dspPending;
   apu_dspEdge(apu);
-  const int changed = pending == 0 || apu->dspPending != pending + 1;
-  g_spc_dbt_epoch += (uint32_t)changed;
-  return changed;
+  return pending == 0 || apu->dspPending != pending + 1;
 #else
   APU_NATIVE_DSP_CYCLE(apu->dsp);
   APU_FE_EDGE(apu);
@@ -282,17 +280,14 @@ void spc_dbt_slow_write(Apu *apu, uint32_t adr, uint32_t val, uint32_t cycle) {
   /* A store to a page the deferred S-DSP watches: apu_spcWriteRam's slow
    * path (the front end has been caught up). */
   apu->cycles = cycle;
-  g_spc_dbt_epoch++;
   apu_dspWriteSlow(apu, (uint16_t)adr, (uint8_t)val);
 }
 uint32_t spc_dbt_io_read(Apu *apu, uint32_t adr, uint32_t cycle) {
-  apu->cycles = cycle;
-  g_spc_dbt_epoch++;   /* $F3 can sync the S-DSP */
+  apu->cycles = cycle;   /* (a sync it causes starts a new epoch itself) */
   return apu_cpuRead(apu, (uint16_t)adr);
 }
 void spc_dbt_io_write(Apu *apu, uint32_t adr, uint32_t val, uint32_t cycle) {
   apu->cycles = cycle;
-  g_spc_dbt_epoch++;
   apu_cpuWrite(apu, (uint16_t)adr, (uint8_t)val);
 }
 uint32_t g_spc_dbt_total;   /* SPC cycles run (statistics) */

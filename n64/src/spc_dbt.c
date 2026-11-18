@@ -60,6 +60,10 @@ static uint32_t s_ncode, s_epilogue, s_exit, s_edge, s_fe, s_prologue, s_chain;
  * the direct page, translated code): a block validated in the current
  * epoch may be entered without checking again, so blocks chain. */
 uint32_t g_spc_dbt_epoch = 1;
+/* Block ends: 0 an exit that does not chain (leaving before an instruction),
+ * 1 no map page, 2 no block (or untranslatable), 3 stale epoch, 4 no time
+ * left, 5 chained. 6: edges that ended a block (batch change). */
+uint32_t g_spc_dbt_chainend[8];
 static bool s_have_epilogue;
 typedef uint32_t (*BlockFn)(Spc *spc, uint32_t c0, uint32_t edge0, uint32_t limit);
 typedef struct {
@@ -289,16 +293,28 @@ static void emit_shared(void) {
   SW(T7, F_C0, SP);
   SUBU(REDGE, REDGE, V0);
   SW(REDGE, F_EDGE, SP);
+  li(T7, (uint32_t)(uintptr_t)&g_spc_dbt_chainend[5]);
+  LW(T6, 0, T7);
+  ADDIU(T6, T6, 1);
+  SW(T6, 0, T7);
   LW(T5, offsetof(Block, fn), T5);
   ADDIU(T5, T5, 16);                 /* past its prologue call */
   JR(T5);
   NOP();
-  const uint32_t no_chain = s_ncode;
+  /* Why chains end (statistics): one counter per branch above. */
   const uint32_t fix[] = { no_chain0, no_chain1, no_chain2, no_chain3, no_chain4 };
-  for (int i = 0; i < 5; i++) s_code[fix[i]] |= (uint32_t)(no_chain - (fix[i] + 1)) & 0xffff;
-  MOVE(V0, T1);
-  j_(s_epilogue);
-  NOP();
+  uint32_t reason_at[5];
+  for (int i = 0; i < 5; i++) {
+    reason_at[i] = s_ncode;
+    li(T7, (uint32_t)(uintptr_t)&g_spc_dbt_chainend[i]);
+    LW(T6, 0, T7);
+    ADDIU(T6, T6, 1);
+    SW(T6, 0, T7);
+    MOVE(V0, T1);
+    j_(s_epilogue);
+    NOP();
+  }
+  for (int i = 0; i < 5; i++) s_code[fix[i]] |= (uint32_t)(reason_at[i] - (fix[i] + 1)) & 0xffff;
   s_chain = s_ncode;
   ORI(T1, ZERO, 1);
   SW(T1, F_CHAIN, SP);

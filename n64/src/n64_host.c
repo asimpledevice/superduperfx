@@ -820,6 +820,13 @@ static int host_main(void) {
                          (unsigned long)g_spc_dbt_refused[2], (unsigned long)g_spc_dbt_refused[3],
                          (unsigned long)g_spc_dbt_code_flushes);
         memset(g_spc_dbt_refused, 0, sizeof g_spc_dbt_refused);
+        extern uint32_t g_spc_dbt_chainend[8];
+        n64_platform_log("[spcdbt]   block ends: no-chain exit %lu, no map %lu, no block %lu, stale %lu, "
+                         "no time %lu, chained %lu\n",
+                         (unsigned long)g_spc_dbt_chainend[0], (unsigned long)g_spc_dbt_chainend[1],
+                         (unsigned long)g_spc_dbt_chainend[2], (unsigned long)g_spc_dbt_chainend[3],
+                         (unsigned long)g_spc_dbt_chainend[4], (unsigned long)g_spc_dbt_chainend[5]);
+        memset(g_spc_dbt_chainend, 0, sizeof g_spc_dbt_chainend);
         g_spc_dbt_code_flushes = 0; }
       memset(g_spc_dbt_stats, 0, sizeof g_spc_dbt_stats);
       g_spc_dbt_total = 0;

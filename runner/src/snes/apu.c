@@ -522,11 +522,15 @@ void apu_dspEchoRead(Apu* apu) { apu_dspSyncFor(apu, APU_DSP_SYNC_ECHO_READ); }
 _Static_assert(APU_DSP_MAX_PENDING * 0x3fffu / 0x10000u + 1u <= 65u, "BRR span");
 
 static void apu_dspMark(Apu* apu, uint16_t start, uint32_t len, uint8_t bits) {
-  SPC_DBT_MARKS_CHANGED();
   if (!len) return;
   const uint32_t first = start >> 8, last = ((uint32_t)start + len - 1u) >> 8;
   for (uint32_t p = first; p <= last; p++) {
     const uint8_t bit = (uint8_t)(1u << (p & 7));
+#if SNESRECOMP_SPC_DBT
+    if (((bits & APU_DSP_WATCH_LOG) && !(apu->spc->dspWatchLog[(p >> 3) & 31] & bit)) ||
+        ((bits & APU_DSP_WATCH_SYNC) && !(apu->spc->dspWatchSync[(p >> 3) & 31] & bit)))
+      SPC_DBT_MARKS_CHANGED();   /* a new mark */
+#endif
     if (bits & APU_DSP_WATCH_LOG) apu->spc->dspWatchLog[(p >> 3) & 31] |= bit;
     if (bits & APU_DSP_WATCH_SYNC) apu->spc->dspWatchSync[(p >> 3) & 31] |= bit;
   }
