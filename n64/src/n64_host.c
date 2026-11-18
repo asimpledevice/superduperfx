@@ -881,6 +881,22 @@ static int host_main(void) {
         }
         if (o) n64_platform_log("[spcops]%s\n", line);
       }
+#ifdef N64_SPC_IDX_REPORT
+      { static int dumped;
+        if (!dumped++) {
+          n64_platform_log("[spcidx-code]");
+          for (int a = 0x1490; a < 0x1500; a++) n64_platform_log(" %02x", ram[a]);
+          n64_platform_log("\n");
+        } }
+      { /* [dp+X] / [dp]+Y instructions executed, with their bytes. */
+        for (int pc = 0; pc < 0x10000; pc++) {
+          const uint8_t o = ram[pc];
+          if (g_spc_pc_cycles[pc] && ((o & 0x0f) == 0x07 && (o & 0x10) == 0x00 || (o & 0x1f) == 0x17))
+            n64_platform_log("[spcidx] %04x %02x %02x  %lu cycles\n", pc, o, ram[(uint16_t)(pc + 1)],
+                             (unsigned long)g_spc_pc_cycles[pc]);
+        }
+      }
+#endif
       for (int k = 0; k < 24; k++) {
         uint32_t best = 0; int bpc = -1;
         for (int pc = 0; pc < 0x10000; pc++) if (g_spc_pc_cycles[pc] > best) { best = g_spc_pc_cycles[pc]; bpc = pc; }

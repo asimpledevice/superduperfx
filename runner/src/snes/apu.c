@@ -530,6 +530,9 @@ static void apu_dspMark(Apu* apu, uint16_t start, uint32_t len, uint8_t bits) {
     if ((bits & APU_DSP_WATCH_SYNC) && !(apu->spc->dspWatchSync[(p >> 3) & 31] & bit) &&
         (g_spc_dbt_rpages[(p >> 3) & 31] & bit))   /* (a page no block reads: none to recheck) */
       SPC_DBT_MARKS_CHANGED();
+    /* The S-DSP may write this page (echo): translated code on it would go
+     * stale without an SPC store to say so. */
+    if ((bits & APU_DSP_WATCH_SYNC) && g_spc_dbt_code[p & 255]) spc_dbt_code_written((uint16_t)(p << 8));
 #endif
     if (bits & APU_DSP_WATCH_LOG) apu->spc->dspWatchLog[(p >> 3) & 31] |= bit;
     if (bits & APU_DSP_WATCH_SYNC) apu->spc->dspWatchSync[(p >> 3) & 31] |= bit;

@@ -99,6 +99,11 @@ void spc_dbt_flush(void) {
 }
 
 uint32_t g_spc_dbt_exit_o;
+int g_spc_dbt_trace_runs;   /* (spc_dbt_test.c: log each run) */
+#ifndef SPC_DBT_TEST_WATCH
+#define SPC_DBT_TEST_WATCH 0x00, 0x01, 0x02
+#endif
+uint16_t g_spc_dbt_watch[3] = { SPC_DBT_TEST_WATCH };   /* (and the ARAM bytes it shows) */
 uint8_t g_spc_dbt_rpages[32];
 uint32_t g_spc_dbt_code_flushes;
 void spc_dbt_code_written(uint16_t adr) {
@@ -615,6 +620,13 @@ static bool addr_of(Ctx *c, int mode, Addr *a, int *len, uint8_t flag) {
       return true;
     }
     case M_IDX: case M_IDY: {
+      /* SPC_DBT_IDX=1 enables these. Off by default: exact in SMW, Joe &
+       * Mac 2 and the random test (live S-DSP included), but Pitfall's
+       * state diverges from frame ~290 with them on, for a reason not yet
+       * found (docs/n64/SPC_TRANSLATOR.md). */
+#if !defined(SPC_DBT_IDX) || !SPC_DBT_IDX
+      return false;
+#endif
       /* [dp+X] / [dp]+Y: a pointer in the direct page, then anywhere: the
        * target is checked at run time (rd/wr), not by the block's pages.
        * Edges first: rd's slow read calls C, which clobbers t0. */
@@ -760,7 +772,11 @@ static void rd_any(Ctx *c, int dst) {
   r_(T2, T1, T1, 0, 6);              /* srlv t1, t1, t2 */
   ANDI(T1, T1, 1);
   const int cold = new_label(), back = new_label();
+#ifdef SPC_DBT_IDX_SYNC_BAIL
+  BNE(T1, ZERO, c->bail);   /* (bisection) */
+#else
   BNE(T1, ZERO, cold);
+#endif
   NOP();
   ADDU(T1, RRAM, T0);
   LBU(dst, -0x8000, T1);
@@ -805,8 +821,8 @@ static void wr_dummy(Ctx *c, const Addr *a, int src, bool dummy) {
   if (a->dyn && a->any) {
     /* I/O registers, and lines holding translated code (the interpreter's
      * store flushes the translations), leave before the instruction; the
-     * store then goes through st's mark checks. (A store's dummy read of
-     * plain memory has no effect.) */
+     * store then goes through st's mark checks. (MOV's dummy read is
+     * emitted before, by emit_generic.) */
     (void)dummy;
     ADDIU(T1, T0, -0xf0);
     SLTIU(T1, T1, 0x10);
@@ -943,6 +959,10 @@ static void branch_end(Ctx *c, int len, int8_t rel, uint32_t base_cycles, bool w
   NOP();
   taken_exit(c, target, c->o + base_cycles + 2);
   bind(fall);
+#ifdef SPC_DBT_NO_SUPER
+  exit_const(c, next, c->o + base_cycles);   /* (bisection: blocks end at branches) */
+  return;
+#endif
   c->cont = true;                    /* the block goes on at next */
 }
 
@@ -988,6 +1008,9 @@ static bool emit_generic(Ctx *c, uint8_t op, int *len) {
   const bool store = o == O_MOVS || o == O_MOVSX || o == O_MOVSY;
   const uint8_t flag = (uint8_t)(rmw || store ? 3 : 1);
   if ((rmw || store) && mode == M_IMM) return false;
+#ifdef SPC_DBT_IDX_NOSTORE
+  if ((rmw || store) && (mode == M_IDX || mode == M_IDY)) return false;   /* (bisection) */
+#endif
   /* RMW of an I/O register: left to the interpreter. */
   if (rmw && !(mode == M_IND || mode == M_DPX || mode == M_DPY || mode == M_ABX || mode == M_ABY)) {
     const uint16_t pg = (uint16_t)(c->p << 8);
@@ -1039,6 +1062,10 @@ static bool emit_generic(Ctx *c, uint8_t op, int *len) {
     case O_MOVS: case O_MOVSX: case O_MOVSY: {
       const int r = o == O_MOVS ? RA_ : o == O_MOVSX ? RX : RY;
       if (!a.dyn && is_io(a.adr)) rd(c, &a, T3);   /* the dummy read reaches I/O */
+      /* (and a target anywhere: the dummy read of a page with a sync mark
+       * syncs the S-DSP, as spc_movs's spc_read does; other computed
+       * targets' pages are checked when the block is validated) */
+      if (a.dyn && a.any) rd(c, &a, T3);
       wr_dummy(c, &a, r, true);                    /* (computed: in its cold path) */
       return true;
     }
@@ -1074,6 +1101,9 @@ static bool dp_word(Ctx *c, uint16_t *lo, uint16_t *hi, uint8_t flag) {
  * dp,#imm ($x8), x = OR, AND, EOR, CMP, ADC, SBC (spc.c's spc_orm and
  * friends: read the source, read the destination, write it unless CMP). */
 static bool emit_dp2(Ctx *c, uint8_t op, int *len) {
+#ifdef SPC_DBT_NO_DP2
+  return false;
+#endif
   if ((op & 0x0f) != 0x09 && (op & 0x0f) != 0x08) return false;
   if (op >= 0xc0 || ((op & 0x0f) == 0x08 && !(op & 0x10)) || ((op & 0x0f) == 0x09 && (op & 0x10)))
     return false;
@@ -1480,6 +1510,11 @@ static Block *translate(Apu *apu, uint16_t pc, uint8_t p, bool may_flush) {
   while (n < kMaxInsns) {
     const uint8_t op = c.ram[c.pc];
     if (c.pc >= 0xff00 || c.pc < 0x200) break;
+    /* Code on a page the S-DSP may write (echo) is not translated: the
+     * interpreter syncs before it fetches there (apu_dspMark drops
+     * translations when a page with code gets the mark). */
+    if (APU_DSP_PAGE_BIT(apu->spc->dspWatchSync, c.pc) ||
+        APU_DSP_PAGE_BIT(apu->spc->dspWatchSync, (uint16_t)(c.pc + 2))) break;
     c.bail = new_label();
     c.exit_after = false;
     c.fe_checked = false;
@@ -1794,6 +1829,14 @@ uint32_t spc_dbt_run(Apu *apu, uint32_t limit) {
   const uint32_t e0 = g_spc_dbt_edges;
 #endif
   const uint32_t used = ((EnterFn)(void *)&s_code[s_enter])(spc, c0, edge0, limit);
+  if (g_spc_dbt_trace_runs) {
+    extern void n64_platform_log(const char *fmt, ...);
+    extern uint16_t g_spc_dbt_watch[3];
+    n64_platform_log("[dbt-run] %04x c%lu +%lu -> %04x a%02x x%02x y%02x sp%02x c%d z%d n%d v%d h%d p%d  w %02x %02x %02x\n", pc,
+                     (unsigned long)c0, (unsigned long)used, spc->pc, spc->a, spc->x, spc->y, spc->sp, spc->c,
+                     spc->z, spc->n, spc->v, spc->h, spc->p, apu->ram[g_spc_dbt_watch[0]], apu->ram[g_spc_dbt_watch[1]],
+                     apu->ram[g_spc_dbt_watch[2]]);
+  }
 #ifdef SPC_DBT_SELFCHECK
   if (used > limit) {
     extern void n64_platform_log(const char *fmt, ...);

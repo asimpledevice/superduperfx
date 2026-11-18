@@ -85,19 +85,65 @@ makes later timings comparable.
    is an inline exit); branches back into the block become direct jumps
    behind the budget check, so driver loops stay in one block. Needs edge
    timing from a running cycle register instead of static offsets.
-6. **Cheaper checks and flags.** One per-page "store needs care" byte
-   (S-DSP log marks, view-fresh pages, translated code) instead of two
-   loads per store; dead N/Z/C write elimination within a block.
-7. **Coverage.** The remaining opcodes ([dp+X], [dp]+Y, dp,dp and dp,#imm
-   ALU forms, PSW push/pop, TCALL/PCALL, BRK/RETI).
-   What the interpreter still runs in SMW (0.58M cycles per 300 frames):
-   the CPU handshake loop at $05A9-$05C0, whose abs+X accesses land in
-   the I/O page (computed I/O addresses leave the block today: they need
-   a run-time path to the I/O helpers), and $10A1-$10E4 ([dp+X] forms).
-8. **Validation and default.** An SPC test ROM for the N64 (the native
-   core's random-program contract, apu_native_test, run against the
-   translator); all three games' hashes; EverDrive timing; then decide
-   whether SPCDBT becomes the default.
+6. *(6a done)* **Cheaper checks and flags.** The largest translator
+   overhead in a profile was block validation, run every time the
+   validity epoch moved, and SMW's driver toggles the direct page ~1800
+   times per 60 frames. The epoch's bit 0 now follows P (so a block
+   validated under one P is current again when P flips back), P changes
+   count only when P changes, and a new sync mark moves the epoch only on
+   a page some translated block reads: slow-path entries 17k -> 0 per 60
+   frames, SPC time 24.25 -> 21.87 ms per frame.
+   *Evaluated, not done:* one per-page "store needs care" byte (saves two
+   instructions per store but needs hooks wherever the S-DSP's log or
+   view-fresh marks change) and dead N/Z elimination (almost every
+   instruction can leave the block, and N/Z must be right there). Both
+   are small next to what remains (see 7).
+7. *(mostly done)* **Coverage.** Done: OR/AND/EOR/CMP/ADC/SBC dp,dp and
+   dp,#imm; a pc whose instruction is not covered marks the next one as a
+   block start. [dp+X] and [dp]+Y are written (targets checked at run
+   time: I/O and IPL ROM leave the block, sync-marked pages read through
+   the runtime, stores to translated code lines leave the block, MOV's
+   dummy read syncs like the interpreter's) but **opt-in**
+   (`EXTRA_CFLAGS=-DSPC_DBT_IDX=1`): exact in SMW, Joe & Mac 2 and the
+   random test with a live S-DSP, yet Pitfall's ARAM diverges from frame
+   ~290 with them on (same SPC cycle count, so a real difference; not
+   reproduced by the random test, even with Pitfall's loop code in it).
+   Computed I/O through the helpers (`SPC_DBT_DYN_IO=1`) was exact but
+   neutral (21.01 vs 21.02 ms SPC time): off. Left: PSW push/pop,
+   TCALL/PCALL, BRK/RETI, SETP/CLRP (blocks are kept per pc, not per
+   direct page). What SMW still interprets (~0.5M cycles per 300 frames)
+   is mostly its CPU handshake loop ($05A9-$05C0), which nothing made
+   faster.
+8. *(done except hardware)* **Validation and default.**
+   - `SPCDBT_TEST=1`: an N64 test ROM (src/spc_dbt_test.c) runs random
+     SPC programs (structured loops of random non-branch instructions with
+     random operands, and fully random memory) on a translated and an
+     interpreted APU and compares ARAM, ports, timers, registers and the
+     S-DSP after every slice. It found the missing code-store check (see
+     below) on its first full run.
+   - SMW, Pitfall, Joe & Mac 2: S-DSP output marks and WRAM/ARAM states
+     match the interpreter. (Pitfall's own run is not reproducible between
+     builds after ~frame 800, translator or not, so it compares against a
+     no-translator run of the same source.)
+   - Not done: EverDrive timing (the owner's hardware).
+   - Default: stays off (`SPCDBT=0`) until it has run on the EverDrive:
+     the translator writes code and maintains the caches itself, which
+     ares checks but hardware has the last word on.
+
+Bugs the test and the games found in this round:
+- The interpreter's store path checked for translated code only in the
+  audio-split build: in the translator's own configuration a store into
+  translated code never dropped it (Pitfall uploads code as it plays).
+- S-DSP echo writes can land on translated code (no SPC store to say so):
+  a page with translated code that gets a sync mark (the S-DSP may write
+  it) now drops the translations, and code on a sync-marked page is not
+  translated.
+- [dp+X] stores skipped the dummy read that syncs the S-DSP.
+- Struct initializers broke when a field was added mid-struct.
+- Test harness only: the two APUs share the RSP (each one's S-DSP batches
+  are now joined before the other runs) and the validity epoch (the
+  reference's P changes flipped the bit that follows the translated
+  APU's P).
 
 Options to weigh along the way (from the same projects):
 

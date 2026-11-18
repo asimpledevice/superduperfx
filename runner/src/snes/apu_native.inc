@@ -305,7 +305,11 @@ uint32_t g_spc_dbt_total;   /* SPC cycles run (statistics) */
  * interpreter reached by stepping through straight-line code (a block that
  * did not fit in the time left, say) gets no block of its own: every
  * suffix of a block would. */
-bool g_spc_dbt_enabled = true;   /* (the translator's self-test runs a reference with it off) */
+#ifdef SPC_DBT_START_OFF
+bool g_spc_dbt_enabled = false;   /* (bisection: the translator built in but never used) */
+#else
+bool g_spc_dbt_enabled = true;
+#endif   /* (the translator's self-test runs a reference with it off) */
 static inline bool apu_native_dbtWants(uint16_t pc, bool at_target) {
   if (__builtin_expect(!g_spc_dbt_enabled, 0)) return false;
   void **const pg = g_spc_dbt_map[pc >> 8];
@@ -348,10 +352,12 @@ static void apu_runCycles_native(Apu *apu, uint32_t clocks) {
         /* A wait loop the skip handles: translated code leaves before it
          * (spc_dbt_may_run), so the skip gets to fast-forward it. */
         const uint16_t wpc = apu->spc->pc;
+#ifndef SPC_DBT_NO_WAITMARK
         if (!(g_spc_dbt_wait[wpc >> 3] & (1u << (wpc & 7)))) {
           g_spc_dbt_wait[wpc >> 3] |= (uint8_t)(1u << (wpc & 7));
           g_spc_dbt_epoch += 2;   /* links into it go back through C */
         }
+#endif
         at_target = true;      /* (the loop's pc: a branch target) */
 #endif
 #ifdef SNESRECOMP_SPC_PC_PROFILE

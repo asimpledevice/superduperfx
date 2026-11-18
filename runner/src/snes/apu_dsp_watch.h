@@ -9,6 +9,16 @@
 #if SNESRECOMP_ECHO_IN_PLACE && !(SNESRECOMP_APU_DEFER_DSP && SNESRECOMP_DSP_FRONTEND)
 #error "SNESRECOMP_ECHO_IN_PLACE needs SNESRECOMP_APU_DEFER_DSP and SNESRECOMP_DSP_FRONTEND"
 #endif
+/* An SPC store to a 32-byte line holding translated code (the SPC
+ * translator, SNESRECOMP_SPC_DBT) drops the translations: every variant
+ * below checks it. */
+#if SNESRECOMP_SPC_DBT
+#define APU_DBT_BEFORE_ARAM_WRITE(adr) \
+  do { if (__builtin_expect(g_spc_dbt_code[(adr) >> 8] & (1u << (((adr) >> 5) & 7)), 0)) \
+         spc_dbt_code_written(adr); } while (0)
+#else
+#define APU_DBT_BEFORE_ARAM_WRITE(adr) ((void)0)
+#endif
 #if SNESRECOMP_DSP_STREAM
 /* The audio split: the SPC's ARAM accesses leave the fast path only on
  * pages where the S-DSP may still touch an echo line (its ring in use, or a
@@ -22,10 +32,7 @@ static inline bool apu_streamLate(const Apu* apu, uint32_t stamp) {
 void apu_streamLedger(Apu* apu, uint16_t adr);
 static inline void apu_spcWriteRam(Apu* apu, uint16_t adr, uint8_t val) {
   APU_FE_BEFORE_ARAM_WRITE(apu);
-#if SNESRECOMP_SPC_DBT
-  if (__builtin_expect(g_spc_dbt_code[adr >> 8] & (1u << ((adr >> 5) & 7)), 0))
-    spc_dbt_code_written(adr);
-#endif
+  APU_DBT_BEFORE_ARAM_WRITE(adr);
   APU_FE_ECHO_LOG(apu, adr, 1);
   const uint32_t p = adr >> 8;
   if (__builtin_expect(((apu->echoRegion[p >> 3] >> (p & 7)) & 1) ||
@@ -64,6 +71,7 @@ static inline uint8_t apu_spcReadRam(Apu* apu, uint16_t adr) {
 static inline void apu_spcWriteRam(Apu* apu, uint16_t adr, uint8_t val) {
   APU_FE_BEFORE_ARAM_WRITE(apu);
   APU_FE_ECHO_LOG(apu, adr, 1);
+  APU_DBT_BEFORE_ARAM_WRITE(adr);
 #if SNESRECOMP_APU_DEFER_DSP_VERIFY
   if (apu->dspPending) { apu_dspLogRam(apu, adr, val); return; }
 #endif
@@ -91,6 +99,7 @@ static inline uint8_t apu_spcReadRam(Apu* apu, uint16_t adr) {
 static inline void apu_spcWriteRam(Apu* apu, uint16_t adr, uint8_t val) {
   APU_FE_BEFORE_ARAM_WRITE(apu);
   APU_FE_ECHO_LOG(apu, adr, 1);
+  APU_DBT_BEFORE_ARAM_WRITE(adr);
   apu->ram[adr] = val;
 }
 static inline uint8_t apu_spcReadRam(Apu* apu, uint16_t adr) {
