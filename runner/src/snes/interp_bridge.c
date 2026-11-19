@@ -2444,40 +2444,46 @@ static BRIDGE_COLD int bridge_wait_replay(CpuState *cpu, Interp816 *in, const Br
         if (!at->i && g_snes->inIrq) { site = INTERP_RESUME_SITE_IRQ_PENDING; break; }
         if (g_master_cycles >= s_lle_master_deadline) break;
 #if SNESRECOMP_LAZY_BEAM
-        /* Whole laps in one go, as many as end before anything a single step
-         * could meet: the deadline, the next beam event (so no IRQ can latch
-         * and the per-step beam call returns at once), the refresh tax's
-         * next scanline (its per-step charge stays the plain sum) and the
-         * APU flush threshold. Stepping them one by one would leave the same
-         * state. */
+        /* Whole laps in one go, as many as end before the deadline and
+         * before the H/V comparator can latch; stepping them one by one
+         * would leave the same state:
+         * - the beam is walked to here first, and nothing during the wait
+         *   can observe it before the latch, so one walk afterwards equals
+         *   the per-step walks;
+         * - the refresh tax is 40 clocks each time its phase passes a
+         *   scanline, which every step would charge at the same phase;
+         * - the SPC is caught up from the pending total, however sliced. */
         if (e == 0 && lap_master) {
-            uint64_t k = (s_lle_master_deadline - g_master_cycles) / lap_master, lim;
-            lim = s_beam_next_event > g_master_cycles
-                      ? (s_beam_next_event - g_master_cycles - 1) / lap_master : 0;
-            if (lim < k) k = lim;
-            {
-                const uint64_t upto = g_refresh_charged_upto;
-                const uint64_t used = upto && g_master_cycles >= upto
-                                          ? g_refresh_phase + (g_master_cycles - upto) : 1364u;
-                lim = used < 1364u ? (1363u - used) / lap_master : 0;
-                if (lim < k) k = lim;
+            bridge_beam_catchup(cpu);
+            uint64_t bound = s_lle_master_deadline;
+            if (g_snes->hIrqEnabled || g_snes->vIrqEnabled) {
+                const uint32_t to = snes_master_clocks_until_irq(g_snes);
+                if (to && g_snes->beamMasterLast + to - 1 < bound)
+                    bound = g_snes->beamMasterLast + to - 1;
             }
-            if (apu_batch) {
-                lim = s_apu_pending_master < apu_flush_thresh
-                          ? (apu_flush_thresh - 1 - s_apu_pending_master) / lap_master : 0;
-                if (lim < k) k = lim;
-            }
-            lim = (uint64_t)(step_cap - steps - j - 1) / (uint64_t)n;
-            if (lim < k) k = lim;
-            if (k) {
-                g_interp_bridge_steps += k * (uint64_t)n;
-                g_master_cycles += k * lap_master;
-                snes_refresh_charge_inline(g_master_cycles);
-                g_open_bus = idle_cost[(first + n - 1) & 63].open_bus;
-                g_coprocessor_master_cycles = g_master_cycles;
-                if (apu_batch) s_apu_pending_master += k * lap_master;
-                j += (long)(k * (uint64_t)n) - 1;
-                continue;
+            const uint64_t upto = g_refresh_charged_upto;
+            if (upto && g_master_cycles == upto && bound > g_master_cycles) {
+                /* 1364 clocks of work cost 1404 with the tax: an estimate,
+                 * then the exact cost of that many laps, backed off until
+                 * it fits. */
+                uint64_t k = (bound - g_master_cycles) * 1364u / (1404u * lap_master), lines = 0;
+                const uint64_t cap_k = (uint64_t)(step_cap - steps - j - 1) / (uint64_t)n;
+                if (k > cap_k) k = cap_k;
+                for (; k; k--) {
+                    lines = (g_refresh_phase + k * lap_master) / 1364u;
+                    if (g_master_cycles + k * lap_master + 40u * lines <= bound) break;
+                }
+                if (k > 1) {
+                    g_interp_bridge_steps += k * (uint64_t)n;
+                    g_refresh_phase = g_refresh_phase + k * lap_master - lines * 1364u;
+                    g_master_cycles += k * lap_master + 40u * lines;
+                    g_refresh_charged_upto = g_master_cycles;
+                    g_open_bus = idle_cost[(first + n - 1) & 63].open_bus;
+                    g_coprocessor_master_cycles = g_master_cycles;
+                    if (apu_batch) s_apu_pending_master += k * lap_master;   /* (the tax is not SPC time, as per step) */
+                    j += (long)(k * (uint64_t)n) - 1;
+                    continue;
+                }
             }
         }
 #endif
