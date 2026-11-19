@@ -149,6 +149,12 @@ uint32_t g_apu_port_writes, g_apu_port_burst;
 uint32_t g_apu_catchups, g_apu_port_burst_max;
 #endif
 
+#ifdef N64_STATE_HASH
+/* (Check builds: how often a port write re-anchored guest time to the SPC's
+ * clock -- [0] no anchor or guest time went back, [1] the SPC was already
+ * past the write's time -- and [2] by how many cycles in total.) */
+uint32_t g_apu_rebase[3];
+#endif
 bool apu_schedulePortWrite(Apu* apu, uint8_t port, uint8_t val,
                            uint64_t guest_cycle) {
   if (apu_portQueueDepth(apu) >= APU_PORT_QUEUE_LEN)
@@ -165,11 +171,18 @@ bool apu_schedulePortWrite(Apu* apu, uint8_t port, uint8_t val,
     apu->portGuestAnchor = guest_cycle;
     apu->portTargetAnchor = apu->portClock;
     apu->portTimeValid = true;
+#ifdef N64_STATE_HASH
+    g_apu_rebase[0]++;
+#endif
   }
 
   uint64_t target = apu->portTargetAnchor +
                     (guest_cycle - apu->portGuestAnchor);
   if (target < apu->portClock) {
+#ifdef N64_STATE_HASH
+    g_apu_rebase[1]++;
+    g_apu_rebase[2] += (uint32_t)(apu->portClock - target);
+#endif
     apu->portGuestAnchor = guest_cycle;
     apu->portTargetAnchor = apu->portClock;
     target = apu->portClock;

@@ -863,6 +863,15 @@ static int host_main(void) {
                          cpu_P(), (unsigned long long)g_master_cycles);
       }
 #endif
+#ifdef N64_SPCTIME_FROM
+      if (frame >= N64_SPCTIME_FROM && frame <= N64_SPCTIME_TO) {
+        extern uint32_t g_apu_rebase[3];
+        n64_platform_log("[spcframe] %lu cycles %lu pc %04x anchors %lu %lu %lu master %llu\n", (unsigned long)frame,
+                         (unsigned long)g_snes->apu->cycles, g_snes->apu->spc->pc, (unsigned long)g_apu_rebase[0],
+                         (unsigned long)g_apu_rebase[1], (unsigned long)g_apu_rebase[2],
+                         (unsigned long long)g_master_cycles);
+      }
+#endif
       if (frame % N64_STATE_HASH_PERIOD == 0) {
         uint32_t h = 2166136261u, ha = 2166136261u;
         for (int i = 0; i < 0x20000; ++i) h = (h ^ g_snes->ram[i]) * 16777619u;
@@ -873,6 +882,10 @@ static int host_main(void) {
         n64_platform_log("[spctime] frame %lu cycles %lu samples %lu pc %04x\n", (unsigned long)frame,
                          (unsigned long)g_snes->apu->cycles, (unsigned long)s_out_pos,
                          g_snes->apu->spc->pc);
+        { extern uint32_t g_apu_rebase[3];
+          n64_platform_log("[spcanchor] frame %lu re-anchors %lu (no anchor / time back), %lu (SPC ahead of the write), "
+                           "%lu cycles ahead in total\n", (unsigned long)frame, (unsigned long)g_apu_rebase[0],
+                           (unsigned long)g_apu_rebase[1], (unsigned long)g_apu_rebase[2]); }
 #ifdef N64_RSPDSP
         { extern uint32_t g_snesdsp_rsp_ne_batches;
           n64_platform_log("[rspdsp] no-echo variant: %lu batches\n", (unsigned long)g_snesdsp_rsp_ne_batches); }
