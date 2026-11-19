@@ -39,7 +39,7 @@
 #define I816_UNREACHABLE() ((void)0)
 #endif
 
-static const int cyclesPerOpcode[256] = {
+static const uint8_t cyclesPerOpcode[256] = {   /* (bytes: as ints the table was 1 KB of the 8 KB data cache) */
   7, 6, 7, 4, 5, 3, 5, 6, 3, 2, 2, 4, 6, 4, 6, 5,
   2, 5, 5, 7, 5, 4, 6, 6, 2, 4, 2, 2, 6, 4, 7, 5,
   6, 6, 8, 4, 3, 3, 5, 6, 4, 2, 2, 5, 4, 4, 6, 5,
