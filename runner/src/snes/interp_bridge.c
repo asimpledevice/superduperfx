@@ -445,9 +445,21 @@ static int bridge_read_is_stable(uint32_t adr) {
  * Invalidated (0) whenever the bridge touches anything that can move or
  * reconfigure the beam: any non-WRAM/ROM access and every bridge entry. */
 static uint64_t s_beam_next_event;
+/* SNESRECOMP_INTERP_BURST=2 (the lean loop in _interp_run_core): the guest
+ * master clock up to which a plain instruction needs nothing but its own
+ * clock advance -- no beam event, refresh charge, deadline or SPC catch-up
+ * falls due before it. 0 = not known; set to 0 with the beam's cached event,
+ * i.e. by every access outside plain RAM and ROM and every bridge entry. */
+#if SNESRECOMP_INTERP_BURST == 2
+static uint64_t s_lean_event;
+#define BRIDGE_LEAN_EVENT_RESET() (s_lean_event = 0)
+#else
+#define BRIDGE_LEAN_EVENT_RESET() ((void)0)
+#endif
 static inline void bridge_beam_catchup(const CpuState *cpu) {
 #if SNESRECOMP_LAZY_BEAM
     s_beam_next_event = 0;
+    BRIDGE_LEAN_EVENT_RESET();
     if (g_snes && g_master_cycles != g_snes->beamMasterLast)
         snes_sync_master_clock(g_snes, g_master_cycles);
 #else
@@ -1395,6 +1407,7 @@ int interp_bridge_lle_deadline_pause(CpuState *cpu, uint32_t resume_pc24) {
              * changed the cartridge mapping. */
 #if SNESRECOMP_LAZY_BEAM
             s_beam_next_event = 0;
+            BRIDGE_LEAN_EVENT_RESET();
 #endif
             cpu_fast_map_validate();
             return 0;
@@ -2982,6 +2995,7 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
     cpu_fast_map_validate();
 #if SNESRECOMP_LAZY_BEAM
     s_beam_next_event = 0;   /* the scheduler may have moved the beam */
+    BRIDGE_LEAN_EVENT_RESET();
 #endif
     /* Fixed for the run: whether the cart has a coprocessor to keep in step,
      * and the APU batch threshold. */
@@ -4273,6 +4287,134 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
          *
          * This is also the contract a translated block has to meet; the
          * interpreter core stands in for generated code here. */
+#if SNESRECOMP_INTERP_BURST == 2
+        /* The lean loop. As the burst below, with the per-step questions
+         * about time -- refresh line crossed, beam event reached, deadline
+         * passed, SPC catch-up due -- asked as one: has the clock reached
+         * s_lean_event, the earliest of them? Until it has, a step is the
+         * opcode and its clock advance. When it has, the step ends with
+         * exactly what the big loop does after every step (refresh charge,
+         * beam, SPC catch-up, in that order), the next step starts with the
+         * big loop's IRQ and deadline checks, and the event is worked out
+         * again. An IRQ that is pending but masked keeps the event at 0, so
+         * every step is checked until it is taken. The per-step cost record
+         * is not kept: only the replays read it, a lap is recorded by the
+         * big loop, and declared polls keep the run out of here. */
+        if (burst_ok && apu_batch_always && SNESRECOMP_LAZY_BEAM
+#if SNESRECOMP_WAIT_REPLAY
+            && !wr_n
+#endif
+            ) {
+            extern bool s_guest_scope_active;   /* common_rtl.c */
+            uint32_t prev = pc_before;
+            int check = 1;
+            /* (the big loop's steps since the last event was worked out can
+             * only have moved it later, except by raising an IRQ) */
+            if (g_snes->inIrq) s_lean_event = 0;
+            s_interp_bus_timing_active = 1;
+            for (;;) {
+                const uint32_t bpc = ((uint32_t)BIN_R(k) << 16) | in.pc;
+                if (bpc <= prev || ((bpc ^ prev) >> 16) || steps + 1 >= step_cap) break;
+                const uint8_t *const pg = cpu_fast_map_page(bpc);
+                if (!pg || k_burst_stop[pg[bpc & 0x1FFFu]]) break;
+#ifdef N64_STATE_AT_PC
+                if (bpc == (uint32_t)(N64_STATE_AT_PC)) break;
+#endif
+                if (check && auto_quiescent) {
+                    if (!BIN_R(i) && g_snes->inIrq) break;
+                    if (s_lle_master_deadline && g_master_cycles >= s_lle_master_deadline) break;
+                }
+                steps++;
+#ifdef N64_TIME_CATS
+                g_tcat_iters++;
+#endif
+                if (s_guest_scope_active) RtlGuestScopeCheckpoint();
+                if (auto_quiescent) q_prev_pc = bpc;   /* (forward: never a loop head) */
+                s_interp_bus_master = 0;
+                s_interp_bus_cycles = 0;
+                g_interp_wlog_pc24 = bpc & 0xFFFFFFu;
+                g_coprocessor_master_cycles = g_master_cycles;
+#ifdef N64_INTERP_REPORT
+                const uint32_t brep_mx = (uint32_t)(BIN_R(mf) ? 1u << 25 : 0) | (BIN_R(xf) ? 1u << 24 : 0);
+#endif
+#ifdef N64_JIT_REPORT
+                s_jr_slow = 0;
+#endif
+                const uint32_t btcat = tcat_enter(TCAT_OPCODE);
+                int bcyc = interp816_runOpcode(&in);
+                tcat_leave(btcat);
+#ifdef N64_TIME_CATS
+                g_tcat_ops++;
+#endif
+#ifdef N64_INTERP_REPORT
+                s_rep_total += (uint32_t)bcyc;
+                s_rep_insns++;
+                interp_rep_add(s_rep_pc, kInterpRepPc, (bpc & 0xffffff) | brep_mx, (uint32_t)bcyc);
+                interp_rep_add(s_rep_entry, kInterpRepEntry, (entry_pc24 & 0xffffff) | brep_mx, (uint32_t)bcyc);
+#endif
+#ifdef N64_JIT_REPORT
+                jr_step((bpc & 0xffffff) | brep_mx, pg[bpc & 0x1FFFu], 0);
+#endif
+                if (bcyc <= 0) bcyc = 1;
+                {
+                    const unsigned internal = (unsigned)bcyc > s_interp_bus_cycles
+                                                  ? (unsigned)bcyc - s_interp_bus_cycles : 0;
+                    const uint64_t master = s_interp_bus_master + (uint64_t)internal * 6u;
+                    g_interp_bridge_steps++;
+                    g_master_cycles += master;
+                    s_apu_pending_master += master;
+                }
+                check = 0;
+                if (g_master_cycles >= s_lean_event) {
+                    s_interp_bus_timing_active = 0;
+                    snes_refresh_charge_inline(g_master_cycles);
+                    g_coprocessor_master_cycles = g_master_cycles;
+                    bridge_beam_after_step(cpu);
+                    if (BRIDGE_APU_FLUSH_DUE(apu_flush_thresh)) bridge_apu_flush(cpu);
+                    /* The next event: the beam's (just renewed), the next
+                     * refresh line, the deadline, and the clock before
+                     * which the SPC's pending time cannot reach its
+                     * threshold (it grows no faster than the clock). */
+                    uint64_t ev = s_beam_next_event;
+                    if (g_snes->inIrq || !g_refresh_charged_upto || g_refresh_phase >= 1364u) {
+                        ev = 0;
+                    } else {
+                        const uint64_t line = g_refresh_charged_upto + (1364u - g_refresh_phase);
+                        if (line < ev) ev = line;
+                        if (auto_quiescent && s_lle_master_deadline && s_lle_master_deadline < ev)
+                            ev = s_lle_master_deadline;
+                        const uint64_t spc = s_apu_pending_master >= apu_flush_thresh ? 0
+                            : g_master_cycles + (apu_flush_thresh - s_apu_pending_master);
+                        if (spc < ev) ev = spc;
+                    }
+                    s_lean_event = ev;
+                    check = 1;
+                    s_interp_bus_timing_active = 1;
+                } else {
+                    g_coprocessor_master_cycles = g_master_cycles;
+                }
+                if (auto_quiescent &&
+                    (progress_write_epoch != g_interp_bridge_write_epoch ||
+                     progress_dynamic_epoch != s_interp_dynamic_progress_epoch)) {
+                    progress_write_epoch = g_interp_bridge_write_epoch;
+                    progress_dynamic_epoch = s_interp_dynamic_progress_epoch;
+#if !SNESRECOMP_LLE_APU_PROGRESS_FLUSH
+                    if (!bridge_apu_guest_time_ready())
+#endif
+                    {
+                        s_interp_bus_timing_active = 0;
+                        bridge_apu_flush(cpu);
+                        s_interp_bus_timing_active = 1;
+                    }
+                    steps = 0;
+                }
+                if (steps == 0 && out_landing)
+                    *out_landing = ((uint32_t)BIN_R(k) << 16) | in.pc;
+                prev = bpc;
+            }
+            s_interp_bus_timing_active = 0;
+        }
+#else
 #if SNESRECOMP_WAIT_REPLAY
         if (burst_ok && !wr_n) {       /* (a lap being recorded is stepped) */
 #else
@@ -4362,6 +4504,7 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
                 prev = bpc;
             }
         }
+#endif   /* SNESRECOMP_INTERP_BURST == 2 */
 #endif
     }
 

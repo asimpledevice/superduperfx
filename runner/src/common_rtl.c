@@ -43,7 +43,7 @@ static void rtl_reset_audio_delivery(void);
 /* See RtlSetSpeculativeFrame in common_rtl.h. Run-ahead drives this on every
  * build, netplay or not, so it must not sit behind the netplay guard. */
 static bool g_rtl_speculative_frame;
-static bool s_guest_scope_active;
+bool s_guest_scope_active;   /* (read inline by the interpreter loop) */
 static _Thread_local bool s_guest_main_thread;
 static RtlStateExtraBoundCallback *s_state_extra_bound;
 void RtlSetStateExtraBound(RtlStateExtraBoundCallback *callback) {s_state_extra_bound=callback;}
