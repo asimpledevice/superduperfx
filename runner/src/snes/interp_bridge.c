@@ -2916,6 +2916,32 @@ static BRIDGE_COLD int bridge_ibrwatch_enter(CpuState *cpu, uint32_t entry_pc24,
     return ibrw;
 }
 
+/* A run's large working arrays, kept out of _interp_run_core's stack frame
+ * (SNESRECOMP_BRIDGE_SCRATCH). With them the frame was 9.3 KB: larger than
+ * the 8 KB direct-mapped data cache, with the registers at its top and the
+ * frames of everything the loop calls 9 KB below, so the loop's own hot
+ * data could not be kept from colliding with itself or with the hot statics
+ * (the 2026-11-19 profile: 14 data-cache misses per interpreted
+ * instruction on four such pairs). A run takes a slot for its lifetime; a
+ * run paused on the Blue thread keeps its slot. With no slot free the
+ * arrays go on the stack as before. */
+#ifndef SNESRECOMP_BRIDGE_SCRATCH
+#define SNESRECOMP_BRIDGE_SCRATCH 0
+#endif
+typedef struct BridgeRunScratch {
+    BridgeQState qring[64];
+    BridgeQState wr_lap[32];
+    BridgeIdleCost idle_cost[64];
+    uint64_t qbucket[64];
+    ITraceEnt ring[256];
+    uint8_t qslot_bucket[64];
+    uint8_t in_use;
+} BridgeRunScratch;
+#if SNESRECOMP_BRIDGE_SCRATCH
+enum { kBridgeScratchSlots = 4 };
+static BridgeRunScratch s_bridge_scratch[kBridgeScratchSlots];
+#endif
+
 static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
                                  uint16_t s_exit, uint32_t *out_landing,
                                  uint32_t *out_return_pc,
@@ -2923,7 +2949,7 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
                                  uint8_t yield_flag_value,
                                  int reset_cap_on_bounce,
                                  const uint32_t *stop_pcs, int n_stop,
-                                 int stop_on_rti) {
+                                 int stop_on_rti, BridgeRunScratch *const sc) {
     const int auto_quiescent = yield_pc == 0xFFFFFFFEu;
     cpu_fast_map_validate();
 #if SNESRECOMP_LAZY_BEAM
@@ -2968,7 +2994,8 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
     static int dtrace = -1;
     if (SNESRECOMP_INTERP_DIAG && dtrace < 0)
         dtrace = getenv("SNESRECOMP_INTERP_DTRACE") ? 1 : 0;
-    ITraceEnt head[8], ring[256];
+    ITraceEnt head[8];
+    ITraceEnt *const ring = sc->ring;
     long itn = 0;
     /* Edge-ring cursor: the opcode last executed by THIS frame and where it
      * falls through to. A nested frame keeps its own, so a bounce never
@@ -2983,11 +3010,11 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
      * interpreter is entered ~100 times a frame, often for a few
      * instructions, and on the N64 this 4.6 KB clear alone cost ~5 ms of an
      * 80 ms emulation stage. */
-    BridgeQState qring[64];
+    BridgeQState *const qring = sc->qring;
     /* What each step cost, parallel to qring, for replaying a declared idle
      * poll's cycle (interp_bridge_set_idle_poll). Recorded on every step, so
      * a poll declared while a run is live never replays a stale entry. */
-    BridgeIdleCost idle_cost[64];
+    BridgeIdleCost *const idle_cost = sc->idle_cost;
     /* The quiescent detector's candidates, bucketed by a hash of every field
      * both matchers compare (PC, registers, flags, widths, write epoch and
      * idle-live read epoch). The ordinary matcher still compares its full
@@ -3001,11 +3028,11 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
      * one -- and they are compared in full in ascending slot order, so the
      * entry chosen, and with it the repeat count, is the one the full
      * 64-entry scan chooses. A collision only costs a compare. */
-    uint64_t qbucket[64];
-    uint8_t qslot_bucket[64];
+    uint64_t *const qbucket = sc->qbucket;
+    uint8_t *const qslot_bucket = sc->qslot_bucket;
     if (auto_quiescent) {   /* the detector's only users */
-        memset(qbucket, 0, sizeof qbucket);
-        memset(qslot_bucket, 0xFF, sizeof qslot_bucket);
+        memset(qbucket, 0, sizeof sc->qbucket);
+        memset(qslot_bucket, 0xFF, sizeof sc->qslot_bucket);
     }
     /* SNESRECOMP_QUIESCENT_BACKEDGE=1: record detector states only where
      * control flow went backwards or changed bank, i.e. at loop heads,
@@ -3069,7 +3096,7 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
 #if SNESRECOMP_WAIT_REPLAY
     /* A wait the detector found, while one lap of it is recorded for the
      * replay: its steps' states, and the step number of the first. */
-    BridgeQState wr_lap[32];
+    BridgeQState *const wr_lap = sc->wr_lap;
     int wr_n = 0, wr_begin = 0;
     long wr_first = 0;
 #endif
@@ -3277,7 +3304,7 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
                 if (_wr == BRIDGE_COLD_RETURN_1) return 1;
                 steps = step_cap;
                 goto idle_replay_step_cap;
-            } else if (wr_n == (int)(sizeof wr_lap / sizeof wr_lap[0])) {
+            } else if (wr_n == (int)(sizeof sc->wr_lap / sizeof sc->wr_lap[0])) {
                 wr_n = 0;
             } else {
                 wr_lap[wr_n++] = cur;
@@ -4345,6 +4372,19 @@ idle_replay_step_cap:
 }
 
 
+/* (BridgeRunScratch) A run with its arrays on the stack: the default, and the
+ * fallback when every slot is taken. */
+static __attribute__((noinline)) int bridge_run_core_stack(
+    CpuState *cpu, uint32_t entry_pc24, uint16_t s_exit, uint32_t *out_landing,
+    uint32_t *out_return_pc, uint32_t yield_pc, uint16_t yield_flag_addr,
+    uint8_t yield_flag_value, int reset_cap_on_bounce, const uint32_t *stop_pcs, int n_stop,
+    int stop_on_rti) {
+    BridgeRunScratch local;
+    return _interp_run_core(cpu, entry_pc24, s_exit, out_landing, out_return_pc, yield_pc,
+                            yield_flag_addr, yield_flag_value, reset_cap_on_bounce, stop_pcs,
+                            n_stop, stop_on_rti, &local);
+}
+
 /* ── interpreter attribution scope ────────────────────────────────────────
  *
  * Every bridge run pushes a synthesized name (interp@$XXXXXX, the entry PC)
@@ -4433,11 +4473,25 @@ static int interp_bridge_run_ex2(CpuState *cpu, uint32_t entry_pc24,
     const uint32_t rep_t0 = snesrecomp_apu_ticks();
 #endif
     const uint32_t tcat_prev = tcat_enter(TCAT_INTERP);
-    int _r = _interp_run_core(cpu, entry_pc24, s_exit, out_landing,
-                              out_return_pc, yield_pc,
-                              yield_flag_addr, yield_flag_value,
-                              reset_cap_on_bounce, stop_pcs, n_stop,
-                              stop_on_rti);
+    int _r;
+    {
+        BridgeRunScratch *sc = NULL;
+#if SNESRECOMP_BRIDGE_SCRATCH
+        for (int i = 0; i < kBridgeScratchSlots; i++)
+            if (!s_bridge_scratch[i].in_use) { sc = &s_bridge_scratch[i]; break; }
+#endif
+        if (sc) {
+            sc->in_use = 1;
+            _r = _interp_run_core(cpu, entry_pc24, s_exit, out_landing, out_return_pc, yield_pc,
+                                  yield_flag_addr, yield_flag_value, reset_cap_on_bounce,
+                                  stop_pcs, n_stop, stop_on_rti, sc);
+            sc->in_use = 0;
+        } else {
+            _r = bridge_run_core_stack(cpu, entry_pc24, s_exit, out_landing, out_return_pc,
+                                       yield_pc, yield_flag_addr, yield_flag_value,
+                                       reset_cap_on_bounce, stop_pcs, n_stop, stop_on_rti);
+        }
+    }
     tcat_leave(tcat_prev);
 #ifdef N64_RUNLOG_FROM
     /* Check builds: where each interpreter run in a frame window started and
