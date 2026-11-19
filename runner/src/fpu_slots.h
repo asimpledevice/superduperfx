@@ -26,6 +26,10 @@
 #define FPU_PARK_S7 "$f14"
 #define FPU_PARK_S8 "$f15"
 #define FPU_PARK_SP_RA "$f16"
+/* SNESRECOMP_PARK_ON_STACK=1: the parked thread's s0-s8 and ra are in a frame
+ * on its own stack and this one register holds its sp (low 32 bits); the
+ * nine above are then free. */
+#define FPU_PARK_SP "$f16"
 
 /* The 65816 registers (runner/src/cpu_regs.h, CPUFPU=1 builds): one each,
  * held zero-extended. Compiled code reaches them through GCC global register

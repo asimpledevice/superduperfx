@@ -24,6 +24,59 @@ uint32_t g_blue_pauses, g_blue_resumes, g_blue_unwinds, g_blue_yields;
 #if !defined(__mips__)
 #error "The Blue thread is the N64 (MIPS) context switch"
 #endif
+#ifndef SNESRECOMP_PARK_ON_STACK
+#define SNESRECOMP_PARK_ON_STACK 0
+#endif
+#if SNESRECOMP_PARK_ON_STACK
+/* The thread not running keeps its callee-saved GPRs (s0-s8) and its return
+ * address in a frame on its own stack; one reserved FPU register
+ * (FPU_PARK_SP, fpu_slots.h) holds that stack pointer. A switch pushes the
+ * frame, swaps sp with the slot and pops the other thread's frame, so the
+ * same call goes either way. gp is the same for both threads; everything
+ * else is caller-saved, so for the compiler the switch is an ordinary call.
+ *
+ * The nine registers this leaves free (the parked s0-s8 used to have one
+ * each) are for state that every interpreted instruction touches: at some 80
+ * switches a frame, the frame's 20 loads and stores cost nothing next to
+ * that.
+ *
+ * sp changes in one instruction and the frame is written below the new sp
+ * first, so an interrupt at any point finds a valid stack. MFC1's result is
+ * undefined for one instruction (VR4300 manual), so the slot is read ahead of
+ * its use. */
+void thread_park_swap(void);
+void thread_park_init(uintptr_t sp, uintptr_t ra);
+__asm__(
+    ".text\n"
+    ".set push\n.set noreorder\n.set noat\n"
+    ".globl thread_park_swap\n.type thread_park_swap, @function\n"
+    "thread_park_swap:\n"
+    "  daddiu $29, $29, -80\n"
+    "  mfc1 $8, " FPU_PARK_SP "\n"       /* the other thread's sp (a KSEG0 address, sign-extended) */
+    "  sd $16, 0($29)\n  sd $17, 8($29)\n  sd $18, 16($29)\n  sd $19, 24($29)\n"
+    "  sd $20, 32($29)\n  sd $21, 40($29)\n  sd $22, 48($29)\n  sd $23, 56($29)\n"
+    "  sd $30, 64($29)\n  sd $31, 72($29)\n"
+    "  mtc1 $29, " FPU_PARK_SP "\n"
+    "  or $29, $8, $0\n"
+    "  ld $16, 0($29)\n  ld $17, 8($29)\n  ld $18, 16($29)\n  ld $19, 24($29)\n"
+    "  ld $20, 32($29)\n  ld $21, 40($29)\n  ld $22, 48($29)\n  ld $23, 56($29)\n"
+    "  ld $30, 64($29)\n  ld $31, 72($29)\n"
+    "  jr $31\n"
+    "  daddiu $29, $29, 80\n"
+    ".size thread_park_swap, .-thread_park_swap\n"
+    /* Park a thread that has not run yet: a frame with s0-s8 zero and the
+     * given ra, below the given sp. */
+    ".globl thread_park_init\n.type thread_park_init, @function\n"
+    "thread_park_init:\n"
+    "  daddiu $4, $4, -80\n"
+    "  sd $0, 0($4)\n  sd $0, 8($4)\n  sd $0, 16($4)\n  sd $0, 24($4)\n"
+    "  sd $0, 32($4)\n  sd $0, 40($4)\n  sd $0, 48($4)\n  sd $0, 56($4)\n"
+    "  sd $0, 64($4)\n  sd $5, 72($4)\n"
+    "  jr $31\n"
+    "  mtc1 $4, " FPU_PARK_SP "\n"
+    ".size thread_park_init, .-thread_park_init\n"
+    ".set pop\n");
+#else
 /* The thread not running is parked in reserved FPU registers (fpu_slots.h):
  * its callee-saved GPRs s0-s8, and sp and ra packed into one (both are 32-bit
  * KSEG0 addresses). gp is the same for both threads. A switch swaps each
@@ -75,6 +128,7 @@ __asm__(
     "  dmtc1 $8, " FPU_PARK_SP_RA "\n"
     ".size thread_park_init, .-thread_park_init\n"
     ".set pop\n");
+#endif
 
 static void blue_main(void);
 static void blue_trampoline(void) {
