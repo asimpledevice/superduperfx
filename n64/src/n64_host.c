@@ -399,6 +399,12 @@ static volatile uint32_t s_dcprof_start = N64_DCPROF, s_dcprof_stop = N64_DCPROF
 static volatile uint32_t s_dcprof_start = 0xffffffffu, s_dcprof_stop = 0xffffffffu;
 #endif
 static int host_main(void);
+/* Blue's stack top relative to the main stack's colour, in bytes (a multiple
+ * of the 16-byte cache line). The interpreter's hot locals sit on Blue's
+ * stack; see docs/n64 on the 2026-11-19 data-cache profile. */
+#ifndef N64_BLUE_STACK_SHIFT
+#define N64_BLUE_STACK_SHIFT 0
+#endif
 #if N64_STACK_COLOR >= 0 && defined(__mips__)
 static uint8_t s_host_stack[256 * 1024] __attribute__((aligned(8192)));
 #if SNESRECOMP_BLUE_THREAD
@@ -519,7 +525,7 @@ static int host_main(void) {
 #endif
 #if N64_STACK_COLOR >= 0 && defined(__mips__) && SNESRECOMP_BLUE_THREAD
   blue_set_stack(s_blue_stack, s_blue_stack + sizeof s_blue_stack - 8192 +
-                                           (N64_STACK_COLOR & 8191) - 64);
+                                           ((N64_STACK_COLOR + N64_BLUE_STACK_SHIFT) & 8191) - 64);
 #endif
   n64_platform_init();
   if (!n64_platform_has_expansion_pak())
