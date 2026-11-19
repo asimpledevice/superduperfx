@@ -4275,6 +4275,18 @@ static int interp_bridge_run_ex2(CpuState *cpu, uint32_t entry_pc24,
                               reset_cap_on_bounce, stop_pcs, n_stop,
                               stop_on_rti);
     tcat_leave(tcat_prev);
+#ifdef N64_RUNLOG_FROM
+    /* Check builds: where each interpreter run in a frame window started and
+     * left, and at what clock (-DN64_RUNLOG_FROM=a -DN64_RUNLOG_TO=b). */
+    if (snes_frame_counter >= N64_RUNLOG_FROM && snes_frame_counter <= N64_RUNLOG_TO) {
+        extern void n64_platform_log(const char *fmt, ...);
+        n64_platform_log("[run] f %d entry %06lx%s -> resume %06lx master %llu steps %llu s %04x\n",
+                         snes_frame_counter, (unsigned long)(entry_pc24 & 0xffffff),
+                         stop_on_rti ? " (interrupt)" : "", (unsigned long)s_lle_resume_pc24,
+                         (unsigned long long)g_master_cycles, (unsigned long long)g_interp_bridge_steps,
+                         (unsigned)cpu_S());
+    }
+#endif
 #ifdef N64_INTERP_REPORT
     s_rep_ticks += snesrecomp_apu_ticks() - rep_t0;
     s_rep_calls++;
