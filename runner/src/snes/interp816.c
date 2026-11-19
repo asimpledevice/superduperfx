@@ -50,7 +50,12 @@
 #define I816_UNREACHABLE() ((void)0)
 #endif
 
-static const uint8_t cyclesPerOpcode[256] = {   /* (bytes: as ints the table was 1 KB of the 8 KB data cache) */
+/* The tables and tallies below are defined once, in the struct build, and
+ * shared by the main CPU's build (I816_MAIN). */
+#ifdef I816_MAIN
+extern const uint8_t cyclesPerOpcode[256];
+#else
+const uint8_t cyclesPerOpcode[256] = {   /* (bytes: as ints the table was 1 KB of the 8 KB data cache) */
   7, 6, 7, 4, 5, 3, 5, 6, 3, 2, 2, 4, 6, 4, 6, 5,
   2, 5, 5, 7, 5, 4, 6, 6, 2, 4, 2, 2, 6, 4, 7, 5,
   6, 6, 8, 4, 3, 3, 5, 6, 4, 2, 2, 5, 4, 4, 6, 5,
@@ -68,6 +73,7 @@ static const uint8_t cyclesPerOpcode[256] = {   /* (bytes: as ints the table was
   2, 6, 3, 4, 3, 3, 5, 6, 2, 2, 2, 3, 4, 4, 6, 5,
   2, 5, 5, 7, 5, 4, 6, 6, 2, 4, 4, 2, 8, 4, 7, 5
 };
+#endif
 
 static uint8_t interp816_read(Interp816* cpu, uint32_t adr);
 static void interp816_write(Interp816* cpu, uint32_t adr, uint8_t val);
@@ -95,6 +101,7 @@ static void interp816_write(Interp816* cpu, uint32_t adr, uint8_t val) {
   cpu->write(cpu->mem, adr, val);
 }
 
+#ifndef I816_MAIN
 Interp816* interp816_init(void* mem, Interp816ReadHandler read, Interp816WriteHandler write) {
   Interp816* cpu = malloc(sizeof(Interp816));
   memset(cpu, 0, sizeof(Interp816));
@@ -108,6 +115,7 @@ Interp816* interp816_init(void* mem, Interp816ReadHandler read, Interp816WriteHa
 void interp816_free(Interp816* cpu) {
   free(cpu);
 }
+#endif
 
 void interp816_reset(Interp816* cpu) {
   I816_W(a, 0);
@@ -134,12 +142,13 @@ void interp816_reset(Interp816* cpu) {
   cpu->cyclesUsed = 0;
 }
 
+#ifndef I816_MAIN
 void interp816_set_brk_hook_enabled(Interp816 *cpu, bool enabled) {
   if (cpu) cpu->brkHookEnabled = enabled;
 }
 
 void interp816_saveload(Interp816 *cpu, SaveLoadInfo *sli) {
-  sli->func(sli, &I816_R(a), offsetof(Interp816, cyclesUsed) - offsetof(Interp816, a));
+  sli->func(sli, &cpu->a, offsetof(Interp816, cyclesUsed) - offsetof(Interp816, a));
 }
 
 /* Current opcode PC (PB:PC of the opcode byte). Updated every interpreted
@@ -157,8 +166,8 @@ uint64_t snesrecomp_host_now_ns(void) {
     return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
 }
 
-static uint64_t s_interp816_insns;
-static uint64_t s_interp816_cycles;
+uint64_t s_interp816_insns;
+uint64_t s_interp816_cycles;
 uint64_t s_interp816_opcodes_run = 0; /* dev perf: per-bridge-call opcode count */
 uint64_t interp816_insns_total(void)  { return s_interp816_insns; }
 uint64_t interp816_cycles_total(void) { return s_interp816_cycles; }
@@ -194,8 +203,8 @@ uint64_t interp816_cycles_total(void) { return s_interp816_cycles; }
 #else
 #define INTERP816_PAGE_COUNT 1u
 #endif
-static uint64_t s_interp_page_cycles[INTERP816_PAGE_COUNT];
-static uint64_t s_interp_page_insns[INTERP816_PAGE_COUNT];
+uint64_t s_interp_page_cycles[INTERP816_PAGE_COUNT];
+uint64_t s_interp_page_insns[INTERP816_PAGE_COUNT];
 
 uint64_t interp816_page_cycles(unsigned page) {
     return page < INTERP816_PAGE_COUNT ? s_interp_page_cycles[page] : 0;
@@ -209,13 +218,13 @@ unsigned interp816_page_count(void) { return INTERP816_PAGE_COUNT; }
  * interpreter, dumped via interp816_perf_dump(). Keyed by a 12-bit hash of
  * the full pc24 so the dump shows the precise hot instruction, not a page. */
 #define INTERP_PC_BUCKETS 4096
-static uint32_t s_pc_buckets[INTERP_PC_BUCKETS];
-static uint32_t s_pc24[INTERP_PC_BUCKETS];
-static uint32_t s_pc_bucket_total = 0;
-static uint32_t s_pc_sample_skip = 0;
-static uint32_t s_oh_count[256], s_oh_tot[256]; /* per-opcode: samples, host-ns */
-static uint32_t s_oh_sample; /* 1-in-64 probe counter */
-static int s_oh_on = -1;
+uint32_t s_pc_buckets[INTERP_PC_BUCKETS];
+uint32_t s_pc24[INTERP_PC_BUCKETS];
+uint32_t s_pc_bucket_total = 0;
+uint32_t s_pc_sample_skip = 0;
+uint32_t s_oh_count[256], s_oh_tot[256]; /* per-opcode: samples, host-ns */
+uint32_t s_oh_sample; /* 1-in-64 probe counter */
+int s_oh_on = -1;
 #define OPCODE_HIST_BEGIN() do { uint64_t _oh_t0 = 0; if (s_oh_on < 0) { const char *_e = getenv("SNESRECOMP_INTERP_OPCODE_HIST"); s_oh_on = (_e && _e[0] && _e[0] != '0') ? 1 : 0; } int _oh_s = (s_oh_on == 1 && (s_oh_sample++ & 63u) == 0); if (_oh_s) _oh_t0 = snesrecomp_host_now_ns();
 #define OPCODE_HIST_END(_op) if (_oh_s) { uint64_t _dt = snesrecomp_host_now_ns() - _oh_t0; s_oh_count[(_op)]++; s_oh_tot[(_op)] += (uint32_t)(_dt < 0xFFFFFFFFu ? _dt : 0xFFFFFFFFu); } } while(0)
 void interp816_perf_dump(void) {
@@ -268,6 +277,22 @@ void interp816_opcode_hist_dump(void) {
     memset(s_oh_count, 0, sizeof(s_oh_count));
     memset(s_oh_tot, 0, sizeof(s_oh_tot));
 }
+
+#else
+extern uint32_t g_interp816_cur_pc;
+extern uint64_t s_interp816_insns, s_interp816_cycles, s_interp816_opcodes_run;
+extern uint64_t s_interp_page_cycles[], s_interp_page_insns[];
+extern uint32_t s_pc_buckets[], s_pc24[], s_pc_bucket_total, s_pc_sample_skip;
+extern uint32_t s_oh_count[256], s_oh_tot[256], s_oh_sample;
+extern int s_oh_on;
+uint64_t snesrecomp_host_now_ns(void);
+#ifndef SNESRECOMP_INTERP_PAGE_MAP
+#define SNESRECOMP_INTERP_PAGE_MAP 1
+#endif
+#define INTERP_PC_BUCKETS 4096
+#define OPCODE_HIST_BEGIN() do { uint64_t _oh_t0 = 0; if (s_oh_on < 0) { const char *_e = getenv("SNESRECOMP_INTERP_OPCODE_HIST"); s_oh_on = (_e && _e[0] && _e[0] != '0') ? 1 : 0; } int _oh_s = (s_oh_on == 1 && (s_oh_sample++ & 63u) == 0); if (_oh_s) _oh_t0 = snesrecomp_host_now_ns();
+#define OPCODE_HIST_END(_op) if (_oh_s) { uint64_t _dt = snesrecomp_host_now_ns() - _oh_t0; s_oh_count[(_op)]++; s_oh_tot[(_op)] += (uint32_t)(_dt < 0xFFFFFFFFu ? _dt : 0xFFFFFFFFu); } } while(0)
+#endif
 
 int interp816_runOpcode(Interp816* cpu) {
   cpu->cyclesUsed = 0;
@@ -377,6 +402,11 @@ void interp816_setFlags(Interp816* cpu, uint8_t val) {
 }
 
 static void interp816_setZN(Interp816* cpu, uint16_t value, bool byte) {
+#ifdef I816_MAIN
+  (void)cpu;
+  if (byte) cpu_set_nz8(value); else cpu_set_nz16(value);
+  return;
+#endif
   if(byte) {
     I816_W(z, (value & 0xff) == 0);
     I816_W(n, value & 0x80);
@@ -695,7 +725,10 @@ static void interp816_sbc(Interp816* cpu, uint32_t low, uint32_t high) {
  * and their order, are unchanged. */
 enum { I816_M_NONE, I816_M_IDX, I816_M_SR, I816_M_DP, I816_M_IDL, I816_M_IMM_FALSE, I816_M_ABS, I816_M_ABL, I816_M_IDY_FALSE, I816_M_IDP, I816_M_ISY, I816_M_DPX, I816_M_ILY, I816_M_ABY_FALSE, I816_M_ABX_FALSE, I816_M_ABX_TRUE, I816_M_ALX, I816_M_IDY_TRUE, I816_M_DPY, I816_M_ABY_TRUE, I816_M_IMM_TRUE };
 enum { I816_O_NONE, I816_O_ORA, I816_O_TSB, I816_O_ASL, I816_O_TRB, I816_O_AND, I816_O_BIT, I816_O_ROL, I816_O_EOR, I816_O_LSR, I816_O_ADC, I816_O_STZ, I816_O_ROR, I816_O_STA, I816_O_STY, I816_O_STX, I816_O_LDY, I816_O_LDA, I816_O_LDX, I816_O_CPY, I816_O_CMP, I816_O_DEC, I816_O_CPX, I816_O_SBC, I816_O_INC };
-static const uint8_t k_i816_mode[256] = {
+#ifdef I816_MAIN
+extern const uint8_t k_i816_mode[256];
+#else
+const uint8_t k_i816_mode[256] = {
    0,  1,  0,  2,  3,  3,  3,  4,  0,  5,  0,  0,  6,  6,  6,  7,  /* 00 */
    0,  8,  9, 10,  3, 11, 11, 12,  0, 13,  0,  0,  6, 14, 15, 16,  /* 10 */
    0,  1,  0,  2,  3,  3,  3,  4,  0,  5,  0,  0,  6,  6,  6,  7,  /* 20 */
@@ -713,7 +746,11 @@ static const uint8_t k_i816_mode[256] = {
   20,  1,  0,  2,  3,  3,  3,  4,  0,  5,  0,  0,  6,  6,  6,  7,  /* E0 */
    0,  8,  9, 10,  0, 11, 11, 12,  0, 13,  0,  0,  0, 14, 15, 16,  /* F0 */
 };
-static const uint8_t k_i816_op[256] = {
+#endif
+#ifdef I816_MAIN
+extern const uint8_t k_i816_op[256];
+#else
+const uint8_t k_i816_op[256] = {
    0,  1,  0,  1,  2,  1,  3,  1,  0,  1,  0,  0,  2,  1,  3,  1,  /* 00 */
    0,  1,  1,  1,  4,  1,  3,  1,  0,  1,  0,  0,  4,  1,  3,  1,  /* 10 */
    0,  5,  0,  5,  6,  5,  7,  5,  0,  5,  0,  0,  6,  5,  7,  5,  /* 20 */
@@ -731,6 +768,7 @@ static const uint8_t k_i816_op[256] = {
   22, 23,  0, 23, 22, 23, 24, 23,  0, 23,  0,  0, 22, 23, 24, 23,  /* E0 */
    0, 23, 23, 23,  0, 23, 24, 23,  0, 23,  0,  0,  0, 23, 24, 23,  /* F0 */
 };
+#endif
 
 static void interp816_doOpcode(Interp816* cpu, uint8_t opcode) {
   switch(opcode) {
@@ -1071,23 +1109,26 @@ static void interp816_doOpcode(Interp816* cpu, uint8_t opcode) {
     }
     case 0x18: case 0x38: case 0x58: case 0x78:
     case 0xb8: case 0xd8: case 0xf8: { // clc sec cli sei clv cld sed
-      bool* const f = opcode < 0x40 ? &I816_R(c) : opcode < 0x80 ? &I816_R(i) : opcode < 0xc0 ? &I816_R(v) : &I816_R(d);
-      *f = (opcode & 0x20) && opcode != 0xb8;
+      const bool f = (opcode & 0x20) && opcode != 0xb8;
+      if (opcode < 0x40) I816_W(c, f); else if (opcode < 0x80) I816_W(i, f);
+      else if (opcode < 0xc0) I816_W(v, f); else I816_W(d, f);
       break;
     }
     case 0xa8: case 0xaa: case 0x9b: case 0xbb: case 0xba: { // tay tax txy tyx tsx
-      uint16_t* const dst = (opcode == 0xa8 || opcode == 0x9b) ? &I816_R(y) : &I816_R(x);
       const uint16_t src = opcode == 0xba ? I816_R(sp) : opcode == 0x9b ? I816_R(x) :
                            opcode == 0xbb ? I816_R(y) : I816_R(a);
-      *dst = I816_R(xf) ? (src & 0xff) : src;
-      interp816_setZN(cpu, *dst, I816_R(xf));
+      const uint16_t dst = I816_R(xf) ? (src & 0xff) : src;
+      if (opcode == 0xa8 || opcode == 0x9b) I816_W(y, dst); else I816_W(x, dst);
+      interp816_setZN(cpu, dst, I816_R(xf));
       break;
     }
     case 0xe8: case 0xc8: case 0xca: case 0x88: { // inx iny dex dey
-      uint16_t* const r = (opcode == 0xe8 || opcode == 0xca) ? &I816_R(x) : &I816_R(y);
-      const uint16_t v = (opcode == 0xe8 || opcode == 0xc8) ? (uint16_t)(*r + 1) : (uint16_t)(*r - 1);
-      *r = I816_R(xf) ? (v & 0xff) : v;
-      interp816_setZN(cpu, *r, I816_R(xf));
+      const bool isx = opcode == 0xe8 || opcode == 0xca;
+      const uint16_t r0 = isx ? I816_R(x) : I816_R(y);
+      const uint16_t v = (opcode == 0xe8 || opcode == 0xc8) ? (uint16_t)(r0 + 1) : (uint16_t)(r0 - 1);
+      const uint16_t r = I816_R(xf) ? (v & 0xff) : v;
+      if (isx) I816_W(x, r); else I816_W(y, r);
+      interp816_setZN(cpu, r, I816_R(xf));
       break;
     }
     case 0x8a: case 0x98: case 0x1a: case 0x3a: { // txa tya inca deca
@@ -1108,16 +1149,17 @@ static void interp816_doOpcode(Interp816* cpu, uint8_t opcode) {
       break;
     }
     case 0x68: case 0xfa: case 0x7a: { // pla plx ply
-      uint16_t* const r = opcode == 0x68 ? &I816_R(a) : opcode == 0xfa ? &I816_R(x) : &I816_R(y);
       const bool byte = opcode == 0x68 ? I816_R(mf) : I816_R(xf);
+      uint16_t r;
       if(byte) {
         /* 8-bit A keeps its high byte; 8-bit X and Y have none */
-        *r = (opcode == 0x68 ? (*r & 0xff00) : 0) | interp816_pullByte(cpu);
+        r = (opcode == 0x68 ? (I816_R(a) & 0xff00) : 0) | interp816_pullByte(cpu);
       } else {
         cpu->cyclesUsed++; // 16-bit: 1 extra cycle
-        *r = interp816_pullWord(cpu);
+        r = interp816_pullWord(cpu);
       }
-      interp816_setZN(cpu, *r, byte);
+      if (opcode == 0x68) I816_W(a, r); else if (opcode == 0xfa) I816_W(x, r); else I816_W(y, r);
+      interp816_setZN(cpu, r, byte);
       break;
     }
     case 0x08: case 0x4b: case 0x8b: { // php phk phb

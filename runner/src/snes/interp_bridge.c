@@ -94,6 +94,27 @@ static uint64_t s_apu_pending_master = 0;
 /* 1: straight-line instructions after an interpreted step run in a small
  * loop with the same per-step effects (see the burst in _interp_run_core);
  * 0: every instruction goes round the full loop. */
+/* SNESRECOMP_INTERP_REGS=1: the main CPU's interpreter core keeps A, X, Y,
+ * S, D, DB, PB and the flags in the reserved FPU registers (interp816_main.c)
+ * and so does this file: BIN_R/BIN_W (on `in`) and BINP_R/BINP_W (on a
+ * pointer to it) are every access to them here. */
+#ifndef SNESRECOMP_INTERP_REGS
+#define SNESRECOMP_INTERP_REGS 0
+#endif
+#if SNESRECOMP_INTERP_REGS
+#include "interp816_regs.h"
+int interp816m_runOpcode(Interp816 *cpu);
+#define interp816_runOpcode interp816m_runOpcode
+#define BIN_R(f) I816_R(f)
+#define BIN_W(f, v) I816_W(f, v)
+#define BINP_R(f) I816_R(f)
+#define BINP_W(f, v) I816_W(f, v)
+#else
+#define BIN_R(f) (in.f)
+#define BIN_W(f, v) (in.f = (v))
+#define BINP_R(f) (in->f)
+#define BINP_W(f, v) (in->f = (v))
+#endif
 #ifndef SNESRECOMP_INTERP_BURST
 #define SNESRECOMP_INTERP_BURST 0
 #endif
@@ -345,7 +366,7 @@ static int bridge_is_idle_poll(uint32_t pc24) {
 static int bridge_idle_replay_allowed(const Interp816 *in, long period) {
     if (period <= 0 || period > 32 || !g_snes)
         return 0;
-    if (!in->i && (g_snes->hIrqEnabled || g_snes->vIrqEnabled)) return 0;
+    if (!BINP_R(i) && (g_snes->hIrqEnabled || g_snes->vIrqEnabled)) return 0;
     if (g_snes->cart && (g_snes->cart->superfx || g_snes->cart->cx4 ||
                          g_snes->cart->sa1))
         return 0;
@@ -700,23 +721,30 @@ void interp_bridge_test_apu_port_diag_probe(CpuState *cpu, int apu_port) {
  * state carries P in parts (cpu_regs.h). Map both directions.
  * PC has no CpuState home (control flow is host-C calls) — it is interp-only
  * and set explicitly by the run loop, never synced. */
+#if SNESRECOMP_INTERP_REGS
+/* The interpreter core's registers are the CPU state's (interp816_main.c):
+ * nothing to copy. */
+static inline void sync_cpu_to_interp(const CpuState *c, Interp816 *in) { (void)c; (void)in; }
+static inline void sync_interp_to_cpu(const Interp816 *in, CpuState *c) { (void)c; (void)in; }
+#else
 static void sync_cpu_to_interp(const CpuState *c, Interp816 *in) {
-    in->a  = cpu_A();  in->x = cpu_X();  in->y = cpu_Y();
-    in->sp = cpu_S();  in->dp = cpu_D(); in->db = cpu_DB(); in->k = cpu_PB();
+    BINP_W(a, cpu_A());  BINP_W(x, cpu_X());  BINP_W(y, cpu_Y());
+    BINP_W(sp, cpu_S());  BINP_W(dp, cpu_D()); BINP_W(db, cpu_DB()); BINP_W(k, cpu_PB());
     (void)c;
-    in->c  = cpu_flag_C(); in->z = cpu_flag_Z(); in->v = cpu_flag_V();
-    in->n  = cpu_flag_N(); in->i = cpu_flag_I(); in->d = cpu_flag_D();
-    in->mf = cpu_m_flag();  in->xf = cpu_x_flag(); in->e = cpu_emulation();
+    BINP_W(c, cpu_flag_C()); BINP_W(z, cpu_flag_Z()); BINP_W(v, cpu_flag_V());
+    BINP_W(n, cpu_flag_N()); BINP_W(i, cpu_flag_I()); BINP_W(d, cpu_flag_D());
+    BINP_W(mf, cpu_m_flag());  BINP_W(xf, cpu_x_flag()); BINP_W(e, cpu_emulation());
 }
 static void sync_interp_to_cpu(const Interp816 *in, CpuState *c) {
-    cpu_set_A(in->a);  cpu_set_X(in->x);  cpu_set_Y(in->y);
-    cpu_set_S(in->sp); cpu_set_D(in->dp); cpu_set_DB(in->db); cpu_set_PB(in->k);
+    cpu_set_A(BINP_R(a));  cpu_set_X(BINP_R(x));  cpu_set_Y(BINP_R(y));
+    cpu_set_S(BINP_R(sp)); cpu_set_D(BINP_R(dp)); cpu_set_DB(BINP_R(db)); cpu_set_PB(BINP_R(k));
     (void)c;
-    cpu_set_flag_C(in->c); cpu_set_flags_nz(in->n, in->z); cpu_set_flag_V(in->v);
-    cpu_set_P_mxid((in->mf ? 0x20u : 0u) | (in->xf ? 0x10u : 0u) |
-                   (in->d ? 0x08u : 0u) | (in->i ? 0x04u : 0u));
-    cpu_set_emulation(in->e);
+    cpu_set_flag_C(BINP_R(c)); cpu_set_flags_nz(BINP_R(n), BINP_R(z)); cpu_set_flag_V(BINP_R(v));
+    cpu_set_P_mxid((BINP_R(mf) ? 0x20u : 0u) | (BINP_R(xf) ? 0x10u : 0u) |
+                   (BINP_R(d) ? 0x08u : 0u) | (BINP_R(i) ? 0x04u : 0u));
+    cpu_set_emulation(BINP_R(e));
 }
+#endif
 
 /* Multi-PC pre-opcode hooks (Metal Warriors DMA widen + sprite draw-window
  * sites use 16). Callbacks may mutate CpuState and live DMA/PPU MMIO mirrors;
@@ -1117,9 +1145,9 @@ static int bridge_cooperative_yield(CpuState *cpu, const Interp816 *in,
                                     uint32_t pc24, uint32_t yield_pc,
                                     int site) {
     if (yield_pc) {
-        lle_resume_set(pc24, site, in->sp);
+        lle_resume_set(pc24, site, BINP_R(sp));
     } else {
-        lle_unwind_arm(pc24, s_interp_bridge_depth - 1, 0, site, in->sp);
+        lle_unwind_arm(pc24, s_interp_bridge_depth - 1, 0, site, BINP_R(sp));
     }
     sync_interp_to_cpu(in, cpu);
     bridge_apu_flush(cpu);
@@ -2124,21 +2152,21 @@ static BRIDGE_COLD int bridge_so_d9_wait(CpuState *cpu, Interp816 *in, int auto_
     }
     if (s_d9_bytes_ok) {
         for (;;) {
-            if (auto_quiescent && !in->i && g_snes && g_snes->inIrq) {
-                lle_resume_set(((uint32_t)in->k << 16) | in->pc, INTERP_RESUME_SITE_D9_IRQ, in->sp);
+            if (auto_quiescent && !BINP_R(i) && g_snes && g_snes->inIrq) {
+                lle_resume_set(((uint32_t)BINP_R(k) << 16) | in->pc, INTERP_RESUME_SITE_D9_IRQ, BINP_R(sp));
                 sync_interp_to_cpu(in, cpu);
                 bridge_apu_flush(cpu);
                 return BRIDGE_COLD_RETURN_1;
             }
             if (auto_quiescent && s_lle_master_deadline &&
                 g_master_cycles >= s_lle_master_deadline) {
-                lle_resume_set(((uint32_t)in->k << 16) | in->pc, INTERP_RESUME_SITE_D9_DEADLINE, in->sp);
+                lle_resume_set(((uint32_t)BINP_R(k) << 16) | in->pc, INTERP_RESUME_SITE_D9_DEADLINE, BINP_R(sp));
                 sync_interp_to_cpu(in, cpu);
                 bridge_apu_flush(cpu);
                 return BRIDGE_COLD_RETURN_1;
             }
             if (in->pc == 0x84B4u) {
-                if (in->z) {
+                if (BINP_R(z)) {
                     g_master_cycles += 18u;
                     in->pc = 0x84B2u;
                 } else {
@@ -2156,28 +2184,28 @@ static BRIDGE_COLD int bridge_so_d9_wait(CpuState *cpu, Interp816 *in, int auto_
             g_master_cycles += 18u;
             {
                 const uint8_t v = (uint8_t)g_ram[0x00D9u];
-                in->a = (uint16_t)((in->a & 0xFF00u) | v);
-                in->z = (v == 0);
-                in->n = (v & 0x80u) != 0;
+                BINP_W(a, (uint16_t)((BINP_R(a) & 0xFF00u) | v));
+                BINP_W(z, (v == 0));
+                BINP_W(n, (v & 0x80u) != 0);
             }
             if (g_snes) snes_sync_master_clock(g_snes, g_master_cycles);
             if (g_snes && g_snes->cart)
                 cart_sync_coprocessors(g_snes->cart, g_master_cycles);
             g_coprocessor_master_cycles = g_master_cycles;
-            if (auto_quiescent && !in->i && g_snes && g_snes->inIrq) {
-                lle_resume_set(0xC084B4u, INTERP_RESUME_SITE_D9_IRQ, in->sp);
+            if (auto_quiescent && !BINP_R(i) && g_snes && g_snes->inIrq) {
+                lle_resume_set(0xC084B4u, INTERP_RESUME_SITE_D9_IRQ, BINP_R(sp));
                 sync_interp_to_cpu(in, cpu);
                 bridge_apu_flush(cpu);
                 return BRIDGE_COLD_RETURN_1;
             }
             if (auto_quiescent && s_lle_master_deadline &&
                 g_master_cycles >= s_lle_master_deadline) {
-                lle_resume_set(0xC084B4u, INTERP_RESUME_SITE_D9_DEADLINE, in->sp);
+                lle_resume_set(0xC084B4u, INTERP_RESUME_SITE_D9_DEADLINE, BINP_R(sp));
                 sync_interp_to_cpu(in, cpu);
                 bridge_apu_flush(cpu);
                 return BRIDGE_COLD_RETURN_1;
             }
-            if (in->z) {
+            if (BINP_R(z)) {
                 g_master_cycles += 18u;
                 if (g_snes) snes_sync_master_clock(g_snes, g_master_cycles);
                 if (g_snes && g_snes->cart)
@@ -2409,19 +2437,19 @@ static BRIDGE_COLD int bridge_idle_replay(CpuState *cpu, Interp816 *in,
                     }
                 }
             }
-            in->k = at->k; in->pc = (uint16_t)at->pc;
-            in->a = at->a; in->x = at->x; in->y = at->y;
-            in->sp = at->sp; in->dp = at->dp; in->db = at->db;
-            in->c = at->c; in->z = at->z; in->v = at->v; in->n = at->n;
-            in->i = at->i; in->d = at->d; in->mf = at->mf;
-            in->xf = at->xf; in->e = at->e;
+            BINP_W(k, at->k); in->pc = (uint16_t)at->pc;
+            BINP_W(a, at->a); BINP_W(x, at->x); BINP_W(y, at->y);
+            BINP_W(sp, at->sp); BINP_W(dp, at->dp); BINP_W(db, at->db);
+            BINP_W(c, at->c); BINP_W(z, at->z); BINP_W(v, at->v); BINP_W(n, at->n);
+            BINP_W(i, at->i); BINP_W(d, at->d); BINP_W(mf, at->mf);
+            BINP_W(xf, at->xf); BINP_W(e, at->e);
             g_coprocessor_master_cycles = g_master_cycles;
             snes_sync_master_clock(g_snes, g_master_cycles);
             if (g_snes->cart)
                 cart_sync_coprocessors(g_snes->cart, g_master_cycles);
             if (capped)
                 return BRIDGE_COLD_STEP_CAP;
-            lle_resume_set(at->pc, INTERP_RESUME_SITE_DEADLINE, in->sp);
+            lle_resume_set(at->pc, INTERP_RESUME_SITE_DEADLINE, BINP_R(sp));
             sync_interp_to_cpu(in, cpu);
             bridge_apu_flush(cpu);
             return BRIDGE_COLD_RETURN_1;
@@ -2561,15 +2589,15 @@ static BRIDGE_COLD int bridge_wait_replay(CpuState *cpu, Interp816 *in, const Br
             if (BRIDGE_APU_FLUSH_DUE(apu_flush_thresh)) bridge_apu_flush(cpu);
         }
     }
-    in->k = at->k; in->pc = (uint16_t)at->pc;
-    in->a = at->a; in->x = at->x; in->y = at->y;
-    in->sp = at->sp; in->dp = at->dp; in->db = at->db;
-    in->c = at->c; in->z = at->z; in->v = at->v; in->n = at->n;
-    in->i = at->i; in->d = at->d; in->mf = at->mf;
-    in->xf = at->xf; in->e = at->e;
+    BINP_W(k, at->k); in->pc = (uint16_t)at->pc;
+    BINP_W(a, at->a); BINP_W(x, at->x); BINP_W(y, at->y);
+    BINP_W(sp, at->sp); BINP_W(dp, at->dp); BINP_W(db, at->db);
+    BINP_W(c, at->c); BINP_W(z, at->z); BINP_W(v, at->v); BINP_W(n, at->n);
+    BINP_W(i, at->i); BINP_W(d, at->d); BINP_W(mf, at->mf);
+    BINP_W(xf, at->xf); BINP_W(e, at->e);
     if (capped)
         return BRIDGE_COLD_STEP_CAP;
-    lle_resume_set(at->pc, site, in->sp);
+    lle_resume_set(at->pc, site, BINP_R(sp));
     sync_interp_to_cpu(in, cpu);
     bridge_apu_flush(cpu);
     return BRIDGE_COLD_RETURN_1;
@@ -2584,11 +2612,11 @@ static BRIDGE_COLD int bridge_stable_poll(CpuState *cpu, Interp816 *in, uint32_t
                                           int *ret) {
     BridgePollHead now;
     memset(&now, 0, sizeof now);
-    now.pc = pc_before; now.a = in->a; now.x = in->x; now.y = in->y;
-    now.sp = in->sp; now.dp = in->dp; now.db = in->db;
-    now.c = in->c; now.z = in->z; now.v = in->v; now.n = in->n;
-    now.i = in->i; now.d = in->d; now.mf = in->mf; now.xf = in->xf;
-    now.e = in->e;
+    now.pc = pc_before; now.a = BINP_R(a); now.x = BINP_R(x); now.y = BINP_R(y);
+    now.sp = BINP_R(sp); now.dp = BINP_R(dp); now.db = BINP_R(db);
+    now.c = BINP_R(c); now.z = BINP_R(z); now.v = BINP_R(v); now.n = BINP_R(n);
+    now.i = BINP_R(i); now.d = BINP_R(d); now.mf = BINP_R(mf); now.xf = BINP_R(xf);
+    now.e = BINP_R(e);
     now.write_epoch = g_interp_bridge_write_epoch;
     now.volatile_read_epoch = s_interp_volatile_read_epoch;
     now.step = steps;
@@ -2623,12 +2651,12 @@ static BRIDGE_COLD int bridge_nested_handoff(CpuState *cpu, Interp816 *in,
     const int _blocked = _sched_flag == s_sched_yield_flag_value;
     if (_blocked) {
         lle_unwind_arm(pc_before, s_interp_bridge_depth - 1, 0,
-                       INTERP_RESUME_SITE_NESTED_HANDOFF, in->sp);
+                       INTERP_RESUME_SITE_NESTED_HANDOFF, BINP_R(sp));
         if (ibrw)
             fprintf(stderr,
                     "[ibr] nested yield hand-off -> $%06X sp=$%04X "
                     "flag=$%02X owner_depth=%d\n",
-                    (unsigned)s_lle_unwind_pc24, (unsigned)in->sp,
+                    (unsigned)s_lle_unwind_pc24, (unsigned)BINP_R(sp),
                     _sched_flag, s_interp_bridge_depth - 1);
         sync_interp_to_cpu(in, cpu);
         bridge_apu_flush(cpu);
@@ -2658,7 +2686,7 @@ static BRIDGE_COLD int bridge_nlr_exit(CpuState *cpu, Interp816 *in, uint32_t yi
                     "sp=$%04X s_enter=$%04X - contained bail\n",
                     (int)air, (unsigned)target,
                     snes_frame_counter, (unsigned)pc_before,
-                    (unsigned)sp_pre, (unsigned)in->sp,
+                    (unsigned)sp_pre, (unsigned)BINP_R(sp),
                     (unsigned)s_enter);
         }
         sync_interp_to_cpu(in, cpu);
@@ -2682,14 +2710,14 @@ static BRIDGE_COLD void bridge_cap_report(CpuState *cpu, const Interp816 *in, ui
                                           const ITraceEnt *head, long itn) {
     static int s_cap_reports;
     if (s_cap_reports < 32) {
-        const uint32_t last_pc = ((uint32_t)in->k << 16) | in->pc;
+        const uint32_t last_pc = ((uint32_t)BINP_R(k) << 16) | in->pc;
         s_cap_reports++;
         fprintf(stderr,
                 "[interp_cap] entry=$%06X last=$%06X op=$%02X "
                 "m=%u x=%u db=$%02X sp=$%04X a=$%04X flag=$%02X\n",
                 (unsigned)entry_pc24, (unsigned)last_pc,
-                bridge_bus_read(cpu, last_pc), in->mf, in->xf, in->db,
-                in->sp, in->a,
+                bridge_bus_read(cpu, last_pc), BINP_R(mf), BINP_R(xf), BINP_R(db),
+                BINP_R(sp), BINP_R(a),
                 yield_pc ? bridge_bus_read(cpu, yield_flag_addr) : 0);
         fprintf(stderr,                    "[interp_cap] head:");
         for (int hi = 0; hi < 8 && hi < itn; hi++)
@@ -2716,18 +2744,18 @@ static BRIDGE_COLD void bridge_cap_report(CpuState *cpu, const Interp816 *in, ui
 /* Step cap hit: decode the instruction it stopped at (see the call site). */
 static BRIDGE_COLD void bridge_cap_diag(CpuState *cpu, const Interp816 *in) {
     static uint32_t s_last_diag_pc;
-    uint32_t pc24 = ((uint32_t)in->k << 16) | in->pc;
+    uint32_t pc24 = ((uint32_t)BINP_R(k) << 16) | in->pc;
     if (pc24 != s_last_diag_pc) {
         s_last_diag_pc = pc24;
         uint8_t op = bridge_bus_read(cpu, pc24);
         fprintf(stderr, "[diag] PC=$%06X op=$%02X m=%u x=%u db=$%02X a=$%04X x16=$%04X y16=$%04X sp=$%04X\n",
-                (unsigned)pc24, (unsigned)op, (unsigned)in->mf, (unsigned)in->xf,
-                (unsigned)in->db, (unsigned)in->a, (unsigned)in->x, (unsigned)in->y, (unsigned)in->sp);
+                (unsigned)pc24, (unsigned)op, (unsigned)BINP_R(mf), (unsigned)BINP_R(xf),
+                (unsigned)BINP_R(db), (unsigned)BINP_R(a), (unsigned)BINP_R(x), (unsigned)BINP_R(y), (unsigned)BINP_R(sp));
         if (op == 0xCD) { /* CMP abs */
             uint8_t lo = bridge_bus_read(cpu, pc24 + 1);
             uint8_t hi8 = bridge_bus_read(cpu, pc24 + 2);
             uint16_t addr16 = (uint16_t)lo | ((uint16_t)hi8 << 8);
-            uint8_t memval = cpu_read8(cpu, in->db, addr16);
+            uint8_t memval = cpu_read8(cpu, BINP_R(db), addr16);
             fprintf(stderr, "  -> CMP $%04X mem=$%02X\n",
                     (unsigned)addr16, (unsigned)memval);
         }
@@ -2781,8 +2809,8 @@ static BRIDGE_COLD int bridge_yield_point(CpuState *cpu, Interp816 *in, uint32_t
         bridge_bus_read(cpu, pc_before + 3) == 0xD0 &&
         bridge_bus_read(cpu, pc_before + 4) == 0xFB;
     if (_yield_flag != yield_flag_value && _canonical_wait_loop) {
-        in->mf = 1;
-        in->db = in->k;
+        BINP_W(mf, 1);
+        BINP_W(db, BINP_R(k));
     }
     if (bridge_yield_diag() &&
         _yield_flag != yield_flag_value && steps > 16) {
@@ -2793,12 +2821,12 @@ static BRIDGE_COLD int bridge_yield_point(CpuState *cpu, Interp816 *in, uint32_t
                     "[yield_diag] pc=$%06X flag=$%02X want=$%02X "
                     "m=%u x=%u db=$%02X sp=$%04X a=$%04X z=%u\n",
                     (unsigned)pc_before, _yield_flag,
-                    yield_flag_value, in->mf, in->xf, in->db, in->sp,
-                    in->a, in->z);
+                    yield_flag_value, BINP_R(mf), BINP_R(xf), BINP_R(db), BINP_R(sp),
+                    BINP_R(a), BINP_R(z));
         }
     }
     if (_yield_flag == yield_flag_value) {
-        lle_resume_set(pc_before, INTERP_RESUME_SITE_YIELD_FLAG, in->sp);
+        lle_resume_set(pc_before, INTERP_RESUME_SITE_YIELD_FLAG, BINP_R(sp));
         sync_interp_to_cpu(in, cpu);
         bridge_apu_flush(cpu);
         return 1;
@@ -2844,7 +2872,7 @@ static BRIDGE_COLD int bridge_pre_opcode_hooks(CpuState *cpu, Interp816 *in, uin
             s_pre_opcode_hooks[hi].hook(cpu, pc_before);
             sync_cpu_to_interp(cpu, in);
             if (s_pre_opcode_redirect_valid) {
-                in->k = (uint8_t)((s_pre_opcode_redirect_pc24 >> 16) & 0xFF);
+                BINP_W(k, (uint8_t)((s_pre_opcode_redirect_pc24 >> 16) & 0xFF));
                 in->pc = (uint16_t)(s_pre_opcode_redirect_pc24 & 0xFFFF);
                 s_pre_opcode_redirect_valid = 0;
                 redirected = true;
@@ -2977,7 +3005,7 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
     const int wlog_state_sync = SNESRECOMP_INTERP_DIAG && getenv("SNESRECOMP_WLOG_STATE") != NULL;
 
     sync_cpu_to_interp(cpu, &in);
-    in.k  = (uint8)((entry_pc24 >> 16) & 0xFF);
+    BIN_W(k, (uint8)((entry_pc24 >> 16) & 0xFF));
     in.pc = (uint16)(entry_pc24 & 0xFFFF);
 
     /* Frame base: the routine has returned to its caller when an RTS/RTL pops
@@ -3142,7 +3170,7 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
                              entry_pc24, s_lle_unwind_pc24, cpu_S());
             s_lle_unwind_active = 0;
             s_lle_unwind_owner_depth = 0;
-            in.k  = (uint8)((s_lle_unwind_pc24 >> 16) & 0xFF);
+            BIN_W(k, (uint8)((s_lle_unwind_pc24 >> 16) & 0xFF));
             in.pc = (uint16)(s_lle_unwind_pc24 & 0xFFFF);
             edge_expect = s_lle_unwind_pc24 & 0xFFFFFFu;
         } else {
@@ -3154,7 +3182,7 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
                 return 1;
             }
             return bridge_nlr_exit(cpu, &in, yield_pc, _air, entry_pc24, entry_pc24,
-                                   in.sp, s_enter);
+                                   BIN_R(sp), s_enter);
         }
     }
 #endif
@@ -3163,7 +3191,7 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
         g_tcat_iters++;
 #endif
         RtlGuestScopeCheckpoint();
-        const uint32_t pc_before = ((uint32_t)in.k << 16) | in.pc;
+        const uint32_t pc_before = ((uint32_t)BIN_R(k) << 16) | in.pc;
 #ifdef N64_STATE_AT_PC
         if (pc_before == (uint32_t)(N64_STATE_AT_PC)) {
             extern void n64_state_at_pc(void);   /* n64_host.c */
@@ -3223,7 +3251,7 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
          * interpreter will execute, then accept debugger register edits before
          * continuing. This is compiled out of production builds. */
         sync_interp_to_cpu(&in, cpu);
-        debug_on_block_enter(pc_before, in.a, in.x, in.y);
+        debug_on_block_enter(pc_before, BIN_R(a), BIN_R(x), BIN_R(y));
         sync_cpu_to_interp(cpu, &in);
 #endif
         /* IRQs are sampled between instructions.  An auto-quiescent whole-
@@ -3231,7 +3259,7 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
          * the CPU H/V comparator or a coprocessor asserts IRQ; otherwise a
          * perfectly live hardware-poll loop can monopolize the bridge and
          * starve the handler forever. */
-        if (auto_quiescent && steps && !in.i && g_snes &&
+        if (auto_quiescent && steps && !BIN_R(i) && g_snes &&
             (g_snes->inIrq || (has_coprocessor &&
              ((g_snes->cart && g_snes->cart->superfx &&
               g_snes->cart->superfx->irq_pending) ||
@@ -3242,14 +3270,14 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
               cx4_irq_pending(g_snes->cart->cx4)) ||
              (g_snes->cart && g_snes->cart->sa1 &&
               sa1_cpu_irq_pending(g_snes->cart->sa1)))))) {
-            lle_resume_set(pc_before, INTERP_RESUME_SITE_IRQ_PENDING, in.sp);
+            lle_resume_set(pc_before, INTERP_RESUME_SITE_IRQ_PENDING, BIN_R(sp));
             sync_interp_to_cpu(&in,cpu);
             bridge_apu_flush(cpu);
             return 1;
         }
         if (auto_quiescent && s_lle_master_deadline &&
             g_master_cycles >= s_lle_master_deadline) {
-            lle_resume_set(pc_before, INTERP_RESUME_SITE_DEADLINE, in.sp);
+            lle_resume_set(pc_before, INTERP_RESUME_SITE_DEADLINE, BIN_R(sp));
             sync_interp_to_cpu(&in,cpu);
             bridge_apu_flush(cpu);
             return 1;
@@ -3258,9 +3286,9 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
          * the wait; it executes the LDA $00D9 / BEQ loop with the same master
          * timing and IRQ/deadline sampling, but avoids the full interpreter bus
          * dispatch overhead in the battle vIRQ case. */
-        if (in.k == 0xC0u && (in.pc == 0x84B2u || in.pc == 0x84B4u) &&
-            s_d9ff && auto_quiescent && g_snes && !in.i &&
-            !s_interp_bus_timing_active && in.mf && !in.e && !in.dp &&
+        if (BIN_R(k) == 0xC0u && (in.pc == 0x84B2u || in.pc == 0x84B4u) &&
+            s_d9ff && auto_quiescent && g_snes && !BIN_R(i) &&
+            !s_interp_bus_timing_active && BIN_R(mf) && !BIN_R(e) && !BIN_R(dp) &&
             g_snes->vIrqEnabled && g_snes->vTimer == 216u) {
             const int _d9 = bridge_so_d9_wait(cpu, &in, auto_quiescent);
             if (_d9 == BRIDGE_COLD_RETURN_1) return 1;
@@ -3278,17 +3306,17 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
          * equals the sum of per-opcode advances), so jumping the beam to
          * the natural exit point and flushing the skipped SPC time is
          * state-exact. Disabled with SNESRECOMP_NO_VBLANK_FF=1. */
-        if (auto_quiescent && g_snes && !in.i && !s_lle_master_deadline &&
+        if (auto_quiescent && g_snes && !BIN_R(i) && !s_lle_master_deadline &&
             ((pc_before >> 16) & 0xF1u) == 0xC0u &&   /* banks $C0-$CE: the list's */
             bridge_vff_pc(pc_before))
             bridge_vblank_ff(cpu, pc_before);
 #if SNESRECOMP_WAIT_REPLAY
         if (wr_n) {
             BridgeQState cur;
-            cur.pc=pc_before; cur.a=in.a; cur.x=in.x; cur.y=in.y;
-            cur.sp=in.sp; cur.dp=in.dp; cur.db=in.db; cur.k=in.k;
-            cur.c=in.c; cur.z=in.z; cur.v=in.v; cur.n=in.n; cur.i=in.i;
-            cur.d=in.d; cur.mf=in.mf; cur.xf=in.xf; cur.e=in.e;
+            cur.pc=pc_before; cur.a=BIN_R(a); cur.x=BIN_R(x); cur.y=BIN_R(y);
+            cur.sp=BIN_R(sp); cur.dp=BIN_R(dp); cur.db=BIN_R(db); cur.k=BIN_R(k);
+            cur.c=BIN_R(c); cur.z=BIN_R(z); cur.v=BIN_R(v); cur.n=BIN_R(n); cur.i=BIN_R(i);
+            cur.d=BIN_R(d); cur.mf=BIN_R(mf); cur.xf=BIN_R(xf); cur.e=BIN_R(e);
             if (wr_lap[0].write_epoch != g_interp_bridge_write_epoch ||
                 wr_lap[0].continuous_read_epoch != s_interp_continuous_read_epoch ||
                 wr_lap[0].volatile_read_epoch != s_interp_volatile_read_epoch ||
@@ -3323,10 +3351,10 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
         if (q_record) {
             BridgeQState now;
             memset(&now, 0, sizeof now);
-            now.pc=pc_before; now.a=in.a; now.x=in.x; now.y=in.y;
-            now.sp=in.sp; now.dp=in.dp; now.db=in.db; now.k=in.k;
-            now.c=in.c; now.z=in.z; now.v=in.v; now.n=in.n; now.i=in.i;
-            now.d=in.d; now.mf=in.mf; now.xf=in.xf; now.e=in.e;
+            now.pc=pc_before; now.a=BIN_R(a); now.x=BIN_R(x); now.y=BIN_R(y);
+            now.sp=BIN_R(sp); now.dp=BIN_R(dp); now.db=BIN_R(db); now.k=BIN_R(k);
+            now.c=BIN_R(c); now.z=BIN_R(z); now.v=BIN_R(v); now.n=BIN_R(n); now.i=BIN_R(i);
+            now.d=BIN_R(d); now.mf=BIN_R(mf); now.xf=BIN_R(xf); now.e=BIN_R(e);
             now.write_epoch=g_interp_bridge_write_epoch; now.step=steps;
             now.continuous_read_epoch=s_interp_continuous_read_epoch;
             now.idle_live_epoch=s_interp_idle_live_epoch;
@@ -3403,7 +3431,7 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
                          * mistaken for this path: continuous_read_epoch changes
                          * on every such read. */
                         lle_resume_set(pc_before,
-                                       INTERP_RESUME_SITE_QUIESCENT, in.sp);
+                                       INTERP_RESUME_SITE_QUIESCENT, BIN_R(sp));
                         s_lle_quiescent_yield = 1;
                         /* Flush accumulated SPC time BEFORE yielding so the
                          * SPC700 processes any pending port writes (Star Ocean
@@ -3460,8 +3488,8 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
                             "[interp_low_exec] from=$%06X/%02X to=$%06X "
                             "m=%u x=%u db=$%02X sp=$%04X a=$%04X prior:",
                             (unsigned)_prev->pc, _prev->op,
-                            (unsigned)pc_before, in.mf, in.xf, in.db,
-                            in.sp, in.a);
+                            (unsigned)pc_before, BIN_R(mf), BIN_R(xf), BIN_R(db),
+                            BIN_R(sp), BIN_R(a));
                     long _low_start = itn > 64 ? itn - 64 : 0;
                     for (long _li = _low_start; _li < itn; _li++) {
                         const ITraceEnt *_le = &ring[_li & 255];
@@ -3539,7 +3567,7 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
          * can change.  Recognise the register/opcode shape (not a game PC) at
          * the final taken BEQ, yield to the owning LLE scheduler, and resume at
          * the backward target so $4212/$4218/$4219 are sampled again. */
-        if (_cooperative_poll && _poll_op == 0xF0 && in.z) {
+        if (_cooperative_poll && _poll_op == 0xF0 && BIN_R(z)) {
             int _jw_ret;
             if (bridge_joypad_wait(cpu, &in, pc_before, yield_pc, &_jw_ret))
                 return _jw_ret;
@@ -3624,8 +3652,8 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
                 fprintf(stderr,
                         "[interp_cop] pc=$%06X m=%u x=%u db=$%02X "
                         "sp=$%04X a=$%04X prior:",
-                        (unsigned)pc_before, in.mf, in.xf, in.db,
-                        in.sp, in.a);
+                        (unsigned)pc_before, BIN_R(mf), BIN_R(xf), BIN_R(db),
+                        BIN_R(sp), BIN_R(a));
                 long _cop_start = itn > 16 ? itn - 16 : 0;
                 for (long _ci = _cop_start; _ci < itn; _ci++) {
                     const ITraceEnt *_ce = &ring[_ci & 255];
@@ -3646,7 +3674,7 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
                 /* post-XCE e = pre-XCE carry */
                 fprintf(stderr, "[xce] f=%d pc=$%06X e=%d->%d sp=$%04X\n",
                         snes_frame_counter, (unsigned)pc_before,
-                        (int)in.e, (int)in.c, (unsigned)in.sp);
+                        (int)BIN_R(e), (int)BIN_R(c), (unsigned)BIN_R(sp));
             }
         }
         {
@@ -3659,13 +3687,13 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
             ITraceRecentEnt *_g =
                 &g_itrace_recent[g_itrace_recent_n++ & (ITRACE_RECENT_LEN - 1)];
             _g->pc = pc_before; _g->frame = snes_frame_counter;
-            _g->sp = in.sp; _g->op = op; _g->pad = 0;
+            _g->sp = BIN_R(sp); _g->op = op; _g->pad = 0;
             if ((pc_before & 0xFFFFFFu) != edge_expect && itn > 1)
                 interp_edge_note(edge_from, pc_before,
                                  interp_edge_kind_for_op(edge_op), edge_op,
-                                 in.sp);
+                                 BIN_R(sp));
             edge_op = op;
-            edge_expect = interp_fallthrough_pc(pc_before, op, in.mf, in.xf);
+            edge_expect = interp_fallthrough_pc(pc_before, op, BIN_R(mf), BIN_R(xf));
 #endif
             edge_from = pc_before & 0xFFFFFFu;
         }
@@ -3698,12 +3726,12 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
                         "sp=$%04X a=$%04X b=%02X %02X %02X %02X "
                         "r4804=%02X r4805=%02X r4806=%02X r4807=%02X\n",
                         snes_frame_counter, (unsigned)pc_before,
-                        in.mf, in.xf, in.e, in.db, in.sp, in.a, op,
-                        (unsigned)cpu_read8(cpu, in.k,
+                        BIN_R(mf), BIN_R(xf), BIN_R(e), BIN_R(db), BIN_R(sp), BIN_R(a), op,
+                        (unsigned)cpu_read8(cpu, BIN_R(k),
                                             (uint16)(pc_before + 1)),
-                        (unsigned)cpu_read8(cpu, in.k,
+                        (unsigned)cpu_read8(cpu, BIN_R(k),
                                             (uint16)(pc_before + 2)),
-                        (unsigned)cpu_read8(cpu, in.k,
+                        (unsigned)cpu_read8(cpu, BIN_R(k),
                                             (uint16)(pc_before + 3)),
                         _r4804, _r4805, _r4806, _r4807);
             }
@@ -3721,7 +3749,7 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
             static int _tbp = -1;
             if (_tbp < 0) _tbp = getenv("SNESRECOMP_TRAP_BADPB") ? 1 : 0;
             if (_tbp)
-                bridge_trap_badpb(pc_before, op, in.sp, entry_pc24, head, itn, ring, trace);
+                bridge_trap_badpb(pc_before, op, BIN_R(sp), entry_pc24, head, itn, ring, trace);
         }
 
         /* Subroutine calls: JSR abs (0x20, 3B), JSL (0x22, 4B),
@@ -3731,10 +3759,10 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
         const int call_len = (op == 0x22) ? 4 : 3;
         const int is_ret   = op_class & BRIDGE_OP_RET;
 
-        const uint8_t coverage_mx = (uint8_t)((in.mf << 1) | in.xf);
-        const uint8_t coverage_e = in.e;
-        const uint16_t dp_before = in.dp;
-        const uint16_t sp_before = in.sp;
+        const uint8_t coverage_mx = (uint8_t)((BIN_R(mf) << 1) | BIN_R(xf));
+        const uint8_t coverage_e = BIN_R(e);
+        const uint16_t dp_before = BIN_R(dp);
+        const uint16_t sp_before = BIN_R(sp);
         s_interp_bus_master=0;
         s_interp_bus_cycles=0;
         s_interp_bus_timing_active=1;
@@ -3752,10 +3780,10 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
                     steps, (unsigned)pc_before);
         if (SNESRECOMP_INTERP_DIAG && g_interp_bridge_pc_hook)
             g_interp_bridge_pc_hook(pc_before & 0xFFFFFFu,
-                                    in.mf ? 1 : 0, in.xf ? 1 : 0);
+                                    BIN_R(mf) ? 1 : 0, BIN_R(xf) ? 1 : 0);
         if (s_idle_poll_count) s_idle_poll_now = bridge_is_idle_poll(pc_before);
 #ifdef N64_INTERP_REPORT
-        const uint32_t rep_mx = (uint32_t)(in.mf ? 1u << 25 : 0) | (in.xf ? 1u << 24 : 0);
+        const uint32_t rep_mx = (uint32_t)(BIN_R(mf) ? 1u << 25 : 0) | (BIN_R(xf) ? 1u << 24 : 0);
 #endif
 #ifdef N64_JIT_REPORT
         s_jr_slow = 0;   /* (the opcode fetch above is not this instruction's access) */
@@ -3778,16 +3806,16 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
         s_idle_poll_now = 0;
         if (SNESRECOMP_INTERP_DIAG && s_interp_pctrace && steps < 4)
             fprintf(stderr, "[pctrace] step=%ld post-runOpcode cyc=%d pc=%02X:%04X\n",
-                    steps, _cyc, in.k, in.pc);
+                    steps, _cyc, BIN_R(k), in.pc);
         s_interp_bus_timing_active=0;
-        if (SNESRECOMP_INTERP_DIAG && dtrace && in.dp != dp_before) {
+        if (SNESRECOMP_INTERP_DIAG && dtrace && BIN_R(dp) != dp_before) {
             extern int snes_frame_counter;
             fprintf(stderr,
                     "[interp_d] f=%d pc=$%06X op=$%02X D=$%04X->$%04X "
                     "S=$%04X->$%04X\n",
                     snes_frame_counter, (unsigned)pc_before, (unsigned)op,
-                    (unsigned)dp_before, (unsigned)in.dp,
-                    (unsigned)sp_before, (unsigned)in.sp);
+                    (unsigned)dp_before, (unsigned)BIN_R(dp),
+                    (unsigned)sp_before, (unsigned)BIN_R(sp));
         }
 
         /* Guest-time-anchored APU: advance the guest clock + SPC by this opcode's
@@ -3887,7 +3915,7 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
         if (in.waiting) {
             in.waiting = false;
             if (auto_quiescent || yield_pc) {
-                lle_resume_set(((uint32_t)in.k << 16) | in.pc, INTERP_RESUME_SITE_WAI, in.sp);
+                lle_resume_set(((uint32_t)BIN_R(k) << 16) | in.pc, INTERP_RESUME_SITE_WAI, BIN_R(sp));
                 s_lle_wai_yield = 1;
                 sync_interp_to_cpu(&in, cpu);
                 bridge_apu_flush(cpu);
@@ -3913,7 +3941,7 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
          * target — the actual entry to record, not the JMP site. For a direct
          * dispatch target the caller already knows the entry and ignores it. */
         if (steps == 0 && out_landing)
-            *out_landing = ((uint32_t)in.k << 16) | in.pc;
+            *out_landing = ((uint32_t)BIN_R(k) << 16) | in.pc;
 
         /* In-bridge goto-gap sighting: an indirect JMP/JML's dynamically
          * resolved landing with no compiled variant — task entry points and
@@ -3922,7 +3950,7 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
          * they leave no trail at all. JMP (abs)=$6C, JMP (abs,X)=$7C,
          * JML [abs]=$DC. */
         if (op_class & BRIDGE_OP_JMP_INDIRECT) {
-            const uint32_t landing = ((uint32_t)in.k << 16) | in.pc;
+            const uint32_t landing = ((uint32_t)BIN_R(k) << 16) | in.pc;
             sync_interp_to_cpu(&in, cpu);   /* live (m,x) for the probe */
             if (!cpu_dispatch_has_entry(cpu, landing))
                 tier2_record(pc_before, landing, tier2_entry_mx(cpu),
@@ -3935,13 +3963,13 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
          * take inline arguments). See tail_frames. */
         int tail_j = -1;
         if ((op_class & (BRIDGE_OP_JMP_DIRECT | BRIDGE_OP_JMP_INDIRECT)) && tail_n > 0 &&
-            (uint32_t)in.sp + 3u < 0x2000u) {
+            (uint32_t)BIN_R(sp) + 3u < 0x2000u) {
             for (int j = tail_n - 1; j >= 0; --j) {
-                if (tail_frames[j].s_after != in.sp) continue;
+                if (tail_frames[j].s_after != BIN_R(sp)) continue;
                 const uint8_t fs = tail_frames[j].size;
                 const uint32_t r = tail_frames[j].ret_pc24;
                 const uint16_t pushed = (uint16_t)((r & 0xFFFFu) - 1u);
-                const uint8_t *st = g_ram + in.sp + 1u;   /* bank 0 stack page in WRAM */
+                const uint8_t *st = g_ram + BIN_R(sp) + 1u;   /* bank 0 stack page in WRAM */
                 if (fs && st[0] == (uint8_t)pushed && st[1] == (uint8_t)(pushed >> 8) &&
                     (fs == 2 || st[2] == (uint8_t)(r >> 16)))
                     tail_j = j;
@@ -3955,7 +3983,7 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
              * and set pc to the target. If the target has a compiled body for
              * the current (m,x), run it compiled. */
             sync_interp_to_cpu(&in, cpu);          /* expose (m,x) + frame to AOT */
-            const uint32_t target = ((uint32_t)in.k << 16) | in.pc;
+            const uint32_t target = ((uint32_t)BIN_R(k) << 16) | in.pc;
             /* Cooperative-scheduler (yield_pc) mode bounces too (fiber-free
              * rich-LLE, docs/LLE_SCHEDULER.md): a bounced body that reaches a
              * yield primitive no longer corrupts the paired-call stack — its
@@ -3979,7 +4007,7 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
                  * right after HandleChargingBeamGfxAudio's JSR), the Samus-draw
                  * +2 leak. frame: JSL(0x22)=3, JSR/JSR(abs,X)=2. */
                 const uint8_t _fs = tail_ok ? tail_frames[tail_j].size : (op == 0x22) ? 3 : 2;
-                uint16_t _sp_pre = in.sp;
+                uint16_t _sp_pre = BIN_R(sp);
                 /* Compiled body paces its own APU (RtlApuRead/Write); un-suppress
                  * the per-touch catch-up for its duration, then restore the
                  * PRE-CALL value (not literal 1 — under the co-sim shared APU
@@ -4034,7 +4062,7 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
                     fprintf(stderr, "[ibr] call op=$%02X pc=$%06X -> $%06X "
                             "sp_pre=$%04X aot_ret=%d sp_post=$%04X\n",
                             op, (unsigned)pc_before, (unsigned)target,
-                            (unsigned)_sp_pre, (int)_air, (unsigned)in.sp);
+                            (unsigned)_sp_pre, (int)_air, (unsigned)BIN_R(sp));
                 const uint32_t ret = tail_ok ? tail_frames[tail_j].ret_pc24 :
                     (pc_before + (uint32_t)call_len +
                      (uint32_t)cpu_dispatch_inline_arg_bytes(target)) & 0xFFFFFF;
@@ -4051,7 +4079,7 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
                             if (yield_pc) {
                                 lle_resume_set(s_lle_unwind_pc24,
                                                INTERP_RESUME_SITE_DEADLINE_UNWIND,
-                                               in.sp);
+                                               BIN_R(sp));
                                 s_lle_unwind_active = 0;
                                 s_lle_unwind_owner_depth = 0;
                                 s_lle_unwind_is_deadline = 0;
@@ -4068,7 +4096,7 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
                                         "sp_pre=$%04X sp_unwind=$%04X "
                                         "resume=$%06X\n",
                                         snes_frame_counter, (unsigned)target,
-                                        (unsigned)_sp_pre, (unsigned)in.sp,
+                                        (unsigned)_sp_pre, (unsigned)BIN_R(sp),
                                         (unsigned)s_lle_unwind_pc24);
                             }
                             /* Fiber-free yield: the bounced body reached a
@@ -4087,10 +4115,10 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
                             s_lle_unwind_owner_depth = 0;
                             s_lle_unwind_is_deadline = 0;
                             sync_cpu_to_interp(cpu, &in);
-                            in.k  = (uint8)((s_lle_unwind_pc24 >> 16) & 0xFF);
+                            BIN_W(k, (uint8)((s_lle_unwind_pc24 >> 16) & 0xFF));
                             in.pc = (uint16)(s_lle_unwind_pc24 & 0xFFFF);
                             interp_edge_note(pc_before, s_lle_unwind_pc24,
-                                             INTERP_EDGE_EXTERNAL, op, in.sp);
+                                             INTERP_EDGE_EXTERNAL, op, BIN_R(sp));
                             edge_expect = s_lle_unwind_pc24 & 0xFFFFFFu;
 #if SNESRECOMP_TAIL_FRAMES_KEEP
                             /* The compiled body handed control back from
@@ -4101,7 +4129,7 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
                              * it under that return (each record is checked
                              * against S and the stack bytes when used). */
                             tail_n = _tail_keep;
-                            if (!tail_ok && is_call && in.sp <= _sp_pre) {
+                            if (!tail_ok && is_call && BIN_R(sp) <= _sp_pre) {
                                 while (tail_n > 0 && tail_frames[tail_n - 1].s_after <= _sp_pre)
                                     tail_n--;
                                 if (tail_n == (int)(sizeof tail_frames / sizeof tail_frames[0])) {
@@ -4122,7 +4150,7 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
                                         "sp=$%04X yield_pc=$%06X sched=%d "
                                         "depth=%d\n",
                                         (unsigned)s_lle_unwind_pc24,
-                                        (unsigned)in.sp,
+                                        (unsigned)BIN_R(sp),
                                         (unsigned)yield_pc,
                                         s_lle_sched_depth,
                                         s_interp_bridge_depth);
@@ -4149,14 +4177,14 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
                      * this interpreter frame. Preserve that non-local return
                      * instead of resuming at ret. */
                     const int _skip_crossed_owner =
-                        interp_owner_crossed(in.sp);
+                        interp_owner_crossed(BIN_R(sp));
                     if (_air != RECOMP_RETURN_SKIP_1 ||
                         _skip_crossed_owner) {
                         return bridge_nlr_exit(cpu, &in, yield_pc, _air, target, pc_before,
                                                _sp_pre, s_enter);
                     }
                 }
-                in.k  = (uint8)((ret >> 16) & 0xFF);
+                BIN_W(k, (uint8)((ret >> 16) & 0xFF));
                 in.pc = (uint16)(ret & 0xFFFF);
                 if (tail_ok) tail_n = tail_j;   /* that call (and any inside it) has returned */
                 /* Resume-task mode: a successful bounce is forward progress
@@ -4172,14 +4200,14 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
                  * return address never reaches the RTS that would pop its
                  * record). Left in, sixteen of them push out the record of
                  * the frame a later tail jump needs. */
-                while (tail_n > 0 && tail_frames[tail_n - 1].s_after <= in.sp)
+                while (tail_n > 0 && tail_frames[tail_n - 1].s_after <= BIN_R(sp))
                     tail_n--;
 #endif
                 if (tail_n == (int)(sizeof tail_frames / sizeof tail_frames[0])) {
                     memmove(&tail_frames[0], &tail_frames[1], sizeof tail_frames - sizeof tail_frames[0]);
                     tail_n--;
                 }
-                tail_frames[tail_n].s_after = in.sp;
+                tail_frames[tail_n].s_after = BIN_R(sp);
                 tail_frames[tail_n].size = cpu_dispatch_inline_arg_bytes(target) ? 0
                                            : (op == 0x22) ? 3 : 2;
                 tail_frames[tail_n].ret_pc24 = (pc_before + (uint32_t)call_len) & 0xFFFFFF;
@@ -4195,7 +4223,7 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
                 if (_ibrw)
                     fprintf(stderr, "[ibr] call op=$%02X pc=$%06X -> $%06X "
                             "(interp into target) sp=$%04X\n",
-                            op, (unsigned)pc_before, (unsigned)target, (unsigned)in.sp);
+                            op, (unsigned)pc_before, (unsigned)target, (unsigned)BIN_R(sp));
             }
             /* A jump that was not run compiled carries on through the rest
              * of the step like any other instruction. */
@@ -4220,12 +4248,12 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
             if (_ibrw)
                 fprintf(stderr, "[ibr] ret  op=$%02X pc=$%06X sp=$%04X "
                         "(s_enter=$%04X exit=%d)\n",
-                        op, (unsigned)pc_before, (unsigned)in.sp,
-                        (unsigned)s_enter, (int)((uint16_t)in.sp > s_enter));
-            if ((uint16_t)in.sp > s_enter) {
+                        op, (unsigned)pc_before, (unsigned)BIN_R(sp),
+                        (unsigned)s_enter, (int)((uint16_t)BIN_R(sp) > s_enter));
+            if ((uint16_t)BIN_R(sp) > s_enter) {
                 /* The interpreted routine returned past its entry depth. */
                 if (out_return_pc)
-                    *out_return_pc = ((uint32_t)in.k << 16) | in.pc;
+                    *out_return_pc = ((uint32_t)BIN_R(k) << 16) | in.pc;
                 sync_interp_to_cpu(&in, cpu);
                 bridge_apu_flush(cpu);
                 return 1;
@@ -4252,7 +4280,7 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
 #endif
             uint32_t prev = pc_before;
             for (;;) {
-                const uint32_t bpc = ((uint32_t)in.k << 16) | in.pc;
+                const uint32_t bpc = ((uint32_t)BIN_R(k) << 16) | in.pc;
                 if (bpc <= prev || ((bpc ^ prev) >> 16) || steps + 1 >= step_cap) break;
                 const uint8_t *const pg = cpu_fast_map_page(bpc);
                 if (!pg || k_burst_stop[pg[bpc & 0x1FFFu]]) break;
@@ -4260,7 +4288,7 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
                 if (bpc == (uint32_t)(N64_STATE_AT_PC)) break;
 #endif
                 if (auto_quiescent) {
-                    if (!in.i && g_snes->inIrq) break;
+                    if (!BIN_R(i) && g_snes->inIrq) break;
                     if (s_lle_master_deadline && g_master_cycles >= s_lle_master_deadline) break;
                 }
                 steps++;
@@ -4276,7 +4304,7 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
                 g_interp_wlog_pc24 = bpc & 0xFFFFFFu;
                 g_coprocessor_master_cycles = g_master_cycles;
 #ifdef N64_INTERP_REPORT
-                const uint32_t brep_mx = (uint32_t)(in.mf ? 1u << 25 : 0) | (in.xf ? 1u << 24 : 0);
+                const uint32_t brep_mx = (uint32_t)(BIN_R(mf) ? 1u << 25 : 0) | (BIN_R(xf) ? 1u << 24 : 0);
 #endif
 #ifdef N64_JIT_REPORT
                 s_jr_slow = 0;
@@ -4330,7 +4358,7 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
                     steps = 0;
                 }
                 if (steps == 0 && out_landing)
-                    *out_landing = ((uint32_t)in.k << 16) | in.pc;
+                    *out_landing = ((uint32_t)BIN_R(k) << 16) | in.pc;
                 prev = bpc;
             }
         }
@@ -4359,7 +4387,7 @@ idle_replay_step_cap:
      * Interrupt handlers must complete (RTI) or be discarded entirely;
      * the caller (so_rtl.c) saves/restores the CPU stack to handle bail. */
     if (!stop_on_rti)
-        lle_resume_set(((uint32_t)in.k << 16) | in.pc, INTERP_RESUME_SITE_STEP_CAP, in.sp);
+        lle_resume_set(((uint32_t)BIN_R(k) << 16) | in.pc, INTERP_RESUME_SITE_STEP_CAP, BIN_R(sp));
     sync_interp_to_cpu(&in, cpu);
     bridge_apu_flush(cpu);
     /* Post-sync diagnostic: decode the instruction at step-cap PC */

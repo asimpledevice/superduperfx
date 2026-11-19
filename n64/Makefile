@@ -31,7 +31,7 @@ RUNNER_SRCS = \
 	snes/dsp1_hle.c snes/joypad.c snes/audio_shadow.c snes/dsp_shadow.c \
 	snes/color_lut.c snes/ppu.c snes/hd_jobs.c snes/ppu_legacy.c snes/sa1.c \
 	snes/sdd1.c snes/ws_shadow.c snes/snes.c snes/snes_other.c snes/spc.c \
-	snes/superfx.c snes/interp816.c snes/tier2_capture.c snes/interp_bridge.c \
+	snes/superfx.c snes/interp816.c snes/interp816_main.c snes/tier2_capture.c snes/interp_bridge.c \
 	snes/cx4.c
 
 HOST_SRCS = n64_host.c n64_platform.c n64_compat.c n64_stubs.c n64_ppu_desc.c \
