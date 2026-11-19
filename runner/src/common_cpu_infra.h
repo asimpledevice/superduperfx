@@ -48,7 +48,17 @@ void snes_refresh_charge(void);   /* DRAM refresh tax; see common_cpu_infra.c */
  * the watermark and phase; anything else takes the full function. Same
  * result as snes_refresh_charge in every case. */
 extern uint64_t g_refresh_charged_upto, g_refresh_phase;
-static inline __attribute__((always_inline)) void snes_refresh_charge_inline(uint64_t master_cycles) {
+/* (forced inline in INTERPREGS builds: there GCC otherwise leaves the
+ * per-instruction helpers out of line; forcing it in the default build made
+ * the interpreter loop 296 bytes larger and Pitfall slower) */
+#ifndef SDFX_HOT_INLINE
+#if defined(SNESRECOMP_INTERP_REGS) && SNESRECOMP_INTERP_REGS
+#define SDFX_HOT_INLINE static inline __attribute__((always_inline))
+#else
+#define SDFX_HOT_INLINE static inline
+#endif
+#endif
+SDFX_HOT_INLINE void snes_refresh_charge_inline(uint64_t master_cycles) {
   const uint64_t upto = g_refresh_charged_upto;
   if (upto != 0 && master_cycles >= upto &&
       g_refresh_phase + (master_cycles - upto) < 1364u) {
