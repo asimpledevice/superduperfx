@@ -2434,6 +2434,8 @@ static BRIDGE_COLD int bridge_wait_replay(CpuState *cpu, Interp816 *in, const Br
                                           int apu_batch) {
     const BridgeQState *at = &lap[0];
     int capped = 0, site = INTERP_RESUME_SITE_DEADLINE;
+    uint64_t lap_master = 0;
+    for (int e = 0; e < n; e++) lap_master += idle_cost[(first + e) & 63].master;
     for (long j = 0;; j++) {
         const int e = (int)(j % n);
         const BridgeIdleCost *cost = &idle_cost[(first + e) & 63];
@@ -2441,6 +2443,44 @@ static BRIDGE_COLD int bridge_wait_replay(CpuState *cpu, Interp816 *in, const Br
         if (steps + j >= step_cap) { capped = 1; break; }
         if (!at->i && g_snes->inIrq) { site = INTERP_RESUME_SITE_IRQ_PENDING; break; }
         if (g_master_cycles >= s_lle_master_deadline) break;
+#if SNESRECOMP_LAZY_BEAM
+        /* Whole laps in one go, as many as end before anything a single step
+         * could meet: the deadline, the next beam event (so no IRQ can latch
+         * and the per-step beam call returns at once), the refresh tax's
+         * next scanline (its per-step charge stays the plain sum) and the
+         * APU flush threshold. Stepping them one by one would leave the same
+         * state. */
+        if (e == 0 && lap_master) {
+            uint64_t k = (s_lle_master_deadline - g_master_cycles) / lap_master, lim;
+            lim = s_beam_next_event > g_master_cycles
+                      ? (s_beam_next_event - g_master_cycles - 1) / lap_master : 0;
+            if (lim < k) k = lim;
+            {
+                const uint64_t upto = g_refresh_charged_upto;
+                const uint64_t used = upto && g_master_cycles >= upto
+                                          ? g_refresh_phase + (g_master_cycles - upto) : 1364u;
+                lim = used < 1364u ? (1363u - used) / lap_master : 0;
+                if (lim < k) k = lim;
+            }
+            if (apu_batch) {
+                lim = s_apu_pending_master < apu_flush_thresh
+                          ? (apu_flush_thresh - 1 - s_apu_pending_master) / lap_master : 0;
+                if (lim < k) k = lim;
+            }
+            lim = (uint64_t)(step_cap - steps - j - 1) / (uint64_t)n;
+            if (lim < k) k = lim;
+            if (k) {
+                g_interp_bridge_steps += k * (uint64_t)n;
+                g_master_cycles += k * lap_master;
+                snes_refresh_charge_inline(g_master_cycles);
+                g_open_bus = idle_cost[(first + n - 1) & 63].open_bus;
+                g_coprocessor_master_cycles = g_master_cycles;
+                if (apu_batch) s_apu_pending_master += k * lap_master;
+                j += (long)(k * (uint64_t)n) - 1;
+                continue;
+            }
+        }
+#endif
         g_interp_bridge_steps++;
         g_master_cycles += cost->master;
         snes_refresh_charge_inline(g_master_cycles);
