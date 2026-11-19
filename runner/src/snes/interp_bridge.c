@@ -91,6 +91,12 @@ static uint64_t s_apu_pending_master = 0;
 #ifndef SNESRECOMP_WAIT_REPLAY
 #define SNESRECOMP_WAIT_REPLAY 0
 #endif
+/* 1: straight-line instructions after an interpreted step run in a small
+ * loop with the same per-step effects (see the burst in _interp_run_core);
+ * 0: every instruction goes round the full loop. */
+#ifndef SNESRECOMP_INTERP_BURST
+#define SNESRECOMP_INTERP_BURST 0
+#endif
 /* 0: the detector never yields a stable wait; the loop is interpreted to the
  * deadline or the IRQ. Slow, and the reference the two above are checked
  * against. */
@@ -2034,6 +2040,15 @@ static void interp_hist_init(void) {
 
 /* Opcode classes the run loop tests on every step. */
 enum { BRIDGE_OP_CALL = 1, BRIDGE_OP_RET = 2, BRIDGE_OP_JMP_INDIRECT = 4, BRIDGE_OP_JMP_DIRECT = 8 };
+#if SNESRECOMP_INTERP_BURST
+/* Opcodes a burst stops before: those the big loop handles specially (calls,
+ * returns, jumps, RTI) or that halt, vector or repeat themselves. */
+static const uint8_t k_burst_stop[256] = {
+    [0x00] = 1, [0x02] = 1, [0x20] = 1, [0x22] = 1, [0xFC] = 1, [0x60] = 1, [0x6B] = 1, [0x40] = 1,
+    [0x4C] = 1, [0x5C] = 1, [0x6C] = 1, [0x7C] = 1, [0xDC] = 1, [0xCB] = 1, [0xDB] = 1, [0x44] = 1,
+    [0x54] = 1,
+};
+#endif
 static const uint8_t k_bridge_op_class[256] = {
     [0x20] = BRIDGE_OP_CALL, [0x22] = BRIDGE_OP_CALL, [0xFC] = BRIDGE_OP_CALL,  /* JSR, JSL, JSR (a,X) */
     [0x60] = BRIDGE_OP_RET, [0x6B] = BRIDGE_OP_RET,                             /* RTS, RTL */
@@ -3006,6 +3021,16 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
      * balanced the way these entries say. */
     struct { uint16_t s_after; uint8_t size; uint32_t ret_pc24; } tail_frames[16];
     int tail_n = 0;
+#if SNESRECOMP_INTERP_BURST
+    /* (See the burst at the end of the loop.) Only where the big loop does
+     * nothing per step that the burst leaves out: the sparse detector, no
+     * scheduler yield PC, stop PCs, hooks, declared polls, coprocessor,
+     * traces; and not in the banks with per-PC special cases. */
+    const int burst_ok =
+        (auto_quiescent ? q_sparse : !yield_pc) && !s_sched_yield_pc && !n_stop &&
+        !s_pre_opcode_hook_count && !s_idle_poll_count && !has_coprocessor && !trace &&
+        !_ibrw && !wlog_state_sync && g_snes && ((entry_pc24 >> 16) & 0xFFu) < 0xC0u;
+#endif
 #if SNESRECOMP_WAIT_REPLAY
     /* A wait the detector found, while one lap of it is recorded for the
      * replay: its steps' states, and the step number of the first. */
@@ -4144,6 +4169,110 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
                 return 1;
             }
         }
+#if SNESRECOMP_INTERP_BURST
+        /* Burst: the instructions that follow in a straight line (forward,
+         * same bank, not a call, return, jump or halt) run in this small
+         * loop instead of going round the big one. Each does what a step of
+         * the big loop does for such an instruction -- the same checks
+         * before it, the same clock, refresh, beam and APU accounting after
+         * it, in the same order -- and anything the big loop would treat
+         * specially ends the burst before that instruction, untouched. What
+         * is left out is the code a plain instruction never needs (the
+         * detector away from loop heads, call and tail-jump handling, the
+         * diagnostics), which is most of the loop's size.
+         *
+         * This is also the contract a translated block has to meet; the
+         * interpreter core stands in for generated code here. */
+#if SNESRECOMP_WAIT_REPLAY
+        if (burst_ok && !wr_n) {       /* (a lap being recorded is stepped) */
+#else
+        if (burst_ok) {
+#endif
+            uint32_t prev = pc_before;
+            for (;;) {
+                const uint32_t bpc = ((uint32_t)in.k << 16) | in.pc;
+                if (bpc <= prev || ((bpc ^ prev) >> 16) || steps + 1 >= step_cap) break;
+                const uint8_t *const pg = cpu_fast_map_page(bpc);
+                if (!pg || k_burst_stop[pg[bpc & 0x1FFFu]]) break;
+#ifdef N64_STATE_AT_PC
+                if (bpc == (uint32_t)(N64_STATE_AT_PC)) break;
+#endif
+                if (auto_quiescent) {
+                    if (!in.i && g_snes->inIrq) break;
+                    if (s_lle_master_deadline && g_master_cycles >= s_lle_master_deadline) break;
+                }
+                steps++;
+#ifdef N64_TIME_CATS
+                g_tcat_iters++;
+#endif
+                RtlGuestScopeCheckpoint();
+                snes_refresh_charge_inline(g_master_cycles);
+                if (auto_quiescent) q_prev_pc = bpc;   /* (forward: never a loop head) */
+                s_interp_bus_master = 0;
+                s_interp_bus_cycles = 0;
+                s_interp_bus_timing_active = 1;
+                g_interp_wlog_pc24 = bpc & 0xFFFFFFu;
+                g_coprocessor_master_cycles = g_master_cycles;
+#ifdef N64_INTERP_REPORT
+                const uint32_t brep_mx = (uint32_t)(in.mf ? 1u << 25 : 0) | (in.xf ? 1u << 24 : 0);
+#endif
+#ifdef N64_JIT_REPORT
+                s_jr_slow = 0;
+#endif
+                const uint32_t btcat = tcat_enter(TCAT_OPCODE);
+                int bcyc = interp816_runOpcode(&in);
+                tcat_leave(btcat);
+#ifdef N64_TIME_CATS
+                g_tcat_ops++;
+#endif
+#ifdef N64_INTERP_REPORT
+                s_rep_total += (uint32_t)bcyc;
+                s_rep_insns++;
+                interp_rep_add(s_rep_pc, kInterpRepPc, (bpc & 0xffffff) | brep_mx, (uint32_t)bcyc);
+                interp_rep_add(s_rep_entry, kInterpRepEntry, (entry_pc24 & 0xffffff) | brep_mx, (uint32_t)bcyc);
+#endif
+#ifdef N64_JIT_REPORT
+                jr_step((bpc & 0xffffff) | brep_mx, pg[bpc & 0x1FFFu], 0);
+#endif
+                s_interp_bus_timing_active = 0;
+                if (bcyc <= 0) bcyc = 1;
+                {
+                    const unsigned internal = (unsigned)bcyc > s_interp_bus_cycles
+                                                  ? (unsigned)bcyc - s_interp_bus_cycles : 0;
+                    const uint64_t master = s_interp_bus_master + (uint64_t)internal * 6u;
+                    g_interp_bridge_steps++;
+                    g_master_cycles += master;
+                    snes_refresh_charge_inline(g_master_cycles);
+                    g_coprocessor_master_cycles = g_master_cycles;
+                    bridge_beam_after_step(cpu);
+                    if (apu_batch_always || rtl_apu_extended_frame_timing() ||
+                        !interp_bridge_use_absolute_apu_timeline(
+                            rtl_apu_frame_timeline_active(),
+                            g_snes && cart_has_sa1(g_snes->cart), false)) {
+                        s_apu_pending_master += master;
+                        if (s_apu_pending_master >= apu_flush_thresh) bridge_apu_flush(cpu);
+                    }
+                    idle_cost[steps & 63].master = master;
+                    idle_cost[steps & 63].cyc = (uint8_t)bcyc;
+                    idle_cost[steps & 63].open_bus = g_open_bus;
+                }
+                if (auto_quiescent &&
+                    (progress_write_epoch != g_interp_bridge_write_epoch ||
+                     progress_dynamic_epoch != s_interp_dynamic_progress_epoch)) {
+                    progress_write_epoch = g_interp_bridge_write_epoch;
+                    progress_dynamic_epoch = s_interp_dynamic_progress_epoch;
+#if !SNESRECOMP_LLE_APU_PROGRESS_FLUSH
+                    if (!bridge_apu_guest_time_ready())
+#endif
+                    bridge_apu_flush(cpu);
+                    steps = 0;
+                }
+                if (steps == 0 && out_landing)
+                    *out_landing = ((uint32_t)in.k << 16) | in.pc;
+                prev = bpc;
+            }
+        }
+#endif
     }
 
     /* Step cap hit — contained bail. Sync so observable state is consistent;
