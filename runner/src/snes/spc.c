@@ -598,8 +598,8 @@ static const uint8_t k_spc_op2[256] = {
 
 /* For the dynamic translator (SNESRECOMP_SPC_DBT): cycles per opcode and
  * the generic opcodes' addressing mode and operation. */
-void spc_tables(const int** cycles, const uint8_t** mode, const uint8_t** op) {
-  *cycles = cyclesPerOpcode;
+void spc_tables(const uint8_t** cycles, const uint8_t** mode, const uint8_t** op) {
+  *cycles = k_spc_cycles;
   *mode = k_spc_mode;
   *op = k_spc_op;
 }

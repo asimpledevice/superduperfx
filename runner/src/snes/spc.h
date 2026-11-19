@@ -55,6 +55,6 @@ void spc_free(Spc* spc);
 void spc_reset(Spc* spc);
 int spc_runOpcode(Spc* spc);
 void spc_saveload(Spc *spc, SaveLoadInfo *sli);
-void spc_tables(const int** cycles, const uint8_t** mode, const uint8_t** op);
+void spc_tables(const uint8_t** cycles, const uint8_t** mode, const uint8_t** op);
 
 #endif

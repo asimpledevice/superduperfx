@@ -82,7 +82,7 @@ static Block s_blocks[kBlocks];
 static uint32_t s_nblocks;
 static void *s_pages[kMapPages][256];   /* map pages, handed out in order */
 static uint32_t s_npages;
-static const int *s_cyc;
+static const uint8_t *s_cyc;
 static const uint8_t *s_mode, *s_op;
 
 static bool s_flushed;   /* a flush happened during this run: no links or translation */
