@@ -2501,6 +2501,18 @@ static BRIDGE_COLD int bridge_wait_replay(CpuState *cpu, Interp816 *in, const Br
                     lines = (g_refresh_phase + k * lap_master) / 1364u;
                     if (g_master_cycles + k * lap_master + 40u * lines <= bound) break;
                 }
+#ifdef N64_RUNLOG_FROM
+                if (snes_frame_counter >= N64_RUNLOG_FROM && snes_frame_counter <= N64_RUNLOG_TO) {
+                    extern void n64_platform_log(const char *fmt, ...);
+                    n64_platform_log("[jump] f %d master %llu bound %llu deadline %llu beam %llu v %u h %u vt %u ht %u "
+                                     "irq h%d v%d pending %d i %d laps %llu lap %llu\n", snes_frame_counter,
+                                     (unsigned long long)g_master_cycles, (unsigned long long)bound,
+                                     (unsigned long long)s_lle_master_deadline,
+                                     (unsigned long long)g_snes->beamMasterLast, g_snes->vPos, g_snes->hPos,
+                                     g_snes->vTimer, g_snes->hTimer, g_snes->hIrqEnabled, g_snes->vIrqEnabled,
+                                     g_snes->inIrq, at->i, (unsigned long long)k, (unsigned long long)lap_master);
+                }
+#endif
                 if (k > 1) {
                     g_interp_bridge_steps += k * (uint64_t)n;
                     g_refresh_phase = g_refresh_phase + k * lap_master - lines * 1364u;
