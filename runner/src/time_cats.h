@@ -23,7 +23,7 @@ static inline uint32_t tcat_now(void) {
  * the 16 KB caches holding the other side's code and data. */
 extern uint32_t g_tcat_sw[TCAT_N][TCAT_N];
 #endif
-static inline uint32_t tcat_enter(uint32_t cat) {
+static inline __attribute__((always_inline)) uint32_t tcat_enter(uint32_t cat) {
   const uint32_t now = tcat_now(), prev = g_tcat_cur;
 #ifdef N64_TIME_SWITCHES
   g_tcat_sw[prev][cat]++;

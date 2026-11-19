@@ -126,7 +126,7 @@ int interp816m_runOpcode(Interp816 *cpu);
 #endif
 /* Guest time exists for the SPC: the frame timeline runs and the APU's port
  * clock is anchored to it. Before that (boot), catch-up is relative. */
-static inline bool bridge_apu_guest_time_ready(void) {
+static inline __attribute__((always_inline)) bool bridge_apu_guest_time_ready(void) {
     return rtl_apu_frame_timeline_active() && g_snes && g_snes->apu &&
            g_snes->apu->portTimeValid;
 }
@@ -454,7 +454,7 @@ static inline void bridge_beam_catchup(const CpuState *cpu) {
     (void)cpu;
 #endif
 }
-static inline void bridge_beam_after_step(const CpuState *cpu) {
+static inline __attribute__((always_inline)) void bridge_beam_after_step(const CpuState *cpu) {
     if (!g_snes) return;
 #if SNESRECOMP_LAZY_BEAM
     if (g_master_cycles < s_beam_next_event) return;
