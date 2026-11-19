@@ -294,9 +294,24 @@ uint64_t snesrecomp_host_now_ns(void);
 #define OPCODE_HIST_END(_op) if (_oh_s) { uint64_t _dt = snesrecomp_host_now_ns() - _oh_t0; s_oh_count[(_op)]++; s_oh_tot[(_op)] += (uint32_t)(_dt < 0xFFFFFFFFu ? _dt : 0xFFFFFFFFu); } } while(0)
 #endif
 
+/* The dev hotspot sampler and the per-opcode host-time histogram each read
+ * a static on every instruction to see whether an environment variable
+ * turned them on. Nothing sets one on the N64, and that load was the hottest
+ * instruction of the core in a PC-sample profile (a data-cache miss), so
+ * they are compiled in only on request. */
+#ifndef SNESRECOMP_INTERP_DEV_PROBES
+#define SNESRECOMP_INTERP_DEV_PROBES 0
+#endif
+#if !SNESRECOMP_INTERP_DEV_PROBES
+#undef OPCODE_HIST_BEGIN
+#undef OPCODE_HIST_END
+#define OPCODE_HIST_BEGIN() do {
+#define OPCODE_HIST_END(_op) } while (0)
+#endif
 int interp816_runOpcode(Interp816* cpu) {
   cpu->cyclesUsed = 0;
   s_interp816_opcodes_run++;
+#if SNESRECOMP_INTERP_DEV_PROBES
   /* getenv() walks the whole environment block on MSVC (~us) - cache it so
    * the hot path pays a branch, not a CRT call, per interpreted instruction.
    * Same value as getenv, so behaviour is bit-identical. */
@@ -314,6 +329,7 @@ int interp816_runOpcode(Interp816* cpu) {
       }
     }
   }
+#endif
   if(cpu->stopped) return 1;
 
   bool interruptPending = cpu->nmiWanted || cpu->irqWanted;
