@@ -287,6 +287,15 @@ BLUE ?= 1
 # registers (runner/src/cpu_regs.h); CPUFPU=0 keeps them in g_cpu.
 CPUFPU ?= 1
 N64_CFLAGS += -DSNESRECOMP_CPU_REGS_FPU=$(CPUFPU)
+# INTERPREGS=1: the main CPU's interpreter core and the bridge keep the
+# 65816 registers in those FPU registers too (runner/src/snes/interp816_main.c).
+# The main core takes the struct core's place in the I-cache order; the
+# struct core, which only coprocessors then call, goes to plain .text.
+INTERPREGS ?= 0
+N64_CFLAGS += -DSNESRECOMP_INTERP_REGS=$(INTERPREGS)
+ifeq ($(INTERPREGS),1)
+$(BUILD_DIR)/runner/snes/interp816.o: N64_CFLAGS += -fno-function-sections
+endif
 N64_CFLAGS += -DSNESRECOMP_FAST_READ_MAP=1 -DSNESRECOMP_QUIESCENT_BACKEDGE=1 \
 	-DSNESRECOMP_LAZY_BEAM=1 -DSNESRECOMP_REVERSE_DEBUG=0 -DSNESRECOMP_INTERP_EDGE_TRACE=0 \
 	-DSNESRECOMP_WRAM_POLL_QUIESCENT=1 -DSNESRECOMP_PARK_TO_VBLANK=1 -DSNESRECOMP_TAIL_FRAMES_KEEP=1 -DSNESRECOMP_WAIT_REPLAY=1 -DSNESRECOMP_BRIDGE_SCRATCH=1 \
