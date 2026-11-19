@@ -44,6 +44,20 @@ uint32_t g_blue_pauses, g_blue_resumes, g_blue_unwinds, g_blue_yields;
  * first, so an interrupt at any point finds a valid stack. MFC1's result is
  * undefined for one instruction (VR4300 manual), so the slot is read ahead of
  * its use. */
+/* SNESRECOMP_PARK_SP_COP0=1: the parked sp is in COP0 ErrorEPC ($30)
+ * instead, and no FPU register is used at all. Only a reset, an NMI or a
+ * cache error writes ErrorEPC, and ERET reads it only with Status.ERL set
+ * (n64/regtest, test 3). */
+#ifndef SNESRECOMP_PARK_SP_COP0
+#define SNESRECOMP_PARK_SP_COP0 0
+#endif
+#if SNESRECOMP_PARK_SP_COP0
+#define PARK_SP_GET "mfc0 $8, $30"
+#define PARK_SP_PUT(r) "mtc0 " r ", $30"
+#else
+#define PARK_SP_GET "mfc1 $8, " FPU_PARK_SP
+#define PARK_SP_PUT(r) "mtc1 " r ", " FPU_PARK_SP
+#endif
 void thread_park_swap(void);
 void thread_park_init(uintptr_t sp, uintptr_t ra);
 __asm__(
@@ -52,11 +66,11 @@ __asm__(
     ".globl thread_park_swap\n.type thread_park_swap, @function\n"
     "thread_park_swap:\n"
     "  daddiu $29, $29, -80\n"
-    "  mfc1 $8, " FPU_PARK_SP "\n"       /* the other thread's sp (a KSEG0 address, sign-extended) */
+    "  " PARK_SP_GET "\n"       /* the other thread's sp (a KSEG0 address, sign-extended) */
     "  sd $16, 0($29)\n  sd $17, 8($29)\n  sd $18, 16($29)\n  sd $19, 24($29)\n"
     "  sd $20, 32($29)\n  sd $21, 40($29)\n  sd $22, 48($29)\n  sd $23, 56($29)\n"
     "  sd $30, 64($29)\n  sd $31, 72($29)\n"
-    "  mtc1 $29, " FPU_PARK_SP "\n"
+    "  " PARK_SP_PUT("$29") "\n"
     "  or $29, $8, $0\n"
     "  ld $16, 0($29)\n  ld $17, 8($29)\n  ld $18, 16($29)\n  ld $19, 24($29)\n"
     "  ld $20, 32($29)\n  ld $21, 40($29)\n  ld $22, 48($29)\n  ld $23, 56($29)\n"
@@ -73,7 +87,7 @@ __asm__(
     "  sd $0, 32($4)\n  sd $0, 40($4)\n  sd $0, 48($4)\n  sd $0, 56($4)\n"
     "  sd $0, 64($4)\n  sd $5, 72($4)\n"
     "  jr $31\n"
-    "  mtc1 $4, " FPU_PARK_SP "\n"
+    "  " PARK_SP_PUT("$4") "\n"
     ".size thread_park_init, .-thread_park_init\n"
     ".set pop\n");
 #else

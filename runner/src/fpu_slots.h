@@ -44,7 +44,7 @@
 #define FPU_CPU_DB "$f22"
 #define FPU_CPU_PB "$f23"
 #define FPU_CPU_P_MXID "$f24" /* P's M, X, I and D bits (the rest are 0) */
-#define FPU_CPU_E "$f25"   /* the emulation bit, 0 or 1 */
+#define FPU_CPU_E "$f25"   /* the emulation bit, 0 or 1; free with SNESRECOMP_CPU_E_PACKED=1 (D's high half) */
 
 /* The master clocks (64-bit; cpu_regs.h g_master_cycles). */
 #define FPU_MASTER_CYCLES "$f26"

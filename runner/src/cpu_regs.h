@@ -76,7 +76,42 @@ CPU_REG_IN_FPU(A, uint16, FPU_CPU_A, 0xFFFFu, 1)
 CPU_REG_IN_FPU(X, uint16, FPU_CPU_X, 0xFFFFu, 1)
 CPU_REG_IN_FPU(Y, uint16, FPU_CPU_Y, 0xFFFFu, 1)
 CPU_REG_IN_FPU(S, uint16, FPU_CPU_S, 0xFFFFu, 1)
+#ifndef SNESRECOMP_CPU_E_PACKED
+#define SNESRECOMP_CPU_E_PACKED 0
+#endif
+#if SNESRECOMP_CPU_E_PACKED
+/* D's register also holds the emulation bit, in its high half: a 32-bit MTC1
+ * leaves the high half of a 64-bit FPU register as it was (n64/regtest,
+ * test 1), so D reads and writes stay one instruction, and E, which
+ * generated code reads in two dozen places and writes in two, needs no
+ * register of its own. The register is one 64-bit variable for the compiler
+ * and the MFC1/MTC1 name it as an operand, so it knows a write of D leaves a
+ * new value and reads E again. */
+register uint64_t g_fpu_cpu_D_E __asm__(FPU_CPU_D);
+static inline __attribute__((always_inline)) uint16 cpu_D(void) {
+  uint32_t v;
+  __asm__("mfc1 %0, %1" : "=r"(v) : "f"(g_fpu_cpu_D_E));
+  if (v > 0xFFFFu) __builtin_unreachable();
+  return (uint16)v;
+}
+static inline __attribute__((always_inline)) void cpu_set_D(uint32_t v) {
+  uint32_t t = (uint16)v;
+  __asm__("mtc1 %1, %0" : "+f"(g_fpu_cpu_D_E) : "r"(t));
+}
+static inline __attribute__((always_inline)) uint8 cpu_emulation(void) {
+  uint32_t v = (uint32_t)(g_fpu_cpu_D_E >> 32);
+  __asm__("" : "+r"(v));
+  if (v > 0xFFu) __builtin_unreachable();
+  return (uint8)v;
+}
+static inline __attribute__((always_inline)) void cpu_set_emulation(uint32_t v) {
+  uint64_t t = (uint8)v, lo;
+  __asm__("dmfc1 %0, %1\n\tdsll32 %0, %0, 0\n\tdsrl32 %0, %0, 0\n\tdsll32 %2, %2, 0\n\tor %0, %0, %2\n\tdmtc1 %0, %1"
+          : "=&r"(lo), "+f"(g_fpu_cpu_D_E), "+r"(t));
+}
+#else
 CPU_REG_IN_FPU(D, uint16, FPU_CPU_D, 0xFFFFu, 1)
+#endif
 CPU_REG_IN_FPU(DB, uint8, FPU_CPU_DB, 0xFFu, 1)
 CPU_REG_IN_FPU(PB, uint8, FPU_CPU_PB, 0xFFu, 1)
 CPU_REG_IN_FPU(P_mxid, uint8, FPU_CPU_P_MXID, 0x3Cu, 1)
@@ -97,7 +132,9 @@ CPU_REG_IN_STRUCT(flag_C, uint8)
 CPU_REG_IN_STRUCT(flag_V, uint8)
 #endif
 #if SNESRECOMP_CPU_REGS_FPU
+#if !SNESRECOMP_CPU_E_PACKED
 CPU_REG_IN_FPU(emulation, uint8, FPU_CPU_E, 0xFFu, 1)
+#endif
 #undef CPU_REG_IN_FPU
 #else
 CPU_REG_IN_STRUCT(emulation, uint8)
