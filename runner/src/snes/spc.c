@@ -10,7 +10,8 @@
 #include "apu.h"
 #include "apu_dsp_watch.h"
 
-static const int cyclesPerOpcode[256] = {
+/* (bytes, and its own name: n64/data_order.ld pins it by section) */
+static const uint8_t k_spc_cycles[256] = {
   2, 8, 4, 5, 3, 4, 3, 6, 2, 6, 5, 4, 5, 4, 6, 8,
   2, 8, 4, 5, 4, 5, 5, 6, 5, 5, 6, 5, 2, 2, 4, 6,
   2, 8, 4, 5, 3, 4, 3, 6, 2, 6, 5, 4, 5, 4, 5, 4,
@@ -144,7 +145,7 @@ int spc_runOpcode(Spc* spc) {
   if(spc->stopped) return 1;
   uint8_t opcode = spc_readOpcode(spc);
 #if !SNESRECOMP_SPC_HALT_TRACE
-  spc->cyclesUsed = cyclesPerOpcode[opcode];
+  spc->cyclesUsed = k_spc_cycles[opcode];
   spc_doOpcode(spc, opcode);
   return spc->cyclesUsed;
 #else
@@ -156,7 +157,7 @@ int spc_runOpcode(Spc* spc) {
     s_spc_trace_head = (s_spc_trace_head + 1) % SPC_TRACE_RING;
     if (s_spc_trace_count < SPC_TRACE_RING) s_spc_trace_count++;
   }
-  spc->cyclesUsed = cyclesPerOpcode[opcode];
+  spc->cyclesUsed = k_spc_cycles[opcode];
   spc_doOpcode(spc, opcode);
   if (spc->stopped && s_spc_trace_on) {
     fprintf(stderr, "[spc] HALT at pc=%04x opcode=%02x (%s) after %u traced insns\n",

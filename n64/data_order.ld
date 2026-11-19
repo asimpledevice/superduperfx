@@ -150,12 +150,22 @@
   *(.bss.new_line_irqs)
 }
 .rodata : {
+  /* The opcode tables of the SPC700 and 65816 cores, placed by hand
+   * (2026-11-19): unpinned, they moved with every change to read-only data
+   * and twice landed on the cache lines of the hot stack frames (offsets
+   * 0x1000-0x11ff of each 8 KB). Offsets 0x100-0x5ff and 0x700-0xaff had the
+   * fewest misses in the Super Mario World and Joe & Mac 2 profiles. */
   . = ALIGN(8192);
-  . += 0xdb0;
+  . += 0x100;
+  *(.rodata.k_spc_op)
+  *(.rodata.k_spc_mode)
+  *(.rodata.k_spc_cycles)
+  *(.rodata.cyclesPerOpcode)
+  *(.rodata.k_i816_op)
+  . += 0x100;
+  *(.rodata.k_i816_mode)
+  *(.rodata.k_bridge_op_class)
   *(.rodata.transferLength)
   *(.rodata.bAdrOffsets)
-  *(.rodata.k_bridge_op_class)
   *(.rodata.bootRom)
-  *(.rodata.cyclesPerOpcode)
-  *(.rodata.cyclesPerOpcode)
 }
