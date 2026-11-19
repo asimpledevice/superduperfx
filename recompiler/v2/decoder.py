@@ -964,6 +964,7 @@ def _labeled_successors(insn: Insn, key: DecodeKey, bank: int,
                 or getattr(insn, 'noreturn_jsr', False)):
             return []
         ret_m, ret_x = post_m, post_x
+        insn.exit_guard = None
         target_pc24: Optional[int] = None
         if mnem == 'JSR' and insn.length == 3 and insn.mode != INDIR_X:
             target_pc24 = addr24(bank, insn.operand & 0xFFFF)
@@ -1053,6 +1054,12 @@ def _labeled_successors(insn: Insn, key: DecodeKey, bank: int,
                 if item not in unknown_callee_exit_sites:
                     unknown_callee_exit_sites.append(item)
             return []
+        if target_pc24 is not None and not callee_exit_known:
+            # No proven exit widths for the callee: the continuation is
+            # decoded with the widths of the call, and the emitter checks
+            # the live widths after the call (emit_function, guarded
+            # continuation), continuing in the interpreter when they differ.
+            insn.exit_guard = (ret_m & 1, ret_x & 1, next_pc & 0xFFFF)
         return [(DecodeKey(addr24(bank, next_pc), ret_m, ret_x, post_p_stack), 'fall')]
 
     # Default: linear fall-through with post-instruction mode.

@@ -1277,6 +1277,9 @@ fn analyze(
             NodeSummary,
         ),
     > = HashMap::new();
+    let guarded_exit = std::env::var("SNESRECOMP_GUARDED_EXIT")
+        .map(|v| v == "1")
+        .unwrap_or(false);
     let mut round_log = std::env::var("SNESRECOMP_NATIVE_ROUND_LOG")
         .ok()
         .map(|path| fs::File::create(path).expect("create analysis round log"));
@@ -1457,7 +1460,40 @@ fn analyze(
                             .unwrap_or(true)
                 })
                 .collect();
-            let summary = match summary_cache.get(&key) {
+            // Guarded continuation (SNESRECOMP_GUARDED_EXIT=1): a call whose
+            // callee has no proven exit widths no longer keeps its caller in
+            // the interpreter. The continuation is decoded with the widths
+            // the call was made in, and the emitter checks the live widths
+            // after the call, continuing in the interpreter when they differ.
+            // Only the disposition and the demands come from that decode:
+            // this routine's own exit facts still come from the strict graph
+            // above, so nothing unproven is published to its callers (they
+            // guard their calls to it in turn).
+            let guarded_summary = if guarded_exit && !graph.unknown_callee_exit_sites.is_empty() {
+                let probe_env = DecodeEnv {
+                    stop_on_unknown_callee_exit: false,
+                    ..env.clone()
+                };
+                catch_unwind(AssertUnwindSafe(|| {
+                    decode_function(rom, bank, pc, key.m, key.x, end, &probe_env)
+                }))
+                .ok()
+                .map(|probe| {
+                    let mut summary =
+                        summarize(key, &probe, inputs, rom, mapping, &poisoned, unstable);
+                    if summary.disposition == "aot_eligible" {
+                        summary.reasons.push("guarded_callee_exit".to_string());
+                    }
+                    summary
+                })
+                .filter(|summary| summary.disposition == "aot_eligible")
+            } else {
+                None
+            };
+            let summary = if let Some(summary) = guarded_summary {
+                summary
+            } else {
+            match summary_cache.get(&key) {
                 Some((cached_graph, cached_unknown, cached_unstable, summary))
                     if Arc::ptr_eq(cached_graph, &graph)
                         && cached_unknown == &relevant_unknown
@@ -1478,6 +1514,7 @@ fn analyze(
                     );
                     summary
                 }
+            }
             };
             if summary
                 .reasons

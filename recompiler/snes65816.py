@@ -252,7 +252,8 @@ class Insn:
                   'dispatch_configured_stack_bytes',
                   'const_z_fold_unconditional', 'const_z_fold_dead_pc24',
                   'const_z_fold_taken',
-                  'data_region_exec', 'terminal_jsr', 'noreturn_jsr', 'brk_rti')
+                  'data_region_exec', 'terminal_jsr', 'noreturn_jsr', 'brk_rti',
+                  'exit_guard')
 
     def __init__(self, addr, opcode, mnem, mode, operand, length):
         self.addr = addr
@@ -323,6 +324,10 @@ class Insn:
         # distinct from terminal_jsr: the target does not consume its frame as
         # inline data, and the exceptional target remains an LLE safety path.
         self.noreturn_jsr = False
+        # (m, x, next_pc16) when this JSR/JSL's callee has no proven exit
+        # widths and the continuation was decoded with the call's own; the
+        # emitter then checks the live widths after the call.
+        self.exit_guard = None
         self.brk_rti = False
         self.m_flag = 1
         self.x_flag = 1

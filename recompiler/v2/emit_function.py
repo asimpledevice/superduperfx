@@ -2083,6 +2083,22 @@ def emit_function(rom: bytes, bank: int, start: int,
                             lines.append(ln)
                         if op.terminal:
                             block_terminated = True
+                        guard = getattr(insn, 'exit_guard', None)
+                        if (guard and not op.terminal
+                                and os.environ.get('SNESRECOMP_GUARDED_EXIT') == '1'):
+                            # Guarded continuation: the callee's exit widths
+                            # are not proven. What follows was decoded for
+                            # M{gm}X{gx}; any other live widths continue in
+                            # the interpreter at the instruction after the
+                            # call, which reads the widths as they are.
+                            gm, gx, gpc = guard
+                            gpc24 = ((bank & 0xFF) << 16) | gpc
+                            lines.append(f"if (cpu_mx() != {(gm << 1) | gx}) {{ /* callee exit widths not proven */")
+                            lines.append(
+                                f"return interp_tier_dispatch_balanced(cpu, "
+                                f"{_transfer_target_expr(gpc24, False)}, 0x{gpc24:06x}u, "
+                                f"_entry_s, _hrv, false);")
+                            lines.append("}")
                 else:
                     # ReadReg, ALU, Read/Write, etc. — non-terminating.
                     for ln in emit_op(op, getattr(di_insn, 'addr', None)):
