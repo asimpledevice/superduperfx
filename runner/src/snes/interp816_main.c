@@ -27,7 +27,8 @@
 #define interp816_getFlags interp816m_getFlags
 #define interp816_setFlags interp816m_setFlags
 /* (the place the cache layout gives the core: n64/icache_order.ld) */
-int interp816m_runOpcode(struct Interp816 *cpu) __attribute__((section(".text.interp816_runOpcode")));
+#include "interp816.h"
+int interp816_runOpcode(Interp816 *cpu) __attribute__((section(".text.interp816_runOpcode")));
 #include "interp816.c"
 #else
 typedef int interp816_main_unused;
