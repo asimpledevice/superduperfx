@@ -409,6 +409,9 @@ static inline void bridge_beam_after_step(const CpuState *cpu) {
 
 /* The general path, out of line: the fast path below stays a small leaf
  * function, without the register saves this one needs. */
+#ifdef N64_JIT_REPORT
+static uint8_t s_jr_slow;   /* the current opcode made an access outside plain RAM/ROM */
+#endif
 static uint8_t bridge_bus_read_slow(CpuState *cpu, uint32_t adr) __attribute__((noinline));
 static uint8_t bridge_bus_read(void *mem, uint32_t adr) {
     CpuState *cpu = (CpuState *)mem;
@@ -454,6 +457,9 @@ static uint8_t bridge_bus_read(void *mem, uint32_t adr) {
 }
 
 static uint8_t bridge_bus_read_slow(CpuState *cpu, uint32_t adr) {
+#ifdef N64_JIT_REPORT
+    s_jr_slow = 1;
+#endif
     uint8_t value;
     bridge_beam_catchup(cpu);
     int stable_rom = 0;
@@ -530,6 +536,9 @@ static void bridge_bus_write(void *mem, uint32_t adr, uint8_t val) {
     {
         const uint8_t k = g_cpu_fast_page_kind[(adr & 0xFFFFFFu) >> kCpuFastMapPageShift];
         if (k != kCpuFastMapWram && k != kCpuFastMapWramLow) bridge_beam_catchup(cpu);
+#ifdef N64_JIT_REPORT
+        if (k != kCpuFastMapWram && k != kCpuFastMapWramLow) s_jr_slow = 1;
+#endif
     }
     const int is_apu_port = bridge_is_apu_port(adr);
     if (is_apu_port && bridge_apu_port_diag_enabled()) {
@@ -1803,6 +1812,107 @@ void interp_report_dump(void) {
     memset(s_rep_pc, 0, sizeof s_rep_pc);
     memset(s_rep_entry, 0, sizeof s_rep_entry);
     s_rep_total = s_rep_lost = 0;
+}
+#endif
+
+#ifdef N64_JIT_REPORT
+/* Measurement builds (-DN64_JIT_REPORT, with N64_INTERP_REPORT): what a
+ * 65816 translator inside this loop would get to work with. The interpreted
+ * instruction stream is cut into the straight-line runs a block could hold:
+ * a run ends after an instruction that transfers control or changes the
+ * register widths, and before one that touches anything but plain RAM/ROM
+ * (that instruction stays interpreted). Reported every 300 frames: the
+ * share of instructions by run length, how many distinct run starts cover
+ * the stream, and the opcode mix. */
+enum { kJrBlocks = 8192 };
+static InterpRepEnt s_jr_block[kJrBlocks];
+static uint32_t s_jr_op[256], s_jr_len[6], s_jr_runs, s_jr_insns, s_jr_slow_ops, s_jr_lost;
+static uint32_t s_jr_start, s_jr_cur;
+static const uint8_t k_jr_ends[256] = {
+    [0x00] = 1, [0x02] = 1, [0x10] = 1, [0x30] = 1, [0x50] = 1, [0x70] = 1, [0x80] = 1, [0x82] = 1,
+    [0x90] = 1, [0xB0] = 1, [0xD0] = 1, [0xF0] = 1, [0x20] = 1, [0x22] = 1, [0xFC] = 1, [0x60] = 1,
+    [0x6B] = 1, [0x40] = 1, [0x4C] = 1, [0x5C] = 1, [0x6C] = 1, [0x7C] = 1, [0xDC] = 1, [0xC2] = 1,
+    [0xE2] = 1, [0x28] = 1, [0xFB] = 1, [0xCB] = 1, [0xDB] = 1, [0x44] = 1, [0x54] = 1,
+};
+static void jr_close(void) {
+    if (!s_jr_cur) return;
+    const uint32_t n = s_jr_cur;
+    s_jr_len[n == 1 ? 0 : n < 4 ? 1 : n < 8 ? 2 : n < 16 ? 3 : n < 32 ? 4 : 5] += n;
+    s_jr_runs++;
+    uint32_t h = (s_jr_start * 2654435761u) & (kJrBlocks - 1), i;
+    for (i = 0; i < 64; i++) {
+        InterpRepEnt *e = &s_jr_block[(h + i) & (kJrBlocks - 1)];
+        if (e->key == s_jr_start + 1) { e->cycles += n; break; }
+        if (!e->key) { e->key = s_jr_start + 1; e->cycles = n; break; }
+    }
+    if (i == 64) s_jr_lost += n;
+    s_jr_cur = 0;
+}
+static void jr_step(uint32_t key, uint8_t op, int first) {
+    s_jr_insns++;
+    s_jr_op[op]++;
+    if (first) jr_close();
+    if (s_jr_slow) {            /* stays interpreted; cuts the run before it */
+        s_jr_slow = 0;
+        s_jr_slow_ops++;
+        jr_close();
+        return;
+    }
+    if (!s_jr_cur) s_jr_start = key;
+    s_jr_cur++;
+    if (k_jr_ends[op]) jr_close();
+}
+static int jr_cmp(const void *a, const void *b) {
+    const uint32_t x = ((const InterpRepEnt *)a)->cycles, y = ((const InterpRepEnt *)b)->cycles;
+    return x < y ? 1 : x > y ? -1 : 0;
+}
+void jit_report_dump(void) {
+    extern void n64_platform_log(const char *fmt, ...);
+    static const char *const names[6] = { "1", "2-3", "4-7", "8-15", "16-31", "32+" };
+    if (!s_jr_insns) return;
+    jr_close();
+    n64_platform_log("[jit] %lu instructions, %lu runs (%lu.%lu per run); %lu.%lu%% touch I/O and stay interpreted\n",
+                     (unsigned long)s_jr_insns, (unsigned long)s_jr_runs,
+                     (unsigned long)((s_jr_insns - s_jr_slow_ops) / (s_jr_runs ? s_jr_runs : 1)),
+                     (unsigned long)((uint64_t)(s_jr_insns - s_jr_slow_ops) * 10 / (s_jr_runs ? s_jr_runs : 1) % 10),
+                     (unsigned long)((uint64_t)s_jr_slow_ops * 100 / s_jr_insns),
+                     (unsigned long)((uint64_t)s_jr_slow_ops * 1000 / s_jr_insns % 10));
+    for (int k = 0; k < 6; k++)
+        n64_platform_log("[jit] runs of %s instructions: %lu.%lu%% of instructions\n", names[k],
+                         (unsigned long)((uint64_t)s_jr_len[k] * 100 / s_jr_insns),
+                         (unsigned long)((uint64_t)s_jr_len[k] * 1000 / s_jr_insns % 10));
+    qsort(s_jr_block, kJrBlocks, sizeof s_jr_block[0], jr_cmp);
+    {
+        uint32_t starts = 0, acc = 0, n50 = 0, n90 = 0, n99 = 0;
+        const uint32_t tot = s_jr_insns - s_jr_slow_ops;
+        for (uint32_t i = 0; i < kJrBlocks && s_jr_block[i].cycles; i++) {
+            starts++;
+            acc += s_jr_block[i].cycles;
+            if (!n50 && (uint64_t)acc * 100 >= (uint64_t)tot * 50) n50 = starts;
+            if (!n90 && (uint64_t)acc * 100 >= (uint64_t)tot * 90) n90 = starts;
+            if (!n99 && (uint64_t)acc * 100 >= (uint64_t)tot * 99) n99 = starts;
+        }
+        n64_platform_log("[jit] %lu distinct run starts (%lu instructions not tabled); 50%% of instructions in %lu, "
+                         "90%% in %lu, 99%% in %lu\n", (unsigned long)starts, (unsigned long)s_jr_lost,
+                         (unsigned long)n50, (unsigned long)n90, (unsigned long)n99);
+        for (int i = 0; i < 12 && s_jr_block[i].cycles; i++)
+            n64_platform_log("[jit-run] %06lx m%u x%u %lu instructions\n",
+                             (unsigned long)((s_jr_block[i].key - 1) & 0xffffff),
+                             (unsigned)((s_jr_block[i].key - 1) >> 25) & 1, (unsigned)((s_jr_block[i].key - 1) >> 24) & 1,
+                             (unsigned long)s_jr_block[i].cycles);
+    }
+    for (int k = 0; k < 24; k++) {
+        int b = 0;
+        for (int i = 1; i < 256; i++) if (s_jr_op[i] > s_jr_op[b]) b = i;
+        if (!s_jr_op[b]) break;
+        n64_platform_log("[jit-op] %02x %lu.%lu%%\n", b, (unsigned long)((uint64_t)s_jr_op[b] * 100 / s_jr_insns),
+                         (unsigned long)((uint64_t)s_jr_op[b] * 1000 / s_jr_insns % 10));
+        s_jr_op[b] = 0;
+    }
+    memset(s_jr_block, 0, sizeof s_jr_block);
+    memset(s_jr_op, 0, sizeof s_jr_op);
+    memset(s_jr_len, 0, sizeof s_jr_len);
+    s_jr_runs = s_jr_insns = s_jr_slow_ops = s_jr_lost = 0;
 }
 #endif
 
@@ -3361,6 +3471,9 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
 #ifdef N64_INTERP_REPORT
         const uint32_t rep_mx = (uint32_t)(in.mf ? 1u << 25 : 0) | (in.xf ? 1u << 24 : 0);
 #endif
+#ifdef N64_JIT_REPORT
+        s_jr_slow = 0;   /* (the opcode fetch above is not this instruction's access) */
+#endif
         const uint32_t tcat_op = tcat_enter(TCAT_OPCODE);
         int _cyc = interp816_runOpcode(&in);   /* executes the opcode; pushes/pops frames */
         tcat_leave(tcat_op);
@@ -3372,6 +3485,9 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
         s_rep_insns++;
         interp_rep_add(s_rep_pc, kInterpRepPc, (pc_before & 0xffffff) | rep_mx, (uint32_t)_cyc);
         interp_rep_add(s_rep_entry, kInterpRepEntry, (entry_pc24 & 0xffffff) | rep_mx, (uint32_t)_cyc);
+#endif
+#ifdef N64_JIT_REPORT
+        jr_step((pc_before & 0xffffff) | rep_mx, op, steps == 0);
 #endif
         s_idle_poll_now = 0;
         if (SNESRECOMP_INTERP_DIAG && s_interp_pctrace && steps < 4)

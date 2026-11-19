@@ -921,6 +921,9 @@ static int host_main(void) {
 #endif
 #ifdef N64_INTERP_REPORT
     if (frame % 300 == 299) { extern void interp_report_dump(void); interp_report_dump(); }
+#ifdef N64_JIT_REPORT
+    if (frame % 300 == 299) { extern void jit_report_dump(void); jit_report_dump(); }
+#endif
 #endif
 #if SNESRECOMP_SPC_DBT
     if (frame % 60 == 59) {
