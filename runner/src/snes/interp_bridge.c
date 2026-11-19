@@ -109,6 +109,25 @@ static inline bool bridge_apu_guest_time_ready(void) {
     return rtl_apu_frame_timeline_active() && g_snes && g_snes->apu &&
            g_snes->apu->portTimeValid;
 }
+/* The periodic SPC catch-up while interpreting. Every excursion into the SPC
+ * core evicts the interpreter's code and data from the 16 KB caches, and at
+ * the base threshold (1024 master clocks) that is every 30-40 instructions.
+ * With guest time the catch-up runs to an absolute target, so how often it
+ * happens does not change where the SPC stands at any port access, IRQ or
+ * frame end (each of those catches it up by itself); only the relative
+ * catch-up before guest time is established needs the short interval (its
+ * cap, snes_catchupApu). SNESRECOMP_LLE_APU_FLUSH_READY is the interval once
+ * guest time is ready; 0 keeps the base threshold throughout. */
+#ifndef SNESRECOMP_LLE_APU_FLUSH_READY
+#define SNESRECOMP_LLE_APU_FLUSH_READY 0
+#endif
+#if SNESRECOMP_LLE_APU_FLUSH_READY
+#define BRIDGE_APU_FLUSH_DUE(thresh) \
+    (s_apu_pending_master >= (thresh) && \
+     (s_apu_pending_master >= (uint64_t)(SNESRECOMP_LLE_APU_FLUSH_READY) || !bridge_apu_guest_time_ready()))
+#else
+#define BRIDGE_APU_FLUSH_DUE(thresh) (s_apu_pending_master >= (thresh))
+#endif
 static uint64_t bridge_bounce_flush_thresh(void) {
     static int64_t s_t = -1;
     if (s_t < 0) {
@@ -2539,7 +2558,7 @@ static BRIDGE_COLD int bridge_wait_replay(CpuState *cpu, Interp816 *in, const Br
         bridge_beam_after_step(cpu);
         if (apu_batch) {
             s_apu_pending_master += cost->master;
-            if (s_apu_pending_master >= apu_flush_thresh) bridge_apu_flush(cpu);
+            if (BRIDGE_APU_FLUSH_DUE(apu_flush_thresh)) bridge_apu_flush(cpu);
         }
     }
     in->k = at->k; in->pc = (uint16_t)at->pc;
@@ -3777,7 +3796,7 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
                         rtl_apu_frame_timeline_active(),
                         g_snes && cart_has_sa1(g_snes->cart), false)) {
                     s_apu_pending_master += _master;
-                    if (s_apu_pending_master >= apu_flush_thresh) bridge_apu_flush(cpu);
+                    if (BRIDGE_APU_FLUSH_DUE(apu_flush_thresh)) bridge_apu_flush(cpu);
                 }
             }
             idle_cost[steps & 63].master = _master;
@@ -4266,7 +4285,7 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
                             rtl_apu_frame_timeline_active(),
                             g_snes && cart_has_sa1(g_snes->cart), false)) {
                         s_apu_pending_master += master;
-                        if (s_apu_pending_master >= apu_flush_thresh) bridge_apu_flush(cpu);
+                        if (BRIDGE_APU_FLUSH_DUE(apu_flush_thresh)) bridge_apu_flush(cpu);
                     }
                     idle_cost[steps & 63].master = master;
                     idle_cost[steps & 63].cyc = (uint8_t)bcyc;
