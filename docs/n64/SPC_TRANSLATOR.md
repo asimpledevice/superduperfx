@@ -169,3 +169,32 @@ Options to weigh along the way (from the same projects):
 Not adopted: sodium64's accuracy shortcuts; beebjit's fixed host slot per
 guest byte (64 KB x 64 bytes would not fit) and per-instruction
 invalidation (whole-cache flush is enough so far).
+
+## I-cache layout retrain (2026-11-19)
+
+`n64/icache_order.ld` was trained without the translator. Retrained from a
+profile of the `SPCDBT=1` build (SMW attract, frames 400-520, 23,606
+samples, 277 functions placed) and measured against the committed layout,
+translator off and on, four builds side by side (frames 360-1650,
+`APUTIME=1`):
+
+| Layout | Translator | Run phase | SPC time |
+|---|---|---|---|
+| Committed | off | 74.0 ms | 32.51 ms |
+| Committed | on | 71.0 ms | 21.81 ms |
+| Retrained | off | 79.1 ms | 34.86 ms |
+| Retrained | on | 72.5 ms | 21.58 ms |
+
+Not adopted. The rule was: better SPC time and run phase with the
+translator on, and no regression with it off. The retrained layout gains
+0.23 ms of SPC time with the translator on but its run phase is 1.5 ms
+longer, and with the translator off it is 5.1 ms slower.
+
+The committed layout is itself out of date: with today's code 40 of its
+529 placed functions no longer land at their planned addresses (the first
+is `dma_doDma.part.0`; the function before it outgrew its gap), which the
+build reports. The comparison above is therefore between a stale layout
+and a fresh one trained on a single configuration, and the stale one still
+wins. A retrain worth adopting should profile both configurations, and is
+better done once the 65816 changes in progress have settled, since they
+move which code is hot.
