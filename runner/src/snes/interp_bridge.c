@@ -84,6 +84,19 @@ static uint64_t s_apu_pending_master = 0;
 #ifndef SNESRECOMP_QUIESCENT_BEST_MATCH
 #define SNESRECOMP_QUIESCENT_BEST_MATCH 0
 #endif
+/* 1: a stable wait the detector finds is replayed to the next event at its
+ * measured cost (bridge_wait_replay), leaving where spinning would have;
+ * 0: the detector yields and the scheduler parks the CPU, which takes the
+ * event at the loop head whatever instruction spinning would have reached. */
+#ifndef SNESRECOMP_WAIT_REPLAY
+#define SNESRECOMP_WAIT_REPLAY 0
+#endif
+/* 0: the detector never yields a stable wait; the loop is interpreted to the
+ * deadline or the IRQ. Slow, and the reference the two above are checked
+ * against. */
+#ifndef SNESRECOMP_QUIESCENT_YIELD
+#define SNESRECOMP_QUIESCENT_YIELD 1
+#endif
 /* Guest time exists for the SPC: the frame timeline runs and the APU's port
  * clock is anchored to it. Before that (boot), catch-up is relative. */
 static inline bool bridge_apu_guest_time_ready(void) {
@@ -2383,6 +2396,77 @@ static BRIDGE_COLD int bridge_idle_replay(CpuState *cpu, Interp816 *in,
     return BRIDGE_COLD_FALL;
 }
 
+#if SNESRECOMP_WAIT_REPLAY
+/* Carts and frames a detected wait may be replayed on: nothing but an
+ * interrupt can change what the loop reads (the same devices the declared
+ * replay refuses, plus the coprocessors this loop would have to keep in
+ * step). An armed H/V comparator is fine: the replay walks the beam as the
+ * interpreted steps do and leaves at the latch. */
+static int bridge_wait_replay_allowed(void) {
+    if (!g_snes || !g_snes->cart) return 0;
+    if (g_snes->cart->superfx || g_snes->cart->cx4 || g_snes->cart->sa1 ||
+        g_snes->cart->dsp1 || g_snes->cart->sdd1)
+        return 0;
+    if (g_snes->dma) {
+        for (int c = 0; c < 8; c++) {
+            const DmaChannel *ch = &g_snes->dma->channel[c];
+            if (ch->hdmaActive && !ch->terminated && ch->bAdr >= 0x7D && ch->bAdr <= 0x83)
+                return 0;
+        }
+    }
+    return 1;
+}
+static int bridge_wait_same(const BridgeQState *p, const BridgeQState *q) {
+    return p->pc == q->pc && p->a == q->a && p->x == q->x && p->y == q->y && p->sp == q->sp &&
+           p->dp == q->dp && p->db == q->db && p->k == q->k && p->c == q->c && p->z == q->z &&
+           p->v == q->v && p->n == q->n && p->i == q->i && p->d == q->d && p->mf == q->mf &&
+           p->xf == q->xf && p->e == q->e;
+}
+/* Replay one learned lap of a stable wait (lap[0..n), its steps' costs in
+ * idle_cost from step `first`) until the run would leave: for each step, in
+ * the interpreted loop's order, the step cap, a pending IRQ, the deadline;
+ * then that step's clocks, the refresh tax, open bus, the beam and the
+ * APU's pending time. Leaves with the state and resume site of the step it
+ * stopped before. */
+static BRIDGE_COLD int bridge_wait_replay(CpuState *cpu, Interp816 *in, const BridgeQState *lap,
+                                          int n, const BridgeIdleCost *idle_cost, long first,
+                                          long steps, long step_cap, uint64_t apu_flush_thresh,
+                                          int apu_batch) {
+    const BridgeQState *at = &lap[0];
+    int capped = 0, site = INTERP_RESUME_SITE_DEADLINE;
+    for (long j = 0;; j++) {
+        const int e = (int)(j % n);
+        const BridgeIdleCost *cost = &idle_cost[(first + e) & 63];
+        at = &lap[e];
+        if (steps + j >= step_cap) { capped = 1; break; }
+        if (!at->i && g_snes->inIrq) { site = INTERP_RESUME_SITE_IRQ_PENDING; break; }
+        if (g_master_cycles >= s_lle_master_deadline) break;
+        g_interp_bridge_steps++;
+        g_master_cycles += cost->master;
+        snes_refresh_charge_inline(g_master_cycles);
+        g_open_bus = cost->open_bus;
+        g_coprocessor_master_cycles = g_master_cycles;
+        bridge_beam_after_step(cpu);
+        if (apu_batch) {
+            s_apu_pending_master += cost->master;
+            if (s_apu_pending_master >= apu_flush_thresh) bridge_apu_flush(cpu);
+        }
+    }
+    in->k = at->k; in->pc = (uint16_t)at->pc;
+    in->a = at->a; in->x = at->x; in->y = at->y;
+    in->sp = at->sp; in->dp = at->dp; in->db = at->db;
+    in->c = at->c; in->z = at->z; in->v = at->v; in->n = at->n;
+    in->i = at->i; in->d = at->d; in->mf = at->mf;
+    in->xf = at->xf; in->e = at->e;
+    if (capped)
+        return BRIDGE_COLD_STEP_CAP;
+    lle_resume_set(at->pc, site, in->sp);
+    sync_interp_to_cpu(in, cpu);
+    bridge_apu_flush(cpu);
+    return BRIDGE_COLD_RETURN_1;
+}
+#endif
+
 /* Stable-poll detector at a short backward transfer (see the call site):
  * returns 1 with *ret set when the run must end with that value. */
 static BRIDGE_COLD int bridge_stable_poll(CpuState *cpu, Interp816 *in, uint32_t pc_before,
@@ -2863,6 +2947,13 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
      * balanced the way these entries say. */
     struct { uint16_t s_after; uint8_t size; uint32_t ret_pc24; } tail_frames[16];
     int tail_n = 0;
+#if SNESRECOMP_WAIT_REPLAY
+    /* A wait the detector found, while one lap of it is recorded for the
+     * replay: its steps' states, and the step number of the first. */
+    BridgeQState wr_lap[32];
+    int wr_n = 0, wr_begin = 0;
+    long wr_first = 0;
+#endif
 #if SNESRECOMP_INTERRUPT_AOT_ENTRY
     /* An interrupt handler with a compiled body for the live (m,x) runs
      * compiled from its first instruction: its RTI pops the interrupt frame
@@ -3045,7 +3136,38 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
             ((pc_before >> 16) & 0xF1u) == 0xC0u &&   /* banks $C0-$CE: the list's */
             bridge_vff_pc(pc_before))
             bridge_vblank_ff(cpu, pc_before);
+#if SNESRECOMP_WAIT_REPLAY
+        if (wr_n) {
+            BridgeQState cur;
+            cur.pc=pc_before; cur.a=in.a; cur.x=in.x; cur.y=in.y;
+            cur.sp=in.sp; cur.dp=in.dp; cur.db=in.db; cur.k=in.k;
+            cur.c=in.c; cur.z=in.z; cur.v=in.v; cur.n=in.n; cur.i=in.i;
+            cur.d=in.d; cur.mf=in.mf; cur.xf=in.xf; cur.e=in.e;
+            if (wr_lap[0].write_epoch != g_interp_bridge_write_epoch ||
+                wr_lap[0].continuous_read_epoch != s_interp_continuous_read_epoch ||
+                wr_lap[0].volatile_read_epoch != s_interp_volatile_read_epoch ||
+                steps != wr_first + wr_n) {
+                wr_n = 0;                      /* not the wait it looked like */
+            } else if (bridge_wait_same(&cur, &wr_lap[0])) {
+                const int _wr = bridge_wait_replay(
+                    cpu, &in, wr_lap, wr_n, idle_cost, wr_first, steps, step_cap, apu_flush_thresh,
+                    apu_batch_always || rtl_apu_extended_frame_timing() ||
+                    !interp_bridge_use_absolute_apu_timeline(
+                        rtl_apu_frame_timeline_active(),
+                        g_snes && cart_has_sa1(g_snes->cart), false));
+                if (_wr == BRIDGE_COLD_RETURN_1) return 1;
+                steps = step_cap;
+                goto idle_replay_step_cap;
+            } else if (wr_n == (int)(sizeof wr_lap / sizeof wr_lap[0])) {
+                wr_n = 0;
+            } else {
+                wr_lap[wr_n++] = cur;
+            }
+        }
+        int q_record = auto_quiescent && !wr_n;
+#else
         int q_record = auto_quiescent;
+#endif
         if (q_record && q_sparse) {
             /* Loop head: first step, a backward move, or a bank change. */
             q_record = pc_before <= q_prev_pc ||
@@ -3110,11 +3232,21 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
                     }
                 }
                 if (old->continuous_read_epoch==now.continuous_read_epoch) {
-#if SNESRECOMP_QUIESCENT_BEST_MATCH
+#if SNESRECOMP_QUIESCENT_BEST_MATCH || SNESRECOMP_WAIT_REPLAY
                     if (old->repeats + 1 > now.repeats)
 #endif
                     now.repeats=old->repeats+1;
+#if !SNESRECOMP_QUIESCENT_YIELD
+                    if (0) {
+#elif SNESRECOMP_WAIT_REPLAY
+                    if (now.repeats>=2 && s_lle_master_deadline && bridge_wait_replay_allowed()) {
+                        wr_begin = 1;          /* record one lap, then replay it */
+                        break;
+                    }
                     if (now.repeats>=2) {
+#else
+                    if (now.repeats>=2) {
+#endif
                         /* Stable CPU/memory state is a genuine cooperative
                          * wait.  The owning scheduler advances idle hardware
                          * to the next timer comparator or vblank and resumes
@@ -3136,7 +3268,7 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
                         sync_interp_to_cpu(&in,cpu);
                         return 1;
                     }
-#if SNESRECOMP_QUIESCENT_BEST_MATCH
+#if SNESRECOMP_QUIESCENT_BEST_MATCH || SNESRECOMP_WAIT_REPLAY
                     /* Every earlier visit with this state is in the bucket,
                      * lowest slot first. The lowest is the oldest still in
                      * the ring, the first visit with a count of 0, so taking
@@ -3156,6 +3288,14 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
             qbucket[qb] |= 1ull << qs;
             qslot_bucket[qs] = (uint8_t)qb;
             qring[qs]=now;
+#if SNESRECOMP_WAIT_REPLAY
+            if (wr_begin) {
+                wr_begin = 0;
+                wr_lap[0] = now;
+                wr_n = 1;
+                wr_first = steps;
+            }
+#endif
         }
         if (s_pre_opcode_hook_count > 0 && bridge_pre_opcode_hooks(cpu, &in, pc_before))
             continue;
