@@ -294,6 +294,33 @@ void n64_state_at_pc(void) {
   n64_platform_log("[sync] %lu wram %08lx a %04x x %04x y %04x s %04x p %02x\n",
                    (unsigned long)s_hits++, (unsigned long)h, cpu_A(), cpu_X(), cpu_Y(), cpu_S(),
                    cpu_P());
+#ifdef N64_SYNC_PAGES_FROM
+  /* For hits in [N64_SYNC_PAGES_FROM, N64_SYNC_PAGES_TO]: a 16-bit hash of
+   * every WRAM page, and pages 0 and 1 (direct page, stack) in full. */
+  if (s_hits - 1 >= N64_SYNC_PAGES_FROM && s_hits - 1 <= N64_SYNC_PAGES_TO) {
+    static const char hex[] = "0123456789abcdef";
+    char line[64 * 4 + 1];
+    for (int row = 0; row < 8; ++row) {
+      for (int pg = 0; pg < 64; ++pg) {
+        uint32_t ph = 2166136261u;
+        const uint8_t *q = g_snes->ram + (row * 64 + pg) * 256;
+        for (int i = 0; i < 256; ++i) ph = (ph ^ q[i]) * 16777619u;
+        ph ^= ph >> 16;
+        for (int k = 0; k < 4; ++k) line[pg * 4 + k] = hex[(ph >> (12 - 4 * k)) & 15];
+      }
+      line[64 * 4] = 0;
+      n64_platform_log("[syncpages] %lu %d %s\n", (unsigned long)(s_hits - 1), row, line);
+    }
+    for (int row = 0; row < 16; ++row) {
+      for (int i = 0; i < 32; ++i) {
+        line[i * 2] = hex[g_snes->ram[row * 32 + i] >> 4];
+        line[i * 2 + 1] = hex[g_snes->ram[row * 32 + i] & 15];
+      }
+      line[64] = 0;
+      n64_platform_log("[syncram] %lu %04x %s\n", (unsigned long)(s_hits - 1), row * 32, line);
+    }
+  }
+#endif
 }
 #endif
 static void *volatile s_heap_pad;
