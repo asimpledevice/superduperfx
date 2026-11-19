@@ -278,6 +278,24 @@ static void render_audio(int16_t *stereo, int frames) {
 #if defined(__mips__)
 #include <malloc.h>
 #include <unistd.h>
+
+#ifdef N64_STATE_AT_PC
+/* Guest sync-point check: -DN64_STATE_AT_PC=0xBBAAAA. Each time the
+ * interpreter is about to execute that PC, hash WRAM and the registers.
+ * Unlike [state] (taken at host frame ends, where compiled code stops a
+ * block later than interpreted code), this samples the guest at the same
+ * point of its own program in every build, so two builds that run the same
+ * guest computation print the same lines whatever is compiled. Pick a PC
+ * the top-level loop passes once per game frame. */
+void n64_state_at_pc(void) {
+  static uint32_t s_hits;
+  uint32_t h = 2166136261u;
+  for (int i = 0; i < 0x20000; ++i) h = (h ^ g_snes->ram[i]) * 16777619u;
+  n64_platform_log("[sync] %lu wram %08lx a %04x x %04x y %04x s %04x p %02x\n",
+                   (unsigned long)s_hits++, (unsigned long)h, cpu_A(), cpu_X(), cpu_Y(), cpu_S(),
+                   cpu_P());
+}
+#endif
 static void *volatile s_heap_pad;
 /* Where the next block from the top of the heap starts: the top chunk is
  * the last mallinfo().keepcost bytes below the break, and a block's data
@@ -794,6 +812,29 @@ static int host_main(void) {
 #endif
 #ifndef N64_STATE_HASH_PERIOD
 #define N64_STATE_HASH_PERIOD 60
+#endif
+#ifdef N64_STATE_PAGES_FROM
+      /* Localise a difference between two builds: for each frame in the
+       * window, a 16-bit hash of every 256-byte WRAM page (64 per line) and
+       * the registers. -DN64_STATE_PAGES_FROM=a -DN64_STATE_PAGES_TO=b. */
+      if (frame >= N64_STATE_PAGES_FROM && frame <= N64_STATE_PAGES_TO) {
+        static const char hex[] = "0123456789abcdef";
+        char line[64 * 4 + 1];
+        for (int row = 0; row < 8; ++row) {
+          for (int pg = 0; pg < 64; ++pg) {
+            uint32_t ph = 2166136261u;
+            const uint8_t *p = g_snes->ram + (row * 64 + pg) * 256;
+            for (int i = 0; i < 256; ++i) ph = (ph ^ p[i]) * 16777619u;
+            ph ^= ph >> 16;
+            for (int k = 0; k < 4; ++k) line[pg * 4 + k] = hex[(ph >> (12 - 4 * k)) & 15];
+          }
+          line[64 * 4] = 0;
+          n64_platform_log("[pages] %lu %d %s\n", (unsigned long)frame, row, line);
+        }
+        n64_platform_log("[regs] %lu a %04x x %04x y %04x s %04x d %04x db %02x p %02x master %llu\n",
+                         (unsigned long)frame, cpu_A(), cpu_X(), cpu_Y(), cpu_S(), cpu_D(), cpu_DB(),
+                         cpu_P(), (unsigned long long)g_master_cycles);
+      }
 #endif
       if (frame % N64_STATE_HASH_PERIOD == 0) {
         uint32_t h = 2166136261u, ha = 2166136261u;

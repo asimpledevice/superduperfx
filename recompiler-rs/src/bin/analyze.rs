@@ -592,6 +592,9 @@ fn has_truncated_call_continuation(graph: &FunctionDecodeGraph) -> bool {
     graph.insns().iter().any(|decoded| {
         matches!(decoded.insn.mnem, "JSR" | "JSL")
             && !decoded.insn.terminal_jsr
+            // A dispatch-helper JSL (inline jump table) is a resolved tail
+            // dispatch, not a call whose continuation went missing.
+            && decoded.insn.dispatch_entries.is_none()
             && decoded.successors.is_empty()
     })
 }

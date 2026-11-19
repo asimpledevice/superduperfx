@@ -195,6 +195,94 @@ def _dynamic_charge_lines(insn, speed_expr: str = "8") -> List[str]:
     return out
 
 
+# Instructions that keep a dispatch helper from being run inline at its call
+# site: anything that leaves the straight line before the final indirect jump.
+_HELPER_NOT_INLINE = frozenset((
+    'RTS', 'RTL', 'RTI', 'BRA', 'BRL', 'JSR', 'JSL', 'BRK', 'COP', 'WAI',
+    'STP', 'BCC', 'BCS', 'BEQ', 'BNE', 'BMI', 'BPL', 'BVC', 'BVS', 'MVN',
+    'MVP', 'XCE', 'PER'))
+
+
+def dispatch_helper_inline(rom: bytes, insn, vf):
+    """The body of a JSL dispatch helper, for running at the call site.
+
+    A dispatch-helper call (`JSL helper` followed by an inline jump table) is
+    emitted as a C switch on the table index. The switch alone leaves out what
+    the helper itself does on the way: it pulls the return frame, writes
+    direct-page scratch, leaves the table pointer in A and takes its cycles.
+    This returns those instructions lowered as ordinary code -- the JSL's
+    frame push, then every helper instruction up to its indirect jump -- so
+    the stack, memory, registers, flags and clock are what the interpreter
+    leaves at the same point. The caller switches afterwards and checks the
+    pointer the helper actually computed (`_tgt`) against each table entry.
+
+    Returns (lines, exit_m, exit_x), or None when the helper is not a straight
+    line ending in JMP (abs) / JML [abs] (the caller then keeps the site in
+    the interpreter)."""
+    from snes65816 import decode_insn, INDIR
+    if getattr(insn, 'mnem', '') != 'JSL':
+        return None
+    helper = insn.operand & 0xFFFFFF
+    hbank, pc = (helper >> 16) & 0xFF, helper & 0xFFFF
+    m, x = getattr(insn, 'm_flag', 1) & 1, getattr(insn, 'x_flag', 1) & 1
+    body, last = [], None
+    for _ in range(64):
+        try:
+            ins = decode_insn(rom, rom_offset(hbank, pc), pc, hbank, m=m, x=x)
+        except Exception:
+            return None
+        if ins is None:
+            return None
+        ins.m_flag, ins.x_flag = m, x   # decode_insn sizes by them but does not stamp them
+        if ins.mnem in ('JMP', 'JML'):
+            if getattr(ins, 'opcode', None) not in (0x6C, 0xDC) or ins.mode != INDIR:
+                return None
+            last = ins
+            break
+        if ins.mnem in _HELPER_NOT_INLINE:
+            return None
+        body.append(ins)
+        if ins.mnem == 'REP':
+            if ins.operand & 0x20: m = 0
+            if ins.operand & 0x10: x = 0
+        elif ins.mnem == 'SEP':
+            if ins.operand & 0x20: m = 1
+            if ins.operand & 0x10: x = 1
+        pc = (pc + ins.length) & 0xFFFF
+    if last is None:
+        return None
+    cyc = _block_cycle_const([(i,) for i in body + [last]])
+    if not cyc:
+        return None
+    site = insn.addr & 0xFFFFFF
+    ret16 = (site + 3) & 0xFFFF
+    spd_expr, _spd_const = _block_speed(hbank, helper & 0xFFFF)
+    lines = [
+        f"/* ${helper:06X} run inline: frame, scratch, registers and clock as the ROM leaves them */",
+        "cpu_write8(cpu, 0x00, cpu_S(), cpu_PB()); cpu_set_S((uint16)(cpu_S() - 1));",
+        f"cpu_write8(cpu, 0x00, cpu_S(), 0x{(ret16 >> 8) & 0xFF:02x}); cpu_set_S((uint16)(cpu_S() - 1));",
+        f"cpu_write8(cpu, 0x00, cpu_S(), 0x{ret16 & 0xFF:02x}); cpu_set_S((uint16)(cpu_S() - 1));",
+        "uint8 _disp_pb = cpu_PB();",
+        f"cpu_set_PB(0x{hbank:02x});",
+        f"g_master_cycles += {cyc}u * {spd_expr};",
+    ]
+    for ins in body:
+        lines.extend(_dynamic_charge_lines(ins, spd_expr))
+        for op in lower(ins, value_factory=vf):
+            lines.extend(emit_op(op, ins.addr))
+    ptr = last.operand & 0xFFFF
+    if last.opcode == 0xDC:
+        lines.append(
+            f"uint32 _tgt = ((uint32)cpu_read8(cpu, 0x00, (uint16)0x{(ptr + 2) & 0xFFFF:04x}) << 16) "
+            f"| (uint32)cpu_read16(cpu, 0x00, (uint16)0x{ptr:04x});")
+    else:
+        lines.append(
+            f"uint32 _tgt = 0x{hbank:02x}0000u "
+            f"| (uint32)cpu_read16(cpu, 0x00, (uint16)0x{ptr:04x});")
+    lines.append("cpu_set_PB(_disp_pb);")
+    return lines, m, x
+
+
 def _stack_width_for_a(insn) -> int:
     return 1 if (getattr(insn, 'm_flag', 1) & 1) else 2
 
@@ -1986,7 +2074,8 @@ def emit_function(rom: bytes, bank: int, start: int,
                                 block_terminated = True
                         else:
                             from v2.codegen import _emit_dispatch
-                            for ln in _emit_dispatch(insn):
+                            for ln in _emit_dispatch(
+                                    insn, inline=dispatch_helper_inline(rom, insn, vf)):
                                 lines.append(ln)
                             block_terminated = True
                     else:

@@ -68,6 +68,22 @@ static uint64_t s_apu_pending_master = 0;
 #ifndef SNESRECOMP_LLE_APU_PROGRESS_FLUSH
 #define SNESRECOMP_LLE_APU_PROGRESS_FLUSH 1
 #endif
+/* 1: an interrupt handler that has a compiled body is entered compiled (see
+ * _interp_run_core); 0: its own instructions are interpreted, the reference. */
+#ifndef SNESRECOMP_INTERRUPT_AOT_ENTRY
+#define SNESRECOMP_INTERRUPT_AOT_ENTRY 0
+#endif
+/* 1: the interpreter's call records (tail_frames) survive helpers that pull
+ * their own return address and compiled bodies that hand control back, so a
+ * jump to a compiled routine still runs it compiled; 0: the reference. */
+#ifndef SNESRECOMP_TAIL_FRAMES_KEEP
+#define SNESRECOMP_TAIL_FRAMES_KEEP 0
+#endif
+/* 1: the stable-wait detector counts a repeat from the matching visit that
+ * has counted furthest (see the detector); 0: from the oldest in its ring. */
+#ifndef SNESRECOMP_QUIESCENT_BEST_MATCH
+#define SNESRECOMP_QUIESCENT_BEST_MATCH 0
+#endif
 /* Guest time exists for the SPC: the frame timeline runs and the APU's port
  * clock is anchored to it. Before that (boot), catch-up is relative. */
 static inline bool bridge_apu_guest_time_ready(void) {
@@ -2737,12 +2753,77 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
      * balanced the way these entries say. */
     struct { uint16_t s_after; uint8_t size; uint32_t ret_pc24; } tail_frames[16];
     int tail_n = 0;
+#if SNESRECOMP_INTERRUPT_AOT_ENTRY
+    /* An interrupt handler with a compiled body for the live (m,x) runs
+     * compiled from its first instruction: its RTI pops the interrupt frame
+     * and host-returns, which is this run's exit (stop_on_rti). Without this
+     * the handler's own instructions are interpreted and only the routines it
+     * calls run compiled. Same bookkeeping as the call bounce in the loop. */
+    if (stop_on_rti && cpu_dispatch_has_entry(cpu, entry_pc24) &&
+        !lle_bounce_target_excluded(entry_pc24)) {
+        sync_interp_to_cpu(&in, cpu);          /* PB = the vector's bank */
+        if (s_apu_pending_master >= bridge_bounce_flush_thresh())
+            bridge_apu_flush(cpu);
+        const int _apu_drv = g_interp_apu_driving;
+        g_interp_apu_driving = 0;
+        const int _saved_bounce_base = s_interp_bounce_recomp_base;
+        const int _saved_bounce_owner = s_interp_bounce_owner_depth;
+        s_interp_bounce_recomp_base = g_recomp_stack_top;
+        s_interp_bounce_owner_depth = s_interp_bridge_depth;
+        g_interp_bridge_bounces++;
+        if (g_interp_bridge_bounce_hook)
+            g_interp_bridge_bounce_hook(entry_pc24 & 0xFFFFFFu,
+                                        cpu_m_flag() ? 1 : 0, cpu_x_flag() ? 1 : 0);
+        s_lle_next_unwind_is_deadline = 0;
+        interp_edge_note(0, entry_pc24, INTERP_EDGE_AOT_CALL, 0, (uint16_t)cpu_S());
+        g_interp_wlog_pc24 = 0;
+        const RecompReturn _air = cpu_dispatch_pc_paired(cpu, entry_pc24, 0);
+        s_interp_bounce_owner_depth = _saved_bounce_owner;
+        s_interp_bounce_recomp_base = _saved_bounce_base;
+        g_interp_apu_driving = _apu_drv;
+        sync_cpu_to_interp(cpu, &in);
+        if (_air == RECOMP_RETURN_NORMAL) {    /* the handler's RTI */
+            bridge_apu_flush(cpu);
+            return 1;
+        }
+        if (s_lle_unwind_active && !s_lle_unwind_is_deadline &&
+            s_lle_unwind_owner_depth == s_interp_bridge_depth) {
+            /* The body handed a continuation back (a yield primitive or a
+             * rewritten return): interpret from there to the RTI. */
+            resume_ring_note(INTERP_RESUME_SITE_YIELD_UNWIND,
+                             INTERP_RESUME_KIND_UNWIND_CONSUME,
+                             entry_pc24, s_lle_unwind_pc24, cpu_S());
+            s_lle_unwind_active = 0;
+            s_lle_unwind_owner_depth = 0;
+            in.k  = (uint8)((s_lle_unwind_pc24 >> 16) & 0xFF);
+            in.pc = (uint16)(s_lle_unwind_pc24 & 0xFFFF);
+            edge_expect = s_lle_unwind_pc24 & 0xFFFFFFu;
+        } else {
+            /* Anything else leaves through the same exit the call bounce
+             * uses for a return it does not own. */
+            if (s_lle_unwind_active) {
+                sync_interp_to_cpu(&in, cpu);
+                bridge_apu_flush(cpu);
+                return 1;
+            }
+            return bridge_nlr_exit(cpu, &in, yield_pc, _air, entry_pc24, entry_pc24,
+                                   in.sp, s_enter);
+        }
+    }
+#endif
     for (; steps < step_cap; steps++) {
 #ifdef N64_TIME_CATS
         g_tcat_iters++;
 #endif
         RtlGuestScopeCheckpoint();
         const uint32_t pc_before = ((uint32_t)in.k << 16) | in.pc;
+#ifdef N64_STATE_AT_PC
+        if (pc_before == (uint32_t)(N64_STATE_AT_PC)) {
+            extern void n64_state_at_pc(void);   /* n64_host.c */
+            sync_interp_to_cpu(&in, cpu);
+            n64_state_at_pc();
+        }
+#endif
         /* Settle the DRAM refresh tax owed by clocks generated code charged
          * after its last per-block settlement: the interpreter settles after
          * each of its own opcodes, so without this the first interpreted step
@@ -2919,6 +3000,9 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
                     }
                 }
                 if (old->continuous_read_epoch==now.continuous_read_epoch) {
+#if SNESRECOMP_QUIESCENT_BEST_MATCH
+                    if (old->repeats + 1 > now.repeats)
+#endif
                     now.repeats=old->repeats+1;
                     if (now.repeats>=2) {
                         /* Stable CPU/memory state is a genuine cooperative
@@ -2942,7 +3026,18 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
                         sync_interp_to_cpu(&in,cpu);
                         return 1;
                     }
+#if SNESRECOMP_QUIESCENT_BEST_MATCH
+                    /* Every earlier visit with this state is in the bucket,
+                     * lowest slot first. The lowest is the oldest still in
+                     * the ring, the first visit with a count of 0, so taking
+                     * it alone never counts past 1 until the ring wraps and
+                     * overwrites it: a two-instruction wait then spins some
+                     * thirty times before it is recognised. Count from the
+                     * visit that has counted furthest instead. */
+                    continue;
+#else
                     break;
+#endif
                 }
             }
             const unsigned qs = q_sparse ? (q_next_slot++ & 63u) : (unsigned)(steps & 63);
@@ -3524,6 +3619,10 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
                                  (uint16_t)_sp_pre);
                 g_interp_wlog_pc24 = 0;
                 RecompReturn _air = cpu_dispatch_pc_paired(cpu, target, _fs);
+                /* A non-NORMAL return: the records are re-established below
+                 * where the callee's frame is known to be still on the stack
+                 * (the yield unwind this frame consumes), dropped otherwise. */
+                const int _tail_keep = tail_ok ? tail_j + 1 : tail_n;
                 if (_air != RECOMP_RETURN_NORMAL) tail_n = 0;   /* stack no longer as recorded */
                 s_interp_bounce_owner_depth = _saved_bounce_owner;
                 s_interp_bounce_recomp_base = _saved_bounce_base;
@@ -3591,6 +3690,31 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
                             interp_edge_note(pc_before, s_lle_unwind_pc24,
                                              INTERP_EDGE_EXTERNAL, op, in.sp);
                             edge_expect = s_lle_unwind_pc24 & 0xFFFFFFu;
+#if SNESRECOMP_TAIL_FRAMES_KEEP
+                            /* The compiled body handed control back from
+                             * inside the call: its return frame is still on
+                             * the stack, with the frames recorded before it.
+                             * Keep them, and record this call's own, so a
+                             * later jump to a compiled routine can still run
+                             * it under that return (each record is checked
+                             * against S and the stack bytes when used). */
+                            tail_n = _tail_keep;
+                            if (!tail_ok && is_call && in.sp <= _sp_pre) {
+                                while (tail_n > 0 && tail_frames[tail_n - 1].s_after <= _sp_pre)
+                                    tail_n--;
+                                if (tail_n == (int)(sizeof tail_frames / sizeof tail_frames[0])) {
+                                    memmove(&tail_frames[0], &tail_frames[1],
+                                            sizeof tail_frames - sizeof tail_frames[0]);
+                                    tail_n--;
+                                }
+                                tail_frames[tail_n].s_after = _sp_pre;
+                                tail_frames[tail_n].size =
+                                    cpu_dispatch_inline_arg_bytes(target) ? 0 : _fs;
+                                tail_frames[tail_n].ret_pc24 =
+                                    (pc_before + (uint32_t)call_len) & 0xFFFFFF;
+                                tail_n++;
+                            }
+#endif
                             if (_ibrw)
                                 fprintf(stderr, "[ibr] yield-unwind -> $%06X "
                                         "sp=$%04X yield_pc=$%06X sched=%d "
@@ -3640,6 +3764,15 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
                 if (reset_cap_on_bounce) steps = 0;
             } else if (is_call) {
                 /* Interpreted call: record its frame for tail jumps. */
+#if SNESRECOMP_TAIL_FRAMES_KEEP
+                /* Records at or below this frame's position are of frames the
+                 * stack has since unwound past (a helper that pulls its own
+                 * return address never reaches the RTS that would pop its
+                 * record). Left in, sixteen of them push out the record of
+                 * the frame a later tail jump needs. */
+                while (tail_n > 0 && tail_frames[tail_n - 1].s_after <= in.sp)
+                    tail_n--;
+#endif
                 if (tail_n == (int)(sizeof tail_frames / sizeof tail_frames[0])) {
                     memmove(&tail_frames[0], &tail_frames[1], sizeof tail_frames - sizeof tail_frames[0]);
                     tail_n--;

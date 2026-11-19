@@ -2027,7 +2027,7 @@ def _emit_runtime_dispatch(insn) -> List[str]:
     ]
 
 
-def _emit_dispatch(insn) -> List[str]:
+def _emit_dispatch(insn, inline=None) -> List[str]:
     """Emit a return-address jump-table dispatch as a static function-pointer
     array indexed by A. The 65816 dispatcher pops its return PC,
     indexes the table at that PC by A (×2 for short, ×3 for long),
@@ -2070,6 +2070,22 @@ def _emit_dispatch(insn) -> List[str]:
     # SEP #$30 contract.
     em = (getattr(insn, 'm_flag', 1) & 1) if is_short_call_helper else 1
     ex = (getattr(insn, 'x_flag', 1) & 1) if is_short_call_helper else 1
+    if inline is not None:
+        return _emit_dispatch_inline(insn, inline)
+    if getattr(insn, 'mnem', '') == 'JSL':
+        # The helper could not be run inline, and the switch alone would drop
+        # its side effects: push the JSL frame and interpret from the helper.
+        site = insn.addr & 0xFFFFFF
+        ret16 = (site + 3) & 0xFFFF
+        return [
+            "{ /* JSL dispatch: helper interpreted */",
+            "  cpu_write8(cpu, 0x00, cpu_S(), cpu_PB()); cpu_set_S((uint16)(cpu_S() - 1));",
+            f"  cpu_write8(cpu, 0x00, cpu_S(), 0x{(ret16 >> 8) & 0xFF:02x}); cpu_set_S((uint16)(cpu_S() - 1));",
+            f"  cpu_write8(cpu, 0x00, cpu_S(), 0x{ret16 & 0xFF:02x}); cpu_set_S((uint16)(cpu_S() - 1));",
+            f"  return interp_tier_dispatch_tail(cpu, 0x{insn.operand & 0xFFFFFF:06x}u, "
+            f"0x{site:06x}u, _entry_s, _hrv);",
+            "}",
+        ]
     suffix = _variant_suffix(em, ex)
     site_pc24 = insn.addr & 0xFFFFFF
     lines = ["{ /* JSL dispatch — short=2B / long=3B table */"]
@@ -2160,6 +2176,54 @@ def _emit_dispatch(insn) -> List[str]:
     lines.append("    default: break;")
     lines.append("  }")
     lines.append("  return RECOMP_RETURN_NORMAL; /* dispatch is a terminator */")
+    lines.append("}")
+    return lines
+
+
+def _emit_dispatch_inline(insn, inline) -> List[str]:
+    """A JSL dispatch whose helper runs inline (emit_function.
+    dispatch_helper_inline): the helper's own instructions, then a switch on
+    the table index that calls a handler only when the pointer the helper
+    computed is that table entry. Any other pointer -- an index past the
+    table, a null entry, a handler with no compiled body -- continues in the
+    interpreter at that pointer, as the hardware jump would."""
+    body, em, ex = inline
+    bank = (insn.addr >> 16) & 0xFF
+    entries = insn.dispatch_entries
+    kind = getattr(insn, 'dispatch_kind', 'short')
+    suffix = _variant_suffix(em, ex)
+    site_pc24 = insn.addr & 0xFFFFFF
+    lines = ["{ /* JSL dispatch -- helper inline, then the table */"]
+    lines.append(f"  uint16 _idx = (uint16){widths.masked('cpu_A()', 1)};")
+    lines.extend(f"  {ln}" for ln in body)
+    lines.append("  _call_hrv = 0;  /* dispatch-trampoline target */")
+    lines.append("  switch (_idx) {")
+    for i, e in enumerate(entries):
+        if e == 0:
+            continue
+        if kind == 'long':
+            target_bank, local_pc, tgt_addr = (e >> 16) & 0xFF, e & 0xFFFF, e
+        else:
+            target_bank, local_pc = bank, e & 0xFFFF
+            tgt_addr = (bank << 16) | local_pc
+        if not has_exact_variant(tgt_addr, em, ex):
+            continue
+        base_name = _NAME_RESOLVER.get(tgt_addr)
+        if base_name is None:
+            base_name = f"bank_{target_bank:02X}_{local_pc:04X}"
+        _UNRESOLVED_CALL_TARGETS.add((tgt_addr, em, ex))
+        lines.append(f"    case {i}: if (_tgt == 0x{tgt_addr:06x}u) {{")
+        for stmt in emitter_helpers.call_with_pb_save(
+                target_bank if kind == 'long' else None,
+                f"{base_name}{suffix}", trace_pc24=site_pc24):
+            lines.append(f"      {stmt}")
+        lines.append("      return RECOMP_RETURN_NORMAL; /* dispatch is a terminator */")
+        lines.append("    } break;")
+    lines.append("    default: break;")
+    lines.append("  }")
+    lines.append(
+        f"  return interp_tier_dispatch_tail_ex(cpu, _tgt, 0x{site_pc24:06x}u, "
+        f"_entry_s, _hrv, true); /* the pointer the helper computed */")
     lines.append("}")
     return lines
 

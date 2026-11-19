@@ -97,6 +97,10 @@ static uint64_t beam_debt(void) {
 #ifndef SNESRECOMP_PARK_TO_VBLANK
 #define SNESRECOMP_PARK_TO_VBLANK 0
 #endif
+/* SNESRECOMP_PARK_TO_IRQ=1: the same with a comparator armed (see there). */
+#ifndef SNESRECOMP_PARK_TO_IRQ
+#define SNESRECOMP_PARK_TO_IRQ 0
+#endif
 
 static void advance_parked(uint64_t until) {
   g_master_cycles = until;
@@ -221,6 +225,22 @@ void snes_beam_frame_driver_run_frame(void) {
         !g_snes->cart->superfx && !g_snes->cart->sa1 && !g_snes->cart->cx4 &&
         !g_snes->cart->dsp1 && !g_snes->cart->sdd1) {
       advance_parked(frame_end);
+      continue;
+    }
+#endif
+#if SNESRECOMP_PARK_TO_IRQ
+    /* The same carts with an H/V comparator armed: the wait ends at that
+     * match or at the field boundary, whichever is first, and the beam walk
+     * latches the match wherever it is stepped from. Park straight there
+     * instead of a line at a time. No match ahead (already pending with I
+     * set, or a comparator that cannot be reached) leaves only the NMI. */
+    if (g_snes->cart && !g_snes->cart->superfx && !g_snes->cart->sa1 &&
+        !g_snes->cart->cx4 && !g_snes->cart->dsp1 && !g_snes->cart->sdd1) {
+      to_irq = snes_master_clocks_until_irq(g_snes);
+      next = to_irq ? g_master_cycles + to_irq + 1 : frame_end;
+      if (next > frame_end)
+        next = frame_end;
+      advance_parked(next);
       continue;
     }
 #endif
