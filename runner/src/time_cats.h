@@ -18,8 +18,16 @@ static inline uint32_t tcat_now(void) {
   __asm__ volatile("mfc0 %0, $9" : "=r"(c));
   return c;
 }
+#ifdef N64_TIME_SWITCHES
+/* How often the frame moves from one category to another: each move leaves
+ * the 16 KB caches holding the other side's code and data. */
+extern uint32_t g_tcat_sw[TCAT_N][TCAT_N];
+#endif
 static inline uint32_t tcat_enter(uint32_t cat) {
   const uint32_t now = tcat_now(), prev = g_tcat_cur;
+#ifdef N64_TIME_SWITCHES
+  g_tcat_sw[prev][cat]++;
+#endif
   g_tcat_acc[prev] += now - g_tcat_t;
   g_tcat_t = now;
   g_tcat_cur = cat;

@@ -746,6 +746,22 @@ static int host_main(void) {
                          (unsigned long)(s_tc_sum[5] * 8 / 375 / 60), (unsigned long)(s_tc_sum[0] * 8 / 375 / 60),
                          (unsigned long)(s_tc_sum[6] * 8 / 375 / 60), (unsigned long)(s_tc_op / 60),
                          (unsigned long)(s_tc_it / 60));
+#ifdef N64_TIME_SWITCHES
+        { /* Moves between categories per frame (time_cats.h), most frequent first. */
+          static const char *const nm[TCAT_N] = { "other", "interp", "compiled", "spc", "io", "beam", "opcode" };
+          for (int n = 0; n < 12; n++) {
+            int bf = 0, bt = 1;
+            for (int f = 0; f < TCAT_N; f++)
+              for (int t = 0; t < TCAT_N; t++)
+                if (f != t && g_tcat_sw[f][t] > g_tcat_sw[bf][bt]) { bf = f; bt = t; }
+            if (g_tcat_sw[bf][bt] < 60) break;
+            n64_platform_log("[tcat-switch] %s -> %s: %lu per frame\n", nm[bf], nm[bt],
+                             (unsigned long)(g_tcat_sw[bf][bt] / 60));
+            g_tcat_sw[bf][bt] = 0;
+          }
+          memset(g_tcat_sw, 0, sizeof g_tcat_sw);
+        }
+#endif
         s_tc_frames = 0;
       }
       if (s_tc_frames == 0) { for (int k = 0; k < 7; k++) s_tc_sum[k] = 0; s_tc_it = s_tc_op = 0; }

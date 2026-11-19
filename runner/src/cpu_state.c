@@ -1373,6 +1373,9 @@ void cpu_state_init(CpuState *cpu) {
 #undef cpu_dispatch_pc_paired
 uint32_t g_tcat_cur, g_tcat_t;
 uint64_t g_tcat_acc[TCAT_N];
+#ifdef N64_TIME_SWITCHES
+uint32_t g_tcat_sw[TCAT_N][TCAT_N];
+#endif
 uint32_t g_tcat_iters, g_tcat_ops;
 RecompReturn cpu_dispatch_pc_from(CpuState *cpu, uint32 pc24, uint16 entry_s_for_miss_restore,
                                   uint32 source_pc24) {
