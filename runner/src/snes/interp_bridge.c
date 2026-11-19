@@ -94,6 +94,9 @@ static uint64_t s_apu_pending_master = 0;
 /* 0: the detector never yields a stable wait; the loop is interpreted to the
  * deadline or the IRQ. Slow, and the reference the two above are checked
  * against. */
+#ifndef SNESRECOMP_WAIT_REPLAY_APU_TOTAL
+#define SNESRECOMP_WAIT_REPLAY_APU_TOTAL 0   /* 1: one SPC catch-up for a whole jump (test) */
+#endif
 #ifndef SNESRECOMP_QUIESCENT_YIELD
 #define SNESRECOMP_QUIESCENT_YIELD 1
 #endif
@@ -2469,6 +2472,16 @@ static BRIDGE_COLD int bridge_wait_replay(CpuState *cpu, Interp816 *in, const Br
                 uint64_t k = (bound - g_master_cycles) * 1364u / (1404u * lap_master), lines = 0;
                 const uint64_t cap_k = (uint64_t)(step_cap - steps - j - 1) / (uint64_t)n;
                 if (k > cap_k) k = cap_k;
+#if !SNESRECOMP_WAIT_REPLAY_APU_TOTAL
+                /* The SPC is flushed at the threshold the steps flush at:
+                 * where its catch-up is cut is audible in some games'
+                 * S-DSP output (Joe & Mac 2, Pitfall). */
+                if (apu_batch) {
+                    const uint64_t lim = s_apu_pending_master < apu_flush_thresh
+                        ? (apu_flush_thresh - 1 - s_apu_pending_master) / lap_master : 0;
+                    if (k > lim) k = lim;
+                }
+#endif
                 for (; k; k--) {
                     lines = (g_refresh_phase + k * lap_master) / 1364u;
                     if (g_master_cycles + k * lap_master + 40u * lines <= bound) break;
