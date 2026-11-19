@@ -2471,6 +2471,10 @@ static BRIDGE_COLD int bridge_wait_replay(CpuState *cpu, Interp816 *in, const Br
          *   however the pending time was sliced (see below for without). */
         if (e == 0 && lap_master) {
             bridge_beam_catchup(cpu);
+            /* (The steps before a lap boundary have walked the beam past
+             * every event up to now, so this walk cannot latch; if it ever
+             * does, leave as the next step's check would.) */
+            if (!at->i && g_snes->inIrq) { site = INTERP_RESUME_SITE_IRQ_PENDING; break; }
             uint64_t bound = s_lle_master_deadline;
             if (g_snes->hIrqEnabled || g_snes->vIrqEnabled) {
                 const uint32_t to = snes_master_clocks_until_irq(g_snes);

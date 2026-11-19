@@ -611,8 +611,16 @@ uint32_t snes_master_clocks_until_irq(const Snes *snes) {
   uint32_t target_h = snes->hIrqEnabled ? (uint32_t)snes->hTimer * 4u : 0u;
   if (target_h >= 1364u) return 0;                 /* unreachable H target */
 
+  /* The beam standing exactly on the match column has not latched yet: a
+   * walk that ends there has no clock left to take the match with, and the
+   * next clock walked takes it (snes_advance_master_cycles: target >= h).
+   * Reporting that position as a whole line or field away made the lazy
+   * beam skip to its next event first, so the IRQ was raised up to a line
+   * late whenever an instruction ended on the match's very clock (Pitfall,
+   * frame 290: the V=200 IRQ taken 1,028 clocks after its line began). */
   if (!snes->vIrqEnabled) {
     /* H-only: fires every line — later this line, or on the next. */
+    if (target_h == h) return 1u;
     return target_h > h ? (target_h - h) : (1364u - h + target_h);
   }
 
@@ -624,6 +632,7 @@ uint32_t snes_master_clocks_until_irq(const Snes *snes) {
     if (target_v >= 262u) return 0;
     if (target_v > v)      lines = target_v - v;
     else if (target_v < v) lines = 262u - v + target_v;
+    else if (target_h == h) return 1u;   /* on the match: see above */
     else                   lines = (target_h > h) ? 0u : 262u;
     /* lines==0 implies target_h>h, so this stays positive; every other branch
        adds at least a whole line, so the subtraction cannot underflow. */
