@@ -936,7 +936,9 @@ static uint32_t line_unsupported(const Ppu *ppu, const Spans *s, bool *backdrop_
   const uint8_t main = ppu->screenEnabled[0], sub = ppu->screenEnabled[1];
   if (mode > 1) why |= N64PPU_WHY_MODE;
   if (PPU_mosaicSize(ppu) > 1 && (ppu->mosaic & (main | sub) & 0xf)) why |= N64PPU_WHY_MOSAIC;
+#if !N64PPU_SCENE   /* (the scene draws 16x16 tiles from the tile cache; the planes cannot) */
   if ((ppu->bgmode >> 4) & (main | sub) & 0xf) why |= N64PPU_WHY_BIG_TILES;
+#endif
   if (ppu->setini & 0x0b) why |= N64PPU_WHY_HIRES_INTERLACE;
   /* Colour math is visible only where some span allows it and it changes
    * something: a non-zero fixed colour, halving, or a composed subscreen. */
@@ -1099,7 +1101,7 @@ bool n64_ppu_build_line(const Ppu *ppu, int line) {
 #if N64PPU_SCENE
   /* Clipped spans and the subscreen are drawn by the scene too, through
    * the black and math palettes (n64_ppu_scene_tlut). */
-  const bool scene_line_ok = PPU_mode(ppu) <= 1 && !(ppu->bgmode & 0xf0);
+  const bool scene_line_ok = PPU_mode(ppu) <= 1;
   L->scene_bg = scene_line_ok ? 3 : 0;
 #endif
   const uint8_t enabled[2] = {ppu->screenEnabled[0], L->sub_layers};

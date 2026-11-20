@@ -51,6 +51,14 @@ OUTB:    .ds.b OUTB_SIZE
 ZB:      .ds.b 512                  # empty-tile bitmap
 ROW_SC2:   .ds.b 4                  # SceneCmd_Bg: the row's second-screen offset
 ROW_PWRAP: .ds.b 4                  # SceneCmd_Bg: TMAP address of the column after the wrap
+# 16x16 tiles (SCJ_BIG): which half of its tilemap entry an 8-pixel column
+# and the row's lines are in. A tilemap entry then names four characters:
+# itself, the next (right half), and those 16 further on (lower half), the
+# halves swapped by the entry's flips. All 0 with 8x8 tiles.
+ROW_HC:    .ds.b 1                  # the next column's half (0 left, 1 right)
+ROW_HCUR:  .ds.b 1                  # this column's
+ROW_HR:    .ds.b 1                  # the row's half (0 upper, 1 lower)
+           .ds.b 1
     .align 3
 RECB:    .ds.b 512                  # tile records (SceneCmd_Tiles), 64 at a time
 
@@ -157,15 +165,22 @@ Row_loop:
 1:
     # sc = ((xsc & 0xfc) << 8) + (((y0 >> 3) & 31) << 5)
     #    + ((y0 & 0x100) && (xsc & 2) ? (wider ? 0x800 : 0x400) : 0)
+    # (16x16 tiles: an entry covers 16 lines, so y0 >> 4 and y0 & 0x200)
     lbu t4, %lo(JOB + SCJ_XSC)
     andi s6, t4, 1                  # wider (s6 is free until the tile loop)
     andi t5, t4, 0xfc
     sll t5, t5, 8
+    lbu t3, %lo(JOB + SCJ_BIG)
     srl t6, v0, 3
+    and t7, t6, t3
+    sb t7, %lo(ROW_HR)              # the lines' half of a 16-line entry
+    srlv t6, t6, t3
     andi t6, t6, 31
     sll t6, t6, 5
     addu t5, t5, t6
-    andi t6, v0, 0x100
+    li t6, 0x100
+    sllv t6, t6, t3
+    and t6, v0, t6
     beqz t6, 1f
     andi t7, t4, 2
     beqz t7, 1f
@@ -223,7 +238,12 @@ Row_loop:
     lhu t1, %lo(JOB + SCJ_HS)
     andi t2, t1, 7
     subu fp, zero, t2               # sx of tile 0 = -fine
-    srl t1, t1, 3                   # m
+    lbu t3, %lo(JOB + SCJ_BIG)
+    srl t0, t1, 3
+    and t0, t0, t3                  # the first column's half of its 16-pixel entry
+    sb t0, %lo(ROW_HC)
+    addiu t2, t3, 3
+    srlv t1, t1, t2                 # m: the tilemap column (hs >> 3, or >> 4)
     srl t4, t1, 5
     andi t4, t4, 1
     and t4, t4, s6                  # screen of column m
@@ -238,7 +258,9 @@ Row_loop:
     subu t6, t6, t5
     addiu t7, t7, 72
 1:  sw t7, %lo(ROW_PWRAP)
-    sll t6, t6, 3
+    sllv t6, t6, t2                 # 8 or 16 pixels an entry
+    sll t0, t0, 3
+    subu t6, t6, t0                 # less the half of the first entry already past
     addu s6, t6, fp                 # sx at the wrap
 
 Tile_loop:
@@ -249,7 +271,19 @@ Tile_loop:
     nop
     lw s5, %lo(ROW_PWRAP)
 1:  lhu t5, 0(s5)                   # entry
+    # The next column's entry: the next one, or with 16x16 tiles the same
+    # one again for its right half.
+    lbu t6, %lo(JOB + SCJ_BIG)
+    lbu t7, %lo(ROW_HC)
+    sb t7, %lo(ROW_HCUR)
+    beqz t6, 2f
     addiu s5, s5, 2
+    xori t3, t7, 1
+    sb t3, %lo(ROW_HC)
+    bnez t7, 2f
+    nop
+    addiu s5, s5, -2
+2:
     # Priority.
     andi t6, t5, 0x2000
     bne t6, a0, Tile_next
@@ -268,6 +302,21 @@ Tile_loop:
 
     # Tile index: ((tileadr + (e & 0x3ff) << wsh) & 0x7fff) >> wsh.
     andi t3, t5, 0x3ff
+    # 16x16 tiles: + (half column ^ hflip) + 16 * (half row ^ vflip).
+    lbu t4, %lo(JOB + SCJ_BIG)
+    beqz t4, 5f
+    lbu t4, %lo(ROW_HCUR)
+    srl t6, t5, 14
+    andi t6, t6, 1
+    xor t4, t4, t6
+    addu t3, t3, t4
+    lbu t4, %lo(ROW_HR)
+    srl t6, t5, 15
+    xor t4, t4, t6
+    sll t4, t4, 4
+    addu t3, t3, t4
+    andi t3, t3, 0x3ff
+5:
     sllv t3, t3, s3
     addu t3, t3, s4
     andi t3, t3, 0x7fff

@@ -224,12 +224,13 @@ static bool scene_draw_bg_(int layer, bool hi, int a, int b, int sx0, int sx1, u
     if (r0 >= r1) continue;
     const Ppu *regs = (const Ppu *)&band->regs;
     const int mode = PPU_mode(regs);
-    if (mode > 1 || PPU_bigTiles(regs, layer)) return false;
+    if (mode > 1) return false;
     const int bpp = (mode == 0 || layer == 2) ? 2 : 4;
     const unsigned pal_base = mode == 0 ? 32u * (unsigned)layer : 0;
     const N64SceneBg bg = {.hs = regs->hScroll[layer], .vs = regs->vScroll[layer],
                            .xsc = regs->bgXsc[layer], .bpp = (uint8_t)bpp,
-                           .tileadr = (uint16_t)PPU_bgTileAdr(regs, layer)};
+                           .tileadr = (uint16_t)PPU_bgTileAdr(regs, layer),
+                           .big = PPU_bigTiles(regs, layer) ? 1 : 0};
     const uint16_t *tl = scene_tlut(band, bpp == 4 ? TC_TLUT_16 : TC_TLUT_2BPP, pal_base, tmode);
     if (!tl) return false;
     if (!copy_mode) {
@@ -248,7 +249,7 @@ static bool scene_draw_bg_(int layer, bool hi, int a, int b, int sx0, int sx1, u
     for (int c0 = r0; c0 < r1; c0 += 32)
       n64_scene_rsp_bg(s_scene_vram, cache,
                        bpp == 4 ? n64_tile_cache_empty4() : n64_tile_cache_empty2(), bg.hs, bg.vs,
-                       bg.xsc, bpp, bg.tileadr, c0, c0 + 32 < r1 ? c0 + 32 : r1, hi, sx0, sx1, kOx, kOy);
+                       bg.xsc, bpp, bg.big, bg.tileadr, c0, c0 + 32 < r1 ? c0 + 32 : r1, hi, sx0, sx1, kOx, kOy);
     continue;
 #endif
     const int n = n64_scene_bg(&bg, s_scene_vram, r0, r1, q, (int)(sizeof q / sizeof q[0]));

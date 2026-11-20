@@ -42,6 +42,7 @@ typedef struct N64SceneBg {
   uint8_t xsc;         /* BGnSC */
   uint8_t bpp;         /* 2 or 4 */
   uint16_t tileadr;    /* character base, VRAM word address */
+  uint8_t big;         /* 16x16 tiles (BGMODE bits 4-7): a tilemap entry is four 8x8 quads */
 } N64SceneBg;
 
 /* Quads for rows [r0, r1) of one layer; returns how many were written (at

@@ -14,7 +14,7 @@
 #define SCJ_R0      16   /* u8 first screen row */
 #define SCJ_R1      17   /* u8 end row (exclusive) */
 #define SCJ_PRIO    18   /* u8 0 or 1 */
-#define SCJ_PAD     19
+#define SCJ_BIG     19   /* u8 1: 16x16 tiles */
 #define SCJ_SX0     20   /* u16 span [sx0, sx1) */
 #define SCJ_SX1     22
 #define SCJ_OX      24   /* u16 screen position of SNES x 0 */

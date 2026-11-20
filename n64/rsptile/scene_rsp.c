@@ -15,7 +15,7 @@ typedef struct __attribute__((packed, aligned(16))) {
   uint16_t hs, vs;
   uint8_t xsc, wsh;
   uint16_t tileadr;
-  uint8_t r0, r1, prio, pad;
+  uint8_t r0, r1, prio, big;
   uint16_t sx0, sx1, ox, oy;
   uint32_t result;
   uint32_t empty, pad2[3];
@@ -50,7 +50,7 @@ void n64_scene_rsp_init(void) {
 
 void n64_scene_rsp_bg(const uint16_t *vram, const uint8_t *cache, const uint8_t *empty,
                       uint16_t hs, uint16_t vs,
-                      uint8_t xsc, int bpp, uint16_t tileadr, int r0, int r1, int prio,
+                      uint8_t xsc, int bpp, int big, uint16_t tileadr, int r0, int r1, int prio,
                       int sx0, int sx1, int ox, int oy) {
   SceneJob *j = UncachedAddr(&s_jobs[s_next++ % kJobs]);
   j->vram = PhysicalAddr(vram);
@@ -63,7 +63,7 @@ void n64_scene_rsp_bg(const uint16_t *vram, const uint8_t *cache, const uint8_t 
   j->r0 = (uint8_t)r0;
   j->r1 = (uint8_t)r1;
   j->prio = (uint8_t)prio;
-  j->pad = 0;
+  j->big = big ? 1 : 0;
   j->sx0 = (uint16_t)sx0;
   j->sx1 = (uint16_t)sx1;
   j->ox = (uint16_t)ox;
