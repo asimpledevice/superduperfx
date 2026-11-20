@@ -5,7 +5,7 @@ BUILD_DIR = build
 SOURCE_DIR = .
 include ../libdragon.mk
 
-N64_CFLAGS += -Wno-error
+N64_CFLAGS += -Wno-error $(RDPTEST_FLAGS)
 
 all: rdptest.z64
 
