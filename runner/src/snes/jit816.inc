@@ -291,7 +291,7 @@ enum { JO_NONE, JO_LDA, JO_LDX, JO_LDY, JO_STA, JO_STX, JO_STY, JO_STZ, JO_AND, 
        JO_BR, JO_BRA,
        JO_ADC, JO_SBC, JO_INC, JO_DEC,                       /* INC/DEC: memory */
        JO_ASLA, JO_LSRA, JO_ROLA, JO_RORA, JO_INCA, JO_DECA, JO_XBA,
-       JO_SEP, JO_REP, JO_PHA, JO_PHX, JO_PHY, JO_PLA, JO_PLX, JO_PLY };
+       JO_SEP, JO_REP, JO_PHA, JO_PHX, JO_PHY, JO_PLA, JO_PLX, JO_PLY, JO_BIT };
 typedef struct { uint8_t op, mode; } JitOp;
 static JitOp jit_decode(uint8_t opc) {
     static const struct { uint8_t opc, op, mode; } k[] = {
@@ -325,6 +325,7 @@ static JitOp jit_decode(uint8_t opc) {
         {0x0a, JO_ASLA, JM_NONE}, {0x4a, JO_LSRA, JM_NONE}, {0x2a, JO_ROLA, JM_NONE}, {0x6a, JO_RORA, JM_NONE},
         {0x1a, JO_INCA, JM_NONE}, {0x3a, JO_DECA, JM_NONE}, {0xeb, JO_XBA, JM_NONE},
         {0xe2, JO_SEP, JM_IMM8}, {0xc2, JO_REP, JM_IMM8},
+        {0x89, JO_BIT, JM_IMM}, {0x24, JO_BIT, JM_DP}, {0x2c, JO_BIT, JM_ABS}, {0x3c, JO_BIT, JM_ABX},
         {0x48, JO_PHA, JM_NONE}, {0xda, JO_PHX, JM_NONE}, {0x5a, JO_PHY, JM_NONE},
         {0x68, JO_PLA, JM_NONE}, {0xfa, JO_PLX, JM_NONE}, {0x7a, JO_PLY, JM_NONE},
     };
@@ -660,6 +661,12 @@ static int jit_translate(uint32_t pc24, const uint8_t *pg, bool mf, bool xf) {
                 if (set) J_ORI(JT0, JT0, b1 & 0x3c); else J_ANDI(JT0, JT0, 0x3c & ~b1);
                 J_MTC1(JT0, FPMX);
             }
+            /* (setFlags writes N and Z back: the lazy register takes the form (N ? 0x10000 : 0) | (Z ? 0 : 1)) */
+            J_MFC1(JT0, FNZ); J_NOP();
+            J_SRL(JT1, JT0, 15); J_SLTU(JT1, JZERO, JT1); J_SLL(JT1, JT1, 16);
+            J_ANDI(JT0, JT0, 0xffff); J_SLTU(JT0, JZERO, JT0);
+            J_OR(JT0, JT0, JT1);
+            J_MTC1(JT0, FNZ);
             if (set && (b1 & 0x10)) {                            /* X set: the index registers lose their high bytes */
                 J_MFC1(JT0, FX); J_NOP(); J_ANDI(JT0, JT0, 0xff); J_MTC1(JT0, FX);
                 J_MFC1(JT0, FY); J_NOP(); J_ANDI(JT0, JT0, 0xff); J_MTC1(JT0, FY);
@@ -801,6 +808,23 @@ static int jit_translate(uint32_t pc24, const uint8_t *pg, bool mf, bool xf) {
                 J_SRL(JT1, JT0, byte ? 8 : 16);                    /* carry: result > m */
                 J_MTC1(JT1, FC);
                 jit_set_nz(JT0, byte);
+                break;
+            case JO_BIT:
+                /* Z from A & value; from memory also N and V from the
+                 * value's top bits. The immediate form leaves N as it is. */
+                J_MFC1(JT0, FA); J_NOP();
+                J_AND(JT0, JT0, JS2); J_ANDI(JT0, JT0, (int)m);
+                J_SLTU(JT0, JZERO, JT0);                       /* 1 = not zero */
+                if (o.mode == JM_IMM) {
+                    J_MFC1(JT1, FNZ); J_NOP();
+                    J_SRL(JT1, JT1, 15); J_SLTU(JT1, JZERO, JT1);
+                } else {
+                    J_SRL(JT1, JS2, byte ? 7 : 15); J_ANDI(JT1, JT1, 1);
+                    J_SRL(JT2, JS2, byte ? 6 : 14); J_ANDI(JT2, JT2, 1);
+                    J_MTC1(JT2, FV);
+                }
+                J_SLL(JT1, JT1, 16); J_OR(JT0, JT0, JT1);     /* (N ? 0x10000 : 0) | (Z ? 0 : 1) */
+                J_MTC1(JT0, FNZ);
                 break;
             case JO_ADC: case JO_SBC:
                 /* Binary mode (jit816_run keeps blocks with these out of
