@@ -3009,6 +3009,9 @@ static BridgeRunScratch s_bridge_scratch[kBridgeScratchSlots];
 #endif
 #include "jit816.inc"
 #endif
+#ifdef N64_JIT_EXITS
+uint32_t g_lean_settle[7];
+#endif
 typedef struct BridgeLeanArgs {
     uint32_t pc_before, entry_pc24, q_prev_pc;
     int auto_quiescent;
@@ -3110,6 +3113,16 @@ static __attribute__((noinline)) void bridge_lean_run(CpuState *cpu, Interp816 *
 #endif
         check = 0;
         if (g_master_cycles >= s_lean_event) {
+#ifdef N64_JIT_EXITS
+            /* Why the lean loop settles: 0 the event time had been dropped
+             * (an access outside plain RAM and ROM, or the run's start);
+             * then what the next event is: 1 none (IRQ pending), 2 none
+             * (refresh state), 3 the beam's, 4 a refresh line, 5 the
+             * deadline, 6 the SPC catch-up. */
+            extern uint32_t g_lean_settle[7];
+            if (!s_lean_event) g_lean_settle[0]++;
+            int settle_kind = 3;
+#endif
             s_interp_bus_timing_active = 0;
             snes_refresh_charge_inline(g_master_cycles);
             g_coprocessor_master_cycles = g_master_cycles;
@@ -3122,8 +3135,15 @@ static __attribute__((noinline)) void bridge_lean_run(CpuState *cpu, Interp816 *
             uint64_t ev = s_beam_next_event;
             if (g_snes->inIrq || !g_refresh_charged_upto || g_refresh_phase >= 1364u) {
                 ev = 0;
+#ifdef N64_JIT_EXITS
+                settle_kind = g_snes->inIrq ? 1 : 2;
+#endif
             } else {
                 const uint64_t line = g_refresh_charged_upto + (1364u - g_refresh_phase);
+#ifdef N64_JIT_EXITS
+                if (line < ev) settle_kind = 4;
+                if (a->auto_quiescent && s_lle_master_deadline && s_lle_master_deadline < (line < ev ? line : ev)) settle_kind = 5;
+#endif
                 if (line < ev) ev = line;
                 if (a->auto_quiescent && s_lle_master_deadline && s_lle_master_deadline < ev)
                     ev = s_lle_master_deadline;
@@ -3135,8 +3155,14 @@ static __attribute__((noinline)) void bridge_lean_run(CpuState *cpu, Interp816 *
 #endif
                 const uint64_t spc = s_apu_pending_master >= spc_at ? 0
                     : g_master_cycles + (spc_at - s_apu_pending_master);
+#ifdef N64_JIT_EXITS
+                if (spc < ev) settle_kind = 6;
+#endif
                 if (spc < ev) ev = spc;
             }
+#ifdef N64_JIT_EXITS
+            g_lean_settle[settle_kind]++;
+#endif
             s_lean_event = ev;
             check = 1;
             s_interp_bus_timing_active = 1;

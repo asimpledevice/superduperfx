@@ -760,7 +760,13 @@ static int host_main(void) {
                 n64_platform_log("[jit816-exit-op] %02x %lu\n", best, (unsigned long)g_jit816_exit_op[best]);
                 g_jit816_exit_op[best] = 0;
               }
-              g_jit816_exit[0] = g_jit816_exit[1] = g_jit816_exit[2] = 0; }
+              g_jit816_exit[0] = g_jit816_exit[1] = g_jit816_exit[2] = 0;
+              extern uint32_t g_lean_settle[7];
+              n64_platform_log("[lean-settle] event dropped %lu; next: none/irq %lu, none/refresh %lu, beam %lu, refresh line %lu, deadline %lu, spc %lu\n",
+                               (unsigned long)g_lean_settle[0], (unsigned long)g_lean_settle[1], (unsigned long)g_lean_settle[2],
+                               (unsigned long)g_lean_settle[3], (unsigned long)g_lean_settle[4], (unsigned long)g_lean_settle[5],
+                               (unsigned long)g_lean_settle[6]);
+              for (int t = 0; t < 7; t++) g_lean_settle[t] = 0; }
 #endif
             /* The opcodes translation most often stopped at. */
             extern uint32_t g_jit816_ended[256];
