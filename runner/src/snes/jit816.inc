@@ -360,7 +360,21 @@ static void jit_latch(uint32_t adr, uint8_t byte) {
     J_SW(JAT, (int)offsetof(Cart, cpuBusAddress), JT5);
 }
 /* Leave the block: pc, the last instruction's pc for the caller. */
+#ifdef N64_JIT_EXITS
+/* Why blocks are left, counted at run time: 0 the event, 1 a taken branch
+ * out of the block (or a loop out of laps), 2 the block's end; and for the
+ * end, the opcode found there. */
+uint32_t g_jit816_exit[3], g_jit816_exit_op[256];
+static int s_jit_exit_kind, s_jit_exit_op;
+#define JIT_EXIT_KIND(k, op) (s_jit_exit_kind = (k), s_jit_exit_op = (op))
+#else
+#define JIT_EXIT_KIND(k, op) ((void)0)
+#endif
 static void jit_exit(uint16_t pc, uint32_t last_pc24) {
+#ifdef N64_JIT_EXITS
+    { int lo = jaddr(&g_jit816_exit[s_jit_exit_kind]); J_LW(JT0, lo, JAT); J_ADDIU(JT0, JT0, 1); J_SW(JT0, lo, JAT);
+      if (s_jit_exit_kind == 2) { lo = jaddr(&g_jit816_exit_op[s_jit_exit_op]); J_LW(JT0, lo, JAT); J_ADDIU(JT0, JT0, 1); J_SW(JT0, lo, JAT); } }
+#endif
     jli(JT0, pc);
     J_SH(JT0, (int)offsetof(Interp816, pc), JS0);
     jli(JT0, last_pc24);
@@ -537,10 +551,12 @@ static int jit_translate(uint32_t pc24, const uint8_t *pg, bool mf, bool xf) {
                 jbr(5, JT4, JZERO, label[tl]); J_NOP();
             }
             jit_latch(last_adr, last_byte);
+            JIT_EXIT_KIND(1, 0);
             jit_exit(target, ia);
             /* the not-taken path's event exit */
             jbind(lexit[i]);
             jit_latch(last_adr, last_byte);
+            JIT_EXIT_KIND(0, 0);
             jit_exit(ipc[i + 1], ia);
             continue;
         }
@@ -858,6 +874,7 @@ static int jit_translate(uint32_t pc24, const uint8_t *pg, bool mf, bool xf) {
           jbr(5, JT4, JZERO, label[i + 1]); J_NOP(); }
         jbind(lexit[i]);
         if (!bus) jit_latch(last_adr, last_byte);
+        JIT_EXIT_KIND(0, 0);
         jit_exit(ipc[i + 1], ia);
     }
     /* Past the last instruction: back to the interpreter. */
@@ -869,6 +886,7 @@ static int jit_translate(uint32_t pc24, const uint8_t *pg, bool mf, bool xf) {
                            lo_.mode == JM_ALX || lo_.mode == JM_ILY ||
                            (lo_.op >= JO_PHA && lo_.op <= JO_PLY);
         if (!ldata) jit_latch(la, pg[la & 0x1FFFu]);
+        JIT_EXIT_KIND(2, pg[ipc[n] & 0x1FFFu]);
         jit_exit(ipc[n], bank | ipc[n - 1]);
     }
     jfix_all();

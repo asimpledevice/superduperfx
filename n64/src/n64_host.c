@@ -749,6 +749,19 @@ static int host_main(void) {
                              (unsigned long)g_jit816_stats[0], (unsigned long)g_jit816_stats[1],
                              (unsigned long)g_jit816_stats[2], (unsigned long)g_jit816_stats[3],
                              (unsigned long)g_jit816_stats[4], (unsigned long)g_jit816_stats[5]);
+#ifdef N64_JIT_EXITS
+            { extern uint32_t g_jit816_exit[3], g_jit816_exit_op[256];
+              n64_platform_log("[jit816-exit] event %lu, branch out %lu, block end %lu\n", (unsigned long)g_jit816_exit[0],
+                               (unsigned long)g_jit816_exit[1], (unsigned long)g_jit816_exit[2]);
+              for (int t = 0; t < 10; t++) {
+                int best = 0;
+                for (int o = 1; o < 256; o++) if (g_jit816_exit_op[o] > g_jit816_exit_op[best]) best = o;
+                if (!g_jit816_exit_op[best]) break;
+                n64_platform_log("[jit816-exit-op] %02x %lu\n", best, (unsigned long)g_jit816_exit_op[best]);
+                g_jit816_exit_op[best] = 0;
+              }
+              g_jit816_exit[0] = g_jit816_exit[1] = g_jit816_exit[2] = 0; }
+#endif
             /* The opcodes translation most often stopped at. */
             extern uint32_t g_jit816_ended[256];
             for (int t = 0; t < 12; t++) {
