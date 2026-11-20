@@ -141,12 +141,12 @@ static void present_rdp_frame(uint32_t frame, const char *line) {
   { /* Scene sprites: lines drawn from strips / from planes, rectangles. */
     extern uint32_t g_scene_obj_lines, g_scene_obj_plane_lines, g_scene_obj_rects, g_scene_mode_passes[4];
     if (N64_RENDER == 2 && frame % 30 == 0) {
-      extern uint32_t g_scene_sync_blocks;
+      extern uint32_t g_scene_sync_blocks, g_scene_tlut_recycles;
       n64_platform_log("[scene] BG passes: plain %lu, clipped %lu, subscreen %lu, subscreen clipped %lu; "
-                       "VRAM blocks synced %lu\n",
+                       "VRAM blocks synced %lu; TLUT slot recycles so far %lu\n",
                        (unsigned long)g_scene_mode_passes[0], (unsigned long)g_scene_mode_passes[1],
                        (unsigned long)g_scene_mode_passes[2], (unsigned long)g_scene_mode_passes[3],
-                       (unsigned long)g_scene_sync_blocks);
+                       (unsigned long)g_scene_sync_blocks, (unsigned long)g_scene_tlut_recycles);
       g_scene_sync_blocks = 0;
       memset(g_scene_mode_passes, 0, sizeof g_scene_mode_passes);
     }

@@ -113,7 +113,11 @@ uint32_t g_scene_quads, g_scene_passes, g_scene_ticks, g_scene_tlut_ticks, g_sce
 /* TLUTs for this frame: [cgram version][kind]: TC_TLUT_16 for 4bpp
  * layers, TC_TLUT_2BPP with the OBJ half for 2bpp (palette base in the low
  * half), keyed by brightness and base. */
-enum { kSceneTluts = 64 };
+#ifndef N64PPU_SCENE_TLUTS
+#define N64PPU_SCENE_TLUTS 64
+#endif
+enum { kSceneTluts = N64PPU_SCENE_TLUTS };
+uint32_t g_scene_tlut_recycles;   /* times a frame needed more TLUTs than there are slots */
 static uint16_t s_scene_tlut[kSceneTluts][256] __attribute__((aligned(16)));
 static struct { int cgram; uint8_t bright, kind, base, mode, mflags; } s_scene_tkey[kSceneTluts];
 static int s_scene_ntlut;
@@ -167,7 +171,18 @@ static const uint16_t *scene_tlut(const N64PpuBand *band, unsigned kind, unsigne
         s_scene_tkey[i].kind == kind && s_scene_tkey[i].base == base &&
         s_scene_tkey[i].mode == mode && s_scene_tkey[i].mflags == mflags)
       return s_scene_tlut[i];
-  if (s_scene_ntlut == kSceneTluts) return NULL;
+  if (s_scene_ntlut == kSceneTluts) {
+    /* Every slot holds a TLUT that queued RSP or RDP work may still read.
+     * Let all of it finish, then use the slots again. (Returning without a
+     * TLUT here used to drop the layer: its plane rows are never built on a
+     * line the scene draws.) Slow, and not expected: a frame has a few
+     * CGRAM versions and brightness levels, not 64. */
+    rdpq_fence();
+    rspq_wait();
+    s_scene_ntlut = 0;
+    s_loaded_tlut = -1;
+    g_scene_tlut_recycles++;
+  }
   const int i = s_scene_ntlut++;
   s_scene_tkey[i].cgram = cgram;
   s_scene_tkey[i].bright = (uint8_t)bright;
