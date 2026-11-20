@@ -291,6 +291,13 @@ N64_CFLAGS += -DSNESRECOMP_CPU_REGS_FPU=$(CPUFPU)
 # 65816 registers in those FPU registers too (runner/src/snes/interp816_main.c).
 # The main core takes the struct core's place in the I-cache order; the
 # struct core, which only coprocessors then call, goes to plain .text.
+# JIT816=1: the 65816 JIT (runner/src/snes/jit816.inc). It runs inside the lean
+# interpreter loop and uses the registers of INTERPREGS=1, so it turns both on.
+JIT816 ?= 0
+ifeq ($(JIT816),1)
+INTERPREGS := 1
+N64_CFLAGS += -DSNESRECOMP_JIT816=1 -DSNESRECOMP_INTERP_BURST=2
+endif
 INTERPREGS ?= 0
 N64_CFLAGS += -DSNESRECOMP_INTERP_REGS=$(INTERPREGS)
 ifeq ($(INTERPREGS),1)
