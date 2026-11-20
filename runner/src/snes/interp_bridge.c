@@ -3016,9 +3016,7 @@ typedef struct BridgeLeanArgs {
     uint64_t apu_flush_thresh, progress_write_epoch, progress_dynamic_epoch;
     uint32_t *out_landing;
 } BridgeLeanArgs;
-/* (the section by name: called from one unlikely-looking place, GCC files it
- * under .text.unlikely, away from where n64/icache_order.ld puts it) */
-static __attribute__((noinline, section(".text.bridge_lean_run"))) void bridge_lean_run(CpuState *cpu, Interp816 *in, BridgeLeanArgs *a) {
+static __attribute__((noinline)) void bridge_lean_run(CpuState *cpu, Interp816 *in, BridgeLeanArgs *a) {
     long steps = a->steps;
     uint32_t q_prev_pc = a->q_prev_pc;
     uint64_t progress_write_epoch = a->progress_write_epoch;
