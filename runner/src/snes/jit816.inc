@@ -9,7 +9,8 @@
  *   - at a branch out of the block (every backward branch: loop heads stay
  *     with the big loop and its wait detector);
  *   - before the first instruction it has no code for.
- * The lean loop interprets whatever a block leaves. A block is made the
+ * A branch back to an instruction of the block loops inside it, for a few
+ * laps at a time. The lean loop interprets whatever a block leaves. A block is made the
  * second time its first instruction is reached.
  *
  * Exactness. A translated instruction does what interp816 does for it, to
@@ -34,7 +35,8 @@ void data_cache_hit_writeback(volatile const void *, unsigned long);
 void inst_cache_hit_invalidate(volatile void *, unsigned long);
 extern const uint8_t cyclesPerOpcode[256];   /* interp816.c */
 
-enum { kJitCodeWords = 49152, kJitEntries = 2048, kJitMaxInsns = 32, kJitSeen = 512 };
+enum { kJitCodeWords = 49152, kJitEntries = 2048, kJitMaxInsns = 32, kJitSeen = 512,
+       kJitLaps = 8 /* laps of a loop inside a block before it leaves for the big loop */ };
 static uint32_t s_jit_code[kJitCodeWords] __attribute__((aligned(32)));
 static uint32_t s_jit_n;           /* words used */
 static uint32_t s_jit_epilogue;    /* word index */
@@ -52,7 +54,7 @@ static Interp816 *s_jit_in;
 typedef uint32_t (*JitEnterFn)(void *code, Interp816 *in);
 
 enum { JZERO = 0, JAT = 1, JV0 = 2, JV1 = 3, JA0 = 4, JA1 = 5, JA2 = 6, JA3 = 7, JT0 = 8, JT1 = 9, JT2 = 10,
-       JT3 = 11, JT4 = 12, JT5 = 13, JS0 = 16, JS1 = 17, JS2 = 18, JS3 = 19, JS4 = 20, JSP = 29, JRA = 31 };
+       JT3 = 11, JT4 = 12, JT5 = 13, JS0 = 16, JS1 = 17, JS2 = 18, JS3 = 19, JS4 = 20, JS5 = 21, JSP = 29, JRA = 31 };
 enum { FA = 17, FX = 18, FY = 19, FS = 20, FD = 21, FDB = 22, FPB = 23, FPMX = 24, FMC = 26, FCMC = 27,
        FNZ = 28, FC = 29, FV = 30 };   /* fpu_slots.h */
 
@@ -157,14 +159,15 @@ static void jit816_flush(void) {
     enum { FRAME = 96 };
     J_ADDIU(JSP, JSP, -FRAME);
     J_SD(JRA, 88, JSP); J_SD(JS0, 80, JSP); J_SD(JS1, 72, JSP); J_SD(JS2, 64, JSP);
-    J_SD(JS3, 56, JSP); J_SD(JS4, 48, JSP);
+    J_SD(JS3, 56, JSP); J_SD(JS4, 48, JSP); J_SD(JS5, 40, JSP);
     J_MOVE(JS0, JA1);
+    J_ORI(JS5, JZERO, kJitLaps);
     J_JR(JA0);
     J_MOVE(JS1, JZERO);
     s_jit_epilogue = s_jit_n;
     J_MOVE(JV0, JS1);
     J_LD(JRA, 88, JSP); J_LD(JS0, 80, JSP); J_LD(JS1, 72, JSP); J_LD(JS2, 64, JSP);
-    J_LD(JS3, 56, JSP); J_LD(JS4, 48, JSP);
+    J_LD(JS3, 56, JSP); J_LD(JS4, 48, JSP); J_LD(JS5, 40, JSP);
     J_JR(JRA);
     J_ADDIU(JSP, JSP, FRAME);
     data_cache_hit_writeback(&s_jit_code[0], s_jit_n * 4);
@@ -181,7 +184,7 @@ static JitEntry *jit_find(uint32_t key) {
 static void jit_add(uint32_t key, uint32_t code, const uint8_t *pg, uint32_t n) {
     for (uint32_t h = (key ^ (key >> 11)) & (kJitEntries - 1);; h = (h + 1) & (kJitEntries - 1)) {
         JitEntry *e = &s_jit_ent[h];
-        if (e->key == key) return;
+        if (e->key == key) { e->code = code; e->pg = pg; e->n = n; return; }   /* (the newer block: it may hold a loop) */
         if (!e->key) { e->key = key; e->code = code; e->pg = pg; e->n = n; s_jit_nent++; return; }
     }
 }
@@ -252,21 +255,19 @@ static void jit_exit(uint16_t pc, uint32_t last_pc24) {
     J_SW(JT0, lo, JAT);
 }
 
-/* Translate the block that starts at pc24 (page pg, widths mf/xf). Returns
- * the number of instructions translated (0: none). */
-static int jit_translate(uint32_t pc24, const uint8_t *pg, bool mf, bool xf) {
-    const uint32_t mx = (mf ? 2u : 0u) | (xf ? 1u : 0u);
+/* The instructions of a block that starts at pc24: their addresses (and the
+ * address after the last), lengths and operations. count: note the opcode
+ * that ended it. */
+static int jit_scan(uint32_t pc24, const uint8_t *pg, bool mf, bool xf, bool count,
+                    uint16_t *ipc, uint8_t *ilen, JitOp *iop) {
     const uint32_t bank = pc24 & 0xFF0000u;
-    uint16_t ipc[kJitMaxInsns + 1];
-    uint8_t ilen[kJitMaxInsns];
-    JitOp iop[kJitMaxInsns];
     int n = 0;
     uint32_t pc = pc24 & 0xFFFFu;
     const uint32_t page_end = (pc | 0x1FFFu) + 1;
     while (n < kJitMaxInsns) {
         const uint8_t opc = pg[pc & 0x1FFFu];
         const JitOp o = jit_decode(opc);
-        if (o.op == JO_NONE || k_burst_stop[opc]) { g_jit816_ended[opc]++; break; }
+        if (o.op == JO_NONE || k_burst_stop[opc]) { if (count) g_jit816_ended[opc]++; break; }
         const bool byte = jit_op_x(o.op) ? xf : mf;
         const int len = o.mode == JM_NONE ? 1 : o.mode == JM_IMM ? (byte ? 2 : 3) :
                         (o.mode == JM_DP || o.mode == JM_REL) ? 2 : 3;
@@ -279,8 +280,42 @@ static int jit_translate(uint32_t pc24, const uint8_t *pg, bool mf, bool xf) {
         pc += (uint32_t)len;
         if (o.op == JO_BRA) break;
     }
-    if (!n) return 0;
     ipc[n] = (uint16_t)pc;
+    return n;
+}
+
+/* Translate the block that starts at pc24 (page pg, widths mf/xf). Returns
+ * the number of instructions translated (0: none). */
+static int jit_translate(uint32_t pc24, const uint8_t *pg, bool mf, bool xf) {
+    const uint32_t mx = (mf ? 2u : 0u) | (xf ? 1u : 0u);
+    const uint32_t bank = pc24 & 0xFF0000u;
+    uint16_t ipc[kJitMaxInsns + 1];
+    uint8_t ilen[kJitMaxInsns];
+    JitOp iop[kJitMaxInsns];
+    int n = jit_scan(pc24, pg, mf, xf, true, ipc, ilen, iop);
+    if (!n) return 0;
+    /* A loop reached past its head (the big loop ran the head): if a branch
+     * in the block goes back to just before it, start the block there, so
+     * that the loop is inside it. The block must still contain pc24. */
+    for (int i = 0; i < n; i++) {
+        if (iop[i].mode != JM_REL) continue;
+        const uint16_t target = (uint16_t)(ipc[i] + 2 + (int8_t)pg[(ipc[i] + 1) & 0x1FFFu]);
+        if (target >= ipc[0] || ipc[0] - target > 96 || ((target ^ ipc[0]) & 0xE000u)) continue;
+        uint16_t ipc2[kJitMaxInsns + 1];
+        uint8_t ilen2[kJitMaxInsns];
+        JitOp iop2[kJitMaxInsns];
+        const int n2 = jit_scan(bank | target, pg, mf, xf, false, ipc2, ilen2, iop2);
+        bool has_start = false, has_branch = false;
+        for (int j = 0; j < n2; j++) {
+            if (ipc2[j] == ipc[0]) has_start = true;
+            if (ipc2[j] == ipc[i]) has_branch = true;
+        }
+        if (has_start && has_branch) {
+            n = n2;
+            memcpy(ipc, ipc2, sizeof ipc); memcpy(ilen, ilen2, sizeof ilen); memcpy(iop, iop2, sizeof iop);
+        }
+        break;
+    }
 
     s_jit_nlabels = 0; s_jit_nfix = 0;
     int label[kJitMaxInsns + 1], lexit[kJitMaxInsns];
@@ -320,8 +355,7 @@ static int jit_translate(uint32_t pc24, const uint8_t *pg, bool mf, bool xf) {
             /* The flag, taken when it equals bit 5 of the opcode. */
             const uint16_t target = (uint16_t)(ipc[i] + 2 + (int8_t)b1);
             int tl = -1;
-            if (target > ipc[i])
-                for (int j = i + 1; j <= n; j++) if (ipc[j] == target) tl = j;
+            for (int j = 0; j < n; j++) if (ipc[j] == target) tl = j;
             const int ltaken = jlabel();
             if (o.op == JO_BR) {
                 const int sel = opc >> 6, want = (opc >> 5) & 1;
@@ -345,8 +379,16 @@ static int jit_translate(uint32_t pc24, const uint8_t *pg, bool mf, bool xf) {
             J_DMFC1(JT1, FMC); J_NOP(); J_DADDU(JT1, JT1, JS4); J_DMTC1(JT1, FMC); J_DMTC1(JT1, FCMC);
             { const int lo = jaddr(&s_apu_pending_master); J_LD(JT2, lo, JAT); J_DADDU(JT2, JT2, JS4); J_SD(JT2, lo, JAT); }
             J_ADDIU(JS1, JS1, 1);
-            if (tl >= 0 && tl < n) {
+            if (tl >= 0) {
                 const int lo = jaddr(&s_lean_event); J_LD(JT3, lo, JAT); J_SLTU(JT4, JT1, JT3);
+                if (tl <= i) {
+                    /* A loop inside the block: stay for a few laps, then
+                     * leave by the branch, so that the big loop's wait
+                     * detector still sees the loop's head. */
+                    J_ADDIU(JS5, JS5, -1);
+                    J_SLTU(JT5, JZERO, JS5);
+                    J_AND(JT4, JT4, JT5);
+                }
                 jbr(5, JT4, JZERO, label[tl]); J_NOP();
             }
             jit_latch(last_adr, last_byte);
@@ -536,7 +578,7 @@ static uint32_t jit816_run(CpuState *cpu, Interp816 *in, uint32_t pc24, const ui
         e = jit_find(key);
         if (!e) return 0;
     }
-    if (e->pg != pg || (long)e->n >= room) return 0;
+    if (e->pg != pg || (long)(kJitLaps + 1) * kJitMaxInsns >= room) return 0;
     s_jit_cpu = cpu; s_jit_in = in;
     const uint32_t ran = ((JitEnterFn)(void *)&s_jit_code[0])(&s_jit_code[e->code], in);
     g_jit816_stats[2]++;
