@@ -48,6 +48,11 @@ that runs in steady state should be translated.
 3. **Translate on the first visit?** A block is made the second time its
    start is reached. Measure what a translation costs against interpreting
    the block once before changing it.
+   The aim (owner, 2026-11-20): everything gets translated, and the
+   interpreter and the translator both go quiet once a scene settles.
+   Storage is not the limit (384 KB buffer, flushed when full); what costs
+   is the translator's own code running through the caches, so translate
+   once and keep, rather than translate and discard.
 4. **What is "not worth translating" is decided by counting, not by kind.**
    Decimal-mode ADC/SBC, emulation mode, an instruction across an 8 KB page
    boundary and code in RAM stay with the interpreter today. If a game runs
@@ -89,6 +94,13 @@ on the RDP mid-command").
    attract demo).
 6. **Modes 2-7** in the scene (software lines today). Big tiles are done
    (2026-11-20): four cache tiles per tilemap entry.
+   **Layer colour maths:** the fixed-colour case is done through palettes
+   (`tl_fix`, `N64PPU_SCENE_TL_FIXED`), checked by RENDER=2 only on Joe &
+   Mac 2's white flash (add, no halving, all layers). Subtract, halving, a
+   colour window and the OBJ palette 0-3 exemption are coded but no test
+   game shows them: write a generated-scene check. Layer maths with a
+   composed subscreen still falls back (needs two colours per pixel; see
+   rdptest page 5 on hardware).
 7. **Sprite fallback lines.** Lines with range or time over, or a front
    sprite of lower priority overlapping one of higher priority, use the
    planes. An exact per-pixel answer on the RDP is still to design.

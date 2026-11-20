@@ -139,7 +139,7 @@ static void present_rdp_frame(uint32_t frame, const char *line) {
                        (unsigned long)s_rdp_frame->fallback_reasons, diff);
 #if N64PPU_SCENE
   { /* Scene sprites: lines drawn from strips / from planes, rectangles. */
-    extern uint32_t g_scene_obj_lines, g_scene_obj_plane_lines, g_scene_obj_rects, g_scene_mode_passes[4];
+    extern uint32_t g_scene_obj_lines, g_scene_obj_plane_lines, g_scene_obj_rects, g_scene_mode_passes[8];
     if (N64_RENDER == 2 && frame % 30 == 0) {
       extern uint32_t g_scene_sync_blocks, g_scene_tlut_recycles;
       n64_platform_log("[scene] BG passes: plain %lu, clipped %lu, subscreen %lu, subscreen clipped %lu; "

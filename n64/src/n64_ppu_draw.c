@@ -107,7 +107,7 @@ static void use_tlut(const N64PpuFrame *f, int t) {
 static bool s_scene_init;
 static uint32_t s_scene_vram_count = ~0u;
 static const uint16_t *s_scene_vram;
-uint32_t g_scene_mode_passes[4];
+uint32_t g_scene_mode_passes[8];
 uint32_t g_scene_sync_blocks;   /* VRAM blocks the tile cache revisited */   /* BG passes per N64PPU_SCENE_TL_* */
 uint32_t g_scene_quads, g_scene_passes, g_scene_ticks, g_scene_tlut_ticks, g_scene_sync_ticks;
 /* TLUTs for this frame: [cgram version][kind]: TC_TLUT_16 for 4bpp
@@ -119,7 +119,7 @@ uint32_t g_scene_quads, g_scene_passes, g_scene_ticks, g_scene_tlut_ticks, g_sce
 enum { kSceneTluts = N64PPU_SCENE_TLUTS };
 uint32_t g_scene_tlut_recycles;   /* times a frame needed more TLUTs than there are slots */
 static uint16_t s_scene_tlut[kSceneTluts][256] __attribute__((aligned(16)));
-static struct { int cgram; uint8_t bright, kind, base, mode, mflags; } s_scene_tkey[kSceneTluts];
+static struct { int cgram; uint8_t bright, kind, base, mode, mflags; uint16_t fixed; } s_scene_tkey[kSceneTluts];
 static int s_scene_ntlut;
 /* Per CGRAM version, the RSP's copy for this frame's TLUTs. */
 static uint16_t s_scene_cgcopy[N64PPU_DESC_MAX_CGRAMS][256] __attribute__((aligned(16)));
@@ -164,12 +164,16 @@ static const uint16_t *scene_tlut(const N64PpuBand *band, unsigned kind, unsigne
   const Ppu *regs = (const Ppu *)&band->regs;
   const int cgram = band->cgram;
   const unsigned bright = PPU_brightness(regs);
-  const unsigned mflags = mode >= N64PPU_SCENE_TL_MATH
+  unsigned mflags = mode >= N64PPU_SCENE_TL_MATH
       ? (PPU_subtractColor(regs) ? 1u : 0u) | (PPU_halfColor(regs) ? 2u : 0u) : 0u;
+  const bool fix = mode >= N64PPU_SCENE_TL_FIXED;
+  const unsigned fixed = fix ? regs->fixedColor : 0u;
+  if (fix && PPU_addSubscreen(regs)) mflags |= 4u;
   for (int i = 0; i < s_scene_ntlut; ++i)
     if (s_scene_tkey[i].cgram == cgram && s_scene_tkey[i].bright == bright &&
         s_scene_tkey[i].kind == kind && s_scene_tkey[i].base == base &&
-        s_scene_tkey[i].mode == mode && s_scene_tkey[i].mflags == mflags)
+        s_scene_tkey[i].mode == mode && s_scene_tkey[i].mflags == mflags &&
+        s_scene_tkey[i].fixed == fixed)
       return s_scene_tlut[i];
   if (s_scene_ntlut == kSceneTluts) {
     /* Every slot holds a TLUT that queued RSP or RDP work may still read.
@@ -190,6 +194,7 @@ static const uint16_t *scene_tlut(const N64PpuBand *band, unsigned kind, unsigne
   s_scene_tkey[i].base = (uint8_t)base;
   s_scene_tkey[i].mode = (uint8_t)mode;
   s_scene_tkey[i].mflags = (uint8_t)mflags;
+  s_scene_tkey[i].fixed = (uint16_t)fixed;
   const uint32_t t0 = TICKS_READ();
   const uint16_t *cg = n64_ppu_desc()->cgram[cgram];
   if (mode == N64PPU_SCENE_TL_PLAIN) {
@@ -218,7 +223,7 @@ static bool scene_draw_bg_(int layer, bool hi, int a, int b, int sx0, int sx1, u
 static bool scene_draw_bg(int layer, bool hi, int a, int b, int sx0, int sx1, unsigned mode) {
   const uint32_t t0 = TICKS_READ();
   const bool r = scene_draw_bg_(layer, hi, a, b, sx0, sx1, mode);
-  if (r) g_scene_mode_passes[mode & 3]++;
+  if (r) g_scene_mode_passes[mode & 7]++;
   else {
     static int n;
     if (n++ < 8) n64_platform_log("[scene] BG pass refused: layer %d mode %u rows %d-%d, tluts %d\n",
@@ -412,7 +417,7 @@ static void draw_rdp_band(const N64PpuFrame *f, int a, int b) {
     /* Backdrop, with fixed-colour math where it applies. A flat-colour
      * rectangle in standard mode: FILL mode needs 4-pixel-aligned scissors
      * and window spans start anywhere. */
-    const uint16_t fill = sp->math ? (sp->clip ? L->fill_math_clip : L->fill_math)
+    const uint16_t fill = (sp->math & 1) ? (sp->clip ? L->fill_math_clip : L->fill_math)
                                    : (sp->clip ? L->fill_clip : L->fill);
     rdpq_set_mode_standard();
     rdpq_mode_combiner(RDPQ_COMBINER_FLAT);
@@ -426,7 +431,7 @@ static void draw_rdp_band(const N64PpuFrame *f, int a, int b) {
     s_loaded_tlut = -1;
 
     /* Subscreen under the main screen, through the backdrop-math palette. */
-    if (sp->math && L->sub_layers) {
+    if ((sp->math & 1) && L->sub_layers) {
       for (const int8_t *o = kN64PpuOrder[L->order]; *o >= 0; ++o) {
         if ((*o & 0xf) >= N64PPU_OBJ0) continue;
         const int p = (*o & 0xf) - N64PPU_BG1 + N64PPU_SUB_BG1;
@@ -458,9 +463,12 @@ static void draw_rdp_band(const N64PpuFrame *f, int a, int b) {
       const int p = *o & 0xf;
       const int layer = n64ppu_plane_layer(p);
       if (!(L->main_layers & (1 << layer)) || (sp->hide & (1 << layer))) continue;
+      /* Fixed-colour math on this layer, in this span: its palettes carry it. */
+      const bool fx = (sp->math & 2) && (L->lmath & (1 << layer));
 #if N64PPU_SCENE
       /* No plane was built for these (n64_ppu_build_line, same rule). */
-      const unsigned mode = sp->clip ? N64PPU_SCENE_TL_BLACK : N64PPU_SCENE_TL_PLAIN;
+      const unsigned mode = fx ? (sp->clip ? N64PPU_SCENE_TL_FIXED_CLIP : N64PPU_SCENE_TL_FIXED)
+                               : (sp->clip ? N64PPU_SCENE_TL_BLACK : N64PPU_SCENE_TL_PLAIN);
       if (p <= N64PPU_BG4 && (L->scene_bg & 1)) {
         const uint32_t st = SPLIT_T();
         const bool done = scene_draw_bg(p, (*o & N64PPU_HI) != 0, a, b, sp->x0, sp->x1, mode);
@@ -485,7 +493,8 @@ static void draw_rdp_band(const N64PpuFrame *f, int a, int b) {
       if (!rows_any(rows, a, b)) continue;
       const int sel = n64ppu_entry_sel(L->order, *o);
       const uint32_t st = SPLIT_T();
-      use_tlut(f, sp->clip ? N64PPU_TLUT_BLACK + sel : L->tl_main[sel]);
+      use_tlut(f, fx ? (sp->clip ? L->tl_fix_clip[sel] : L->tl_fix[sel])
+                     : (sp->clip ? N64PPU_TLUT_BLACK + sel : L->tl_main[sel]));
       draw_plane(f, p, rows, a, b);
       SPLIT_ADD(2, st);
       RSPW(3);

@@ -99,10 +99,13 @@ typedef struct N64PpuLine {
   uint8_t obj_scene;                         /* sprites drawn from the frame's OBJ strips */
   uint8_t obj_first;                         /* with obj_scene: the OAM rotation's first sprite */
   uint8_t scene_bg;                          /* BG layers drawn by the scene: 1 main screen, 2 subscreen */
+  uint8_t lmath;                             /* main layers with fixed-colour math (BG bits 0-3, OBJ bit 4) */
   N64PpuSpan spans[N64PPU_MAX_SPANS];
   uint8_t tl_main[N64PPU_SELS];               /* normal palettes */
   uint8_t tl_math[N64PPU_SELS];               /* subscreen math palettes */
   uint8_t tl_math_clip[N64PPU_SELS];          /* same with backdrop clipped */
+  uint8_t tl_fix[N64PPU_SELS];                /* main palettes with fixed-colour math */
+  uint8_t tl_fix_clip[N64PPU_SELS];           /* same with the main colour clipped */
   uint16_t fill, fill_clip;                   /* backdrop without math */
   uint16_t fill_math, fill_math_clip;         /* backdrop with fixed-colour math */
 } N64PpuLine;

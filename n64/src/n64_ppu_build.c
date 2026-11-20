@@ -174,8 +174,8 @@ static inline void clear_if_dirty(N64PpuFrame *f, int plane, int r) {   /* OBJ p
 
 /* ---- Palettes ------------------------------------------------------------ */
 
-enum { kTlutNormal = 1, kTlutMath = 2 };
-enum { kMathSubtract = 1, kMathHalf = 2 };
+enum { kTlutNormal = 1, kTlutMath = 2, kTlutFixed = 3 };
+enum { kMathSubtract = 1, kMathHalf = 2, kMathClip = 4 };
 
 /* Brightness applied to a 0..62 colour-math sum, as the software PPU's
  * brightnessMult / brightnessMultHalf tables do. Returns 5 bits. */
@@ -221,7 +221,7 @@ static uint8_t get_tlut_slow(N64PpuFrame *f, const Ppu *ppu, uint8_t kind, uint8
   key.kind = kind;
   key.brightness = PPU_brightness(ppu);
   key.sel = sel;
-  if (kind == kTlutMath) {
+  if (kind != kTlutNormal) {
     key.backdrop = backdrop;
     key.flags = flags;
   }
@@ -236,6 +236,13 @@ static uint8_t get_tlut_slow(N64PpuFrame *f, const Ppu *ppu, uint8_t kind, uint8
     const int src = sel_source(sel, c);
     if (src < 0) { t[c] = 0; continue; }
     const uint16_t raw = ppu->cgram[src];
+    if (kind == kTlutFixed && (sel != N64PPU_SEL_OBJ || c >= 192)) {
+      /* Main colour (zero where clipped) with the fixed colour (`backdrop`);
+       * OBJ palettes 0-3 take no math. */
+      t[c] = math_color((flags & kMathClip) ? 0 : raw, backdrop, flags, b, (flags & kMathHalf) != 0);
+      continue;
+    }
+    if (kind == kTlutFixed && (flags & kMathClip)) { t[c] = 1; continue; }
     t[c] = kind == kTlutMath
         ? math_color(backdrop, raw, flags, b, (flags & kMathHalf) != 0)
         : pack5551(bright(raw & 31, b, false), bright((raw >> 5) & 31, b, false),
@@ -247,12 +254,12 @@ static uint8_t get_tlut_slow(N64PpuFrame *f, const Ppu *ppu, uint8_t kind, uint8
 /* Most lines reuse the previous line's palettes: remember the last result per
  * (kind, selector, flags) and skip the pool search when nothing moved. */
 static struct { uint32_t count; uint16_t backdrop; uint8_t brightness, valid, slot; }
-    s_tlut_memo[2][N64PPU_SELS][4];
+    s_tlut_memo[3][N64PPU_SELS][8];
 
 static uint8_t get_tlut(N64PpuFrame *f, const Ppu *ppu, uint8_t kind, uint8_t sel,
                         uint16_t backdrop, uint8_t flags, bool *full) {
-  typeof(s_tlut_memo[0][0][0]) *m = &s_tlut_memo[kind == kTlutMath][sel][flags & 3];
-  const uint16_t bd = kind == kTlutMath ? backdrop : 0;
+  typeof(s_tlut_memo[0][0][0]) *m = &s_tlut_memo[kind - 1][sel][flags & 7];
+  const uint16_t bd = kind != kTlutNormal ? backdrop : 0;
   if (m->valid && m->count == ppu->cgramWriteCount && m->backdrop == bd &&
       m->brightness == PPU_brightness(ppu))
     return m->slot;
@@ -283,7 +290,21 @@ void n64_ppu_scene_tlut(const uint16_t *cgram, const struct Ppu *regs, unsigned 
   /* math_color one component at a time: for each component k, the result
    * for every source value, already in its RGBA5551 position. */
   uint16_t comp[3][32];
-  if (mode != N64PPU_SCENE_TL_BLACK) {
+  const bool fixed = mode == N64PPU_SCENE_TL_FIXED || mode == N64PPU_SCENE_TL_FIXED_CLIP;
+  if (fixed) {
+    /* Main colour (zero where clipped) with the fixed colour; halved only
+     * unclipped and without addSubscreen (PpuDrawWholeLine). */
+    const bool clip = mode == N64PPU_SCENE_TL_FIXED_CLIP;
+    const bool half = !clip && (mflags & kMathHalf) && !PPU_addSubscreen(regs);
+    for (int k = 0; k < 3; ++k) {
+      const unsigned y = (regs->fixedColor >> (5 * k)) & 31;
+      for (unsigned c = 0; c < 32; ++c) {
+        const unsigned x = clip ? 0 : c;
+        const unsigned v = (mflags & kMathSubtract) ? (x >= y ? x - y : 0) : x + y;
+        comp[k][c] = (uint16_t)(bright(v, b, half) << (11 - 5 * k));
+      }
+    }
+  } else if (mode != N64PPU_SCENE_TL_BLACK) {
     const uint16_t bd = mode == N64PPU_SCENE_TL_MATH ? cgram[0] : 0;
     const uint8_t fl = mode == N64PPU_SCENE_TL_MATH ? mflags : (uint8_t)(mflags & ~kMathHalf);
     const bool half = mode == N64PPU_SCENE_TL_MATH && (mflags & kMathHalf);
@@ -305,6 +326,12 @@ void n64_ppu_scene_tlut(const uint16_t *cgram, const struct Ppu *regs, unsigned 
     if (src < 0) { out[i] = 0; continue; }
     if (mode == N64PPU_SCENE_TL_BLACK) { out[i] = 1; continue; }
     const uint16_t raw = cgram[src];
+    if (fixed && kind == TC_TLUT_16 && i >= 128 && i < 192) {   /* OBJ palettes 0-3: no math */
+      out[i] = mode == N64PPU_SCENE_TL_FIXED_CLIP ? 1
+             : pack5551(bright(raw & 31, b, false), bright((raw >> 5) & 31, b, false),
+                        bright((raw >> 10) & 31, b, false));
+      continue;
+    }
     out[i] = (uint16_t)(comp[0][raw & 31] | comp[1][(raw >> 5) & 31] | comp[2][(raw >> 10) & 31] | 1);
   }
 }
@@ -930,7 +957,7 @@ static bool obj_line_scene(N64PpuFrame *f, const Ppu *ppu, int r) {
 
 /* ---- Lines --------------------------------------------------------------- */
 
-static uint32_t line_unsupported(const Ppu *ppu, const Spans *s, bool *backdrop_math) {
+static uint32_t line_unsupported(const Ppu *ppu, const Spans *s, bool *backdrop_math, uint8_t *lmath) {
   uint32_t why = 0;
   const int mode = PPU_mode(ppu);
   const uint8_t main = ppu->screenEnabled[0], sub = ppu->screenEnabled[1];
@@ -943,13 +970,18 @@ static uint32_t line_unsupported(const Ppu *ppu, const Spans *s, bool *backdrop_
   /* Colour math is visible only where some span allows it and it changes
    * something: a non-zero fixed colour, halving, or a composed subscreen. */
   *backdrop_math = false;
+  *lmath = 0;
   bool any_math_span = false;
   for (int k = 0; k < s->n; ++k) any_math_span |= s->math[k] != 0;
   const bool nontrivial = ppu->fixedColor || PPU_halfColor(ppu) ||
                           (PPU_addSubscreen(ppu) && sub);
   if (PPU_mathEnabled(ppu) && any_math_span && nontrivial) {
-    if (PPU_mathEnabled(ppu) & 0x1f) why |= N64PPU_WHY_COLOR_MATH;   /* layer math */
-    else *backdrop_math = true;
+    /* Layer math with the fixed colour is a palette (tl_fix); with a
+     * composed subscreen it needs two colours per pixel. */
+    const uint8_t layers = (uint8_t)(PPU_mathEnabled(ppu) & main & 0x1f);
+    if (layers && PPU_addSubscreen(ppu) && (sub & 0x1f)) why |= N64PPU_WHY_COLOR_MATH;
+    else *lmath = layers;
+    if (PPU_mathEnabled(ppu) & 0x20) *backdrop_math = true;
     if (*backdrop_math && PPU_addSubscreen(ppu) && (sub & 0x10)) why |= N64PPU_WHY_SUB_OBJ;
   }
   return why;
@@ -994,7 +1026,8 @@ static __attribute__((noinline)) void line_spans(const Ppu *ppu, Spans *s) {
 /* A line's palettes and backdrop colours (out of line, see line_spans).
  * Returns N64PPU_WHY_PALETTES when the palette pool ran out. */
 static __attribute__((noinline)) uint32_t line_palettes(N64PpuFrame *f, const Ppu *ppu,
-                                                        N64PpuLine *L, bool backdrop_math) {
+                                                        N64PpuLine *L, bool backdrop_math,
+                                                        uint8_t lmath) {
   uint32_t why = 0;
   /* A line's palettes and backdrop colours depend only on CGRAM (by its
    * write counter), brightness, the backdrop and fixed colours and the
@@ -1010,12 +1043,14 @@ static __attribute__((noinline)) uint32_t line_palettes(N64PpuFrame *f, const Pp
   key.bd = bd;
   key.fixed = ppu->fixedColor;
   key.brightness = (uint8_t)b;
-  key.mode = (uint8_t)(mflags | (add_sub ? 4 : 0) | (backdrop_math ? 8 : 0));
+  key.mode = (uint8_t)(mflags | (add_sub ? 4 : 0) | (backdrop_math ? 8 : 0) | (lmath ? 16 : 0));
   key.sub = (uint8_t)(ppu->screenEnabled[1] & 0xf);
   if (s_state.linepal.valid && !memcmp(&s_state.linepal.key, &key, sizeof key)) {
     memcpy(L->tl_main, s_state.linepal.line.tl_main, sizeof L->tl_main);
     memcpy(L->tl_math, s_state.linepal.line.tl_math, sizeof L->tl_math);
     memcpy(L->tl_math_clip, s_state.linepal.line.tl_math_clip, sizeof L->tl_math_clip);
+    memcpy(L->tl_fix, s_state.linepal.line.tl_fix, sizeof L->tl_fix);
+    memcpy(L->tl_fix_clip, s_state.linepal.line.tl_fix_clip, sizeof L->tl_fix_clip);
     L->fill = s_state.linepal.line.fill;
     L->fill_clip = s_state.linepal.line.fill_clip;
     L->fill_math = s_state.linepal.line.fill_math;
@@ -1044,6 +1079,14 @@ static __attribute__((noinline)) uint32_t line_palettes(N64PpuFrame *f, const Pp
         }
       }
     }
+    if (lmath) {
+      const uint8_t fl = (uint8_t)((mflags & kMathSubtract) | (!add_sub && PPU_halfColor(ppu) ? kMathHalf : 0));
+      for (int sel = 0; sel < N64PPU_SELS; ++sel) {
+        L->tl_fix[sel] = get_tlut(f, ppu, kTlutFixed, (uint8_t)sel, ppu->fixedColor, fl, &full);
+        L->tl_fix_clip[sel] = get_tlut(f, ppu, kTlutFixed, (uint8_t)sel, ppu->fixedColor,
+                                       (uint8_t)((fl & kMathSubtract) | kMathClip), &full);
+      }
+    }
     if (full) why = N64PPU_WHY_PALETTES;
     s_state.linepal.key = key;
     s_state.linepal.line = *L;
@@ -1069,10 +1112,25 @@ bool n64_ppu_build_line(const Ppu *ppu, int line) {
   Spans *s = &s_state.spans[r];
   line_spans(ppu, s);
   bool backdrop_math;
-  uint32_t why = line_unsupported(ppu, s, &backdrop_math);
+  uint8_t lmath;
+  uint32_t why = line_unsupported(ppu, s, &backdrop_math, &lmath);
 
-  if (!why) why |= line_palettes(f, ppu, L, backdrop_math);
+  if (!why) why |= line_palettes(f, ppu, L, backdrop_math, lmath);
   if (why) {
+#ifdef N64PPU_WHY_LOG
+    { /* The registers behind a fallback, once per change. */
+      static uint32_t s_last;
+      const uint32_t k = (uint32_t)ppu->cgwsel | ((uint32_t)ppu->cgadsub << 8) |
+                         ((uint32_t)ppu->screenEnabled[0] << 16) | ((uint32_t)ppu->screenEnabled[1] << 24);
+      if (k != s_last) {
+        s_last = k;
+        extern void n64_platform_log(const char *fmt, ...);
+        n64_platform_log("[ppuwhy-reg] line %d why %03lx cgwsel %02x cgadsub %02x main %02x sub %02x fixed %04x mode %d spans %d\n",
+                         line, (unsigned long)why, ppu->cgwsel, ppu->cgadsub, ppu->screenEnabled[0],
+                         ppu->screenEnabled[1], ppu->fixedColor, PPU_mode(ppu), s->n);
+      }
+    }
+#endif
     memset(L, 0, sizeof *L);
     flush_all(f);
     clear_line(f, r);
@@ -1083,6 +1141,7 @@ bool n64_ppu_build_line(const Ppu *ppu, int line) {
   }
 
   L->kind = N64PPU_LINE_RDP;
+  L->lmath = lmath;
   L->order = PPU_mode(ppu) == 0 ? N64PPU_ORDER_MODE0
            : (PPU_bg3priority(ppu) ? N64PPU_ORDER_MODE1_BG3TOP : N64PPU_ORDER_MODE1);
   L->nspans = (uint8_t)s->n;
@@ -1090,7 +1149,8 @@ bool n64_ppu_build_line(const Ppu *ppu, int line) {
     L->spans[k].x0 = s->x0[k];
     L->spans[k].x1 = s->x1[k];
     L->spans[k].clip = s->clip[k];
-    L->spans[k].math = (uint8_t)(backdrop_math && s->math[k]);
+    /* bit 0: backdrop math here; bit 1: layer math (L->lmath) here */
+    L->spans[k].math = (uint8_t)(s->math[k] ? (backdrop_math ? 1 : 0) | (lmath ? 2 : 0) : 0);
     L->spans[k].hide = s->mask_main[k];
     L->spans[k].hide_sub = s->mask_sub[k];
   }
