@@ -3302,6 +3302,13 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
     const int q_sparse = SNESRECOMP_QUIESCENT_BACKEDGE && !s_idle_poll_count;
     uint32_t q_prev_pc = 0xFFFFFFFFu;
     unsigned q_next_slot = 0;
+#ifndef SNESRECOMP_QUIESCENT_FILTER
+#define SNESRECOMP_QUIESCENT_FILTER 0
+#endif
+#if SNESRECOMP_QUIESCENT_FILTER
+    uint32_t qfp[16] = { 0 };
+    unsigned qfp_next = 0;
+#endif
     /* Stable-poll detector state: the architectural state at the last few
      * loop heads this frame branched back to (see the detector below). */
     BridgePollHead poll_heads[4];
@@ -3575,6 +3582,29 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
                        (pc_before >> 16) != (q_prev_pc >> 16);
             q_prev_pc = pc_before;
         }
+#if SNESRECOMP_QUIESCENT_FILTER
+        /* Most loop heads are reached with a state not seen before (a loop
+         * doing work), and recording each in the 4.6 KB ring was the largest
+         * source of data-cache misses in Pitfall. So a head's state is first
+         * reduced to one word and looked up among the last sixteen: only a
+         * state whose word was seen goes on to the detector proper. Equal
+         * states give equal words, so a wait is still found, one visit
+         * later; a cycle through more than sixteen heads is not (it runs to
+         * its interrupt, as any undetected wait does). */
+        if (q_record && q_sparse) {
+            uint32_t fp = pc_before ^ ((uint32_t)BIN_R(a) << 8) ^ ((uint32_t)BIN_R(x) << 15) ^
+                          ((uint32_t)BIN_R(y) << 3) ^ ((uint32_t)BIN_R(sp) << 12) ^ ((uint32_t)BIN_R(dp) << 5) ^
+                          ((uint32_t)BIN_R(db) << 24) ^
+                          ((uint32_t)BIN_R(c) | (uint32_t)BIN_R(z) << 1 | (uint32_t)BIN_R(v) << 2 |
+                           (uint32_t)BIN_R(n) << 3 | (uint32_t)BIN_R(i) << 4 | (uint32_t)BIN_R(d) << 5 |
+                           (uint32_t)BIN_R(mf) << 6 | (uint32_t)BIN_R(xf) << 7 | (uint32_t)BIN_R(e) << 28) ^
+                          ((uint32_t)g_interp_bridge_write_epoch * 0x9E3779B1u);
+            fp |= 0x80000000u;   /* (never 0, the empty slot) */
+            int seen = 0;
+            for (unsigned fi = 0; fi < 16; fi++) if (qfp[fi] == fp) { seen = 1; break; }
+            if (!seen) { qfp[qfp_next++ & 15u] = fp; q_record = 0; }
+        }
+#endif
         if (q_record) {
             BridgeQState now;
             memset(&now, 0, sizeof now);
