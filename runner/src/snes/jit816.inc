@@ -520,13 +520,14 @@ static uint32_t jit816_run(CpuState *cpu, Interp816 *in, uint32_t pc24, const ui
     JitEntry *e = jit_find(key);
     if (!e) {
         uint32_t *seen = &s_jit_seen[(pc24 ^ (pc24 >> 9) ^ mx) & (kJitSeen - 1)];
+        if (*seen == (key ^ 0x40000000u)) return 0;   /* nothing translatable starts here */
         if (*seen != key) { *seen = key; return 0; }
         if (s_jit_nent > kJitEntries / 2 || s_jit_n > kJitCodeWords - 4096) jit816_flush();
         const uint32_t start = s_jit_n;
         const int n = jit_translate(pc24, pg, (mx & 2) != 0, (mx & 1) != 0);
         if (n <= 0) {
             if (n < 0) jit816_flush();
-            else { s_jit_n = start; g_jit816_stats[5]++; *seen = 0; }
+            else { s_jit_n = start; g_jit816_stats[5]++; *seen = key ^ 0x40000000u; }
             return 0;
         }
         data_cache_hit_writeback(&s_jit_code[start], (s_jit_n - start) * 4);
