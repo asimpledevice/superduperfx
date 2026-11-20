@@ -6,6 +6,7 @@
   *(.text._interp_run_core)
   . = MAX(., 0x6300);
   *(.text.interp816_runOpcode)
+  *(.text.bridge_lean_run*)   /* SNESRECOMP_INTERP_BURST=2: the lean loop, beside the core it calls (placed by hand) */
   . = MAX(., 0x8f60);
   *(.text.spc_runOpcode)
   . = MAX(., 0xd600);
