@@ -6,22 +6,7 @@
   *(.text._interp_run_core)
   . = MAX(., 0x6300);
   *(.text.interp816_runOpcode)
-  /* The interpreter kernel in one piece (placed by hand, 2026-11-20): the
-   * lean loop (SNESRECOMP_INTERP_BURST=2) and the bus functions every
-   * opcode calls, directly after the opcode core. Under 16 KB together, so
-   * none of them can evict another from the instruction cache. Apart, the
-   * bus timing function shared cache lines with the lean loop and was
-   * fetched again on every bus access (PC-sample profile, Joe & Mac 2). */
-  *(.text.bridge_lean_run*)
-  *(.text.bridge_timing_bus.part.0)
-  *(.text.bridge_bus_read)
-  *(.text.bridge_bus_write)
-  *(.text.interp816_read)
-  *(.text.interp816_write)
-  *(.text.interp816_readOpcode)
-  *(.text.interp816_readWord)
-  *(.text.interp816_writeWord)
-  *(.text.bridge_bus_read_word)
+  *(.text.bridge_lean_run*)   /* SNESRECOMP_INTERP_BURST=2: the lean loop, beside the core it calls (placed by hand) */
   . = MAX(., 0x8f60);
   *(.text.spc_runOpcode)
   . = MAX(., 0xd600);
