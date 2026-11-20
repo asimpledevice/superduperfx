@@ -36,7 +36,8 @@ void inst_cache_hit_invalidate(volatile void *, unsigned long);
 extern const uint8_t cyclesPerOpcode[256];   /* interp816.c */
 
 enum { kJitCodeWords = 98304, kJitEntries = 8192, kJitMaxInsns = 32, kJitSeen = 2048,
-       kJitLaps = 8 /* laps of a loop inside a block before it leaves for the big loop */ };
+       kJitLaps = 8,       /* laps in a row without progress before a loop inside a block leaves for the big loop */
+       kJitRunMax = 4096   /* instructions after which a loop leaves in any case */ };
 static uint32_t s_jit_code[kJitCodeWords] __attribute__((aligned(32)));
 static uint32_t s_jit_n;           /* words used */
 static uint32_t s_jit_epilogue;    /* word index */
@@ -48,6 +49,7 @@ static uint32_t s_jit_nent;
 static uint32_t s_jit_seen[kJitSeen];     /* block starts reached once */
 static uint8_t s_jit_memsel;
 static bool s_jit_full;
+static uint32_t s_jit_fp;                 /* a looping block's A, X, Y and write count at its last lap */
 uint32_t g_jit816_prev;                   /* pc24 of the last instruction a block ran */
 uint32_t g_jit816_ended[256];             /* by opcode: translations that stopped at it (no code for it yet) */
 uint32_t g_jit816_stats[6];               /* blocks, instructions translated, runs, instructions run, flushes, refused */
@@ -507,11 +509,28 @@ static int jit_translate(uint32_t pc24, const uint8_t *pg, bool mf, bool xf) {
             if (tl >= 0) {
                 const int lo = jaddr(&s_lean_event); J_LD(JT3, lo, JAT); J_SLTU(JT4, JT1, JT3);
                 if (tl <= i) {
-                    /* A loop inside the block: stay for a few laps, then
-                     * leave by the branch, so that the big loop's wait
-                     * detector still sees the loop's head. */
+                    /* A loop inside the block. While it makes progress --
+                     * A, X or Y differ from the lap before, or something
+                     * was written -- it stays. A lap that changed none of
+                     * them may be a wait for an interrupt: after a few of
+                     * those in a row it leaves by the branch, so that the
+                     * big loop's wait detector sees the loop's head. (And
+                     * it leaves after kJitRunMax instructions in any case:
+                     * the caller's step cap.) */
+                    J_MFC1(JT0, FA); J_MFC1(JT1, FX); J_MFC1(JT2, FY); J_NOP();
+                    J_SLL(JT1, JT1, 8); J_XOR(JT0, JT0, JT1);
+                    J_SLL(JT2, JT2, 16); J_XOR(JT0, JT0, JT2);
+                    { const int lo = jaddr((const uint8_t *)&g_interp_bridge_write_epoch + sizeof g_interp_bridge_write_epoch - 4);
+                      J_LW(JT1, lo, JAT); }
+                    J_SLL(JT2, JT1, 24); J_XOR(JT0, JT0, JT2); J_XOR(JT0, JT0, JT1);
+                    { const int lo = jaddr(&s_jit_fp); J_LW(JT1, lo, JAT); J_SW(JT0, lo, JAT); }
+                    J_XOR(JT1, JT1, JT0);
+                    jI(4, JT1, JZERO, 2);                 /* the same as last lap: one fewer left */
                     J_ADDIU(JS5, JS5, -1);
+                    J_ORI(JS5, JZERO, kJitLaps);          /* progress: the full allowance again */
                     J_SLTU(JT5, JZERO, JS5);
+                    J_AND(JT4, JT4, JT5);
+                    J_SLTIU(JT5, JS1, kJitRunMax);
                     J_AND(JT4, JT4, JT5);
                 }
                 jbr(5, JT4, JZERO, label[tl]); J_NOP();
@@ -867,7 +886,7 @@ static uint32_t jit816_run(CpuState *cpu, Interp816 *in, uint32_t pc24, const ui
         e = jit_find(key);
         if (!e) return 0;
     }
-    if (e->pg != pg || (long)(kJitLaps + 1) * kJitMaxInsns >= room) return 0;
+    if (e->pg != pg || (long)kJitRunMax + 2 * kJitMaxInsns >= room) return 0;
     if ((e->n & 0x80000000u) && cpu_flag_D()) return 0;   /* decimal arithmetic: the interpreter's */
     s_jit_cpu = cpu; s_jit_in = in;
     const uint32_t ran = ((JitEnterFn)(void *)&s_jit_code[0])(&s_jit_code[e->code], in);
