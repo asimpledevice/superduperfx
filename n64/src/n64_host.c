@@ -748,7 +748,16 @@ static int host_main(void) {
             n64_platform_log("[jit816] blocks %lu (%lu instructions), runs %lu, instructions run %lu, flushes %lu, refused %lu\n",
                              (unsigned long)g_jit816_stats[0], (unsigned long)g_jit816_stats[1],
                              (unsigned long)g_jit816_stats[2], (unsigned long)g_jit816_stats[3],
-                             (unsigned long)g_jit816_stats[4], (unsigned long)g_jit816_stats[5]); }
+                             (unsigned long)g_jit816_stats[4], (unsigned long)g_jit816_stats[5]);
+            /* The opcodes translation most often stopped at. */
+            extern uint32_t g_jit816_ended[256];
+            for (int t = 0; t < 12; t++) {
+              int best = 0;
+              for (int o = 1; o < 256; o++) if (g_jit816_ended[o] > g_jit816_ended[best]) best = o;
+              if (!g_jit816_ended[best]) break;
+              n64_platform_log("[jit816-end] %02x %lu\n", best, (unsigned long)g_jit816_ended[best]);
+              g_jit816_ended[best] = 0;
+            } }
 #endif
         if (s_tc_frames == 59 || frame < 360) s_b0 = g_interp_bridge_bounces; }
       if (frame >= 360 && ++s_tc_frames == 60) {

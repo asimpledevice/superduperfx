@@ -45,6 +45,7 @@ static uint32_t s_jit_seen[kJitSeen];     /* block starts reached once */
 static uint8_t s_jit_memsel;
 static bool s_jit_full;
 uint32_t g_jit816_prev;                   /* pc24 of the last instruction a block ran */
+uint32_t g_jit816_ended[256];             /* by opcode: translations that stopped at it (no code for it yet) */
 uint32_t g_jit816_stats[6];               /* blocks, instructions translated, runs, instructions run, flushes, refused */
 static CpuState *s_jit_cpu;
 static Interp816 *s_jit_in;
@@ -265,7 +266,7 @@ static int jit_translate(uint32_t pc24, const uint8_t *pg, bool mf, bool xf) {
     while (n < kJitMaxInsns) {
         const uint8_t opc = pg[pc & 0x1FFFu];
         const JitOp o = jit_decode(opc);
-        if (o.op == JO_NONE || k_burst_stop[opc]) break;
+        if (o.op == JO_NONE || k_burst_stop[opc]) { g_jit816_ended[opc]++; break; }
         const bool byte = jit_op_x(o.op) ? xf : mf;
         const int len = o.mode == JM_NONE ? 1 : o.mode == JM_IMM ? (byte ? 2 : 3) :
                         (o.mode == JM_DP || o.mode == JM_REL) ? 2 : 3;
