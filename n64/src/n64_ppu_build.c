@@ -1096,11 +1096,30 @@ static __attribute__((noinline)) uint32_t line_palettes(N64PpuFrame *f, const Pp
   return why;
 }
 
-bool n64_ppu_build_line(const Ppu *ppu, int line) {
+static void line_sprites(N64PpuFrame *f, const Ppu *ppu, N64PpuLine *L, int line);
+
+bool n64_ppu_build_line(const Ppu *ppu, int line, bool same_regs) {
   N64PpuFrame *f = s_state.frame;
   s_state.ppu = ppu;
   const int r = line - 1;
   N64PpuLine *L = &f->line[r];
+#if N64PPU_SCENE
+  /* Same registers and CGRAM as the line above, which the RDP draws: spans,
+   * palettes and layers are that line's (they depend on nothing else, and
+   * the scene draws every BG layer of an RDP line, so there are no plane
+   * rows to queue). Only the sprites are per line. */
+  if (same_regs && r > 0 && L[-1].kind == N64PPU_LINE_RDP) {
+    *L = L[-1];
+    L->obj_scene = 0;
+    L->obj_first = 0;
+    L->main_layers &= (uint8_t)~0x10;
+    line_sprites(f, ppu, L, line);
+    f->rdp_lines++;
+    return true;
+  }
+#else
+  (void)same_regs;
+#endif
   memset(L, 0, sizeof *L);
   if (PPU_forcedBlank(ppu)) {
     flush_all(f);
@@ -1189,12 +1208,19 @@ bool n64_ppu_build_line(const Ppu *ppu, int line) {
       }
     }
   }
-  /* Sprites: per line (they read OAM and VRAM live). */
+  line_sprites(f, ppu, L, line);
+  f->rdp_lines++;
+  return true;
+}
+
+/* Sprites of an RDP line: per line (they read OAM and VRAM live). */
+static void line_sprites(N64PpuFrame *f, const Ppu *ppu, N64PpuLine *L, int line) {
+  const int r = line - 1;
   for (int p = N64PPU_OBJ0; p <= N64PPU_OBJ3; ++p) clear_if_dirty(f, p, r);
   if (ppu->screenEnabled[0] & 0x10) {
 #if N64PPU_SCENE
     obj_lines_ensure(ppu);
-    if (scene_line_ok && obj_line_scene(f, ppu, r)) {
+    if (obj_line_scene(f, ppu, r)) {
       L->obj_scene = 1;
       L->obj_first = (uint8_t)(PPU_objPriority(ppu) ? (ppu->oamaddl & 0xfe) >> 1 : 0);
       g_scene_obj_lines++;
@@ -1207,8 +1233,6 @@ bool n64_ppu_build_line(const Ppu *ppu, int line) {
 #endif
     L->main_layers |= 0x10;
   }
-  f->rdp_lines++;
-  return true;
 }
 
 #if N64PPU_SCENE

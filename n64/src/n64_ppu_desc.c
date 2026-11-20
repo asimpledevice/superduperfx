@@ -51,9 +51,11 @@ void n64_ppu_desc_begin(const Ppu *ppu) {
 #endif
 }
 
-/* Line `line` (1-based) with the registers the replay has just produced. */
-void n64_ppu_desc_line(const Ppu *ppu, int line) {
-  if (!s_open) return;
+/* Line `line` (1-based) with the registers the replay has just produced.
+ * Returns true when it joined the previous line's band: same registers and
+ * CGRAM version. */
+bool n64_ppu_desc_line(const Ppu *ppu, int line) {
+  if (!s_open) return false;
   if (ppu->cgramWriteCount != s_cgram_count) new_cgram(ppu);
   if (ppu->vramWriteCount != s_vram_count) s_desc.flags |= N64PPU_DESC_VRAM_CHANGED;
   if (ppu->oamWriteCount != s_oam_count) s_desc.flags |= N64PPU_DESC_OAM_CHANGED;
@@ -62,15 +64,16 @@ void n64_ppu_desc_line(const Ppu *ppu, int line) {
     N64PpuBand *b = &s_desc.band[s_desc.nbands - 1];
     if (b->y1 == line - 1 && b->cgram == cg && !memcmp(&b->regs, ppu, sizeof b->regs)) {
       b->y1 = (uint8_t)line;
-      return;
+      return true;
     }
   }
-  if (s_desc.nbands == N64PPU_DESC_LINES) return;   /* cannot happen: one band per line at most */
+  if (s_desc.nbands == N64PPU_DESC_LINES) return false;   /* cannot happen: one band per line at most */
   N64PpuBand *b = &s_desc.band[s_desc.nbands++];
   b->y0 = b->y1 = (uint8_t)line;
   b->cgram = cg;
   b->pad_ = 0;
   memcpy(&b->regs, ppu, sizeof b->regs);
+  return false;
 }
 
 void n64_ppu_desc_end(const Ppu *ppu) {

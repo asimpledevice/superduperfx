@@ -64,11 +64,11 @@ static uint32_t *s_pixels;  /* defined below: the software PPU output */
 #endif
 #if N64PPU_DESC
 void n64_ppu_desc_begin(const struct Ppu *ppu);
-void n64_ppu_desc_line(const struct Ppu *ppu, int line);
+bool n64_ppu_desc_line(const struct Ppu *ppu, int line);
 void n64_ppu_desc_end(const struct Ppu *ppu);
 #else
 #define n64_ppu_desc_begin(ppu) ((void)0)
-#define n64_ppu_desc_line(ppu, line) ((void)0)
+#define n64_ppu_desc_line(ppu, line) (false)
 #define n64_ppu_desc_end(ppu) ((void)0)
 #endif
 
@@ -92,8 +92,8 @@ static void draw_frame_rdp(bool software_every_line) {
     ppu_rasterApplyLine(g_ppu, line - 1);
     if (ppu_rasterTakeHdmaen(&hdmaen))
       dma_startDma(g_snes->dma, hdmaen, true);
-    n64_ppu_desc_line(g_ppu, line);
-    const bool rdp_ok = n64_ppu_build_line(g_ppu, line);
+    const bool same = n64_ppu_desc_line(g_ppu, line);
+    const bool rdp_ok = n64_ppu_build_line(g_ppu, line, same);
     if (software_every_line || !rdp_ok) ppu_runLine(g_ppu, line);
     else ppu_runLineState(g_ppu, line);
     dma_doHdma(g_snes->dma);

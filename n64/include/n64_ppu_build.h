@@ -19,7 +19,9 @@ void n64_ppu_build_begin(N64PpuFrame *frame, const uint32_t *sw_rows);
 
 /* Expand visible line 1..224 from the PPU's current (per-line) state.
  * Returns false when the line needs the software PPU. */
-bool n64_ppu_build_line(const struct Ppu *ppu, int line);
+/* same_regs: the line's registers and CGRAM equal the previous line's
+ * (n64_ppu_desc_line). */
+bool n64_ppu_build_line(const struct Ppu *ppu, int line, bool same_regs);
 
 /* End the frame's lines: expand (or queue on the RSP) the background runs
  * still deferred. */
