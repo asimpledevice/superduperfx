@@ -3127,8 +3127,14 @@ static __attribute__((noinline)) void bridge_lean_run(CpuState *cpu, Interp816 *
                 if (line < ev) ev = line;
                 if (a->auto_quiescent && s_lle_master_deadline && s_lle_master_deadline < ev)
                     ev = s_lle_master_deadline;
-                const uint64_t spc = s_apu_pending_master >= a->apu_flush_thresh ? 0
-                    : g_master_cycles + (a->apu_flush_thresh - s_apu_pending_master);
+                /* (the interval that applies: SNESRECOMP_LLE_APU_FLUSH_READY's once the SPC has guest time) */
+                uint64_t spc_at = a->apu_flush_thresh;
+#if SNESRECOMP_LLE_APU_FLUSH_READY
+                if ((uint64_t)(SNESRECOMP_LLE_APU_FLUSH_READY) > spc_at && bridge_apu_guest_time_ready())
+                    spc_at = (uint64_t)(SNESRECOMP_LLE_APU_FLUSH_READY);
+#endif
+                const uint64_t spc = s_apu_pending_master >= spc_at ? 0
+                    : g_master_cycles + (spc_at - s_apu_pending_master);
                 if (spc < ev) ev = spc;
             }
             s_lean_event = ev;
