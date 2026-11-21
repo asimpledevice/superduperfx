@@ -3048,6 +3048,36 @@ static inline int bridge_lean_back_ok(const Interp816 *in, uint32_t bpc) {
     return 0;
 }
 #endif
+#if SNESRECOMP_JIT816
+/* JSR (a,X), JMP (a), JMP (a,X) and JML [a] in the lean loop: interpreted
+ * there when the target, read ahead without touching the bus, is ROM with
+ * no compiled body (what the big loop would do with one is its own to do:
+ * run it in place of the call, or under a recorded call's return). */
+#ifndef SNESRECOMP_LEAN_INDIRECT
+#define SNESRECOMP_LEAN_INDIRECT 1
+#endif
+static inline int bridge_lean_ind_op(uint8_t op) {
+    return SNESRECOMP_LEAN_INDIRECT && (op == 0xFC || op == 0x6C || op == 0x7C || op == 0xDC);
+}
+/* The target, or 0xFFFFFFFF when it cannot be read ahead. */
+static uint32_t bridge_lean_ind_target(const Interp816 *in, uint32_t bpc, const uint8_t *pg, uint8_t op) {
+    (void)in;
+    if ((bpc & 0x1FFFu) > 0x1FFDu) return 0xFFFFFFFFu;
+    const uint32_t adr = pg[(bpc + 1) & 0x1FFFu] | (uint32_t)pg[(bpc + 2) & 0x1FFFu] << 8;
+    const uint32_t k = bpc & 0xFF0000u;
+    const int idx = op == 0xFC || op == 0x7C;
+    const uint32_t base = idx ? k : 0u;
+    const uint32_t a0 = idx ? adr + (uint32_t)BINP_R(x) : adr;
+    uint32_t b[3];
+    for (unsigned j = 0; j < (op == 0xDC ? 3u : 2u); j++) {
+        const uint32_t at = base | ((a0 + j) & 0xFFFFu);
+        const uint8_t *const p = cpu_fast_map_page(at);
+        if (!p) return 0xFFFFFFFFu;
+        b[j] = p[at & 0x1FFFu];
+    }
+    return (op == 0xDC ? b[2] << 16 : k) | b[0] | b[1] << 8;
+}
+#endif
 typedef struct BridgeLeanArgs {
     uint32_t pc_before, entry_pc24, q_prev_pc;
     int auto_quiescent;
@@ -3099,7 +3129,7 @@ static __attribute__((noinline)) void bridge_lean_run(CpuState *cpu, Interp816 *
         /* (a block may begin with a call, return or jump: asked below) */
         const int stop_op = pg ? k_burst_stop[pg[bpc & 0x1FFFu]] : 1;
         if (!pg) break;
-        if (stop_op && !jit_op_xfer(jit_decode(pg[bpc & 0x1FFFu]).op)) {
+        if (stop_op && !bridge_lean_ind_op(pg[bpc & 0x1FFFu]) && !jit_op_xfer(jit_decode(pg[bpc & 0x1FFFu]).op)) {
 #ifdef N64_JIT_EXITS
             g_lean_break[4]++; g_lean_break_op[pg[bpc & 0x1FFFu]]++;
 #endif
@@ -3146,11 +3176,20 @@ static __attribute__((noinline)) void bridge_lean_run(CpuState *cpu, Interp816 *
                 goto lean_after_step;
             }
         }
-        if (stop_op) {        /* no block ran it: the big loop's */
+        uint32_t ind_target = 0xFFFFFFFFu;
+        if (stop_op) {
+            const uint8_t sop = pg[bpc & 0x1FFFu];
+            if (bridge_lean_ind_op(sop)) {
+                ind_target = bridge_lean_ind_target(in, bpc, pg, sop);
+                s_jit_cpu = cpu;
+                if (ind_target != 0xFFFFFFFFu && !jit_xfer_ok(ind_target)) ind_target = 0xFFFFFFFFu;
+            }
+            if (ind_target == 0xFFFFFFFFu) {   /* the big loop's */
 #ifdef N64_JIT_EXITS
-            g_lean_break[4]++; g_lean_break_op[pg[bpc & 0x1FFFu]]++;
+                g_lean_break[4]++; g_lean_break_op[sop]++;
 #endif
-            break;
+                break;
+            }
         }
 #endif
         steps++;
@@ -3197,6 +3236,14 @@ static __attribute__((noinline)) void bridge_lean_run(CpuState *cpu, Interp816 *
             s_apu_pending_master += master;
         }
 #if SNESRECOMP_JIT816
+        if (ind_target != 0xFFFFFFFFu && pg[bpc & 0x1FFFu] == 0xFC) {
+            /* A call: its record, as the big loop makes it, and the loop
+             * goes on at the target (not a loop head). */
+            const uint32_t landed = ((uint32_t)BINP_R(k) << 16) | in->pc;
+            s_jit_tail = a->tail_frames; s_jit_tail_n = a->tail_n;
+            jit_tail_call(BINP_R(sp), cpu_dispatch_inline_arg_bytes(landed) ? 0 : 2, (bpc + 3u) & 0xFFFFFFu);
+            last = (landed & 0xFF0000u) | ((landed - 1u) & 0xFFFFu);
+        }
     lean_after_step:
 #endif
         check = 0;
