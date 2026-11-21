@@ -2100,13 +2100,20 @@ static void interp_hist_init(void) {
 
 /* Opcode classes the run loop tests on every step. */
 enum { BRIDGE_OP_CALL = 1, BRIDGE_OP_RET = 2, BRIDGE_OP_JMP_INDIRECT = 4, BRIDGE_OP_JMP_DIRECT = 8 };
+#ifndef SNESRECOMP_LEAN_MOVES
+#define SNESRECOMP_LEAN_MOVES 1
+#endif
 #if SNESRECOMP_INTERP_BURST
 /* Opcodes a burst stops before: those the big loop handles specially (calls,
  * returns, jumps, RTI) or that halt, vector or repeat themselves. */
 static const uint8_t k_burst_stop[256] = {
     [0x00] = 1, [0x02] = 1, [0x20] = 1, [0x22] = 1, [0xFC] = 1, [0x60] = 1, [0x6B] = 1, [0x40] = 1,
-    [0x4C] = 1, [0x5C] = 1, [0x6C] = 1, [0x7C] = 1, [0xDC] = 1, [0xCB] = 1, [0xDB] = 1, [0x44] = 1,
-    [0x54] = 1,
+    [0x4C] = 1, [0x5C] = 1, [0x6C] = 1, [0x7C] = 1, [0xDC] = 1, [0xCB] = 1, [0xDB] = 1,
+#if !(defined(SNESRECOMP_JIT816) && SNESRECOMP_JIT816) || !SNESRECOMP_LEAN_MOVES
+    /* (The block moves repeat themselves: with the JIT's lean loop each
+     * byte's step stays there while A, X and Y change -- they always do.) */
+    [0x44] = 1, [0x54] = 1,
+#endif
 };
 #endif
 static const uint8_t k_bridge_op_class[256] = {

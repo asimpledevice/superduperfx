@@ -45,6 +45,25 @@ that runs in steady state should be translated.
    JMP, JSR (a,X)): they are most block ends in Pitfall's gameplay, and
    each goes round the big loop, which is what keeps the 9 KB
    `_interp_run_core` in the instruction cache.
+   Measured 2026-11-21 (`N64_JIT_EXITS`, `[lean-break]`): a trip round the
+   big loop costs about 50 us. Transfers that are not forward were the
+   larger share and now stay in the lean loop while A, X or Y change
+   (`SNESRECOMP_LEAN_BACK_LAPS`; Pitfall 196.9 -> 171.3 ms a frame over
+   frames 360-900, Joe & Mac 2 -3 ms, SMW neutral, all exact), as do block
+   moves (`SNESRECOMP_LEAN_MOVES`). What remains is the opcodes themselves
+   (Pitfall: about 160 a frame). What the big loop does for them, which a
+   translation has to keep:
+   - a call whose target has a compiled body is run compiled ("bounce"):
+     ask `cpu_dispatch_has_entry` before the call is executed (for
+     JSR (a,X), peek the pointer first) and leave the block if it has;
+   - a return past the run's entry depth (`s_enter`, unless `yield_pc` or
+     `stop_on_rti`) ends the run: compare S before pulling, leave if so;
+   - `tail_frames` (calls recorded for tail jumps into compiled routines):
+     clear them (`tail_n = 0`) after any translated call or return;
+   - a jump back is a loop head for the wait detector: as branches.
+   Fewer bounces were counted with the lean-back rule (Pitfall 16 against
+   33 a frame): find which entry into compiled code the big loop made at
+   those addresses and whether it is worth keeping.
 3. **Translate on the first visit?** A block is made the second time its
    start is reached. Measure what a translation costs against interpreting
    the block once before changing it.
