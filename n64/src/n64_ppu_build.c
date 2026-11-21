@@ -1059,7 +1059,15 @@ static __attribute__((noinline)) uint32_t line_palettes(N64PpuFrame *f, const Pp
     why = s_state.linepal.full ? N64PPU_WHY_PALETTES : 0;
   } else {
     bool full = false;
-    for (int sel = 0; sel < N64PPU_SELS; ++sel)
+    /* With the scene only sprites can still come from planes (lines
+     * obj_line_scene refuses): the BG and subscreen plane palettes are
+     * never loaded. */
+#if N64PPU_SCENE
+    const int sel0 = N64PPU_SEL_OBJ;
+#else
+    const int sel0 = 0;
+#endif
+    for (int sel = sel0; sel < N64PPU_SELS; ++sel)
       L->tl_main[sel] = get_tlut(f, ppu, kTlutNormal, (uint8_t)sel, 0, 0, &full);
     L->fill = pack5551(bright(bd & 31, b, false), bright((bd >> 5) & 31, b, false),
                        bright((bd >> 10) & 31, b, false));
@@ -1073,7 +1081,7 @@ static __attribute__((noinline)) uint32_t line_palettes(N64PpuFrame *f, const Pp
       if (add_sub) {
         L->sub_layers = ppu->screenEnabled[1] & 0xf;
         const uint8_t cflags = (uint8_t)(mflags & ~kMathHalf);
-        for (int sel = 0; sel < N64PPU_SEL_OBJ; ++sel) {
+        for (int sel = sel0; sel < N64PPU_SEL_OBJ; ++sel) {
           L->tl_math[sel] = get_tlut(f, ppu, kTlutMath, (uint8_t)sel, bd, mflags, &full);
           L->tl_math_clip[sel] = get_tlut(f, ppu, kTlutMath, (uint8_t)sel, 0, cflags, &full);
         }
@@ -1081,7 +1089,7 @@ static __attribute__((noinline)) uint32_t line_palettes(N64PpuFrame *f, const Pp
     }
     if (lmath) {
       const uint8_t fl = (uint8_t)((mflags & kMathSubtract) | (!add_sub && PPU_halfColor(ppu) ? kMathHalf : 0));
-      for (int sel = 0; sel < N64PPU_SELS; ++sel) {
+      for (int sel = sel0; sel < N64PPU_SELS; ++sel) {
         L->tl_fix[sel] = get_tlut(f, ppu, kTlutFixed, (uint8_t)sel, ppu->fixedColor, fl, &full);
         L->tl_fix_clip[sel] = get_tlut(f, ppu, kTlutFixed, (uint8_t)sel, ppu->fixedColor,
                                        (uint8_t)((fl & kMathSubtract) | kMathClip), &full);
