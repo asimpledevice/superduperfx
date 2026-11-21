@@ -29,6 +29,26 @@ for pitch modulation", "The paging slot", "Pitch modulation as HLE").
 Parked: the exact sample-major pitch-modulation variant (branch
 `pm-variant-wip`; does not fit IMEM, see RED_DESIGN.md).
 
+## Where the CPU phase goes (profile, 2026-11-21, ares, frames 900-1020)
+
+PC samples of the CPU phase, `JIT816=1`, with and without `SPCDBT=1`.
+
+- **Joe & Mac 2**: 35 ms a frame without the SPC translator, 31.5 with.
+  About 80% is audio either way. With the translator: translated SPC code
+  20%; the S-DSP hand-off on Blue about 35% (`apu_dspLogRam` 8%,
+  `snesdsp_rsp_apu_launch` 6%, `decode` 6%, `snesdsp_rsp_apu_join` 6%,
+  `apu_dspMarkDirEntryAt` 3%, sync, pack, unpack); `spc_dbt_valid` 4%,
+  `spc_dbt_slow_write` 3%. The 65816 is about 3%.
+- **Pitfall**: 59 ms a frame either way. The SPC translator gives nothing
+  there because it keeps translating: `translate` 6%, `emit_insn` 1.5%,
+  the cache flushes 2%. Find what invalidates its blocks. Audio in all is
+  about 40%, the 65816 about 25% (translated code 9%, lean loop 6.6%, big
+  loop 1.8%, `jit_translate` 1%: the 65816 buffer flushes too).
+
+Order this suggests: (1) the SPC translator's retranslation in Pitfall;
+(2) the S-DSP hand-off's bookkeeping on Blue; (3) 65816 code density.
+The 65816's remaining opcodes are a small part of these scenes.
+
 ## 65816 JIT (`JIT816=1`, `runner/src/snes/jit816.inc`)
 
 Exact on Super Mario World, Joe & Mac 2 and Pitfall against the
