@@ -164,6 +164,9 @@ static inline uint8_t *plane_row(N64PpuFrame *f, int plane, int r) {
 static inline void bit_set(uint32_t *bits, int r) { bits[r >> 5] |= 1u << (r & 31); }
 static inline bool bit_get(const uint32_t *bits, int r) { return (bits[r >> 5] >> (r & 31)) & 1; }
 
+/* Rows with a dirty bit in any OBJ plane: one word to look at per line. */
+static uint32_t s_obj_dirty_rows[(N64PPU_LINES + 31) / 32];
+
 static inline void clear_if_dirty(N64PpuFrame *f, int plane, int r) {   /* OBJ planes */
   uint32_t *dirty = s_state.dirty[plane - N64PPU_OBJ0];
   if (bit_get(dirty, r)) {
@@ -824,6 +827,7 @@ static void expand_obj(N64PpuFrame *f, const Ppu *ppu, int line) {
     if (used & (1u << p)) {
       bit_set(f->rows[N64PPU_OBJ0 + p], r);
       bit_set(s_state.dirty[p], r);
+      bit_set(s_obj_dirty_rows, r);
     }
 }
 
@@ -990,7 +994,9 @@ static uint32_t line_unsupported(const Ppu *ppu, const Spans *s, bool *backdrop_
 /* Clear a line's sprite rows (BG runs for it are flushed first). BG rows
  * need no clearing: they are written whole wherever their layer is drawn. */
 static void clear_line(N64PpuFrame *f, int r) {
+  if (!bit_get(s_obj_dirty_rows, r)) return;
   for (int p = N64PPU_OBJ0; p <= N64PPU_OBJ3; ++p) clear_if_dirty(f, p, r);
+  s_obj_dirty_rows[r >> 5] &= ~(1u << (r & 31));
 }
 
 static void flush_all(N64PpuFrame *f) {
@@ -1111,17 +1117,28 @@ bool n64_ppu_build_line(const Ppu *ppu, int line, bool same_regs) {
   s_state.ppu = ppu;
   const int r = line - 1;
   N64PpuLine *L = &f->line[r];
+  f->ref[r] = (uint8_t)r;
 #if N64PPU_SCENE
   /* Same registers and CGRAM as the line above, which the RDP draws: spans,
    * palettes and layers are that line's (they depend on nothing else, and
    * the scene draws every BG layer of an RDP line, so there are no plane
    * rows to queue). Only the sprites are per line. */
-  if (same_regs && r > 0 && L[-1].kind == N64PPU_LINE_RDP) {
-    *L = L[-1];
-    L->obj_scene = 0;
-    L->obj_first = 0;
-    L->main_layers &= (uint8_t)~0x10;
-    line_sprites(f, ppu, L, line);
+  if (same_regs && r > 0 && f->line[f->ref[r - 1]].kind == N64PPU_LINE_RDP) {
+    const N64PpuLine *P = &f->line[f->ref[r - 1]];
+    N64PpuLine t;   /* line_sprites writes these three fields only */
+    t.obj_scene = 0;
+    t.obj_first = 0;
+    t.main_layers = (uint8_t)(P->main_layers & ~0x10);
+    line_sprites(f, ppu, &t, line);
+    if (t.obj_scene == P->obj_scene && t.obj_first == P->obj_first &&
+        t.main_layers == P->main_layers) {
+      f->ref[r] = f->ref[r - 1];   /* the row above, whole */
+    } else {
+      *L = *P;
+      L->obj_scene = t.obj_scene;
+      L->obj_first = t.obj_first;
+      L->main_layers = t.main_layers;
+    }
     f->rdp_lines++;
     return true;
   }
@@ -1224,7 +1241,7 @@ bool n64_ppu_build_line(const Ppu *ppu, int line, bool same_regs) {
 /* Sprites of an RDP line: per line (they read OAM and VRAM live). */
 static void line_sprites(N64PpuFrame *f, const Ppu *ppu, N64PpuLine *L, int line) {
   const int r = line - 1;
-  for (int p = N64PPU_OBJ0; p <= N64PPU_OBJ3; ++p) clear_if_dirty(f, p, r);
+  clear_line(f, r);
   if (ppu->screenEnabled[0] & 0x10) {
 #if N64PPU_SCENE
     obj_lines_ensure(ppu);

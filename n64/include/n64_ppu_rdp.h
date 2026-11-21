@@ -133,6 +133,9 @@ typedef struct N64PpuFrame {
   uint32_t rows_hi[N64PPU_PLANES][(N64PPU_LINES + 31) / 32];
 
   N64PpuLine line[N64PPU_LINES];
+  /* Row r is described by line[ref[r]], ref[r] <= r: a row that equals the
+   * row above in every field shares its N64PpuLine instead of copying it. */
+  uint8_t ref[N64PPU_LINES];
 
   /* RGBA5551 palettes, brightness applied. */
   uint16_t tlut[N64PPU_MAX_TLUTS][256] __attribute__((aligned(16)));

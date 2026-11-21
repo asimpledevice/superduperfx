@@ -27,7 +27,7 @@ int n64_ppu_draw_and_show(const N64PpuFrame *f, const char *status, int compare_
   (void)status;
   int mismatches = 0, logged = 0;
   for (int r = 0; r < N64PPU_LINES; ++r) {
-    const N64PpuLine *L = &f->line[r];
+    const N64PpuLine *L = &f->line[f->ref[r]];
     uint16_t *out = s_out[r];
     if (L->kind != N64PPU_LINE_RDP) continue;
     for (int k = 0; k < L->nspans; ++k) {

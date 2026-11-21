@@ -409,7 +409,7 @@ static bool scene_draw_obj(const N64PpuFrame *f, int prio, unsigned first, int a
 #endif
 
 static void draw_rdp_band(const N64PpuFrame *f, int a, int b) {
-  const N64PpuLine *L = &f->line[a];
+  const N64PpuLine *L = &f->line[f->ref[a]];
   for (int k = 0; k < L->nspans; ++k) {
     const N64PpuSpan *sp = &L->spans[k];
     rdpq_set_scissor(kOx + sp->x0, kOy + a, kOx + sp->x1, kOy + b);
@@ -509,7 +509,7 @@ static __attribute__((noinline)) int compare(const N64PpuFrame *f, const surface
   static int s_cmp_frame;
   const bool map = ++s_cmp_frame == 300;
   for (int r = 0; r < N64PPU_LINES; ++r) {
-    if (f->line[r].kind != N64PPU_LINE_RDP) continue;
+    if (f->line[f->ref[r]].kind != N64PPU_LINE_RDP) continue;
     const uint16_t *row = (const uint16_t *)((const uint8_t *)fb->buffer + (size_t)(r + kOy) * fb->stride) + kOx;
     if (map) {
       char m[257]; int bad = 0;
@@ -588,8 +588,9 @@ int n64_ppu_draw_and_show(const N64PpuFrame *f, const char *status, int compare_
   rdpq_fill_rectangle(0, 0, fb->width, fb->height);
   for (int a = 0; a < N64PPU_LINES;) {
     int b = a + 1;
-    const N64PpuLine *L = &f->line[a];
-    while (b < N64PPU_LINES && !memcmp(&f->line[b], L, sizeof *L)) ++b;
+    const N64PpuLine *L = &f->line[f->ref[a]];
+    while (b < N64PPU_LINES &&
+           (f->ref[b] == f->ref[a] || !memcmp(&f->line[f->ref[b]], L, sizeof *L))) ++b;
     if (L->kind == N64PPU_LINE_SOFTWARE) {
       const uint32_t st = SPLIT_T();
       draw_software_lines(f, a, b);
