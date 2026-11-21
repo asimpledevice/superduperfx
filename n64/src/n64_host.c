@@ -761,6 +761,19 @@ static int host_main(void) {
                 g_jit816_exit_op[best] = 0;
               }
               g_jit816_exit[0] = g_jit816_exit[1] = g_jit816_exit[2] = 0;
+              { extern uint32_t g_lean_break[8], g_lean_break_op[256];
+                n64_platform_log("[lean-break] not forward %lu, bank %lu, step cap %lu, no page %lu, big-loop opcode %lu, irq/deadline %lu; interpreted: big %lu, lean %lu\n",
+                                 (unsigned long)g_lean_break[0], (unsigned long)g_lean_break[1], (unsigned long)g_lean_break[2],
+                                 (unsigned long)g_lean_break[3], (unsigned long)g_lean_break[4], (unsigned long)g_lean_break[5],
+                                 (unsigned long)g_lean_break[6], (unsigned long)g_lean_break[7]);
+                for (int t = 0; t < 10; t++) {
+                  int best = 0;
+                  for (int o = 1; o < 256; o++) if (g_lean_break_op[o] > g_lean_break_op[best]) best = o;
+                  if (!g_lean_break_op[best]) break;
+                  n64_platform_log("[lean-break-op] %02x %lu\n", best, (unsigned long)g_lean_break_op[best]);
+                  g_lean_break_op[best] = 0;
+                }
+                for (int t = 0; t < 8; t++) g_lean_break[t] = 0; }
               extern uint32_t g_lean_settle[7];
               n64_platform_log("[lean-settle] event dropped %lu; next: none/irq %lu, none/refresh %lu, beam %lu, refresh line %lu, deadline %lu, spc %lu\n",
                                (unsigned long)g_lean_settle[0], (unsigned long)g_lean_settle[1], (unsigned long)g_lean_settle[2],

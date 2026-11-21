@@ -3011,6 +3011,32 @@ static BridgeRunScratch s_bridge_scratch[kBridgeScratchSlots];
 #endif
 #ifdef N64_JIT_EXITS
 uint32_t g_lean_settle[7];
+/* Why the lean loop hands back to the big loop: 0 not forward (a loop head
+ * or a transfer back), 1 another bank, 2 the step cap, 3 no plain page,
+ * 4 an opcode the big loop handles (g_lean_break_op), 5 IRQ or deadline;
+ * and the instructions each loop interpreted: [6] big, [7] lean. */
+uint32_t g_lean_break[8], g_lean_break_op[256];
+#endif
+#if SNESRECOMP_JIT816
+/* A transfer that is not forward (a loop head, a call's or return's target)
+ * need not go round the big loop while the run makes progress there: A, X
+ * or Y differ from the last time control came to that address this way.
+ * Once they repeat (SNESRECOMP_LEAN_BACK_LAPS times in a row) every further
+ * arrival is handed to the big loop until they change, so its wait detector
+ * sees each lap of a wait as before. 0 = always hand over. */
+#ifndef SNESRECOMP_LEAN_BACK_LAPS
+#define SNESRECOMP_LEAN_BACK_LAPS 4
+#endif
+static struct { uint32_t fp, n; } s_lean_back[16];
+static inline int bridge_lean_back_ok(const Interp816 *in, uint32_t bpc) {
+    (void)in;
+    const uint32_t fp = (bpc * 0x9E3779B1u) ^ (uint32_t)BINP_R(a) ^ ((uint32_t)BINP_R(x) << 8) ^
+                        ((uint32_t)BINP_R(y) << 16);
+    typeof(s_lean_back[0]) *const sl = &s_lean_back[(bpc ^ (bpc >> 4)) & 15u];
+    if (sl->fp != fp) { sl->fp = fp; sl->n = 0; return SNESRECOMP_LEAN_BACK_LAPS > 0; }
+    if (sl->n < (uint32_t)(SNESRECOMP_LEAN_BACK_LAPS)) { sl->n++; return 1; }
+    return 0;
+}
 #endif
 typedef struct BridgeLeanArgs {
     uint32_t pc_before, entry_pc24, q_prev_pc;
@@ -3033,13 +3059,35 @@ static __attribute__((noinline)) void bridge_lean_run(CpuState *cpu, Interp816 *
     s_interp_bus_timing_active = 1;
     for (;;) {
         const uint32_t bpc = ((uint32_t)BINP_R(k) << 16) | in->pc;
-        if (bpc <= prev || ((bpc ^ prev) >> 16) || steps + 1 >= a->step_cap) break;
+#ifdef N64_JIT_EXITS
+        if ((bpc ^ prev) >> 16) g_lean_break[1]++;
+        else if (bpc <= prev) g_lean_break[0]++;
+        else if (steps + 1 >= a->step_cap) g_lean_break[2]++;
+#endif
+        if (steps + 1 >= a->step_cap) break;
+        if (bpc <= prev || ((bpc ^ prev) >> 16)) {
+#if SNESRECOMP_JIT816
+            if (BINP_R(e) || !bridge_lean_back_ok(in, bpc)) break;
+#ifdef N64_JIT_EXITS
+            if ((bpc ^ prev) >> 16) g_lean_break[1]--; else g_lean_break[0]--;   /* (not handed over) */
+#endif
+#else
+            break;
+#endif
+        }
         const uint8_t *const pg = cpu_fast_map_page(bpc);
+#ifdef N64_JIT_EXITS
+        if (!pg) g_lean_break[3]++;
+        else if (k_burst_stop[pg[bpc & 0x1FFFu]]) { g_lean_break[4]++; g_lean_break_op[pg[bpc & 0x1FFFu]]++; }
+#endif
         if (!pg || k_burst_stop[pg[bpc & 0x1FFFu]]) break;
 #ifdef N64_STATE_AT_PC
         if (bpc == (uint32_t)(N64_STATE_AT_PC)) break;
 #endif
         if (check && a->auto_quiescent) {
+#ifdef N64_JIT_EXITS
+            if ((!BINP_R(i) && g_snes->inIrq) || (s_lle_master_deadline && g_master_cycles >= s_lle_master_deadline)) g_lean_break[5]++;
+#endif
             if (!BINP_R(i) && g_snes->inIrq) break;
             if (s_lle_master_deadline && g_master_cycles >= s_lle_master_deadline) break;
         }
@@ -3069,6 +3117,9 @@ static __attribute__((noinline)) void bridge_lean_run(CpuState *cpu, Interp816 *
         }
 #endif
         steps++;
+#ifdef N64_JIT_EXITS
+        g_lean_break[7]++;
+#endif
 #ifdef N64_TIME_CATS
         g_tcat_iters++;
 #endif
@@ -4044,6 +4095,9 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
 #endif
 #ifdef N64_JIT_REPORT
         s_jr_slow = 0;   /* (the opcode fetch above is not this instruction's access) */
+#endif
+#ifdef N64_JIT_EXITS
+        { extern uint32_t g_lean_break[8]; g_lean_break[6]++; }
 #endif
         const uint32_t tcat_op = tcat_enter(TCAT_OPCODE);
         int _cyc = interp816_runOpcode(&in);   /* executes the opcode; pushes/pops frames */
