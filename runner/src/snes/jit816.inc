@@ -364,10 +364,15 @@ static JitOp jit_decode(uint8_t opc) {
         {0x60, JO_RTS, JM_NONE}, {0x6b, JO_RTL, JM_NONE},
 #endif
     };
-    JitOp r = { JO_NONE, JM_NONE };
-    for (unsigned i = 0; i < sizeof k / sizeof k[0]; i++)
-        if (k[i].opc == opc) { r.op = k[i].op; r.mode = k[i].mode; break; }
-    return r;
+    /* (by opcode, filled on first use: the lean loop asks for every
+     * opcode it would otherwise stop at) */
+    static JitOp tab[256];
+    static bool ready;
+    if (!ready) {
+        for (unsigned i = 0; i < sizeof k / sizeof k[0]; i++) { tab[k[i].opc].op = k[i].op; tab[k[i].opc].mode = k[i].mode; }
+        ready = true;
+    }
+    return tab[opc];
 }
 static bool jit_op_x(int op) {   /* width from X (index registers) rather than M */
     return op == JO_LDX || op == JO_LDY || op == JO_STX || op == JO_STY || op == JO_CPX || op == JO_CPY ||
