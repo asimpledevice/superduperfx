@@ -1027,6 +1027,10 @@ static int host_main(void) {
                          (unsigned long)g_spc_dbt_refused[0], (unsigned long)g_spc_dbt_refused[1],
                          (unsigned long)g_spc_dbt_refused[2], (unsigned long)g_spc_dbt_refused[3],
                          (unsigned long)g_spc_dbt_code_flushes);
+        { extern uint16_t g_spc_dbt_code_adr[8];
+          n64_platform_log("[spcdbt]   last code stores at %04x %04x %04x %04x %04x %04x %04x %04x\n", g_spc_dbt_code_adr[0],
+                           g_spc_dbt_code_adr[1], g_spc_dbt_code_adr[2], g_spc_dbt_code_adr[3], g_spc_dbt_code_adr[4],
+                           g_spc_dbt_code_adr[5], g_spc_dbt_code_adr[6], g_spc_dbt_code_adr[7]); }
         memset(g_spc_dbt_refused, 0, sizeof g_spc_dbt_refused);
         extern uint32_t g_spc_dbt_chainend[8];
         n64_platform_log("[spcdbt]   links (slow path): patched %lu, no block %lu, not valid %lu, no time %lu, "

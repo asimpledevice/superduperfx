@@ -106,6 +106,16 @@ int g_spc_dbt_trace_runs;   /* (spc_dbt_test.c: log each run) */
 uint16_t g_spc_dbt_watch[3] = { SPC_DBT_TEST_WATCH };   /* (and the ARAM bytes it shows) */
 uint8_t g_spc_dbt_rpages[32];
 uint32_t g_spc_dbt_code_flushes;
+#ifndef SPC_DBT_VOLATILE_LINES
+#define SPC_DBT_VOLATILE_LINES 1
+#endif
+/* Lines of ARAM (32 bytes, a bit each) the program has stored into while
+ * they held translated code. Kept across flushes; cleared with the SPC
+ * (spc_dbt_reset_volatile). */
+static uint8_t s_volatile[256];
+void spc_dbt_reset_volatile(void) { memset(s_volatile, 0, sizeof s_volatile); }
+static inline bool volatile_at(uint16_t adr) { return (s_volatile[adr >> 8] >> ((adr >> 5) & 7)) & 1; }
+uint16_t g_spc_dbt_code_adr[8];   /* the last stores to translated code's lines (diagnostic) */
 void spc_dbt_code_written(uint16_t adr) {
 #ifdef SPC_DBT_DUMP
   { extern void n64_platform_log(const char *fmt, ...);
@@ -115,6 +125,19 @@ void spc_dbt_code_written(uint16_t adr) {
   (void)adr;
 #endif
   g_spc_dbt_code_flushes++;
+  g_spc_dbt_code_adr[g_spc_dbt_code_flushes & 7] = adr;
+#if SPC_DBT_VOLATILE_LINES
+  /* The program stores into its own code here: leave this 32-byte line to
+   * the interpreter from now on (translate), so the next store there finds
+   * no translated code and costs nothing. */
+  s_volatile[adr >> 8] |= (uint8_t)(1u << ((adr >> 5) & 7));
+#endif
+  spc_dbt_flush();
+}
+/* The S-DSP may write a page that holds translated code (echo). */
+void spc_dbt_code_page_written(uint16_t adr) {
+  g_spc_dbt_code_flushes++;
+  g_spc_dbt_code_adr[g_spc_dbt_code_flushes & 7] = adr;
   spc_dbt_flush();
 }
 
@@ -1515,6 +1538,8 @@ static Block *translate(Apu *apu, uint16_t pc, uint8_t p, bool may_flush) {
      * translations when a page with code gets the mark). */
     if (APU_DSP_PAGE_BIT(apu->spc->dspWatchSync, c.pc) ||
         APU_DSP_PAGE_BIT(apu->spc->dspWatchSync, (uint16_t)(c.pc + 2))) break;
+    /* Nor code on a line the program stores into (s_volatile). */
+    if (volatile_at(c.pc) || volatile_at((uint16_t)(c.pc + 2))) break;
     c.bail = new_label();
     c.exit_after = false;
     c.fe_checked = false;

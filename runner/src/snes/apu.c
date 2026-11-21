@@ -71,6 +71,7 @@ void apu_reset(Apu* apu) {
 #endif
 #if SNESRECOMP_SPC_DBT
   spc_dbt_flush();   /* ARAM is about to change wholesale */
+  spc_dbt_reset_volatile();
 #endif
   apu->romReadable = true; // before resetting spc, because it reads reset vector from it
   spc_reset(apu->spc);
@@ -546,7 +547,7 @@ static void apu_dspMark(Apu* apu, uint16_t start, uint32_t len, uint8_t bits) {
       SPC_DBT_MARKS_CHANGED();
     /* The S-DSP may write this page (echo): translated code on it would go
      * stale without an SPC store to say so. */
-    if ((bits & APU_DSP_WATCH_SYNC) && g_spc_dbt_code[p & 255]) spc_dbt_code_written((uint16_t)(p << 8));
+    if ((bits & APU_DSP_WATCH_SYNC) && g_spc_dbt_code[p & 255]) spc_dbt_code_page_written((uint16_t)(p << 8));
 #endif
     if (bits & APU_DSP_WATCH_LOG) apu->spc->dspWatchLog[(p >> 3) & 31] |= bit;
     if (bits & APU_DSP_WATCH_SYNC) apu->spc->dspWatchSync[(p >> 3) & 31] |= bit;

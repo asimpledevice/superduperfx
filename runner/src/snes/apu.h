@@ -284,6 +284,8 @@ extern bool g_spc_dbt_enabled;   /* run-time switch (spc_dbt_test.c) */
 extern uint8_t g_spc_dbt_rpages[32];
 void spc_dbt_flush(void);
 void spc_dbt_code_written(uint16_t adr);
+void spc_dbt_code_page_written(uint16_t adr);
+void spc_dbt_reset_volatile(void);
 /* Bit (adr >> 5) & 7 of byte adr >> 8: a 32-byte line holds translated
  * code. g_spc_dbt_map[page][offset]: NULL not tried yet, (void *)1 not
  * translatable, else a block. */

@@ -45,6 +45,15 @@ PC samples of the CPU phase, `JIT816=1`, with and without `SPCDBT=1`.
   about 40%, the 65816 about 25% (translated code 9%, lean loop 6.6%, big
   loop 1.8%, `jit_translate` 1%: the 65816 buffer flushes too).
 
+**(1) is done** (2026-11-21, `SPC_DBT_VOLATILE_LINES`): Pitfall's driver
+stores into its own code at $1A94 (and once at $1901), and each store
+dropped every translation. A 32-byte line that is stored into while it
+holds translated code is left to the interpreter from then on. Pitfall,
+frames 760-1400: flushes 10-60 per 60 frames -> 2 in all, SPC bucket 30.6
+-> 21.4 ms, frame 96.2 -> 88.4 ms. Next in the SPC translator: Joe & Mac 2
+refuses about 360 block runs a frame ("refused: code": a block that could
+store into a line of translated code).
+
 Order this suggests: (1) the SPC translator's retranslation in Pitfall;
 (2) the S-DSP hand-off's bookkeeping on Blue; (3) 65816 code density.
 The 65816's remaining opcodes are a small part of these scenes.
