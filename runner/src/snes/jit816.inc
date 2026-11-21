@@ -35,6 +35,9 @@ void data_cache_hit_writeback(volatile const void *, unsigned long);
 void inst_cache_hit_invalidate(volatile void *, unsigned long);
 extern const uint8_t cyclesPerOpcode[256];   /* interp816.c */
 
+#ifndef SNESRECOMP_JIT_XFER
+#define SNESRECOMP_JIT_XFER 1   /* JMP, JML, JSR, JSL, RTS, RTL in blocks */
+#endif
 enum { kJitCodeWords = 98304, kJitEntries = 8192, kJitMaxInsns = 32, kJitSeen = 2048,
        kJitLaps = 8,       /* laps in a row without progress before a loop inside a block leaves for the big loop */
        kJitRunMax = 4096   /* instructions after which a loop leaves in any case */ };
@@ -54,6 +57,33 @@ uint32_t g_jit816_prev;                   /* pc24 of the last instruction a bloc
 uint32_t g_jit816_ended[256];             /* by opcode: translations that stopped at it (no code for it yet) */
 uint32_t g_jit816_stats[6];               /* blocks, instructions translated, runs, instructions run, flushes, refused */
 static CpuState *s_jit_cpu;
+static uint32_t s_jit_ret_limit;          /* a return that leaves S above this ends the run: the big loop's (0xFFFFFFFF: none) */
+static BridgeTailFrame *s_jit_tail;       /* the run's call records (tail_frames in _interp_run_core) */
+static int *s_jit_tail_n;
+/* What the big loop does to the records for a call it interprets and for a
+ * return (its tail_frames code, same order and tests). */
+static void jit_tail_call(uint32_t s_after, uint32_t size, uint32_t ret_pc24) {
+    BridgeTailFrame *const tf = s_jit_tail;
+    int n = *s_jit_tail_n;
+#if SNESRECOMP_TAIL_FRAMES_KEEP
+    while (n > 0 && tf[n - 1].s_after <= (uint16_t)s_after) n--;
+#endif
+    if (n == kBridgeTailFrames) {
+        memmove(&tf[0], &tf[1], sizeof(BridgeTailFrame) * (kBridgeTailFrames - 1));
+        n--;
+    }
+    tf[n].s_after = (uint16_t)s_after;
+    tf[n].size = (uint8_t)size;
+    tf[n].ret_pc24 = ret_pc24;
+    *s_jit_tail_n = n + 1;
+}
+static void jit_tail_ret(uint32_t sp_before, uint32_t size) {
+    const int n = *s_jit_tail_n;
+    if (n > 0 && s_jit_tail[n - 1].s_after == (uint16_t)sp_before && s_jit_tail[n - 1].size == (uint8_t)size)
+        *s_jit_tail_n = n - 1;
+    else
+        *s_jit_tail_n = 0;
+}
 static Interp816 *s_jit_in;
 typedef uint32_t (*JitEnterFn)(void *code, Interp816 *in);
 
@@ -285,13 +315,14 @@ static void jit_add(uint32_t key, uint32_t code, const uint8_t *pg, uint32_t n) 
 }
 
 /* One translated instruction's description. */
-enum { JM_NONE, JM_IMM, JM_DP, JM_ABS, JM_ABX, JM_ABY, JM_REL, JM_ALX, JM_ILY, JM_IMM8 };
+enum { JM_NONE, JM_IMM, JM_DP, JM_ABS, JM_ABX, JM_ABY, JM_REL, JM_ALX, JM_ILY, JM_IMM8, JM_XABS, JM_XLONG };
 enum { JO_NONE, JO_LDA, JO_LDX, JO_LDY, JO_STA, JO_STX, JO_STY, JO_STZ, JO_AND, JO_ORA, JO_EOR, JO_CMP,
        JO_CPX, JO_CPY, JO_INX, JO_INY, JO_DEX, JO_DEY, JO_TAX, JO_TAY, JO_TXA, JO_TYA, JO_CLC, JO_SEC,
        JO_BR, JO_BRA,
        JO_ADC, JO_SBC, JO_INC, JO_DEC,                       /* INC/DEC: memory */
        JO_ASLA, JO_LSRA, JO_ROLA, JO_RORA, JO_INCA, JO_DECA, JO_XBA,
-       JO_SEP, JO_REP, JO_PHA, JO_PHX, JO_PHY, JO_PLA, JO_PLX, JO_PLY, JO_BIT };
+       JO_SEP, JO_REP, JO_PHA, JO_PHX, JO_PHY, JO_PLA, JO_PLX, JO_PLY, JO_BIT,
+       JO_JMP, JO_JML, JO_JSR, JO_JSL, JO_RTS, JO_RTL };   /* transfers: they end a block */
 typedef struct { uint8_t op, mode; } JitOp;
 static JitOp jit_decode(uint8_t opc) {
     static const struct { uint8_t opc, op, mode; } k[] = {
@@ -328,6 +359,10 @@ static JitOp jit_decode(uint8_t opc) {
         {0x89, JO_BIT, JM_IMM}, {0x24, JO_BIT, JM_DP}, {0x2c, JO_BIT, JM_ABS}, {0x3c, JO_BIT, JM_ABX},
         {0x48, JO_PHA, JM_NONE}, {0xda, JO_PHX, JM_NONE}, {0x5a, JO_PHY, JM_NONE},
         {0x68, JO_PLA, JM_NONE}, {0xfa, JO_PLX, JM_NONE}, {0x7a, JO_PLY, JM_NONE},
+#if SNESRECOMP_JIT_XFER
+        {0x4c, JO_JMP, JM_XABS}, {0x5c, JO_JML, JM_XLONG}, {0x20, JO_JSR, JM_XABS}, {0x22, JO_JSL, JM_XLONG},
+        {0x60, JO_RTS, JM_NONE}, {0x6b, JO_RTL, JM_NONE},
+#endif
     };
     JitOp r = { JO_NONE, JM_NONE };
     for (unsigned i = 0; i < sizeof k / sizeof k[0]; i++)
@@ -337,6 +372,21 @@ static JitOp jit_decode(uint8_t opc) {
 static bool jit_op_x(int op) {   /* width from X (index registers) rather than M */
     return op == JO_LDX || op == JO_LDY || op == JO_STX || op == JO_STY || op == JO_CPX || op == JO_CPY ||
            op == JO_PHX || op == JO_PHY || op == JO_PLX || op == JO_PLY;
+}
+static bool jit_op_xfer(int op) { return op >= JO_JMP && op <= JO_RTL; }
+/* A direct transfer's target, and whether a block may make it: the target is
+ * ROM (so what is known of it now holds) and has no compiled body -- the
+ * big loop runs a compiled body in place of a call it interprets, and a jump
+ * to one under a recorded call's return. */
+static uint32_t jit_xfer_target(uint32_t pc24, const uint8_t *pg, JitOp o) {
+    const uint32_t pc = pc24 & 0xFFFFu;
+    const uint32_t t16 = pg[(pc + 1) & 0x1FFFu] | (uint32_t)pg[(pc + 2) & 0x1FFFu] << 8;
+    return (o.mode == JM_XLONG ? (uint32_t)pg[(pc + 3) & 0x1FFFu] << 16 : (pc24 & 0xFF0000u)) | t16;
+}
+static bool jit_xfer_ok(uint32_t target) {
+    const uint32_t bank = target >> 16;
+    if (bank == 0x7E || bank == 0x7F || (target & 0xFFFFu) < 0x8000u) return false;
+    return !cpu_dispatch_has_entry(s_jit_cpu, target);
 }
 static bool jit_op_store(int op) { return op == JO_STA || op == JO_STX || op == JO_STY || op == JO_STZ; }
 
@@ -395,11 +445,19 @@ static int jit_scan(uint32_t pc24, const uint8_t *pg, bool mf, bool xf, bool cou
     while (n < kJitMaxInsns) {
         const uint8_t opc = pg[pc & 0x1FFFu];
         const JitOp o = jit_decode(opc);
-        if (o.op == JO_NONE || k_burst_stop[opc]) { if (count) g_jit816_ended[opc]++; break; }
+        if (o.op == JO_NONE || (k_burst_stop[opc] && !jit_op_xfer(o.op))) { if (count) g_jit816_ended[opc]++; break; }
+        /* A return is a block of its own: it may have to leave before it
+         * does anything (s_jit_ret_limit), which only a block's first
+         * instruction can (nothing of an instruction before it is pending). */
+        if ((o.op == JO_RTS || o.op == JO_RTL) && n) break;
+        if ((o.mode == JM_XABS || o.mode == JM_XLONG) && !jit_xfer_ok(jit_xfer_target(bank | pc, pg, o))) {
+            if (count) g_jit816_ended[opc]++;
+            break;
+        }
         const bool byte = jit_op_x(o.op) ? xf : mf;
         const int len = o.mode == JM_NONE ? 1 : o.mode == JM_IMM ? (byte ? 2 : 3) :
                         (o.mode == JM_DP || o.mode == JM_REL || o.mode == JM_ILY || o.mode == JM_IMM8) ? 2 :
-                        o.mode == JM_ALX ? 4 : 3;
+                        (o.mode == JM_ALX || o.mode == JM_XLONG) ? 4 : 3;
         if (pc + (uint32_t)len > page_end) break;
         /* SEP and REP of N or Z have no translation (they go through the
          * whole status byte). */
@@ -410,7 +468,7 @@ static int jit_scan(uint32_t pc24, const uint8_t *pg, bool mf, bool xf, bool cou
         ipc[n] = (uint16_t)pc; ilen[n] = (uint8_t)len; iop[n] = o;
         n++;
         pc += (uint32_t)len;
-        if (o.op == JO_BRA || o.op == JO_SEP || o.op == JO_REP) break;   /* (the widths may change: the block ends) */
+        if (o.op == JO_BRA || o.op == JO_SEP || o.op == JO_REP || jit_op_xfer(o.op)) break;   /* (the widths may change: the block ends) */
     }
     ipc[n] = (uint16_t)pc;
     return n;
@@ -488,6 +546,8 @@ static int jit_translate(uint32_t pc24, const uint8_t *pg, bool mf, bool xf) {
             if (bus) accesses += byte ? 1 : 2;
         }
         if (o.mode == JM_ILY) accesses += 3;      /* the pointer */
+        if (o.op == JO_JSR || o.op == JO_RTS) accesses += 2;   /* the return address */
+        if (o.op == JO_JSL || o.op == JO_RTL) accesses += 3;
         const int internal = cyc > accesses ? cyc - accesses : 0;
         const uint32_t fixed = fetch + (uint32_t)internal * 6u;
         const uint32_t last_adr = bank | ((ipc[i] + ilen[i] - 1u) & 0xFFFFu);
@@ -558,6 +618,92 @@ static int jit_translate(uint32_t pc24, const uint8_t *pg, bool mf, bool xf) {
             jit_latch(last_adr, last_byte);
             JIT_EXIT_KIND(0, 0);
             jit_exit(ipc[i + 1], ia);
+            continue;
+        }
+
+        if (jit_op_xfer(o.op)) {
+            const bool call = o.op == JO_JSR || o.op == JO_JSL, ret = o.op == JO_RTS || o.op == JO_RTL;
+            const bool lng = o.op == JO_JSL || o.op == JO_RTL || o.op == JO_JML;
+            const uint32_t target = ret ? 0 : jit_xfer_target(ia, pg, o);
+            if (ret) {
+                /* Leaving S above the run's entry depth is the run's end:
+                 * the big loop's to do. (i == 0: jit_scan.) */
+                J_MFC1(JS2, FS); J_NOP();
+                J_ADDIU(JT0, JS2, lng ? 3 : 2); J_ANDI(JT0, JT0, 0xffff);
+                { const int lo = jaddr(&s_jit_ret_limit); J_LW(JT1, lo, JAT); }
+                J_SLTU(JT2, JT1, JT0);
+                jbr(5, JT2, JZERO, lexit[i]); J_NOP();
+            }
+            J_ORI(JS4, JZERO, (int)fixed);
+            if (call) {
+                /* pushByte(K) for a long call, then pushWord(the last operand byte's address) */
+                { const int lo = jaddr(&s_interp_bus_master); J_SD(JZERO, lo, JAT); }
+                jit_latch(last_adr, last_byte);
+                jli(JT0, ia);
+                { const int lo = jaddr(&g_interp_wlog_pc24); J_SW(JT0, lo, JAT); }
+                { const int lo = jaddr(&g_interp816_cur_pc); J_SW(JT0, lo, JAT); }
+                J_MFC1(JS2, FS); J_NOP();
+                if (lng) {
+                    J_MFC1(JA1, FPB); J_NOP(); jjal(jit_wr8); J_MOVE(JA0, JS2);
+                    J_ADDIU(JS2, JS2, -1); J_ANDI(JS2, JS2, 0xffff);
+                }
+                const uint32_t r16 = (ipc[i] + ilen[i] - 1u) & 0xFFFFu;
+                J_ORI(JA1, JZERO, (int)(r16 >> 8)); jjal(jit_wr8); J_MOVE(JA0, JS2);
+                J_ADDIU(JS2, JS2, -1); J_ANDI(JS2, JS2, 0xffff);
+                J_ORI(JA1, JZERO, (int)(r16 & 0xff)); jjal(jit_wr8); J_MOVE(JA0, JS2);
+                J_ADDIU(JS2, JS2, -1); J_ANDI(JS2, JS2, 0xffff);
+                J_MTC1(JS2, FS);
+                { const int lo = jaddr(&s_interp_bus_master); J_LD(JT0, lo, JAT); J_ADDU(JS4, JS4, JT0); }
+                /* the call's record, as the big loop makes it for a call it interprets */
+                jli(JA2, (ia + ilen[i]) & 0xFFFFFFu);
+                J_ORI(JA1, JZERO, cpu_dispatch_inline_arg_bytes(target) ? 0 : (lng ? 3 : 2));
+                jjal(jit_tail_call); J_MOVE(JA0, JS2);
+            } else if (ret) {
+                J_ORI(JA1, JZERO, lng ? 3 : 2);
+                jjal(jit_tail_ret); J_MOVE(JA0, JS2);
+                /* pullWord + 1 (two byte reads), then pullByte for K */
+                J_ADDIU(JS2, JS2, 1); J_ANDI(JS2, JS2, 0xffff);
+                jit_read(true, JS2, 0, last_adr, last_byte);
+                J_MOVE(JS3, JV0);
+                J_ADDIU(JS2, JS2, 1); J_ANDI(JS2, JS2, 0xffff);
+                { const int lo = jaddr(&s_interp_bus_master); J_SD(JZERO, lo, JAT); }
+                jjal(jit_rd8); J_MOVE(JA0, JS2);
+                J_SLL(JV0, JV0, 8); J_OR(JS3, JS3, JV0);
+                J_ADDIU(JS3, JS3, 1); J_ANDI(JS3, JS3, 0xffff);
+                if (lng) {
+                    J_ADDIU(JS2, JS2, 1); J_ANDI(JS2, JS2, 0xffff);
+                    jjal(jit_rd8); J_MOVE(JA0, JS2);
+                    J_ANDI(JS6, JV0, 0xff);
+                    J_MTC1(JS6, FPB);
+                }
+                { const int lo = jaddr(&s_interp_bus_master); J_LD(JT0, lo, JAT); J_ADDU(JS4, JS4, JT0); }
+                J_MTC1(JS2, FS);
+            } else jit_latch(last_adr, last_byte);
+            if (!ret && lng) { J_ORI(JT0, JZERO, (int)(target >> 16)); J_MTC1(JT0, FPB); }
+            J_DMFC1(JT1, FMC); J_NOP(); J_DADDU(JT1, JT1, JS4); J_DMTC1(JT1, FMC); J_DMTC1(JT1, FCMC);
+            { const int lo = jaddr(&s_apu_pending_master); J_LD(JT2, lo, JAT); J_DADDU(JT2, JT2, JS4); J_SD(JT2, lo, JAT); }
+            J_ADDIU(JS1, JS1, 1);
+            JIT_EXIT_KIND(1, 0);
+            /* The lean loop's "last pc": for a call or a return, just below
+             * the target (they are not loop heads: the loop goes on there);
+             * for a jump, the jump (back is a loop head, as a branch). */
+            if (ret) {
+#ifdef N64_JIT_EXITS
+                { const int lo = jaddr(&g_jit816_exit[1]); J_LW(JT0, lo, JAT); J_ADDIU(JT0, JT0, 1); J_SW(JT0, lo, JAT); }
+#endif
+                J_SH(JS3, (int)offsetof(Interp816, pc), JS0);
+                J_ADDIU(JT0, JS3, -1); J_ANDI(JT0, JT0, 0xffff);
+                if (lng) J_SLL(JT1, JS6, 16); else jli(JT1, bank);
+                J_OR(JT0, JT0, JT1);
+                const int lo = jaddr(&g_jit816_prev);
+                jj(s_jit_epilogue);
+                J_SW(JT0, lo, JAT);
+            } else {
+                jit_exit((uint16_t)target, call ? ((target & 0xFF0000u) | ((target - 1u) & 0xFFFFu)) : ia);
+            }
+            /* a return the big loop must make: nothing done, nothing run */
+            jbind(lexit[i]);
+            if (ret) { JIT_EXIT_KIND(2, opc); jit_exit(ipc[i], ia); }
             continue;
         }
 
@@ -907,6 +1053,7 @@ static int jit_translate(uint32_t pc24, const uint8_t *pg, bool mf, bool xf) {
 #error "jit816's read routines are bridge_bus_read's fast path as built with SNESRECOMP_WRAM_POLL_QUIESCENT=1 and the fast read map"
 #endif
 static uint32_t jit816_run(CpuState *cpu, Interp816 *in, uint32_t pc24, const uint8_t *pg, long room) {
+    s_jit_cpu = cpu; s_jit_in = in;
     if (!s_jit_n || g_memsel != s_jit_memsel) jit816_flush();
     const uint32_t mx = (cpu_m_flag() ? 2u : 0u) | (cpu_x_flag() ? 1u : 0u);
     const uint32_t key = 0x80000000u | mx << 24 | (pc24 & 0xFFFFFFu);
@@ -930,7 +1077,6 @@ static uint32_t jit816_run(CpuState *cpu, Interp816 *in, uint32_t pc24, const ui
     }
     if (e->pg != pg || (long)kJitRunMax + 2 * kJitMaxInsns >= room) return 0;
     if ((e->n & 0x80000000u) && cpu_flag_D()) return 0;   /* decimal arithmetic: the interpreter's */
-    s_jit_cpu = cpu; s_jit_in = in;
     const uint32_t ran = ((JitEnterFn)(void *)&s_jit_code[0])(&s_jit_code[e->code], in);
     g_jit816_stats[2]++;
     g_jit816_stats[3] += ran;

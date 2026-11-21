@@ -3010,6 +3010,9 @@ static BridgeRunScratch s_bridge_scratch[kBridgeScratchSlots];
 #ifndef SNESRECOMP_JIT816
 #define SNESRECOMP_JIT816 0
 #endif
+/* A call a run interpreted (see tail_frames in _interp_run_core). */
+typedef struct BridgeTailFrame { uint16_t s_after; uint8_t size; uint32_t ret_pc24; } BridgeTailFrame;
+enum { kBridgeTailFrames = 16 };
 #if SNESRECOMP_JIT816
 #if !SNESRECOMP_INTERP_REGS
 #error "SNESRECOMP_JIT816 needs SNESRECOMP_INTERP_REGS=1 (the registers translated code uses)"
@@ -3051,6 +3054,9 @@ typedef struct BridgeLeanArgs {
     long steps, step_cap;
     uint64_t apu_flush_thresh, progress_write_epoch, progress_dynamic_epoch;
     uint32_t *out_landing;
+    uint32_t ret_limit;   /* a return leaving S above this ends the run (0xFFFFFFFF: none) */
+    BridgeTailFrame *tail_frames;   /* the run's call records, kept by translated calls and returns too */
+    int *tail_n;
 } BridgeLeanArgs;
 static __attribute__((noinline)) void bridge_lean_run(CpuState *cpu, Interp816 *in, BridgeLeanArgs *a) {
     long steps = a->steps;
@@ -3085,9 +3091,23 @@ static __attribute__((noinline)) void bridge_lean_run(CpuState *cpu, Interp816 *
         const uint8_t *const pg = cpu_fast_map_page(bpc);
 #ifdef N64_JIT_EXITS
         if (!pg) g_lean_break[3]++;
+#if !SNESRECOMP_JIT816
         else if (k_burst_stop[pg[bpc & 0x1FFFu]]) { g_lean_break[4]++; g_lean_break_op[pg[bpc & 0x1FFFu]]++; }
 #endif
+#endif
+#if SNESRECOMP_JIT816
+        /* (a block may begin with a call, return or jump: asked below) */
+        const int stop_op = pg ? k_burst_stop[pg[bpc & 0x1FFFu]] : 1;
+        if (!pg) break;
+        if (stop_op && !jit_op_xfer(jit_decode(pg[bpc & 0x1FFFu]).op)) {
+#ifdef N64_JIT_EXITS
+            g_lean_break[4]++; g_lean_break_op[pg[bpc & 0x1FFFu]]++;
+#endif
+            break;
+        }
+#else
         if (!pg || k_burst_stop[pg[bpc & 0x1FFFu]]) break;
+#endif
 #ifdef N64_STATE_AT_PC
         if (bpc == (uint32_t)(N64_STATE_AT_PC)) break;
 #endif
@@ -3106,6 +3126,10 @@ static __attribute__((noinline)) void bridge_lean_run(CpuState *cpu, Interp816 *
          * scope budget. What it leaves behind is what the steps below do. */
         if (!s_guest_scope_active && !BINP_R(e) && bridge_apu_guest_time_ready()) {
             const uint32_t jtcat = tcat_enter(TCAT_OPCODE);
+            /* (set for each run: a run nested in a settle -- an interrupt
+             * handler's -- has its own) */
+            s_jit_ret_limit = a->ret_limit;
+            s_jit_tail = a->tail_frames; s_jit_tail_n = a->tail_n;
             const uint32_t jn = jit816_run(cpu, in, bpc, pg, a->step_cap - steps - 1);
             tcat_leave(jtcat);
             if (jn) {
@@ -3121,6 +3145,12 @@ static __attribute__((noinline)) void bridge_lean_run(CpuState *cpu, Interp816 *
                 if (a->auto_quiescent) q_prev_pc = last;
                 goto lean_after_step;
             }
+        }
+        if (stop_op) {        /* no block ran it: the big loop's */
+#ifdef N64_JIT_EXITS
+            g_lean_break[4]++; g_lean_break_op[pg[bpc & 0x1FFFu]]++;
+#endif
+            break;
         }
 #endif
         steps++;
@@ -3401,7 +3431,7 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
      * where the innermost call left it runs that routine compiled under the
      * call's return contract (tail jump). Cleared whenever the stack is not
      * balanced the way these entries say. */
-    struct { uint16_t s_after; uint8_t size; uint32_t ret_pc24; } tail_frames[16];
+    BridgeTailFrame tail_frames[kBridgeTailFrames];
     int tail_n = 0;
 #if SNESRECOMP_INTERP_BURST
     /* (See the burst at the end of the loop.) Only where the big loop does
@@ -4604,6 +4634,8 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
             la.progress_write_epoch = progress_write_epoch;
             la.progress_dynamic_epoch = progress_dynamic_epoch;
             la.out_landing = out_landing;
+            la.ret_limit = (yield_pc || stop_on_rti) ? 0xFFFFFFFFu : (uint32_t)s_enter;
+            la.tail_frames = tail_frames; la.tail_n = &tail_n;
             bridge_lean_run(cpu, &in, &la);
             steps = la.steps; q_prev_pc = la.q_prev_pc;
             progress_write_epoch = la.progress_write_epoch;

@@ -61,6 +61,20 @@ that runs in steady state should be translated.
    - `tail_frames` (calls recorded for tail jumps into compiled routines):
      clear them (`tail_n = 0`) after any translated call or return;
    - a jump back is a loop head for the wait detector: as branches.
+   **Done 2026-11-21 for JMP, JML, JSR, JSL, RTS, RTL** (`SNESRECOMP_JIT_XFER`,
+   direct targets in ROM without a compiled body; a return is a block of
+   its own; the call records are kept by `jit_tail_call`/`jit_tail_ret`).
+   Exact on the three games. Lesson: which routines run compiled shows in
+   the state hashes (a first version that dropped the call records changed
+   which jumps ran compiled, and SMW's WRAM hash differed for a few sync
+   points at a time), so a change may not alter that. Gain is small so far
+   (SMW 90.7 -> 89.9 ms, Joe & Mac 2 228.1 -> 227.3; Pitfall's loading
+   frames 2% fewer profile samples). Still to do: JSR (a,X), JMP (a),
+   JMP (a,X), JML [a] (Pitfall: JSR (a,X) is the most frequent one left),
+   and calls whose target has a compiled body.
+   **The code buffer now fills** in Pitfall's loading scene (4 flushes
+   against 1): a translated instruction is some 30-60 words. Make the code
+   denser (item 6; shared exit stubs) before growing the buffer.
    Fewer bounces were counted with the lean-back rule (Pitfall 16 against
    33 a frame): find which entry into compiled code the big loop made at
    those addresses and whether it is worth keeping.
