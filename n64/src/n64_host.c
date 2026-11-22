@@ -749,6 +749,10 @@ static int host_main(void) {
                            (unsigned long)((g_interp_bridge_bounces - s_b0) / 60));
 #if defined(SNESRECOMP_JIT816) && SNESRECOMP_JIT816
           if (frame >= 360 && s_tc_frames == 59) { extern uint32_t g_jit816_stats[6];
+            { extern uint32_t g_jit816_words[6];
+              n64_platform_log("[jit816-words] work %lu, step end %lu, exit stubs %lu, branches %lu, transfers %lu, tails %lu (all translations so far)\n",
+                               (unsigned long)g_jit816_words[0], (unsigned long)g_jit816_words[1], (unsigned long)g_jit816_words[2],
+                               (unsigned long)g_jit816_words[3], (unsigned long)g_jit816_words[4], (unsigned long)g_jit816_words[5]); }
             n64_platform_log("[jit816] blocks %lu (%lu instructions), runs %lu, instructions run %lu, flushes %lu, refused %lu\n",
                              (unsigned long)g_jit816_stats[0], (unsigned long)g_jit816_stats[1],
                              (unsigned long)g_jit816_stats[2], (unsigned long)g_jit816_stats[3],

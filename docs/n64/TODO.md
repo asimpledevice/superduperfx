@@ -194,6 +194,28 @@ that runs in steady state should be translated.
    boundary and code in RAM stay with the interpreter today. If a game runs
    one of them every frame (a decimal score counter), it pulls the
    interpreter back into the caches each time and belongs in the JIT.
+   **Density audit, 2026-11-22** (`[jit816-words]`, `N64_JIT_DUMP=n` logs
+   blocks' code for `objdump -b binary -m mips:4300`). Pitfall before: 54
+   MIPS words per 65816 instruction -- the instructions' own work 30%
+   (about 20 words each), the step end 21% (14 each), exit stubs 15% (about
+   10 each), branches 22% (about 90 each), transfers 7%, tails 5%.
+   Stage 1, done, exact on the three games: no `nop` after `mfc1`/`dmfc1`
+   (the VR4300 interlocks; the project's assembler emits none either), one
+   base register (s7) for the globals a block uses, a store's write-log
+   bookkeeping once instead of twice: **44 words**. Pitfall 66.3 -> 62.5
+   ms a frame (65816 bucket 18.2 -> 13.9), SMW 88.1 -> 85.9, Joe & Mac 2
+   64.5 -> 66.0 (its translation counts improved; the difference is in
+   buckets this does not touch).
+   A block translated before a flush is made again on its first visit
+   (a state of `s_jit_seen`; a separate 8 KB table for it cost Joe & Mac 2
+   3 ms a frame in data-cache misses: no new tables on these paths).
+   Stage 2, to do: (a) clock, SPC time and the next event in registers
+   across the block, written back around C calls: step end 14 -> about 6;
+   (b) one exit stub per block and a table entry per instruction, the
+   index in the event branch's delay slot: about 10 -> 3; (c) the bus latch
+   as an argument or a shared routine instead of 9 words before each store;
+   (d) A, X, Y in ordinary registers across the block. Expectation, not
+   measured: 20-25 words.
 5. **Stores to plain RAM** still call the bus function (reads do not).
 6. **Per-instruction bookkeeping.** Each translated instruction adds its
    clocks, the SPC's pending time and compares with the next event; do it
