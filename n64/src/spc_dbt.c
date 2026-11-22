@@ -44,8 +44,11 @@
 void data_cache_hit_writeback(volatile const void *, unsigned long);
 void inst_cache_hit_invalidate(volatile void *, unsigned long);
 
-#if !SNESRECOMP_APU_DEFER_DSP || SNESRECOMP_ECHO_IN_PLACE || SNESRECOMP_DSP_STREAM
-#error "the SPC translator prototype covers the deferred S-DSP without echo in place only"
+/* The deferred S-DSP's batches (page marks in Spc.dspWatchLog/dspWatchSync),
+ * or the audio split (the same tables as "may leave the fast path" bits:
+ * apu_dsp_watch.h). Echo in place without the split is not covered. */
+#if !SNESRECOMP_APU_DEFER_DSP || (SNESRECOMP_ECHO_IN_PLACE && !SNESRECOMP_DSP_STREAM)
+#error "the SPC translator covers the deferred S-DSP's batches without echo in place, and the audio split"
 #endif
 
 uint8_t g_spc_dbt_code[256];

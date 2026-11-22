@@ -24,6 +24,10 @@
 
 #if SNESRECOMP_SPC_DBT
 
+#if SNESRECOMP_DSP_STREAM
+#error "SPCDBT_TEST runs two APUs; the audio split's S-DSP (Yellow, its records and ledger) is one per system. Test without RSPDSP_STREAM=1."
+#endif
+
 extern void n64_platform_log(const char *fmt, ...);
 extern uint16_t g_spc_dbt_watch[3];   /* (spc_dbt.c: ARAM bytes the failure trace shows) */
 

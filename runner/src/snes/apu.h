@@ -150,12 +150,12 @@ struct Apu {
   uint32_t echoPageTouch[256];
   uint32_t echoPageDirty[256];
   uint8_t echoRegion[32];
-  /* A bit per page: set wherever the SPC's store (read) there may have to
-   * leave the fast path -- the page is in echoRegion or one of its stamps
-   * was set -- and cleared when the exact test finds it need not
-   * (apu_streamWriteSlowNow / apu_streamReadSlowNow). One byte to look at
-   * per access instead of the stamps. */
-  uint8_t echoWriteSlow[32], echoReadSlow[32];
+  /* (Spc.dspWatchLog and dspWatchSync hold a bit per page here: set
+   * wherever the SPC's store, or read, there may have to leave the fast
+   * path -- the page is in echoRegion, one of its stamps was set, or a
+   * voice is untracked -- and cleared when the exact test finds it need
+   * not (apu_streamWriteSlowNow / apu_streamReadSlowNow). The same tables
+   * the batches' marks use, so the SPC translator's checks serve both.) */
   uint32_t dspRegAt[0x80];
   uint8_t dspUntracked;      /* the front end's untracked voices at dspAt (the Dsp's time) */
   uint8_t dspConflict;       /* those of them untracked by an echo conflict */

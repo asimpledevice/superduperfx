@@ -278,12 +278,31 @@ int spc_dbt_edge(Apu *apu, uint32_t cycle) {
   return 0;
 #endif
 }
-void spc_dbt_fe(Apu *apu) { APU_FE_BEFORE_ARAM_WRITE(apu); }
+void spc_dbt_fe(Apu *apu) {
+  APU_FE_BEFORE_ARAM_WRITE(apu);
+#if SNESRECOMP_DSP_STREAM
+  /* A voice is untracked (the front end may just have found it so): every
+   * store goes in the ledger, which translated code leaves to the slow
+   * path. The exact test keeps these bits while it lasts. */
+  if (apu->fe.untracked) memset(apu->spc->dspWatchLog, 0xff, sizeof apu->spc->dspWatchLog);
+#endif
+}
 void spc_dbt_slow_write(Apu *apu, uint32_t adr, uint32_t val, uint32_t cycle) {
   /* A store to a page the deferred S-DSP watches: apu_spcWriteRam's slow
    * path (the front end has been caught up). */
   apu->cycles = cycle;
+#if SNESRECOMP_DSP_STREAM
+  /* The audio split: the page's bit says "maybe". (apu_spcWriteRam after
+   * its front-end and code-line steps, which translated code has made.) */
+  if (apu_streamWriteIsSlow(apu, adr >> 8)) {
+    apu_dspWriteSlow(apu, (uint16_t)adr, (uint8_t)val);
+  } else {
+    if (apu->fe.untracked) apu_streamLedger(apu, (uint16_t)adr);
+    apu->ram[adr] = (uint8_t)val;
+  }
+#else
   apu_dspWriteSlow(apu, (uint16_t)adr, (uint8_t)val);
+#endif
 }
 uint32_t spc_dbt_read_any(Apu *apu, uint32_t adr, uint32_t cycle) {
   apu->cycles = cycle;   /* a read of a page the S-DSP may write: it syncs */

@@ -34,9 +34,11 @@ void apu_streamLedger(Apu* apu, uint16_t adr);
 #define SNESRECOMP_STREAM_SLOW_BITS 1   /* 0: test the stamps on every access; 2: both, compared */
 #endif
 extern uint32_t g_apu_stream_slow_bad;
+/* (An untracked voice: every store goes in the ledger, which the slow path
+ * keeps. The fast path keeps it too, but translated code's does not.) */
 static inline bool apu_streamWriteExact(const Apu* apu, uint32_t p) {
   return ((apu->echoRegion[p >> 3] >> (p & 7)) & 1) || apu_streamLate(apu, apu->echoPageTouch[p]) ||
-         apu_streamLate(apu, apu->echoPageDirty[p]);
+         apu_streamLate(apu, apu->echoPageDirty[p]) || (SNESRECOMP_SPC_DBT && apu->fe.untracked);
 }
 static inline bool apu_streamReadExact(const Apu* apu, uint32_t p) {
   return (apu->fe.echo_writes && ((apu->echoRegion[p >> 3] >> (p & 7)) & 1)) ||
@@ -48,7 +50,7 @@ static inline bool apu_streamWriteIsSlow(Apu* apu, uint32_t p) {
 #if SNESRECOMP_STREAM_SLOW_BITS == 0
   return apu_streamWriteExact(apu, p);
 #else
-  const bool bit = (apu->echoWriteSlow[p >> 3] >> (p & 7)) & 1;
+  const bool bit = (apu->spc->dspWatchLog[p >> 3] >> (p & 7)) & 1;
 #if SNESRECOMP_STREAM_SLOW_BITS == 2
   if (!bit && apu_streamWriteExact(apu, p)) { g_apu_stream_slow_bad++; return true; }
 #endif
@@ -59,7 +61,7 @@ static inline bool apu_streamReadIsSlow(Apu* apu, uint32_t p) {
 #if SNESRECOMP_STREAM_SLOW_BITS == 0
   return apu_streamReadExact(apu, p);
 #else
-  const bool bit = (apu->echoReadSlow[p >> 3] >> (p & 7)) & 1;
+  const bool bit = (apu->spc->dspWatchSync[p >> 3] >> (p & 7)) & 1;
 #if SNESRECOMP_STREAM_SLOW_BITS == 2
   if (!bit && apu_streamReadExact(apu, p)) { g_apu_stream_slow_bad++; return true; }
 #endif
