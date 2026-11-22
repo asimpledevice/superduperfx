@@ -621,6 +621,18 @@ void cpu_write8(CpuState *cpu, uint32 bank_arg, uint32 addr_arg, uint32 v_arg) {
     /* ROM / unmapped write: drop. */
 }
 
+/* Whether a byte store to WRAM is, in cpu_write8, nothing but the store
+ * (and the open-bus and bus-address notes): no write log, no title hook, no
+ * trace or reverse-debug build. For code that makes such stores itself (the
+ * 65816 JIT's fast store path). */
+int cpu_wram_store_plain(void) {
+#if SNESRECOMP_TRACE || SNESRECOMP_REVERSE_DEBUG
+    return 0;
+#else
+    return !g_wlog_active && g_wlog_addr_enabled == 0 && !g_stage_window_store_hook;
+#endif
+}
+
 void cpu_write16(CpuState *cpu, uint32 bank_arg, uint32 addr_arg, uint32 v_arg) { uint8 bank = (uint8)bank_arg; uint16 addr = (uint16)addr_arg; uint16 v = (uint16)v_arg;
     if (g_snes && g_snes->cart)
         cart_note_cpu_bus(g_snes->cart, bank, addr);

@@ -209,8 +209,18 @@ that runs in steady state should be translated.
    A block translated before a flush is made again on its first visit
    (a state of `s_jit_seen`; a separate 8 KB table for it cost Joe & Mac 2
    3 ms a frame in data-cache misses: no new tables on these paths).
-   Stage 2, to do: (a) clock, SPC time and the next event in registers
-   across the block, written back around C calls: step end 14 -> about 6;
+   Stage 2a, done, exact: the clock as one register, the time left before
+   the event (`JR`), written out to the clock register, the coprocessors'
+   clock and the SPC's pending time before a C bus function or the way out
+   and taken again after; step end 12 -> 4 words. And a byte store to
+   plain WRAM is made by a shared routine (`s_jit_st8`: the byte, its
+   speed, the write epoch, the latch, the bus address) when nothing watches
+   stores (`cpu_wram_store_plain`), instead of bridge_bus_write: 38 words
+   an instruction; Pitfall 62.5 -> 59.2 ms a frame (65816 bucket 13.9 ->
+   10.2), Joe & Mac 2 66.0 -> 64.8, SMW 85.9 -> 86.5. (The clock change
+   alone slowed Joe & Mac 2's store-heavy scene: every store's C call had
+   the clock to hand over and back. The fast store removes the call.)
+   Stage 2, to do: (a) done;
    (b) one exit stub per block and a table entry per instruction, the
    index in the event branch's delay slot: about 10 -> 3; (c) the bus latch
    as an argument or a shared routine instead of 9 words before each store;
