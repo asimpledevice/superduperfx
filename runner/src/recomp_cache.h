@@ -100,9 +100,12 @@ void recomp_cache_set_loader(void (*load)(RecompRoutine *rt),
 
 typedef struct RecompCacheStats {
   uint32_t loads, evictions, resident, over_budget;
+  uint32_t memory_evictions;   /* evictions because the host ran out of memory (recomp_cache_make_room) */
   uint32_t fallbacks;   /* calls run in the interpreter while their routine loaded */
   uint64_t load_bytes, used_bytes;
 } RecompCacheStats;
+/* For a loader that ran out of memory: see recomp_cache.c. */
+int recomp_cache_make_room(RecompRoutine *keep);
 void recomp_cache_stats(RecompCacheStats *out);
 
 #endif

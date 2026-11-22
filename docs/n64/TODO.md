@@ -29,6 +29,32 @@ for pitch modulation", "The paging slot", "Pitch modulation as HLE").
 Parked: the exact sample-major pitch-modulation variant (branch
 `pm-variant-wip`; does not fit IMEM, see RED_DESIGN.md).
 
+## The whole stack together (2026-11-22, ares)
+
+`JIT816=1 SPCDBT=1 RSPDSP_STREAM=1 SCENE=1`, ms a frame, exact against the
+truth build on all three: SMW 88.1 (frames 360-2400), Joe & Mac 2 64.5
+(360-1300; 217 without the scene: its big tiles sent every line to the
+planes), Pitfall 66.3 (760-1400). At frame 1020, CPU phase / line build /
+present: Joe & Mac 2 23 / 6 / 7 ms, Pitfall 40 / 9 / 9.5 ms.
+
+- **Memory is now the limit in SMW.** With everything on, the heap ran out
+  with 866 KB of compiled routines resident (the budget says 1,536 KB) and
+  the game stopped. The code cache now evicts and lowers its capacity when
+  a load cannot get memory (`recomp_cache_make_room`): SMW runs on, at
+  about 900 KB resident and one reload every five frames or so. Static
+  buffers to look at when the memory budget is taken up: `s_jit_code` 384
+  KB, the two 256 KB stacks, the SPC translator's `s_code` 256 KB and
+  `s_blocks` 102 KB, `s_jit_ent` 128 KB.
+- **Echo writes are off in every scene measured** (FLG bit 5 set: SMW's
+  and Joe & Mac 2's attract sequences, Pitfall's first level; Pitfall's
+  ring is 4 bytes at $FF00). The split's echo paths with the translator --
+  read bits on the ring, diverted stores, conflicts -- have not run in a
+  game here. Find a scene with echo on (a later SMW level, or another
+  game) before the split becomes the default.
+- Joe & Mac 2, CPU phase: translated SPC code 20%, `spc_dbt_valid` 6.5%
+  (the "code" refusals), `spc_runOpcode` 5%. Pitfall, CPU phase: the 65816
+  is over a third (translated code 13%, lean loop 10%, stores 6%).
+
 ## Audio: which configuration, and what each costs (2026-11-22, ares)
 
 ms a frame, same frames, `JIT816=1`; all exact against the truth build.

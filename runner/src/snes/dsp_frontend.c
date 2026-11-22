@@ -8,6 +8,10 @@
 
 const int *dsp_rate_values(void);   /* dsp.c */
 
+#ifndef SNESRECOMP_FE_ECHO_LAZY
+#define SNESRECOMP_FE_ECHO_LAZY 1   /* 0: the echo position is caught up at every block and key on */
+#endif
+
 static inline bool even_at(const DspFrontEnd *fe, uint32_t s) {
   return ((s - fe->even_base) & 1u) == 0;
 }
@@ -237,8 +241,11 @@ uint8_t dsp_fe_envx(DspFrontEnd *fe, int i) {
 static void decode(DspFrontEnd *fe, int i, uint32_t s) {
   DspFeVoice *v = &fe->v[i];
   /* Echo writes of the samples before s are in (this sample's comes after
-   * its decodes), so on_read may ask dsp_fe_echo_owned. */
-  echo_catch_up(fe, s);
+   * its decodes), so on_read may ask dsp_fe_echo_owned. (With echo writes
+   * off there are none to wait for: the position is caught up when it is
+   * asked for -- dsp_fe_echo_sync, an FLG, ESA or EDL write -- and not at
+   * every block.) */
+  if (fe->echo_writes || !SNESRECOMP_FE_ECHO_LAZY) echo_catch_up(fe, s);
   const uint8_t *ram = fe->aram;
   if (v->prev_flags == 1 || v->prev_flags == 3) {   /* loop (and end) */
     const uint16_t p = (uint16_t)(fe->dir + 4 * v->srcn);
@@ -266,7 +273,7 @@ static void voice_sample(DspFrontEnd *fe, int i, uint32_t s) {
     if (v->key_off) {
       v->state = 4;
     } else if (v->key_on) {
-      echo_catch_up(fe, s);
+      if (fe->echo_writes || !SNESRECOMP_FE_ECHO_LAZY) echo_catch_up(fe, s);
       v->key_on = false;
       v->prev_flags = 0;
       const uint16_t p = (uint16_t)(fe->dir + 4 * v->srcn);

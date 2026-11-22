@@ -59,6 +59,22 @@ static int evict_one(void) {
   return 1;
 }
 
+/* The host could not get memory for `keep`'s body: evict one other routine
+ * (returns 0 when none can go) and take what is resident now as the
+ * capacity from here on, so later loads evict before memory runs out. */
+int recomp_cache_make_room(RecompRoutine *keep) {
+  keep->active++;
+  const int ok = evict_one();
+  keep->active--;
+  if (ok) {
+    /* (a little under: the rest of the program allocates too) */
+    enum { kSlack = 96 * 1024 };
+    s_capacity = s_used > 2u * kSlack ? s_used - kSlack : s_used;
+    s_stats.memory_evictions++;
+  }
+  return ok;
+}
+
 static int (*s_async_begin)(RecompRoutine *rt);
 static int (*s_async_finish)(RecompRoutine *rt, int wait);
 static RecompReturn (*s_fallback)(RecompRoutine *rt, CpuState *cpu, uint32 hrv);

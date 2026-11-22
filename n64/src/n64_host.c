@@ -433,8 +433,12 @@ static uint64_t s_cc_load_us, s_cc_load_max_us;   /* time spent loading modules 
 static void code_cache_load(RecompRoutine *rt) {
   const uint64_t t0 = n64_platform_time_us();
   void *base = NULL;
-  rt->fn = (RecompFn)n64_platform_codepack_load(rt->id, &base);
-  if (!rt->fn) Die("Code cache: out of memory loading a routine.");
+  /* No memory for it: other routines go, least recently used first, and
+   * the cache's capacity becomes what fits (recomp_cache_make_room). The
+   * budget is a guess made at build time; the translators' buffers and the
+   * renderer's caches come out of the same RAM. */
+  while (!(rt->fn = (RecompFn)n64_platform_codepack_load(rt->id, &base)))
+    if (!recomp_cache_make_room(rt)) Die("Code cache: out of memory loading a routine.");
   rt->host = base;
   const uint64_t dt = n64_platform_time_us() - t0;
   s_cc_load_us += dt;
@@ -461,8 +465,8 @@ static int code_cache_begin(RecompRoutine *rt) {
   }
   const uint64_t t0 = n64_platform_time_us();
   void *base = NULL;
-  if (!n64_platform_codepack_begin(rt->id, &base))
-    Die("Code cache: out of memory loading a routine.");
+  while (!n64_platform_codepack_begin(rt->id, &base))
+    if (!recomp_cache_make_room(rt)) Die("Code cache: out of memory loading a routine.");
   rt->host = base;
   s_cc_begin_last_us = n64_platform_time_us() - t0;
   s_cc_begin_us += s_cc_begin_last_us;
@@ -1211,10 +1215,10 @@ static int host_main(void) {
         RecompCacheStats st;
         recomp_cache_stats(&st);
         n64_platform_log("[n64] code cache: loads %u (%lu KB, %lu us avg, %lu us max on the CPU), "
-                         "interpreted while loading %u, evictions %u, resident %u (%lu KB), over budget %u\n",
+                         "interpreted while loading %u, evictions %u (%u for memory), resident %u (%lu KB), over budget %u\n",
                          st.loads, (unsigned long)(st.load_bytes / 1024),
                          (unsigned long)(st.loads ? (s_cc_load_us + S_CC_BEGIN_US) / st.loads : 0),
-                         (unsigned long)s_cc_load_max_us, st.fallbacks, st.evictions, st.resident,
+                         (unsigned long)s_cc_load_max_us, st.fallbacks, st.evictions, st.memory_evictions, st.resident,
                          (unsigned long)(st.used_bytes / 1024), st.over_budget);
       }
 #endif
