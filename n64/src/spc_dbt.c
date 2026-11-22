@@ -1767,6 +1767,11 @@ static int spc_dbt_valid(void *block, Spc *spc) {
   for (int i = 0; i < b->npages; i++) {
     const uint16_t adr = (uint16_t)(b->page[i] << 8);
     if ((b->pflag[i] & 1) && APU_DSP_PAGE_BIT(spc->dspWatchSync, adr)) {
+#if SNESRECOMP_DSP_STREAM
+      /* The audio split's bit says "maybe", and nothing clears a stale one
+       * on a page only blocks read: ask the exact test (it clears those). */
+      if (!apu_streamReadSlowNow(spc->apu, b->page[i])) continue;
+#endif
       g_spc_dbt_stats[4]++; g_spc_dbt_refused[1]++;
       return 0;
     }

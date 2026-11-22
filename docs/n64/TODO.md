@@ -38,7 +38,7 @@ ms a frame, same frames, `JIT816=1`; all exact against the truth build.
 | batches + SPC translator (`SPCDBT=1`) | 87.5 | 222.4 | 88.4 |
 | audio split (`RSPDSP_STREAM=1`), SPC interpreted | 112.8 | 233.5 | 87.8 |
 | batches, SPC interpreted | 90.1 | 226.8 | 103.1 |
-| **audio split + SPC translator** (since 2026-11-22) | 102.0 | 222.4 | **73.7** |
+| **audio split + SPC translator** (since 2026-11-22) | 93.5 | **217.3** | **73.8** |
 
 The split and the translator now build together (`SPCDBT=1 RSPDSP_STREAM=1`):
 the split's "may leave the fast path" bits live in `Spc.dspWatchLog` and
@@ -48,9 +48,11 @@ untracked every store takes the slow path (the ledger). Exact on the three
 games against the truth build and against the split with the SPC
 interpreted. Not covered: `SPCDBT_TEST` (it runs two APUs; the split's
 S-DSP is one per system), and the page-bit check build compares the
-interpreter's accesses only. Left in the translator there: SMW translates
-68% of SPC cycles and Joe & Mac 2 75% (about 290 and 490 block runs
-refused a frame); find the reason by `[spcdbt] refused:`.
+interpreter's accesses only. A block's validity check asks the exact read
+test, which clears stale bits (nothing else does for a page only blocks
+read): "watched read" refusals went from about 290 a frame to none. Left:
+Joe & Mac 2 still refuses about 200 block runs a frame as "code" (a block
+that could store into a line of translated code).
 
 What the profiles say:
 
