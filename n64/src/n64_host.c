@@ -1000,6 +1000,10 @@ static int host_main(void) {
         g_apu_dsp_sync_count[r] = g_apu_dsp_sync_samples[r] = 0;
       }
       n64_platform_log("[dspsync] 60 frames, syncs/samples:%s\n", b);
+#if defined(SNESRECOMP_STREAM_SLOW_BITS) && SNESRECOMP_STREAM_SLOW_BITS == 2
+      { extern uint32_t g_apu_stream_slow_bad;
+        n64_platform_log("[stream-slow-check] bits clear where the exact test says slow: %lu\n", (unsigned long)g_apu_stream_slow_bad); }
+#endif
 #if defined(SNESRECOMP_FE_ENV_CHECK) && SNESRECOMP_FE_ENV_CHECK
       { extern uint32_t g_dsp_fe_env_mismatches;
         n64_platform_log("[fe-env-check] mismatches so far %lu\n", (unsigned long)g_dsp_fe_env_mismatches); }

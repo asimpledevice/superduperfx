@@ -30,14 +30,48 @@ static inline bool apu_streamLate(const Apu* apu, uint32_t stamp) {
   return (int32_t)(stamp - apu->dspAt) > 0;
 }
 void apu_streamLedger(Apu* apu, uint16_t adr);
+#ifndef SNESRECOMP_STREAM_SLOW_BITS
+#define SNESRECOMP_STREAM_SLOW_BITS 1   /* 0: test the stamps on every access; 2: both, compared */
+#endif
+extern uint32_t g_apu_stream_slow_bad;
+static inline bool apu_streamWriteExact(const Apu* apu, uint32_t p) {
+  return ((apu->echoRegion[p >> 3] >> (p & 7)) & 1) || apu_streamLate(apu, apu->echoPageTouch[p]) ||
+         apu_streamLate(apu, apu->echoPageDirty[p]);
+}
+static inline bool apu_streamReadExact(const Apu* apu, uint32_t p) {
+  return (apu->fe.echo_writes && ((apu->echoRegion[p >> 3] >> (p & 7)) & 1)) ||
+         apu_streamLate(apu, apu->echoPageDirty[p]);
+}
+bool apu_streamWriteSlowNow(Apu* apu, uint32_t p);
+bool apu_streamReadSlowNow(Apu* apu, uint32_t p);
+static inline bool apu_streamWriteIsSlow(Apu* apu, uint32_t p) {
+#if SNESRECOMP_STREAM_SLOW_BITS == 0
+  return apu_streamWriteExact(apu, p);
+#else
+  const bool bit = (apu->echoWriteSlow[p >> 3] >> (p & 7)) & 1;
+#if SNESRECOMP_STREAM_SLOW_BITS == 2
+  if (!bit && apu_streamWriteExact(apu, p)) { g_apu_stream_slow_bad++; return true; }
+#endif
+  return __builtin_expect(bit, 0) && apu_streamWriteSlowNow(apu, p);
+#endif
+}
+static inline bool apu_streamReadIsSlow(Apu* apu, uint32_t p) {
+#if SNESRECOMP_STREAM_SLOW_BITS == 0
+  return apu_streamReadExact(apu, p);
+#else
+  const bool bit = (apu->echoReadSlow[p >> 3] >> (p & 7)) & 1;
+#if SNESRECOMP_STREAM_SLOW_BITS == 2
+  if (!bit && apu_streamReadExact(apu, p)) { g_apu_stream_slow_bad++; return true; }
+#endif
+  return __builtin_expect(bit, 0) && apu_streamReadSlowNow(apu, p);
+#endif
+}
 static inline void apu_spcWriteRam(Apu* apu, uint16_t adr, uint8_t val) {
   APU_FE_BEFORE_ARAM_WRITE(apu);
   APU_DBT_BEFORE_ARAM_WRITE(adr);
   APU_FE_ECHO_LOG(apu, adr, 1);
   const uint32_t p = adr >> 8;
-  if (__builtin_expect(((apu->echoRegion[p >> 3] >> (p & 7)) & 1) ||
-                       apu_streamLate(apu, apu->echoPageTouch[p]) ||
-                       apu_streamLate(apu, apu->echoPageDirty[p]), 0)) {
+  if (__builtin_expect(apu_streamWriteIsSlow(apu, p), 0)) {
     apu_dspWriteSlow(apu, adr, val);   /* (keeps the ledger if it stores) */
   } else {
     if (__builtin_expect(apu->fe.untracked != 0, 0)) apu_streamLedger(apu, adr);
@@ -47,8 +81,7 @@ static inline void apu_spcWriteRam(Apu* apu, uint16_t adr, uint8_t val) {
 static inline uint8_t apu_spcReadRam(Apu* apu, uint16_t adr) {
   APU_FE_ECHO_LOG(apu, adr, 0);
   const uint32_t p = adr >> 8;
-  if (__builtin_expect((apu->fe.echo_writes && ((apu->echoRegion[p >> 3] >> (p & 7)) & 1)) ||
-                       apu_streamLate(apu, apu->echoPageDirty[p]), 0))
+  if (__builtin_expect(apu_streamReadIsSlow(apu, p), 0))
     return apu_dspReadSlow(apu, adr);
   return apu->ram[adr];
 }

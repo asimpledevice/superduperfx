@@ -113,6 +113,8 @@ void apu_reset(Apu* apu) {
   apu_yellow_discard();   /* the S-DSP's state is the reset Dsp's again */
   memset(apu->echoPageTouch, 0, sizeof apu->echoPageTouch);
   memset(apu->echoPageDirty, 0, sizeof apu->echoPageDirty);
+  memset(apu->echoWriteSlow, 0, sizeof apu->echoWriteSlow);
+  memset(apu->echoReadSlow, 0, sizeof apu->echoReadSlow);
   memset(apu->echoRegion, 0, sizeof apu->echoRegion);
   memset(apu->dspRegAt, 0, sizeof apu->dspRegAt);
   apu_feNow(apu);         /* the front end tracks from the first sample */
@@ -890,6 +892,8 @@ static void apu_feEcho(void *ctx, uint32_t unit, uint32_t count, uint32_t s_end,
 #if SNESRECOMP_DSP_STREAM
     apu->echoPageTouch[l >> 4] = s_end;
     if (writes && (int32_t)(s_end - apu->echoPageDirty[l >> 4]) > 0) apu->echoPageDirty[l >> 4] = s_end;
+    apu->echoWriteSlow[l >> 7] |= (uint8_t)(1u << ((l >> 4) & 7));
+    if (writes) apu->echoReadSlow[l >> 7] |= (uint8_t)(1u << ((l >> 4) & 7));
 #endif
   }
   /* The pending batch's runs (merged with the last when they continue it). */
@@ -945,6 +949,8 @@ static bool apu_echoDivert(Apu* apu, uint16_t adr, uint8_t val) {
   if ((int32_t)(due - apu->echoDirty[l]) > 0) apu->echoDirty[l] = due;
 #if SNESRECOMP_DSP_STREAM
   if ((int32_t)(due - apu->echoPageDirty[l >> 4]) > 0) apu->echoPageDirty[l >> 4] = due;
+  apu->echoWriteSlow[l >> 7] |= (uint8_t)(1u << ((l >> 4) & 7));
+  apu->echoReadSlow[l >> 7] |= (uint8_t)(1u << ((l >> 4) & 7));
 #else
   apu_dspMark(apu, adr, 1, APU_DSP_WATCH_LOG | APU_DSP_WATCH_SYNC);
 #endif
@@ -988,15 +994,37 @@ uint32_t g_apu_stream_posts, g_apu_stream_waits, g_apu_stream_unsupported;
  * its length (a new EDL applies at the wrap): both count. */
 static void apu_streamRegion(Apu* apu) {
   memset(apu->echoRegion, 0, sizeof apu->echoRegion);
-  if (!apu->feValid) { memset(apu->echoRegion, 0xff, sizeof apu->echoRegion); return; }
+  if (!apu->feValid) {
+    memset(apu->echoRegion, 0xff, sizeof apu->echoRegion);
+    memset(apu->echoWriteSlow, 0xff, sizeof apu->echoWriteSlow);
+    memset(apu->echoReadSlow, 0xff, sizeof apu->echoReadSlow);
+    return;
+  }
   DspFrontEnd *fe = &apu->fe;
   dsp_fe_echo_sync(fe);
   uint32_t slots = fe->delay;
   const uint32_t lap = (uint32_t)fe->echo_index + fe->echo_remain;
   if (lap > slots) slots = lap;
   const uint32_t first = fe->esa >> 8, last = ((uint32_t)fe->esa + slots * 4u - 1u) >> 8;
-  for (uint32_t p = first; p <= last && p < first + 256; p++)
+  for (uint32_t p = first; p <= last && p < first + 256; p++) {
     apu->echoRegion[(p >> 3) & 31] |= (uint8_t)(1u << (p & 7));
+    apu->echoWriteSlow[(p >> 3) & 31] |= (uint8_t)(1u << (p & 7));
+    apu->echoReadSlow[(p >> 3) & 31] |= (uint8_t)(1u << (p & 7));
+  }
+}
+/* The exact tests behind the page bits; a bit that no longer stands for
+ * anything is cleared (stamps only fall behind the S-DSP's progress, and
+ * every site that sets a stamp or the region sets the bits). */
+uint32_t g_apu_stream_slow_bad;
+bool apu_streamWriteSlowNow(Apu* apu, uint32_t p) {
+  if (apu_streamWriteExact(apu, p)) return true;
+  apu->echoWriteSlow[p >> 3] &= (uint8_t)~(1u << (p & 7));
+  return false;
+}
+bool apu_streamReadSlowNow(Apu* apu, uint32_t p) {
+  if (apu_streamReadExact(apu, p)) return true;
+  if (!((apu->echoRegion[p >> 3] >> (p & 7)) & 1)) apu->echoReadSlow[p >> 3] &= (uint8_t)~(1u << (p & 7));
+  return false;
 }
 
 static void apu_streamEnsure(Apu* apu) {
