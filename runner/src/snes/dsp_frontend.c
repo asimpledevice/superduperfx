@@ -157,14 +157,74 @@ static inline void env_tick(DspFeVoice *v) {
 
 /* Step samples [te, s) of a voice with no decode or key on among them: key
  * off (even samples) and reset act on each, then the envelope steps. */
-static void env_catch_up(DspFrontEnd *fe, DspFeVoice *v, uint32_t s) {
-  if (v->pmod) { v->te = s; return; }
+static void env_catch_up_each(DspFrontEnd *fe, DspFeVoice *v, uint32_t s) {
   for (uint32_t k = v->te; k < s; k++) {
     if (v->key_off && even_at(fe, k)) v->state = 4;
     if (fe->reset) { v->state = 4; v->gain = 0; }
     env_tick(v);
   }
   v->te = s;
+}
+/* The same, without a step per sample: what a run of samples does to the
+ * envelope is known in closed form except where env_gain acts, so it jumps
+ * from one env_gain to the next (SNESRECOMP_FE_ENV_JUMP=0: each sample;
+ * SNESRECOMP_FE_ENV_CHECK=1: both, compared). */
+#ifndef SNESRECOMP_FE_ENV_JUMP
+#define SNESRECOMP_FE_ENV_JUMP 1
+#endif
+#ifndef SNESRECOMP_FE_ENV_CHECK
+#define SNESRECOMP_FE_ENV_CHECK 0
+#endif
+uint32_t g_dsp_fe_env_mismatches;
+static void env_catch_up_jump(DspFrontEnd *fe, DspFeVoice *v, uint32_t s) {
+  uint32_t k = v->te;
+  while (k < s) {
+    const uint32_t n = s - k;
+    if (fe->reset) {            /* each sample: release at gain 0 */
+      v->state = 4; v->gain = 0;
+      break;
+    }
+    if (v->key_off && v->state != 4) {   /* until the first even sample */
+      if (even_at(fe, k)) v->state = 4;
+      env_tick(v);
+      k++;
+      continue;
+    }
+    if (v->state == 4) {        /* release: 8 a sample down to 0 */
+      if (!v->gain) break;
+      const uint32_t t = ((uint32_t)v->gain + 7u) / 8u < n ? ((uint32_t)v->gain + 7u) / 8u : n;
+      v->gain = (uint32_t)v->gain >= 8u * t ? (uint16_t)(v->gain - 8u * t) : 0;
+      k += t;
+      continue;
+    }
+    const bool live_gain = v->use_gain;
+    if (live_gain && v->direct_gain) { v->gain = v->gain_value; break; }
+    const uint16_t rate = live_gain ? v->rates[3] : v->rates[v->state > 2 ? 2 : v->state];
+    if (!rate) break;
+    /* the rate counter reaches the rate on the sample `until` from here */
+    const uint32_t until = (uint32_t)v->rate_counter + 1u >= rate ? 1u : (uint32_t)rate - v->rate_counter;
+    if (until > n) { v->rate_counter = (uint16_t)(v->rate_counter + n); break; }
+    v->rate_counter = 0;
+    env_gain(v, live_gain);
+    k += until;
+  }
+  v->te = s;
+}
+static void env_catch_up(DspFrontEnd *fe, DspFeVoice *v, uint32_t s) {
+  if (v->pmod) { v->te = s; return; }
+#if SNESRECOMP_FE_ENV_CHECK
+  DspFeVoice ref = *v;
+  env_catch_up_each(fe, &ref, s);
+  env_catch_up_jump(fe, v, s);
+  if (ref.gain != v->gain || ref.state != v->state || ref.rate_counter != v->rate_counter || ref.te != v->te) {
+    g_dsp_fe_env_mismatches++;
+    *v = ref;
+  }
+#elif SNESRECOMP_FE_ENV_JUMP
+  env_catch_up_jump(fe, v, s);
+#else
+  env_catch_up_each(fe, v, s);
+#endif
 }
 
 void dsp_fe_env_sync(DspFrontEnd *fe, int i) { env_catch_up(fe, &fe->v[i], fe->now); }

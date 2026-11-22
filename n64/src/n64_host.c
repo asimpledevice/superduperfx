@@ -1000,6 +1000,10 @@ static int host_main(void) {
         g_apu_dsp_sync_count[r] = g_apu_dsp_sync_samples[r] = 0;
       }
       n64_platform_log("[dspsync] 60 frames, syncs/samples:%s\n", b);
+#if defined(SNESRECOMP_FE_ENV_CHECK) && SNESRECOMP_FE_ENV_CHECK
+      { extern uint32_t g_dsp_fe_env_mismatches;
+        n64_platform_log("[fe-env-check] mismatches so far %lu\n", (unsigned long)g_dsp_fe_env_mismatches); }
+#endif
     }
 #endif
 #ifdef N64_INTERP_REPORT
