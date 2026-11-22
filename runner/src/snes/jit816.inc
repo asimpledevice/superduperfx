@@ -68,6 +68,14 @@ static uint32_t s_jit_c[JC_N];           /* word indexes: the C bus functions, w
 #define SNESRECOMP_JIT_FAST_STORE 1
 #endif
 static uint32_t s_jit_st8, s_jit_st16;
+/* The way out of a block for an instruction that has a table entry: t0 =
+ * its index, t1 = the block's table, t2 = the bank << 16, t5 = where to go
+ * (-1 the next instruction: the event; -2 the same, at the block's end; else
+ * the pc: a branch out). An entry is the instruction's pc | its last byte
+ * << 16 | (its length - 1) << 24 | 1 << 26 when it made no bus access (the
+ * bus latch is then its last byte's). A block ends with a thunk that loads
+ * t1 and t2 and jumps here, and with its table. */
+static uint32_t s_jit_xcommon;
 static uint8_t s_jit_store_ok;
 static uint8_t s_jit_speed[kCpuFastMapPages];   /* master clocks per access, by 8 KB page (RAM and ROM pages) */
 typedef struct { uint32_t key; uint32_t code; const uint8_t *pg; uint32_t n; } JitEntry;   /* n: bit 31 = holds ADC/SBC (binary mode only) */
@@ -434,6 +442,48 @@ static void jit816_flush(void) {
         J_JR(JRA);
         J_NOP();
     }
+    s_jit_xcommon = s_jit_n;
+    s_jit_nlabels = 0; s_jit_nfix = 0;
+    {
+        const int lnext = jlabel(), lnolatch = jlabel();
+        J_SLL(JT0, JT0, 2); J_ADDU(JT1, JT1, JT0); J_LW(JT3, 0, JT1);
+        J_ANDI(JT4, JT3, 0xffff);                       /* the instruction's pc */
+        J_SRL(JT6, JT3, 24); J_ANDI(JT6, JT6, 3);
+        J_OR(JT7, JT2, JT4);
+        { const int lo = jaddr(&g_jit816_prev); J_SW(JT7, lo, JB); }
+        J_ADDU(JT7, JT4, JT6); J_ANDI(JT7, JT7, 0xffff);   /* its last byte's address */
+        jbr(1, JT5, JZERO, lnext);                      /* bltz (regimm 0): the next instruction */
+        J_ADDIU(JT8, JT7, 1);
+        J_MOVE(JT8, JT5);
+        jbind(lnext);
+        J_SH(JT8, (int)offsetof(Interp816, pc), JS0);
+        J_SRL(JT9, JT3, 26); J_ANDI(JT9, JT9, 1);
+        jbr(4, JT9, JZERO, lnolatch);
+        J_NOP();
+        J_SRL(JT6, JT3, 16);
+        { const int lo = jaddr(&g_open_bus); J_SB(JT6, lo, JB); }
+        { const int lo = jaddr(&g_snes); J_LW(JT6, lo, JB); }
+        J_LW(JT6, (int)offsetof(Snes, cart), JT6);
+        J_OR(JT7, JT2, JT7);
+        J_SW(JT7, (int)offsetof(Cart, cpuBusAddress), JT6);
+        jbind(lnolatch);
+#ifdef N64_JIT_EXITS
+        /* kind: t5 -1 -> 0 (the event), -2 -> 2 (the block's end), a pc -> 1 */
+        { const int lpos = jlabel(), ldone = jlabel();
+          jbr(1, JT5, JZERO, lpos);                     /* bltz */
+          J_ORI(JT6, JZERO, 4);                         /* (a pc: index 1) */
+          jbr(4, JZERO, JZERO, ldone);
+          J_NOP();
+          jbind(lpos);
+          J_ADDIU(JT6, JT5, 1); J_SLL(JT6, JT6, 3); jR(JZERO, JT6, JT6, 0, 0x23);   /* -(t5 + 1) * 8: 0 or 8 */
+          jbind(ldone);
+          { const int lo = jaddr_at(g_jit816_exit); J_ADDU(JAT, JAT, JT6); J_LW(JT7, lo, JAT); J_ADDIU(JT7, JT7, 1); J_SW(JT7, lo, JAT); } }
+#endif
+        jit_syncout_body();
+        jj(s_jit_epilogue);
+        J_NOP();
+    }
+    jfix_all();
     data_cache_hit_writeback(&s_jit_code[0], s_jit_n * 4);
     inst_cache_hit_invalidate(&s_jit_code[0], s_jit_n * 4);
 }
@@ -655,6 +705,9 @@ static int jit_translate(uint32_t pc24, const uint8_t *pg, bool mf, bool xf) {
     s_jit_nlabels = 0; s_jit_nfix = 0;
     int label[kJitMaxInsns + 1], lexit[kJitMaxInsns];
     for (int i = 0; i <= n; i++) label[i] = jlabel();
+    const int lthunk_next = jlabel(), lthunk_to = jlabel();
+    uint32_t tab[kJitMaxInsns];
+    memset(tab, 0, sizeof tab);
     uint32_t at[kJitMaxInsns];
 
     for (int i = 0; i < n; i++) {
@@ -716,7 +769,7 @@ static int jit_translate(uint32_t pc24, const uint8_t *pg, bool mf, bool xf) {
                 /* not taken */
                 J_DSUBU(JR, JR, JS4);
                 J_ADDIU(JS1, JS1, 1);
-                jbr(6, JR, JZERO, lexit[i]); J_NOP();   /* blez: the event */
+                jbr(6, JR, JZERO, lthunk_next); J_ORI(JT0, JZERO, i);   /* blez: the event */
                 { const int lskip = label[i + 1]; jbr(4, JZERO, JZERO, lskip); J_NOP(); }
             }
             /* taken: one more internal cycle (BRA's is in its count) */
@@ -753,14 +806,11 @@ static int jit_translate(uint32_t pc24, const uint8_t *pg, bool mf, bool xf) {
                 }
                 jbr(5, JT4, JZERO, label[tl]); J_NOP();
             }
-            jit_latch(last_adr, last_byte);
-            JIT_EXIT_KIND(1, 0);
-            jit_exit(target, ia);
-            /* the not-taken path's event exit */
+            /* out of the block, to the target */
+            J_ORI(JT5, JZERO, target);
+            jbr(4, JZERO, JZERO, lthunk_to); J_ORI(JT0, JZERO, i);
             jbind(lexit[i]);
-            jit_latch(last_adr, last_byte);
-            JIT_EXIT_KIND(0, 0);
-            jit_exit(ipc[i + 1], ia);
+            tab[i] = (uint32_t)ipc[i] | (uint32_t)last_byte << 16 | (uint32_t)(ilen[i] - 1) << 24 | 1u << 26;
             g_jit816_words[3] += s_jit_n - w_start;
             continue;
         }
@@ -1165,29 +1215,30 @@ static int jit_translate(uint32_t pc24, const uint8_t *pg, bool mf, bool xf) {
         g_jit816_words[0] += w_step - w_start;
         J_DSUBU(JR, JR, JS4);
         J_ADDIU(JS1, JS1, 1);
-        jbr(7, JR, JZERO, label[i + 1]); J_NOP();   /* bgtz: time left */
+        jbr(6, JR, JZERO, lthunk_next); J_ORI(JT0, JZERO, i);   /* blez: the event (the delay slot names the instruction) */
         g_jit816_words[1] += s_jit_n - w_step;
-        const uint32_t w_exit = s_jit_n;
         jbind(lexit[i]);
-        if (!bus) jit_latch(last_adr, last_byte);
-        JIT_EXIT_KIND(0, 0);
-        jit_exit(ipc[i + 1], ia);
-        g_jit816_words[2] += s_jit_n - w_exit;
+        tab[i] = (uint32_t)ipc[i] | (uint32_t)last_byte << 16 | (uint32_t)(ilen[i] - 1) << 24 | (bus ? 0u : 1u << 26);
+        g_jit816_words[2] += 1;   /* (its table entry) */
     }
-    /* Past the last instruction: back to the interpreter. */
+    /* Past the last instruction: back to the interpreter, as its event exit
+     * but counted as the block's end. Then the thunks and the table. */
     jbind(label[n]);
     const uint32_t w_tail = s_jit_n;
+    J_ADDIU(JT5, JZERO, -2);
+    jbr(4, JZERO, JZERO, lthunk_to); J_ORI(JT0, JZERO, n - 1);
+    jbind(lthunk_next);
+    J_ADDIU(JT5, JZERO, -1);
+    jbind(lthunk_to);
     {
-        const uint32_t la = bank | ((ipc[n - 1] + ilen[n - 1] - 1u) & 0xFFFFu);
-        const JitOp lo_ = iop[n - 1];
-        const bool ldata = lo_.mode == JM_DP || lo_.mode == JM_ABS || lo_.mode == JM_ABX || lo_.mode == JM_ABY ||
-                           lo_.mode == JM_ALX || lo_.mode == JM_ILY ||
-                           (lo_.op >= JO_PHA && lo_.op <= JO_PLY);
-        if (!ldata) jit_latch(la, pg[la & 0x1FFFu]);
-        JIT_EXIT_KIND(2, pg[ipc[n] & 0x1FFFu]);
-        jit_exit(ipc[n], bank | ipc[n - 1]);
+        const uint32_t ta = (uint32_t)(uintptr_t)&s_jit_code[s_jit_n + 4];
+        J_LUI(JT1, (int)(ta >> 16));
+        J_ORI(JT1, JT1, (int)(ta & 0xffffu));
+        jj(s_jit_xcommon);
+        J_LUI(JT2, (int)(bank >> 16));
+        for (int i = 0; i < n; i++) jput(tab[i]);
     }
-    g_jit816_words[5] += s_jit_n - w_tail;
+    g_jit816_words[5] += s_jit_n - w_tail - (uint32_t)n;   /* (the table's words are counted with the instructions) */
     jfix_all();
     if (s_jit_full) return -1;
 #ifdef N64_JIT_DUMP
