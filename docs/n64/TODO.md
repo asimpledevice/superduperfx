@@ -220,13 +220,21 @@ that runs in steady state should be translated.
    10.2), Joe & Mac 2 66.0 -> 64.8, SMW 85.9 -> 86.5. (The clock change
    alone slowed Joe & Mac 2's store-heavy scene: every store's C call had
    the clock to hand over and back. The fast store removes the call.)
-   Stage 2, to do: (a) done;
-   (b) one exit stub per block and a table entry per instruction, the
-   index in the event branch's delay slot: about 10 -> 3; (c) the bus latch
-   as an argument or a shared routine instead of 9 words before each store;
-   (d) A, X, Y in ordinary registers across the block. Expectation, not
-   measured: 20-25 words.
-5. **Stores to plain RAM** still call the bus function (reads do not).
+   Stage 2b, done, exact: one shared way out (`s_jit_xcommon`), a thunk a
+   block and a one-word table entry an instruction, the index in the step
+   end's delay slot: 25 words. Stage 2c, done, exact: a store's latch and
+   write-log pc go to the store routine as two registers and are used only
+   on its slow path; pushes and calls the same: **23 words** (54 at the
+   audit's start). Pitfall's buffer no longer flushes in the measured run.
+   Whole stack, ms a frame, before the audit -> now: Pitfall 66.3 -> 60.2
+   (65816 buckets 25.4 -> 15.2), Joe & Mac 2 64.5 -> 64.4 (18.0 -> 16.2),
+   SMW 88.1 -> 87.9 (7.8 -> 7.6; it has 586 translated instructions).
+   Left: (d) A, X, Y in ordinary registers across the block (the "work"
+   is now about 12 words an instruction, much of it mfc1/mtc1 and the lazy
+   N/Z); branches about 25 words; the 384 KB buffer is not yet small
+   enough to cut (Pitfall's translated set is 2,771 instructions, 254 KB).
+   `N64_JIT_DUMP=n` also logs the shared routines (`[jitshared]`).
+5. ~~Stores to plain RAM still call the bus function~~ (done: `s_jit_st8`).
 6. **Per-instruction bookkeeping.** Each translated instruction adds its
    clocks, the SPC's pending time and compares with the next event; do it
    once per straight run.

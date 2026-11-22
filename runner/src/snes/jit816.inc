@@ -278,11 +278,12 @@ static void jit816_flush(void) {
         if ((s_jit_seen[i] & 0x60000000u) != 0x20000000u) s_jit_seen[i] = 0;
     s_jit_nent = 0;
     s_jit_n = 0;
+    s_jit_nlabels = 0; s_jit_nfix = 0;   /* (the shared routines' labels: fixed at the end) */
     s_jit_full = false;
     s_jit_memsel = g_memsel;
     g_jit816_stats[4]++;
     /* The way in and out, shared by every block. */
-    enum { FRAME = 160, F_RA2 = 40, F_RA3 = 144, F_T0 = 128, F_T1 = 136 };   /* 0-39: the called C functions' argument area; 40: a routine's return address */
+    enum { FRAME = 176, F_RA2 = 40, F_RA3 = 144, F_T0 = 128, F_T1 = 136, F_RA4 = 152, F_BM = 160 };   /* 0-39: the called C functions' argument area; 40: a routine's return address */
     s_jit_base = 0;
     J_ADDIU(JSP, JSP, -FRAME);
     J_SD(JRA, 120, JSP); J_SD(JS0, 112, JSP); J_SD(JS1, 104, JSP); J_SD(JS2, 96, JSP);
@@ -322,10 +323,15 @@ static void jit816_flush(void) {
         J_JR(JRA);
         J_NOP();
       } }
-    /* The stores (see s_jit_st8). They use t6-t9 and at. */
+    /* The stores (see s_jit_st8). They use t6-t9 and at. v1 = the bus
+     * latch a slow store must find (the instruction's last fetched byte, its
+     * address above it; 0: leave the latch), t5 = the instruction's pc for
+     * the write log's two globals (0: leave them). A fast store adds its
+     * speed to s4; a slow one adds what the C function put on
+     * s_interp_bus_master and leaves that as it found it. */
     for (int word = 0; word < 2; word++) {
         if (word) s_jit_st16 = s_jit_n; else s_jit_st8 = s_jit_n;
-        uint32_t brs[2];
+        const int lslow = jlabel(), l1 = jlabel(), l2 = jlabel();
         J_SRL(JT8, JA0, kCpuFastMapPageShift);
         { const int lo = jaddr_at(g_cpu_fast_page_kind); J_ADDU(JAT, JAT, JT8); J_LBU(JT9, lo, JAT); }
         J_ADDIU(JT9, JT9, -(int)kCpuFastMapWram);
@@ -333,9 +339,8 @@ static void jit816_flush(void) {
         { const int lo = jaddr(&s_jit_store_ok); J_LBU(JT6, lo, JB); }
         J_AND(JT9, JT9, JT6);
         if (!SNESRECOMP_JIT_FAST_STORE) J_MOVE(JT9, JZERO);
-        brs[0] = s_jit_n; jI(4, JT9, JZERO, 0);            /* beqz: the C function */
+        jbr(4, JT9, JZERO, lslow);
         J_NOP();
-        (void)brs[1];
         if (!word) {
             J_SLL(JT9, JT8, 2);
             { const int lo = jaddr_at(g_cpu_fast_read_page); J_ADDU(JAT, JAT, JT9); J_LW(JT9, lo, JAT); }
@@ -343,7 +348,7 @@ static void jit816_flush(void) {
             J_ADDU(JT9, JT9, JT6);
             J_SB(JA1, 0, JT9);
             { const int lo = jaddr_at(s_jit_speed); J_ADDU(JAT, JAT, JT8); J_LBU(JT8, lo, JAT); }
-            { const int lo = jaddr(&s_interp_bus_master); J_LD(JT6, lo, JB); J_DADDU(JT6, JT6, JT8); J_SD(JT6, lo, JB); }
+            J_ADDU(JS4, JS4, JT8);
             { const int lo = jaddr(&g_open_bus); J_SB(JA1, lo, JB); }
             { const int lo = jaddr(&g_interp_bridge_write_epoch); J_LD(JT6, lo, JB); jI(25, JT6, JT6, 1); J_SD(JT6, lo, JB); }
             { const int lo = jaddr(&g_snes); J_LW(JT9, lo, JB); }
@@ -351,24 +356,53 @@ static void jit816_flush(void) {
             J_JR(JRA);
             J_SW(JA0, (int)offsetof(Cart, cpuBusAddress), JT9);
         } else {
+            const int l3 = jlabel();
             J_SD(JRA, F_RA3, JSP);
             J_SD(JA1, F_T0, JSP);
             J_SD(JA2, F_T1, JSP);
+            jbr(4, JT5, JZERO, l3);
+            J_NOP();
+            { const int lo = jaddr(&g_interp_wlog_pc24); J_SW(JT5, lo, JB); }
+            { const int lo = jaddr(&g_interp816_cur_pc); J_SW(JT5, lo, JB); }
+            jbind(l3);
+            J_MOVE(JT5, JZERO);
             jjal_code(s_jit_st8);
             J_MOVE(JA1, JA2);                              /* the low byte (to the low address in a0) */
             J_LD(JA0, F_T0, JSP);
             J_LD(JA1, F_T1, JSP);
+            J_MOVE(JV1, JZERO);
+            J_MOVE(JT5, JZERO);
             jjal_code(s_jit_st8);
             J_SRL(JA1, JA1, 8);
             J_LD(JRA, F_RA3, JSP);
             J_JR(JRA);
             J_NOP();
         }
-        s_jit_code[brs[0]] |= (s_jit_n - brs[0] - 1) & 0xffffu;
-        jj(s_jit_c[word ? JC_WR16 : JC_WR8]);              /* (returns to the caller) */
+        jbind(lslow);
+        J_SD(JRA, F_RA4, JSP);
+        jbr(4, JV1, JZERO, l1);
+        J_NOP();
+        { const int lo = jaddr(&g_open_bus); J_SB(JV1, lo, JB); }
+        J_SRL(JT6, JV1, 8);
+        { const int lo = jaddr(&g_snes); J_LW(JT9, lo, JB); }
+        J_LW(JT9, (int)offsetof(Snes, cart), JT9);
+        J_SW(JT6, (int)offsetof(Cart, cpuBusAddress), JT9);
+        jbind(l1);
+        jbr(4, JT5, JZERO, l2);
+        J_NOP();
+        { const int lo = jaddr(&g_interp_wlog_pc24); J_SW(JT5, lo, JB); }
+        { const int lo = jaddr(&g_interp816_cur_pc); J_SW(JT5, lo, JB); }
+        jbind(l2);
+        { const int lo = jaddr(&s_interp_bus_master); J_LD(JT6, lo, JB); }
+        J_SD(JT6, F_BM, JSP);
+        jjal_code(s_jit_c[word ? JC_WR16 : JC_WR8]);
+        J_NOP();
+        { const int lo = jaddr(&s_interp_bus_master); J_LD(JT6, lo, JB); J_LD(JT7, F_BM, JSP);
+          J_DSUBU(JT6, JT6, JT7); J_ADDU(JS4, JS4, JT6); J_SD(JT7, lo, JB); }
+        J_LD(JRA, F_RA4, JSP);
+        J_JR(JRA);
         J_NOP();
     }
-
     /* Shared read routines. In: a0 (and a1 for a word's high byte) = the
      * address, v1 = the instruction's last fetched byte and its address
      * << 8 (the bus latch a slow access must find). Out: v0. A page of plain
@@ -443,7 +477,6 @@ static void jit816_flush(void) {
         J_NOP();
     }
     s_jit_xcommon = s_jit_n;
-    s_jit_nlabels = 0; s_jit_nfix = 0;
     {
         const int lnext = jlabel(), lnolatch = jlabel();
         J_SLL(JT0, JT0, 2); J_ADDU(JT1, JT1, JT0); J_LW(JT3, 0, JT1);
@@ -484,6 +517,20 @@ static void jit816_flush(void) {
         J_NOP();
     }
     jfix_all();
+#ifdef N64_JIT_DUMP
+    { extern void n64_platform_log(const char *fmt, ...);
+      static int once;
+      if (!once++) {
+        n64_platform_log("[jitshared] words %lu: syncout %lu c0 %lu st8 %lu st16 %lu rd8 %lu rd16 %lu xcommon %lu\n", (unsigned long)s_jit_n,
+                         (unsigned long)s_jit_syncout, (unsigned long)s_jit_c[0], (unsigned long)s_jit_st8, (unsigned long)s_jit_st16,
+                         (unsigned long)s_jit_rd8, (unsigned long)s_jit_rd16, (unsigned long)s_jit_xcommon);
+        for (uint32_t w = 0; w < s_jit_n; w += 8) {
+          char line[100]; int o = 0;
+          for (uint32_t k = w; k < w + 8 && k < s_jit_n; k++) o += snprintf(line + o, sizeof line - (size_t)o, "%08lx ", (unsigned long)s_jit_code[k]);
+          n64_platform_log("[jitshared] w %s\n", line);
+        }
+      } }
+#endif
     data_cache_hit_writeback(&s_jit_code[0], s_jit_n * 4);
     inst_cache_hit_invalidate(&s_jit_code[0], s_jit_n * 4);
 }
@@ -831,23 +878,19 @@ static int jit_translate(uint32_t pc24, const uint8_t *pg, bool mf, bool xf) {
             J_ORI(JS4, JZERO, (int)fixed);
             if (call) {
                 /* pushByte(K) for a long call, then pushWord(the last operand byte's address) */
-                { const int lo = jaddr(&s_interp_bus_master); J_SD(JZERO, lo, JB); }
-                jit_latch(last_adr, last_byte);
-                jli(JT0, ia);
-                { const int lo = jaddr(&g_interp_wlog_pc24); J_SW(JT0, lo, JB); }
-                { const int lo = jaddr(&g_interp816_cur_pc); J_SW(JT0, lo, JB); }
                 J_MFC1(JS2, FS);
                 if (lng) {
-                    J_MFC1(JA1, FPB); jjal_code(s_jit_st8); J_MOVE(JA0, JS2);
+                    J_MFC1(JA1, FPB); jli(JV1, (last_adr & 0xFFFFFFu) << 8 | last_byte); jli(JT5, ia); jjal_code(s_jit_st8); J_MOVE(JA0, JS2);
                     J_ADDIU(JS2, JS2, -1); J_ANDI(JS2, JS2, 0xffff);
                 }
                 const uint32_t r16 = (ipc[i] + ilen[i] - 1u) & 0xFFFFu;
-                J_ORI(JA1, JZERO, (int)(r16 >> 8)); jjal_code(s_jit_st8); J_MOVE(JA0, JS2);
+                J_ORI(JA1, JZERO, (int)(r16 >> 8));
+                if (lng) { J_MOVE(JV1, JZERO); J_MOVE(JT5, JZERO); } else { jli(JV1, (last_adr & 0xFFFFFFu) << 8 | last_byte); jli(JT5, ia); }
+                jjal_code(s_jit_st8); J_MOVE(JA0, JS2);
                 J_ADDIU(JS2, JS2, -1); J_ANDI(JS2, JS2, 0xffff);
-                J_ORI(JA1, JZERO, (int)(r16 & 0xff)); jjal_code(s_jit_st8); J_MOVE(JA0, JS2);
+                J_ORI(JA1, JZERO, (int)(r16 & 0xff)); J_MOVE(JV1, JZERO); J_MOVE(JT5, JZERO); jjal_code(s_jit_st8); J_MOVE(JA0, JS2);
                 J_ADDIU(JS2, JS2, -1); J_ANDI(JS2, JS2, 0xffff);
                 J_MTC1(JS2, FS);
-                { const int lo = jaddr(&s_interp_bus_master); J_LD(JT0, lo, JB); J_ADDU(JS4, JS4, JT0); }
                 /* the call's record, as the big loop makes it for a call it interprets */
                 jli(JA2, (ia + ilen[i]) & 0xFFFFFFu);
                 J_ORI(JA1, JZERO, cpu_dispatch_inline_arg_bytes(target) ? 0 : (lng ? 3 : 2));
@@ -966,25 +1009,19 @@ static int jit_translate(uint32_t pc24, const uint8_t *pg, bool mf, bool xf) {
                 break;
             case JO_PHA: case JO_PHX: case JO_PHY: {
                 const int f = o.op == JO_PHA ? FA : o.op == JO_PHX ? FX : FY;
-                { const int lo = jaddr(&s_interp_bus_master); J_SD(JZERO, lo, JB); }
-                jit_latch(last_adr, last_byte);
-                jli(JT0, ia);
-                { const int lo = jaddr(&g_interp_wlog_pc24); J_SW(JT0, lo, JB); }
-                { const int lo = jaddr(&g_interp816_cur_pc); J_SW(JT0, lo, JB); }
                 J_MFC1(JS2, FS);
                 J_MFC1(JS3, f);
                 if (byte) {
-                    J_MOVE(JA1, JS3); jjal_code(s_jit_st8); J_MOVE(JA0, JS2);
+                    J_MOVE(JA1, JS3); jli(JV1, (last_adr & 0xFFFFFFu) << 8 | last_byte); jli(JT5, ia); jjal_code(s_jit_st8); J_MOVE(JA0, JS2);
                     J_ADDIU(JS2, JS2, -1);
                 } else {                                         /* high byte, then low */
-                    J_SRL(JA1, JS3, 8); jjal_code(s_jit_st8); J_MOVE(JA0, JS2);
+                    J_SRL(JA1, JS3, 8); jli(JV1, (last_adr & 0xFFFFFFu) << 8 | last_byte); jli(JT5, ia); jjal_code(s_jit_st8); J_MOVE(JA0, JS2);
                     J_ADDIU(JS2, JS2, -1); J_ANDI(JS2, JS2, 0xffff);
-                    J_MOVE(JA1, JS3); jjal_code(s_jit_st8); J_MOVE(JA0, JS2);
+                    J_MOVE(JA1, JS3); J_MOVE(JV1, JZERO); J_MOVE(JT5, JZERO); jjal_code(s_jit_st8); J_MOVE(JA0, JS2);
                     J_ADDIU(JS2, JS2, -1);
                 }
                 J_ANDI(JS2, JS2, 0xffff);
                 J_MTC1(JS2, FS);
-                { const int lo = jaddr(&s_interp_bus_master); J_LD(JT0, lo, JB); J_ADDU(JS4, JS4, JT0); }
                 break; }
             case JO_PLA: case JO_PLX: case JO_PLY: {
                 const int f = o.op == JO_PLA ? FA : o.op == JO_PLX ? FX : FY;
@@ -1040,7 +1077,7 @@ static int jit_translate(uint32_t pc24, const uint8_t *pg, bool mf, bool xf) {
                  * their accesses' speed to s_interp_bus_master, and must
                  * find the bus latch. A plain read goes through the shared
                  * routines, which see to both. */
-                const bool ccall = jit_op_store(o.op) || rmw || o.mode == JM_ILY;
+                const bool ccall = rmw || o.mode == JM_ILY;   /* (a plain store: the store routine sees to both) */
                 if (ccall) {
                     const int lo = jaddr(&s_interp_bus_master); J_SD(JZERO, lo, JB);
                     jit_latch(last_adr, last_byte);
@@ -1108,17 +1145,22 @@ static int jit_translate(uint32_t pc24, const uint8_t *pg, bool mf, bool xf) {
                     else { J_MOVE(JA1, JS3); jjal_code(s_jit_c[JC_RD16]); J_MOVE(JA0, JS2); }
                     J_ADDIU(JS6, JV0, o.op == JO_INC ? 1 : -1);
                     J_ANDI(JS6, JS6, (int)m);
-                    if (byte) { J_MOVE(JA1, JS6); jjal_code(s_jit_st8); J_MOVE(JA0, JS2); }
+                    if (byte) { J_MOVE(JA1, JS6); J_MOVE(JV1, JZERO); J_MOVE(JT5, JZERO); jjal_code(s_jit_st8); J_MOVE(JA0, JS2); }
                     else {                                           /* high byte first */
-                        J_SRL(JA1, JS6, 8); jjal_code(s_jit_st8); J_MOVE(JA0, JS3);
-                        J_MOVE(JA1, JS6); jjal_code(s_jit_st8); J_MOVE(JA0, JS2);
+                        J_SRL(JA1, JS6, 8); J_MOVE(JV1, JZERO); J_MOVE(JT5, JZERO); jjal_code(s_jit_st8); J_MOVE(JA0, JS3);
+                        J_MOVE(JA1, JS6); J_MOVE(JV1, JZERO); J_MOVE(JT5, JZERO); jjal_code(s_jit_st8); J_MOVE(JA0, JS2);
                     }
                     jit_set_nz(JS6, byte);
                 } else if (jit_op_store(o.op)) {
-                    jli(JT0, ia);
-                    { const int lo = jaddr(&g_interp_wlog_pc24); J_SW(JT0, lo, JB); }
-                    { const int lo = jaddr(&g_interp816_cur_pc); J_SW(JT0, lo, JB); }
                     const int f = o.op == JO_STA ? FA : o.op == JO_STX ? FX : FY;
+                    if (o.mode == JM_ILY) {   /* (the latch is the pointer read's by now) */
+                        jli(JT0, ia);
+                        { const int lo = jaddr(&g_interp_wlog_pc24); J_SW(JT0, lo, JB); }
+                        { const int lo = jaddr(&g_interp816_cur_pc); J_SW(JT0, lo, JB); }
+                        J_MOVE(JV1, JZERO); J_MOVE(JT5, JZERO);
+                    } else {
+                        jli(JV1, (last_adr & 0xFFFFFFu) << 8 | last_byte); jli(JT5, ia);
+                    }
                     if (byte) {
                         if (o.op == JO_STZ) J_MOVE(JA1, JZERO); else { J_MFC1(JA1, f); }
                         jjal_code(s_jit_st8);
