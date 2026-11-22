@@ -283,10 +283,13 @@ static void voice_sample(DspFrontEnd *fe, int i, uint32_t s) {
   v->te = s + 1;
 }
 
+uint32_t g_dsp_fe_runs, g_dsp_fe_events;   /* statistics: calls with work, samples with work */
 void dsp_fe_run(DspFrontEnd *fe, uint32_t target) {
+  g_dsp_fe_runs++;
   while (fe->next < target) {
     const uint32_t s = fe->next;
     fe->events++;
+    g_dsp_fe_events++;
     for (int i = 0; i < 8; i++) {
       DspFeVoice *v = &fe->v[i];
       if (v->next != s) continue;
@@ -298,6 +301,7 @@ void dsp_fe_run(DspFrontEnd *fe, uint32_t target) {
   }
   fe->now = target;
 }
+
 
 void dsp_fe_init(DspFrontEnd *fe, const Dsp *d, const uint8_t *aram, uint32_t now,
                  DspFeBlockFn *on_block, void *ctx) {

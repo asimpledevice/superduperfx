@@ -656,8 +656,11 @@ void apu_dspLogRam(Apu* apu, uint16_t adr, uint8_t val) {
   if (rel_reg < 0x400u && rel_reg != rel) apu_dspMarkDirEntry(apu, (uint8_t)(rel_reg >> 2));
 }
 
+uint32_t g_apu_stream_slow_w, g_apu_stream_slow_r;   /* statistics: SPC accesses off the fast path */
+uint16_t g_apu_stream_slow_adr;                       /* the last one's address */
 void apu_dspWriteSlow(Apu* apu, uint16_t adr, uint8_t val) {
 #if SNESRECOMP_DSP_STREAM
+  g_apu_stream_slow_w++; g_apu_stream_slow_adr = adr;
   /* Stored writes go in the ledger while a voice is untracked; a diverted
    * write leaves ARAM as it is (the S-DSP applies it at its sample). */
   if (!apu_echoDivert(apu, adr, val)) {
@@ -962,6 +965,7 @@ static bool apu_echoDivert(Apu* apu, uint16_t adr, uint8_t val) {
 /* An SPC read on a page marked for sync. */
 uint8_t apu_dspReadSlow(Apu* apu, uint16_t adr) {
 #if SNESRECOMP_DSP_STREAM
+  g_apu_stream_slow_r++; g_apu_stream_slow_adr = adr;
   apu_echoNow(apu);
   if (!apu_echoLate(apu, apu->echoDirty[adr >> 4])) return apu->ram[adr];
   /* Wait for the S-DSP to reach the SPC's time: post what is owed, then

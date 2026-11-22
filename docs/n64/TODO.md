@@ -29,6 +29,40 @@ for pitch modulation", "The paging slot", "Pitch modulation as HLE").
 Parked: the exact sample-major pitch-modulation variant (branch
 `pm-variant-wip`; does not fit IMEM, see RED_DESIGN.md).
 
+## Audio: which configuration, and what each costs (2026-11-22, ares)
+
+ms a frame, same frames, `JIT816=1`; all exact against the truth build.
+
+| | SMW | Joe & Mac 2 | Pitfall |
+|---|---|---|---|
+| batches + SPC translator (`SPCDBT=1`) | 87.5 | 222.4 | 88.4 |
+| audio split (`RSPDSP_STREAM=1`), SPC interpreted | 112.8 | 233.5 | 87.8 |
+| batches, SPC interpreted | 90.1 | 226.8 | 103.1 |
+
+The two cannot be combined yet (`spc_dbt.c` refuses echo in place and the
+stream). What the profiles say:
+
+- The split removes the batch bookkeeping (log, launch, join, decode) but
+  runs the front end on Blue. In SMW that is about 630 BRR blocks a frame
+  at some 25 us each (16 ms; `dsp_fe_run`, `apu_feRead`, `apu_feEcho`,
+  the envelope), against 3.5 ms of batch bookkeeping; in Joe & Mac 2 and
+  Pitfall the front end is small (about 35-40 blocks a frame) and the SPC
+  interpreter is what is left (60% of Joe & Mac 2's CPU phase).
+- Front-end runs are short (1.2 samples with work each, 300-400 a frame in
+  SMW) and are started by the SPC's writes of the registers the front end
+  follows (pitch, key on and off, ADSR), not by ARAM stores or echo
+  accesses (0 off the fast path). Tried and dropped, exact but no gain:
+  bringing it up to date only for stores at or above the lowest page a
+  pending read can be on, and only for the registers it follows.
+- Kept (small, exact): the envelope catch-up jumps between changes, and a
+  bit per page decides the SPC's fast ARAM path.
+
+So, in this order: (1) the SPC translator under the split (the one thing
+that helps every game there); (2) queue the followed register writes with
+their sample and run the front end once a batch, so its 630 blocks are
+done in one warm pass; (3) hardware: all of this is ares, and the split's
+case rests on the RSP running beside the CPU.
+
 ## Where the CPU phase goes (profile, 2026-11-21, ares, frames 900-1020)
 
 PC samples of the CPU phase, `JIT816=1`, with and without `SPCDBT=1`.

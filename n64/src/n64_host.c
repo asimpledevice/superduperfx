@@ -1000,6 +1000,22 @@ static int host_main(void) {
         g_apu_dsp_sync_count[r] = g_apu_dsp_sync_samples[r] = 0;
       }
       n64_platform_log("[dspsync] 60 frames, syncs/samples:%s\n", b);
+#if SNESRECOMP_DSP_FRONTEND
+      { extern uint32_t g_dsp_fe_blocks, g_dsp_fe_runs, g_dsp_fe_events;
+        static uint32_t b0, r0, e0;
+        n64_platform_log("[fe] 60 frames: blocks %lu, samples with work %lu, runs %lu\n", (unsigned long)(g_dsp_fe_blocks - b0),
+                         (unsigned long)(g_dsp_fe_events - e0), (unsigned long)(g_dsp_fe_runs - r0));
+        b0 = g_dsp_fe_blocks; r0 = g_dsp_fe_runs; e0 = g_dsp_fe_events; }
+#if SNESRECOMP_DSP_STREAM
+      { extern uint32_t g_apu_stream_slow_w, g_apu_stream_slow_r; extern uint16_t g_apu_stream_slow_adr;
+        static uint32_t w0, rd0;
+        const Apu *ap = g_snes->apu;
+        n64_platform_log("[stream] 60 frames: SPC stores off the fast path %lu, reads %lu (last at %04x); ESA %02x EDL %x FLG %02x\n",
+                         (unsigned long)(g_apu_stream_slow_w - w0), (unsigned long)(g_apu_stream_slow_r - rd0),
+                         g_apu_stream_slow_adr, ap->dspRegs[0x6d], ap->dspRegs[0x7d] & 15, ap->dspRegs[0x6c]);
+        w0 = g_apu_stream_slow_w; rd0 = g_apu_stream_slow_r; }
+#endif
+#endif
 #if defined(SNESRECOMP_STREAM_SLOW_BITS) && SNESRECOMP_STREAM_SLOW_BITS == 2
       { extern uint32_t g_apu_stream_slow_bad;
         n64_platform_log("[stream-slow-check] bits clear where the exact test says slow: %lu\n", (unsigned long)g_apu_stream_slow_bad); }
