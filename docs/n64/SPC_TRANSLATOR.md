@@ -290,3 +290,30 @@ static store is load, mask, branch, nop, store); the watched-store stubs
 3,305, most in the delay slots of those tests; Z and N 2,244 (two
 registers, two moves). The buffer stays 256 KB for now: at 62% a smaller
 one would bring back the room question it just lost.
+
+## Where the sound time goes (PC samples, 2026-11-24, whole stack, ares)
+
+`n64/profile/sound_split.py` splits a `PROFILE=1` log. 120 frames of play
+each; ms a frame from the share of samples and the frame's time.
+
+| | Pitfall | Joe & Mac 2 | SMW |
+|---|---|---|---|
+| sound, all of it on the CPU | 11.0 | 15.2 | 22.6 |
+| translated SPC code | 3.9 | 5.7 | 6.7 |
+| `dsp_fe_run` (the front end's tracker) | 0.5 | 0.4 | 6.3 |
+| `apu_cpuWrite` + `apu_cpuRead` (the 65816's port accesses) | 1.3 | 2.1 | 1.0 |
+| `apu_runCycles_native` | 0.6 | 0.6 | 1.5 |
+| `spc_runOpcode` + `spc_read` (interpreted) | 0.6 | 0.2 | 1.5 |
+| `spc_dbt_edge` + `spc_dbt_fe` (sample edges, front end calls) | 0.6 | 1.0 | 1.3 |
+| `dsp_fe_write`, `dsp_write`, `apu_feRead`, `apu_feNow` | 0.7 | 1.6 | 1.4 |
+| `spc_dbt_valid`, `_link`, `_run`, `_may_run` | 1.2 | 0.5 | 0.6 |
+| `apu_native_waitSkip`, `apu_yellow_post`, timers, the rest | 1.6 | 3.1 | 2.3 |
+
+- Translated code is the largest part everywhere, a third of the sound
+  time, and it is slow for what it is: Joe & Mac 2 runs some 8,000 SPC
+  instructions a frame in 5.7 ms, about 65 CPU cycles each for under 20
+  MIPS instructions. That is cache misses: a frame of the driver walks
+  through far more translated code than the 16 KB instruction cache holds.
+  Fewer SPC instructions run (waits), or the same ones in fewer words.
+- SMW's tracker is 6.3 ms on its own.
+- Everything else is a tail of parts under 1 ms each.
