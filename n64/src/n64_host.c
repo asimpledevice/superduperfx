@@ -1072,6 +1072,28 @@ static int host_main(void) {
                        (unsigned long)g_spc_dbt_stats[1], (unsigned long)g_spc_dbt_stats[2],
                        (unsigned long)g_spc_dbt_stats[3], (unsigned long)g_spc_dbt_stats[4],
                        (unsigned long)g_spc_dbt_stats[5], (unsigned long)g_spc_dbt_stats[6]);
+      if (frame % 600 == 599) {   /* (all so far) why the translations were dropped, and what translation emits */
+        extern uint32_t g_spc_dbt_flush_why[7], g_spc_dbt_words[4], g_spc_dbt_stub_n[8], g_spc_dbt_stub_words[8];
+        n64_platform_log("[spcdbt-flush] reset or memory replaced %lu, no block records %lu, no room %lu, store into code %lu, "
+                         "S-DSP page with code %lu; held then, in all: %lu words, %lu blocks\n",
+                         (unsigned long)g_spc_dbt_flush_why[0], (unsigned long)g_spc_dbt_flush_why[1],
+                         (unsigned long)g_spc_dbt_flush_why[2], (unsigned long)g_spc_dbt_flush_why[3],
+                         (unsigned long)g_spc_dbt_flush_why[4], (unsigned long)g_spc_dbt_flush_why[5],
+                         (unsigned long)g_spc_dbt_flush_why[6]);
+        n64_platform_log("[spcdbt-words] blocks %lu, SPC instructions %lu, main path words %lu, cold path words %lu\n",
+                         (unsigned long)g_spc_dbt_words[3], (unsigned long)g_spc_dbt_words[0],
+                         (unsigned long)g_spc_dbt_words[1], (unsigned long)g_spc_dbt_words[2]);
+        n64_platform_log("[spcdbt-stubs] count/words by kind: leave %lu/%lu, edges %lu/%lu, watched store %lu/%lu, edges(4) %lu/%lu, "
+                         "io read %lu/%lu, io write %lu/%lu, watched read %lu/%lu, other %lu/%lu\n",
+                         (unsigned long)g_spc_dbt_stub_n[0], (unsigned long)g_spc_dbt_stub_words[0],
+                         (unsigned long)g_spc_dbt_stub_n[1], (unsigned long)g_spc_dbt_stub_words[1],
+                         (unsigned long)g_spc_dbt_stub_n[3], (unsigned long)g_spc_dbt_stub_words[3],
+                         (unsigned long)g_spc_dbt_stub_n[4], (unsigned long)g_spc_dbt_stub_words[4],
+                         (unsigned long)g_spc_dbt_stub_n[5], (unsigned long)g_spc_dbt_stub_words[5],
+                         (unsigned long)g_spc_dbt_stub_n[6], (unsigned long)g_spc_dbt_stub_words[6],
+                         (unsigned long)g_spc_dbt_stub_n[7], (unsigned long)g_spc_dbt_stub_words[7],
+                         (unsigned long)g_spc_dbt_stub_n[2], (unsigned long)g_spc_dbt_stub_words[2]);
+      }
       { static uint32_t s_epoch0;
         n64_platform_log("[spcdbt]   epochs %lu\n", (unsigned long)(g_spc_dbt_epoch - s_epoch0));
         s_epoch0 = g_spc_dbt_epoch; }

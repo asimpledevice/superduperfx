@@ -89,8 +89,22 @@ static uint32_t s_npages;
 static const uint8_t *s_cyc;
 static const uint8_t *s_mode, *s_op;
 
+/* Why the translations were dropped, counted (g_spc_dbt_flush_why): 0 the
+ * SPC reset or its memory was replaced or every page became the S-DSP's
+ * (apu.c), 1 no block records left, 2 no room for code, 3 the program
+ * stored into translated code's line, 4 the S-DSP may write a page with
+ * code. And what the buffer held then, summed: [5] words, [6] blocks. */
+uint32_t g_spc_dbt_flush_why[7];
+static int s_flush_why;
+/* What translation emits, summed: [0] SPC instructions, [1] words of the
+ * blocks' main paths, [2] words of their cold paths (stubs), [3] blocks.
+ * By stub kind: how many, and their words. */
+uint32_t g_spc_dbt_words[4], g_spc_dbt_stub_n[8], g_spc_dbt_stub_words[8];
 static bool s_flushed;   /* a flush happened during this run: no links or translation */
 void spc_dbt_flush(void) {
+  g_spc_dbt_flush_why[s_flush_why]++;
+  g_spc_dbt_flush_why[5] += s_ncode; g_spc_dbt_flush_why[6] += s_nblocks;
+  s_flush_why = 0;
   s_flushed = true;
   memset(g_spc_dbt_map, 0, sizeof g_spc_dbt_map);
   memset(g_spc_dbt_code, 0, sizeof g_spc_dbt_code);
@@ -141,12 +155,14 @@ void spc_dbt_code_written(uint16_t adr) {
    * no translated code and costs nothing. */
   s_volatile[adr >> 8] |= (uint8_t)(1u << ((adr >> 5) & 7));
 #endif
+  s_flush_why = 3;
   spc_dbt_flush();
 }
 /* The S-DSP may write a page that holds translated code (echo). */
 void spc_dbt_code_page_written(uint16_t adr) {
   g_spc_dbt_code_flushes++;
   g_spc_dbt_code_adr[g_spc_dbt_code_flushes & 7] = adr;
+  s_flush_why = 4;
   spc_dbt_flush();
 }
 
@@ -1518,6 +1534,7 @@ static Block *translate(Apu *apu, uint16_t pc, uint8_t p, bool may_flush) {
       static int n;
       if (n++ < 10) n64_platform_log("DBTFULL blocks %lu words %lu\n", (unsigned long)s_nblocks, (unsigned long)s_ncode); }
 #endif
+    s_flush_why = s_nblocks == kBlocks ? 1 : 2;
     spc_dbt_flush();
   }
   if (!s_have_epilogue) {
@@ -1666,8 +1683,10 @@ static Block *translate(Apu *apu, uint16_t pc, uint8_t p, bool may_flush) {
     if (s_seg_at[i] >= 0) s_code[s_seg_at[i]] |= s_seg_end[i];
   for (int i = 0; i < s_nbp; i++) s_code[s_bp[i].at] |= s_seg_end[s_bp[i].seg];
   /* The cold paths. */
+  const uint32_t w_cold = s_ncode;
   for (int i = 0; i < s_nstub; i++) {
     const Stub *st = &s_stub[i];
+    const uint32_t w_stub = s_ncode;
     bind(st->label);
     if (st->kind == 0) {          /* leave before the instruction */
       li(T0, (uint32_t)st->pc << 16 | st->o);
@@ -1736,6 +1755,7 @@ static Block *translate(Apu *apu, uint16_t pc, uint8_t p, bool may_flush) {
       B(st->resume);
       NOP();
     }
+    g_spc_dbt_stub_n[st->kind & 7]++; g_spc_dbt_stub_words[st->kind & 7] += s_ncode - w_stub;
   }
   /* Patch the branches. */
   for (int i = 0; i < s_nfix; i++) {
@@ -1779,6 +1799,8 @@ static Block *translate(Apu *apu, uint16_t pc, uint8_t p, bool may_flush) {
   /* New code lines: blocks validated before may store to them. (Lines
    * already marked were part of every validation since.) */
   if (new_lines) g_spc_dbt_epoch += 2;
+  g_spc_dbt_words[0] += (uint32_t)n; g_spc_dbt_words[1] += w_cold - start; g_spc_dbt_words[2] += s_ncode - w_cold;
+  g_spc_dbt_words[3]++;
   g_spc_dbt_stats[0]++;
   g_spc_dbt_stats[7] += (s_ncode - start) * 4;
   return b;

@@ -198,3 +198,42 @@ and a fresh one trained on a single configuration, and the stale one still
 wins. A retrain worth adopting should profile both configurations, and is
 better done once the 65816 changes in progress have settled, since they
 move which code is hot.
+
+## Buffer use and code size (measured 2026-11-24, whole stack, ares)
+
+`[spcdbt-flush]`, `[spcdbt-words]` and `[spcdbt-stubs]` (every 600 frames,
+totals so far) say why translations were dropped and what translation emits.
+
+| | Joe & Mac 2 | SMW | Pitfall |
+|---|---|---|---|
+| flushes: SPC reset / memory replaced | 2 | 2 | 2 |
+| flushes: a store into translated code | 0 | 0 | 5 |
+| flushes: no room, no block records, S-DSP page | 0 | 0 | 0 |
+| blocks / SPC instructions translated | 270 / 2,292 | 278 / 1,924 | 837 / 6,328 (over its flushes) |
+| words, main paths | 35,415 | 31,498 | 101,491 |
+| words, cold paths (stubs) | 24,953 | 23,987 | 69,530 |
+| words an instruction | 26.3 | 28.8 | 27.0 |
+| of the 65,536-word buffer | 92% | 85% | at most a third at a flush |
+
+- **No flush is for room**, so a collector (as the 65816 JIT's buffer has)
+  would save nothing today. But one scene of Joe & Mac 2 fills 92% of the
+  256 KB: a driver a little larger flushes for room, and then everything
+  is made again.
+- **Two fifths of the code is cold paths.** By kind, Joe & Mac 2: a store
+  to a watched page 757 stubs of 18 words (13,626: 23% of all code); the
+  sample edges before a point 1,177 of 6 (6,950); the front end before a
+  store 644 of 4; leaving before an instruction 380 of 4. The store stub
+  is the same code each time but for an address, a register and a cycle
+  count: as one shared routine and a few words a site it would give back
+  about a sixth of the buffer.
+- The main paths are 15 words an instruction, the 13-word link stub of
+  every exit included. Not yet read instruction by instruction, as the
+  65816 JIT's were (54 -> 21 words there).
+- Pitfall's five flushes are stores into its own code; each drops
+  everything (about 22,000 words, 110 blocks), though the store touches
+  one 32-byte line. Dropping only the blocks on that line needs their
+  links undone, which nothing records yet.
+
+Order this suggests: the shared store stub and the edge stub (size, no
+change to what runs); then the main paths' audit; a smaller buffer after
+that; a collector or per-line dropping only if a game shows the need.
