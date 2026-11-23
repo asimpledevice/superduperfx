@@ -1083,6 +1083,13 @@ static int host_main(void) {
         n64_platform_log("[spcdbt-words] blocks %lu, SPC instructions %lu, main path words %lu, cold path words %lu\n",
                          (unsigned long)g_spc_dbt_words[3], (unsigned long)g_spc_dbt_words[0],
                          (unsigned long)g_spc_dbt_words[1], (unsigned long)g_spc_dbt_words[2]);
+        { extern uint32_t g_spc_dbt_cat[11];
+          n64_platform_log("[spcdbt-main] link stubs %lu, exit edge+budget %lu, back edges %lu, edge tests %lu, front-end tests %lu, "
+                           "stores %lu, segment time %lu, Z and N %lu, nops (all) %lu; exits %lu, stores %lu\n",
+                           (unsigned long)g_spc_dbt_cat[0], (unsigned long)g_spc_dbt_cat[1], (unsigned long)g_spc_dbt_cat[2],
+                           (unsigned long)g_spc_dbt_cat[3], (unsigned long)g_spc_dbt_cat[4], (unsigned long)g_spc_dbt_cat[5],
+                           (unsigned long)g_spc_dbt_cat[6], (unsigned long)g_spc_dbt_cat[7], (unsigned long)g_spc_dbt_cat[8],
+                           (unsigned long)g_spc_dbt_cat[9], (unsigned long)g_spc_dbt_cat[10]); }
         n64_platform_log("[spcdbt-stubs] count/words by kind: leave %lu/%lu, edges %lu/%lu, watched store %lu/%lu, edges(4) %lu/%lu, "
                          "io read %lu/%lu, io write %lu/%lu, watched read %lu/%lu, other %lu/%lu\n",
                          (unsigned long)g_spc_dbt_stub_n[0], (unsigned long)g_spc_dbt_stub_words[0],

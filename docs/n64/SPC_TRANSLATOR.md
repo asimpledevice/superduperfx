@@ -251,3 +251,42 @@ of the same code differ by, but the store routine is two jumps longer than
 the stub was, so look at it again if SMW's watched stores turn out hot).
 Cold paths are now 29% of the code. Next: the main paths (15 words an
 instruction), then the buffer's size.
+
+**Main paths, read by what the words are for (2026-11-24).** `[spcdbt-main]`
+counts them. Joe & Mac 2 before: 15.5 words an instruction on the main
+path -- link stubs 18%, stores 19%, the edge test and budget at exits 10%,
+edge tests before stores and I/O 8%, front-end tests 6%, Z and N 6%, the
+segments' time tests 3%; the instructions' own work 30%, under 5 words
+each. So the work was done on what surrounds the instructions:
+
+- **An exit pays its budget first** (`exit_edges`): `addiu t8; subu; bltz;
+  sw t8` in the delay slot, 4 words for 6, and the edge stub's offset is 0
+  (one word less there, and a computed exit loses three more).
+- **A store asks about the edges and the front end at once**
+  (`fe_check`): one test of the two conditions and one stub (`s_edge_fe`:
+  the edges if one is due, then the front end if it is behind -- the order
+  the two tests had), 6 words and a 5-word stub for 7 and two stubs.
+- **A store's watch test reads one bitmap under the audio split**: the
+  batch host's "page is current" bitmap is never set there.
+- **Links: 3 words an exit and 10 a block** for 13 an exit. The epoch and
+  time checks moved from every link stub into the target block's linked
+  entry, eight words before its code, which a stub's `jal` lands on; a
+  failed check goes to `s_link` with `ra` still the stub's, so the stub is
+  linked again when its target was retranslated. (The entry's `slti` is
+  patched with the block's longest path before the caches are flushed:
+  after, and the stale word ran -- ares models the instruction cache.)
+
+Words an instruction, at the start of the audit -> after the stubs ->
+now: Joe & Mac 2 26.3 -> 21.7 -> 17.8 (62% of the buffer, was 92%), SMW
+28.8 -> 23.4 -> 19.0 (56%, was 85%), Pitfall 27.0 -> 22.5 -> 18.3. Exact on
+the three games and the random test at each step. Frame times did not
+move beyond what two builds differ by (SPC bucket, before the audit ->
+now: Joe & Mac 2 17.1 -> 17.8 ms, SMW 21.8 -> 21.2, Pitfall 11.9 -> 11.4):
+the gain is room, not time.
+
+Left, by size (Joe & Mac 2, of 40,726 words): stores 5,021 (6.4 each: a
+static store is load, mask, branch, nop, store); the watched-store stubs
+4,542; link stubs and entries 4,249; edge and front-end tests 4,126; nops
+3,305, most in the delay slots of those tests; Z and N 2,244 (two
+registers, two moves). The buffer stays 256 KB for now: at 62% a smaller
+one would bring back the room question it just lost.
