@@ -248,6 +248,52 @@ that runs in steady state should be translated.
    Storage is not the limit (384 KB buffer, flushed when full); what costs
    is the translator's own code running through the caches, so translate
    once and keep, rather than translate and discard.
+   **The code buffer keeps what runs (2026-11-24, `SNESRECOMP_JIT_EVICT`).**
+   A full buffer used to be flushed whole. Measured with smaller buffers
+   (`SNESRECOMP_JIT_CODE_KB`), whole stack, ms a frame:
+
+   | buffer | policy | Joe & Mac 2 | Pitfall, play | Pitfall, loading (frames 400-1300) |
+   |---|---|---|---|---|
+   | 384 KB | flush | 52.5 | 57.1 | 117.3 |
+   | 192 KB | collect | 52.4 | 56.3 | 115.8 |
+   | 96 KB | flush | 53.5 | (106 flushes; did not reach play in the run) | 169.8 |
+   | 96 KB | collect | 52.6 | 67.5 | 129.9 |
+   | 48 KB | flush | 74.2 | (216 flushes) | - |
+   | 48 KB | collect | 66.2 | 72.1 | 134.8 |
+
+   Now: blocks are placed one after another, each with a header; a block
+   is made in the buffer's last 12 KB and copied to its place (its code is
+   position independent but for one address). When there is no room, a
+   collection drops the blocks that have not run since the last one and
+   moves the rest down together. If that frees less than an eighth, or
+   comes within 25,000 instructions of the last, the buffer is full of
+   code that runs: nothing is made for 100,000 instructions and what does
+   not fit is interpreted. The reason is the price of a block: making one
+   costs about five times interpreting it once, so evicting code that runs
+   to make code that will be evicted in turn is the worst thing to do. Two
+   versions that did that were measured and dropped on the torture ROM at
+   48 KB (one the buffer cannot hold a set of): a hand that evicted in
+   address order, 510 ms a frame against the flush's 348; the collector,
+   198. A third, letting the coldest quarter leave under pressure by a
+   count of instructions run, took Pitfall at 96 KB from 67 to 90 ms: the
+   newcomers were no hotter.
+   The default buffer is now 192 KB and its table of entries 64 KB (was
+   384 and 128): 264 KB for the JIT in all, against 520.
+   At that default: exact on the three games (3 to 4 collections each in
+   Pitfall and Joe & Mac 2, none in SMW) and on the torture ROM (922
+   frames, 193 collections; also at 48 KB, where it collects constantly).
+   Pitfall 55.6 ms a frame, Joe & Mac 2 52.5, SMW 89.4 (87.4 before; SMW
+   never fills the buffer and its 65816 buckets are unchanged, the
+   difference is in the sound and "other" buckets, as between other
+   builds).
+   `-DN64_JIT_BUFLOG` logs the turnover every 60 frames (`[jit816-buffer]`:
+   blocks made, runs, collections, dropped, kept) in any build.
+   Left: a game whose running code is larger than the buffer interprets
+   the overflow first come, first kept; nothing ranks blocks by how much
+   they run (the heat count above did not pay with Pitfall's flat
+   profile, but a game with a few very hot loops among much lukewarm code
+   may differ). The same question for the SPC translator's buffer, which
+   still flushes whole.
 4. **What is "not worth translating" is decided by counting, not by kind.**
    Decimal-mode ADC/SBC, emulation mode, an instruction across an 8 KB page
    boundary and code in RAM stay with the interpreter today. If a game runs

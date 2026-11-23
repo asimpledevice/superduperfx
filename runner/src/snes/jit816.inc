@@ -38,7 +38,22 @@ extern const uint8_t cyclesPerOpcode[256];   /* interp816.c */
 #ifndef SNESRECOMP_JIT_XFER
 #define SNESRECOMP_JIT_XFER 1   /* JMP, JML, JSR, JSL, RTS, RTL in blocks */
 #endif
-enum { kJitCodeWords = 98304, kJitEntries = 8192, kJitMaxInsns = 32, kJitSeen = 2048,
+/* 1: a full code buffer keeps the blocks that run and loses those that stopped
+ * running ("The code buffer's blocks", below); 0: all at once. */
+#ifndef SNESRECOMP_JIT_EVICT
+#define SNESRECOMP_JIT_EVICT 1
+#endif
+/* The code buffer's size (KB), the last 12 of them the room a block is made
+ * in. 192 with collections runs the three test games as 384 did with
+ * flushes (docs/n64/TODO.md); a game whose running code is larger
+ * interprets what does not fit. The table of entries (one a translated
+ * instruction, 16 bytes) follows the size. */
+#ifndef SNESRECOMP_JIT_CODE_KB
+#define SNESRECOMP_JIT_CODE_KB (SNESRECOMP_JIT_EVICT ? 192 : 384)
+#endif
+enum { kJitCodeWords = SNESRECOMP_JIT_CODE_KB * 256,
+       kJitEntries = SNESRECOMP_JIT_CODE_KB > 192 ? 8192 : SNESRECOMP_JIT_CODE_KB > 96 ? 4096 : 2048, kJitMaxInsns = 32, kJitSeen = 2048,
+       kJitBlockRoom = 3072,   /* words kept free for the block being made (a block of 32 long instructions) */
        kJitLaps = 8,       /* laps in a row without progress before a loop inside a block leaves for the big loop */
        kJitRunMax = 4096   /* instructions after which a loop leaves in any case */ };
 static uint32_t s_jit_code[kJitCodeWords] __attribute__((aligned(32)));
@@ -91,7 +106,7 @@ static bool jit_on_shared_lines(uint32_t w0, uint32_t w1) {
 }
 static uint8_t s_jit_store_ok;
 static uint8_t s_jit_speed[kCpuFastMapPages];   /* master clocks per access, by 8 KB page (RAM and ROM pages) */
-typedef struct { uint32_t key; uint32_t code; const uint8_t *pg; uint32_t n; } JitEntry;   /* n: bit 31 = holds ADC/SBC (binary mode only) */
+typedef struct { uint32_t key; uint32_t code; const uint8_t *pg; uint32_t n; } JitEntry;   /* n: bit 31 = the block holds ADC/SBC (binary mode only); bit 30 = ran since the last collection */
 static JitEntry s_jit_ent[kJitEntries];   /* key: 0x80000000 | mx << 24 | pc24 */
 static uint32_t s_jit_nent;
 static uint32_t s_jit_seen[kJitSeen];     /* block starts reached once */
@@ -102,6 +117,7 @@ static uint32_t s_jit_seen[kJitSeen];     /* block starts reached once */
  * another 8 KB to look things up in cost Joe & Mac 2 3 ms a frame.) */
 static uint8_t s_jit_memsel;
 static bool s_jit_full;
+static uint32_t s_jit_limit = kJitCodeWords;   /* the end of the room the code being made has */
 static uint32_t s_jit_fp;                 /* a looping block's A, X, Y and write count at its last lap */
 uint32_t g_jit816_prev;                   /* pc24 of the last instruction a block ran */
 #ifdef N64_JIT_EXITS
@@ -109,7 +125,7 @@ extern uint32_t g_jit816_exit[3], g_jit816_exit_op[256];
 #endif
 uint32_t g_jit816_ended[256];
 uint8_t g_jit816_xlat[256];                /* by opcode: translated at least once (which opcodes a run exercises) */             /* by opcode: translations that stopped at it (no code for it yet) */
-uint32_t g_jit816_stats[6];               /* blocks, instructions translated, runs, instructions run, flushes, refused */
+uint32_t g_jit816_stats[8];               /* blocks, instructions translated, runs, instructions run, flushes or collections, refused, blocks dropped by collections, blocks kept */
 /* Words emitted, by what they are for: 0 the instruction's own work, 1 its
  * step end (clock, SPC time, count, event test), 2 its exit stub (latch and
  * exit), 3 branches whole, 4 transfers whole, 5 a block's tail exit. */
@@ -151,7 +167,7 @@ enum { FA = 17, FX = 18, FY = 19, FS = 20, FD = 21, FDB = 22, FPB = 23, FPMX = 2
        FNZ = 28, FC = 29, FV = 30 };   /* fpu_slots.h */
 
 static void jput(uint32_t w) {
-    if (s_jit_n < kJitCodeWords) s_jit_code[s_jit_n++] = w; else s_jit_full = true;
+    if (s_jit_n < s_jit_limit) s_jit_code[s_jit_n++] = w; else s_jit_full = true;
 }
 static void jI(int op, int rs, int rt, int imm) { jput((uint32_t)op << 26 | (uint32_t)rs << 21 | (uint32_t)rt << 16 | ((uint32_t)imm & 0xffffu)); }
 static void jR(int rs, int rt, int rd, int sa, int fn) { jput((uint32_t)rs << 21 | (uint32_t)rt << 16 | (uint32_t)rd << 11 | (uint32_t)sa << 6 | (uint32_t)fn); }
@@ -269,6 +285,7 @@ static void jbr(int op, int rs, int rt, int l) {   /* BEQ 4, BNE 5; the caller e
     jI(op, rs, rt, 0);
 }
 static void jfix_all(void) {
+    if (s_jit_full) return;   /* (words were dropped: a branch's place may be past the room, in the next piece) */
     for (int i = 0; i < s_jit_nfix; i++) {
         const int32_t to = s_jit_label[s_jit_fix[i].label];
         if (to < 0) { s_jit_full = true; continue; }
@@ -319,12 +336,17 @@ static void jit_syncin(void) {         /* (t0, t1) */
     J_DMFC1(JT1, FMC);
     J_DSUBU(JR, JT0, JT1);
 }
+#if SNESRECOMP_JIT_EVICT
+static void jit_layout_reset(void);
+#endif
+uint32_t g_jit816_nested;                 /* a block asked for while another was running (nothing is made then) */
 static void jit816_flush(void) {
     memset(s_jit_ent, 0, sizeof s_jit_ent);
     for (unsigned i = 0; i < kJitSeen; i++)   /* (blocks translated before stay known) */
         if ((s_jit_seen[i] & 0x60000000u) != 0x20000000u) s_jit_seen[i] = 0;
     s_jit_nent = 0;
     s_jit_n = 0;
+    s_jit_limit = kJitCodeWords;
     s_jit_nlabels = 0; s_jit_nfix = 0;   /* (the shared routines' labels: fixed at the end) */
     s_jit_full = false;
     s_jit_memsel = g_memsel;
@@ -588,6 +610,9 @@ static void jit816_flush(void) {
     data_cache_hit_writeback(&s_jit_code[0], s_jit_n * 4);
     inst_cache_hit_invalidate(&s_jit_code[0], s_jit_n * 4);
     s_jit_shared_end = (s_jit_n + 7u) & ~7u;   /* (whole cache lines) */
+#if SNESRECOMP_JIT_EVICT
+    jit_layout_reset();
+#endif
 }
 
 static JitEntry *jit_find(uint32_t key) {
@@ -604,6 +629,145 @@ static void jit_add(uint32_t key, uint32_t code, const uint8_t *pg, uint32_t n) 
         if (!e->key) { e->key = key; e->code = code; e->pg = pg; e->n = n; s_jit_nent++; return; }
     }
 }
+
+/* ---- The code buffer's blocks -------------------------------------------
+ * SNESRECOMP_JIT_EVICT=1: a full buffer keeps the blocks that are in use.
+ * Blocks are placed one after another (s_jit_top), each with a header:
+ *   a block  header (length; instruction count), key base (the key of its
+ *            instructions less the pc), code, thunk, table (one word an
+ *            instruction: the pc is its low 16 bits)
+ *   a skip   header only (length): the words left unused before the cache
+ *            lines the shared routines take (jit_on_shared_lines)
+ * A block is made in the buffer's last kJitBlockRoom words and copied to
+ * its place: its code is position independent but for the address of its
+ * table, which is set again after a copy.
+ * When there is no room, the buffer is collected (jit_collect): a block
+ * that has not run since the last collection (kJitUsed in none of its
+ * entries) leaves, its entries with it; the others move down together, in
+ * order, their marks cleared. If a collection frees too little, or follows
+ * the last one closely, the buffer is full of code that runs: nothing is made for the next kJitHoldSteps instructions
+ * (what does not fit is interpreted -- making a block costs several times
+ * what interpreting it once does, so a block evicted to make another that
+ * is evicted in turn is the worst case), and the collection after that
+ * finds what stopped running in the meantime. (Tried and dropped: letting
+ * the coldest quarter leave as well under that pressure, by a count of
+ * instructions run. What came in was no hotter and each block cost a
+ * translation: Pitfall at 96 KB went from 67 to 90 ms a frame.)
+ * A block that left is still
+ * known to s_jit_seen, so it is made again on its first visit. */
+enum { kJitUsed = 0x40000000u, kJitHdrLen = 0x000FFFFFu, kJitHdrNShift = 20,
+       kJitHoldSteps = 100000,   /* 65816 instructions (translated or not): some frames' worth */
+       kJitTileEnd = kJitCodeWords - kJitBlockRoom };   /* the buffer's last words: where a block is made, before it is placed */
+static struct { uint32_t base, arith, at[kJitMaxInsns]; uint16_t pc[kJitMaxInsns]; } s_jit_made;   /* the block just made */
+static void jit_del(JitEntry *e) {   /* (linear probing: the entries after it move up) */
+    uint32_t i = (uint32_t)(e - s_jit_ent), j = i;
+    for (;;) {
+        j = (j + 1) & (kJitEntries - 1);
+        const uint32_t kj = s_jit_ent[j].key;
+        if (!kj) break;
+        const uint32_t k = (kj ^ (kj >> 11)) & (kJitEntries - 1);
+        if (i <= j ? (i < k && k <= j) : (i < k || k <= j)) continue;
+        s_jit_ent[i] = s_jit_ent[j];
+        i = j;
+    }
+    s_jit_ent[i].key = 0;
+    s_jit_nent--;
+}
+static bool s_jit_running;      /* a block is running (a C function it called): nothing may be made or moved */
+static uint32_t s_jit_top;      /* the first word not taken by a block */
+static uint32_t s_jit_hold;     /* g_interp_bridge_steps when the buffer was found full: nothing is made for kJitHoldSteps from it */
+static bool s_jit_holding;
+static uint32_t s_jit_collect_at;   /* g_interp_bridge_steps at the last collection */
+static bool s_jit_collected;
+#if SNESRECOMP_JIT_EVICT
+static void jit_layout_reset(void) { s_jit_top = s_jit_shared_end; s_jit_holding = false; s_jit_collected = false; }
+/* The place for a block of len words at or after w: past the shared
+ * routines' lines if it would lie on them. */
+static uint32_t jit_place(uint32_t w, uint32_t len) {
+    if (!jit_on_shared_lines(w, w + len)) return w;
+    const uint32_t o = w % kJitICacheWords;
+    return w - o + (o < s_jit_shared_end ? 0u : (uint32_t)kJitICacheWords) + s_jit_shared_end;
+}
+static void jit_set_table(uint32_t w, uint32_t len, uint32_t n) {   /* the thunk's lui t1 / ori t1: the table's address */
+    const uint32_t t = w + len - n - 4;
+    const uint32_t ta = (uint32_t)(uintptr_t)&s_jit_code[t + 4];
+    s_jit_code[t] = (s_jit_code[t] & 0xFFFF0000u) | (ta >> 16);
+    s_jit_code[t + 1] = (s_jit_code[t + 1] & 0xFFFF0000u) | (ta & 0xFFFFu);
+}
+/* A block's entries (those that are still its own) and whether it ran
+ * since the last collection. */
+static void jit_block_entries(uint32_t w, uint32_t len, uint32_t n, JitEntry **ent, bool *used) {
+    const uint32_t base = s_jit_code[w + 1];
+    *used = false;
+    for (uint32_t i = 0; i < n; i++) {
+        JitEntry *e = jit_find(base | (s_jit_code[w + len - n + i] & 0xFFFFu));
+        if (e && (e->code < w || e->code >= w + len)) e = NULL;   /* (a newer block's) */
+        if (e && (e->n & kJitUsed)) *used = true;
+        ent[i] = e;
+    }
+}
+static void jit_collect(void) {
+    const uint32_t top = s_jit_top;
+    uint32_t src = s_jit_shared_end, dst = s_jit_shared_end;
+    while (src < top) {
+        const uint32_t hdr = s_jit_code[src], len = hdr & kJitHdrLen, n = hdr >> kJitHdrNShift;
+        if (!n) { src += len; continue; }                       /* a skip */
+        const uint32_t base = s_jit_code[src + 1];
+        JitEntry *ent[kJitMaxInsns];
+        bool used;
+        jit_block_entries(src, len, n, ent, &used);
+        if (!used) {
+            /* (one at a time: taking an entry out moves others) */
+            for (uint32_t i = 0; i < n; i++) {
+                JitEntry *e = jit_find(base | (s_jit_code[src + len - n + i] & 0xFFFFu));
+                if (e && e->code >= src && e->code < src + len) jit_del(e);
+            }
+            g_jit816_stats[6]++;
+            src += len;
+            continue;
+        }
+        const uint32_t d = jit_place(dst, len);                 /* (never past src: the same rule placed it there) */
+        if (d != dst) s_jit_code[dst] = d - dst;
+        for (uint32_t i = 0; i < n; i++)
+            if (ent[i]) {
+                ent[i]->n &= ~(uint32_t)kJitUsed;
+                ent[i]->code -= src - d;
+            }
+        if (d != src) {
+            memmove(&s_jit_code[d], &s_jit_code[src], len * 4);
+            jit_set_table(d, len, n);
+        }
+        g_jit816_stats[7]++;
+        src += len;
+        dst = d + len;
+    }
+    s_jit_top = dst;
+    data_cache_hit_writeback(&s_jit_code[s_jit_shared_end], (top - s_jit_shared_end) * 4);
+    inst_cache_hit_invalidate(&s_jit_code[s_jit_shared_end], (top - s_jit_shared_end) * 4);
+    g_jit816_stats[4]++;
+}
+/* The place for the block of len words just made, or 0: none for now. */
+static uint32_t jit_take(uint32_t len) {
+    for (int pass = 0; pass < 2; pass++) {
+        const uint32_t w = jit_place(s_jit_top, len);
+        if (w + len <= (uint32_t)kJitTileEnd) {
+            if (w != s_jit_top) s_jit_code[s_jit_top] = w - s_jit_top;
+            s_jit_top = w + len;
+            return w;
+        }
+        if (pass) break;
+        const bool soon = s_jit_collected && (uint32_t)g_interp_bridge_steps - s_jit_collect_at < (uint32_t)kJitHoldSteps / 4;
+        jit_collect();
+        s_jit_collected = true; s_jit_collect_at = (uint32_t)g_interp_bridge_steps;
+        /* Little freed, or the last collection was a moment ago: the buffer
+         * is full of code that runs, or is too small for what runs now.
+         * (Also when this block fits: collections are then a hold apart.) */
+        if (soon || (uint32_t)kJitTileEnd - s_jit_top < (uint32_t)kJitTileEnd / 8) { s_jit_hold = (uint32_t)g_interp_bridge_steps; s_jit_holding = true; }
+    }
+    { s_jit_hold = (uint32_t)g_interp_bridge_steps; s_jit_holding = true; }
+    return 0;
+}
+#endif
 
 /* One translated instruction's description. */
 enum { JM_NONE, JM_IMM, JM_DP, JM_ABS, JM_ABX, JM_ABY, JM_REL, JM_ALX, JM_ILY, JM_IMM8, JM_XABS, JM_XLONG,
@@ -1062,6 +1226,7 @@ static int jit_translate(uint32_t pc24, const uint8_t *pg, bool mf, bool xf, boo
             } else {
                 jit_exit((uint16_t)target, call ? ((target & 0xFF0000u) | ((target - 1u) & 0xFFFFu)) : ia);
             }
+            tab[i] = ipc[i];   /* (not used to leave by; a collection finds the block's instructions here) */
             /* a return the big loop must make: nothing done, nothing run */
             jbind(lexit[i]);
             if (ret) { JIT_EXIT_KIND(2, opc); jit_exit(ipc[i], ia); }
@@ -1606,8 +1771,14 @@ static int jit_translate(uint32_t pc24, const uint8_t *pg, bool mf, bool xf, boo
 #endif
     uint32_t arith = 0;
     for (int i = 0; i < n; i++) if (iop[i].op == JO_ADC || iop[i].op == JO_SBC) arith = 0x80000000u;
+#if SNESRECOMP_JIT_EVICT   /* (the caller places the block, then adds its entries) */
+    s_jit_made.base = 0x80000000u | (dl ? 1u << 26 : 0u) | mx << 24 | bank;
+    s_jit_made.arith = arith;
+    for (int i = 0; i < n; i++) { s_jit_made.pc[i] = ipc[i]; s_jit_made.at[i] = at[i]; }
+#else
     for (int i = 0; i < n; i++)
-        jit_add(0x80000000u | (dl ? 1u << 26 : 0u) | mx << 24 | bank | ipc[i], at[i], pg, (uint32_t)(n - i) | arith);
+        jit_add(0x80000000u | (dl ? 1u << 26 : 0u) | mx << 24 | bank | ipc[i], at[i], pg, arith);
+#endif
     g_jit816_stats[0]++;
     g_jit816_stats[1] += (uint32_t)n;
     return n;
@@ -1634,7 +1805,32 @@ static uint32_t jit816_run(CpuState *cpu, Interp816 *in, uint32_t pc24, const ui
         uint32_t *seen = &s_jit_seen[(pc24 ^ (pc24 >> 9) ^ mx << 7) & (kJitSeen - 1)];
         if (*seen == (key ^ 0x40000000u)) return 0;   /* nothing translatable starts here */
         if (*seen != key && *seen != (key ^ 0x20000000u)) { *seen = key; return 0; }
-        if (s_jit_nent > kJitEntries / 2 || s_jit_n > kJitCodeWords - 4096) jit816_flush();
+#if SNESRECOMP_JIT_EVICT
+        if (s_jit_running) { g_jit816_nested++; return 0; }
+        if (s_jit_holding) {                                             /* the buffer is full of code that runs */
+            if ((uint32_t)g_interp_bridge_steps - s_jit_hold < (uint32_t)kJitHoldSteps) return 0;
+            s_jit_holding = false;
+        }
+        if (s_jit_nent > kJitEntries - kJitEntries / 4) jit816_flush();   /* (not expected: the buffer bounds the entries) */
+        s_jit_n = kJitTileEnd + 2; s_jit_limit = kJitCodeWords; s_jit_full = false;
+        const int n = jit_translate(pc24, pg, (mx & 2) != 0, (mx & 1) != 0, dl != 0, false);
+        if (n <= 0) {
+            s_jit_full = false;
+            g_jit816_stats[5]++; *seen = key ^ 0x40000000u;
+            return 0;
+        }
+        const uint32_t len = s_jit_n - kJitTileEnd;
+        const uint32_t start = jit_take(len);
+        if (!start) return 0;                                            /* (still known as seen: made when there is room) */
+        memcpy(&s_jit_code[start + 2], &s_jit_code[kJitTileEnd + 2], (len - 2) * 4);
+        s_jit_code[start] = len | (uint32_t)n << kJitHdrNShift;
+        s_jit_code[start + 1] = s_jit_made.base;
+        jit_set_table(start, len, (uint32_t)n);
+        for (int i = 0; i < n; i++)
+            jit_add(s_jit_made.base | s_jit_made.pc[i], s_jit_made.at[i] - kJitTileEnd + start, pg, s_jit_made.arith);
+        s_jit_n = start + len;   /* (the range to write back, below) */
+#else
+        if (s_jit_nent > kJitEntries / 2 || s_jit_n > kJitCodeWords - kJitBlockRoom) jit816_flush();
         const uint32_t start = s_jit_n;
         int n = jit_translate(pc24, pg, (mx & 2) != 0, (mx & 1) != 0, dl != 0, true);
         if (n == -2) {   /* past the shared routines' lines */
@@ -1647,6 +1843,7 @@ static uint32_t jit816_run(CpuState *cpu, Interp816 *in, uint32_t pc24, const ui
             else { s_jit_n = start; g_jit816_stats[5]++; *seen = key ^ 0x40000000u; }
             return 0;
         }
+#endif
         data_cache_hit_writeback(&s_jit_code[start], (s_jit_n - start) * 4);
         inst_cache_hit_invalidate(&s_jit_code[start], (s_jit_n - start) * 4);
         *seen = key ^ 0x20000000u;
@@ -1655,7 +1852,10 @@ static uint32_t jit816_run(CpuState *cpu, Interp816 *in, uint32_t pc24, const ui
     }
     if (e->pg != pg || (long)kJitRunMax + 2 * kJitMaxInsns >= room) return 0;
     if ((e->n & 0x80000000u) && cpu_flag_D()) return 0;   /* decimal arithmetic: the interpreter's */
+    if (!(e->n & kJitUsed)) e->n |= kJitUsed;   /* (for collections: this block runs) */
+    s_jit_running = true;
     const uint32_t ran = ((JitEnterFn)(void *)&s_jit_code[0])(&s_jit_code[e->code], in);
+    s_jit_running = false;
     g_jit816_stats[2]++;
     g_jit816_stats[3] += ran;
     return ran;

@@ -748,7 +748,7 @@ static int host_main(void) {
           n64_platform_log("[tcat] bounces into compiled bodies: %lu per frame\n",
                            (unsigned long)((g_interp_bridge_bounces - s_b0) / 60));
 #if defined(SNESRECOMP_JIT816) && SNESRECOMP_JIT816
-          if (frame >= 360 && s_tc_frames == 59) { extern uint32_t g_jit816_stats[6];
+          if (frame >= 360 && s_tc_frames == 59) { extern uint32_t g_jit816_stats[8], g_jit816_nested;
             { extern uint32_t g_jit816_words[6];
               n64_platform_log("[jit816-words] work %lu, step end %lu, exit stubs %lu, branches %lu, transfers %lu, tails %lu (all translations so far)\n",
                                (unsigned long)g_jit816_words[0], (unsigned long)g_jit816_words[1], (unsigned long)g_jit816_words[2],
@@ -757,6 +757,8 @@ static int host_main(void) {
                              (unsigned long)g_jit816_stats[0], (unsigned long)g_jit816_stats[1],
                              (unsigned long)g_jit816_stats[2], (unsigned long)g_jit816_stats[3],
                              (unsigned long)g_jit816_stats[4], (unsigned long)g_jit816_stats[5]);
+            n64_platform_log("[jit816-buffer] collections: blocks dropped %lu, kept %lu (in all); asked for while one ran %lu\n",
+                             (unsigned long)g_jit816_stats[6], (unsigned long)g_jit816_stats[7], (unsigned long)g_jit816_nested);
 #ifdef N64_JIT_EXITS
             { extern uint32_t g_jit816_exit[3], g_jit816_exit_op[256];
               n64_platform_log("[jit816-exit] event %lu, branch out %lu, block end %lu\n", (unsigned long)g_jit816_exit[0],
@@ -1230,6 +1232,15 @@ static int host_main(void) {
     }
 #endif
     if (++frame % 60 == 0) {
+#if defined(N64_JIT_BUFLOG) && SNESRECOMP_JIT816
+      { extern uint32_t g_jit816_stats[8], g_jit816_nested;   /* the code buffer's turnover, without the reports' build */
+        extern unsigned long long g_interp_bridge_steps;
+        n64_platform_log("[jit816-buffer] blocks made %lu (%lu instructions), runs %lu (%lu instructions), flushes or collections %lu, none %lu, dropped %lu, kept %lu, nested %lu; 65816 instructions in all %lu\n",
+                         (unsigned long)g_jit816_stats[0], (unsigned long)g_jit816_stats[1], (unsigned long)g_jit816_stats[2],
+                         (unsigned long)g_jit816_stats[3], (unsigned long)g_jit816_stats[4], (unsigned long)g_jit816_stats[5],
+                         (unsigned long)g_jit816_stats[6], (unsigned long)g_jit816_stats[7], (unsigned long)g_jit816_nested,
+                         (unsigned long)g_interp_bridge_steps); }
+#endif
       n64_platform_log("[n64] frames %lu: avg/frame run %lu us, ppu %lu us, present %lu us\n",
                        (unsigned long)frame, (unsigned long)(acc_run / 60),
                        (unsigned long)(acc_draw / 60), (unsigned long)(acc_present / 60));
