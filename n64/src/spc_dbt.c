@@ -58,7 +58,7 @@ uint32_t g_spc_dbt_refused[4];   /* direct page, watched read, watched write, co
 
 enum { kCodeWords = 65536, kBlocks = 1536, kMaxInsns = 32, kMapPages = 48 };
 static uint32_t s_code[kCodeWords] __attribute__((aligned(32)));
-static uint32_t s_ncode, s_epilogue, s_exit, s_edge, s_fe, s_enter, s_link, s_dyn;
+static uint32_t s_ncode, s_epilogue, s_exit, s_edge, s_fe, s_enter, s_link, s_dyn, s_wstore;
 static void *s_target;   /* the block s_enter starts */
 /* Bumped whenever a block's entry conditions may have changed (page marks,
  * the direct page, translated code): a block validated in the current
@@ -386,6 +386,28 @@ static void emit_shared(void) {
   SW(ZERO, F_FE, SP);
   LW(RBUD, F_T8, SP);
   LW(REDGE, F_T9, SP);
+  LW(RA, F_RET, SP);
+  JR(RA);
+  NOP();
+
+  /* A store to a watched page: the runtime's write. a1 = the address, a2 =
+   * the byte, a3 = the instruction's cycle offset in the block. (One
+   * routine: as a stub of each store it was a quarter of all the code.) */
+  s_wstore = s_ncode;
+  SW(RA, F_RET, SP);
+  SW(T0, F_SAVE0, SP);
+  SW(T3, F_SAVE3, SP);
+  LW(T1, F_END, SP);
+  SUBU(T1, T1, RBUD);
+  ADDU(A3, A3, T1);                   /* F_END - t8 + o: this instruction's cycle */
+  jal((void *)spc_dbt_slow_write);
+  LW(A0, offsetof(Spc, apu), RSPC);
+  LW(RBUD, F_T8, SP);                 /* (as call_cycle_at) */
+  LW(REDGE, F_T9, SP);
+  ORI(T1, ZERO, 1);
+  SW(T1, F_FE, SP);
+  LW(T0, F_SAVE0, SP);
+  LW(T3, F_SAVE3, SP);
   LW(RA, F_RET, SP);
   JR(RA);
   NOP();
@@ -1688,36 +1710,24 @@ static Block *translate(Apu *apu, uint16_t pc, uint8_t p, bool may_flush) {
     const Stub *st = &s_stub[i];
     const uint32_t w_stub = s_ncode;
     bind(st->label);
+    /* (pc << 16 | o: its low half goes in the jump's delay slot) */
     if (st->kind == 0) {          /* leave before the instruction */
-      li(T0, (uint32_t)st->pc << 16 | st->o);
+      LUI(T0, st->pc);
       j_(s_exit);
-      NOP();
+      ORI(T0, T0, st->o);
     } else if (st->kind == 1 || st->kind == 4) {   /* the sample edges before a point */
-      if (st->kind == 1) li(T0, (uint32_t)st->pc << 16 | st->o);
-      else LW(T0, F_SAVE0, SP);
+      if (st->kind == 1) LUI(T0, st->pc);
       jal_code(s_edge);
-      NOP();
+      if (st->kind == 1) ORI(T0, T0, st->o); else LW(T0, F_SAVE0, SP);
       B(st->resume);
       NOP();
-    } else if (st->kind == 3) {   /* a store to a watched page: the runtime's write */
-      SW(T0, F_SAVE0, SP);
-      SW(T3, F_SAVE3, SP);
+    } else if (st->kind == 3) {   /* a store to a watched page: the shared routine */
+      MOVE(A2, st->src);
       if (st->where == 0) li(A1, st->adr);
       else if (st->where == 1) MOVE(A1, T0);
       else ADDIU(A1, RSP_, 0x100);
-      MOVE(A2, st->src);
-      LW(A3, F_END, SP);
-      SUBU(A3, A3, RBUD);
-      ADDIU(A3, A3, st->o);
-      LW(A0, offsetof(Spc, apu), RSPC);
-      jal((void *)spc_dbt_slow_write);
-      NOP();
-      LW(RBUD, F_T8, SP);
-      LW(REDGE, F_T9, SP);
-      ORI(T1, ZERO, 1);
-      SW(T1, F_FE, SP);
-      LW(T0, F_SAVE0, SP);
-      LW(T3, F_SAVE3, SP);
+      jal_code(s_wstore);
+      ORI(A3, ZERO, st->o);
       B(st->resume);
       NOP();
     } else if (st->kind == 7) {   /* a read of a page the S-DSP may write */

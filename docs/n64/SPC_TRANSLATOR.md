@@ -237,3 +237,17 @@ totals so far) say why translations were dropped and what translation emits.
 Order this suggests: the shared store stub and the edge stub (size, no
 change to what runs); then the main paths' audit; a smaller buffer after
 that; a collector or per-line dropping only if a game shows the need.
+
+**Stubs shared (2026-11-24).** The watched-store stub is one routine
+(`s_wstore`; a site passes the address, the byte and the cycle offset: 6
+words, was 18), and the edge and leave stubs put half of their constant in
+the jump's delay slot (5 and 3 words, were 6 and 4). Nothing on a block's
+main path changed. Words an instruction: Joe & Mac 2 26.3 -> 21.7 (76% of
+the buffer, was 92%), SMW 28.8 -> 23.4 (69%, was 85%), Pitfall 27.0 ->
+22.5. Exact on the three games and the translator's random test; frame
+times as before (Joe & Mac 2 52.8 ms against 52.9, Pitfall 55.5 / 55.7,
+SMW 89.8 / 89.1, its SPC bucket 22.6 against 21.8: within what two builds
+of the same code differ by, but the store routine is two jumps longer than
+the stub was, so look at it again if SMW's watched stores turn out hot).
+Cold paths are now 29% of the code. Next: the main paths (15 words an
+instruction), then the buffer's size.
