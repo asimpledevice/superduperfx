@@ -3025,7 +3025,7 @@ uint32_t g_lean_settle[7];
  * or a transfer back), 1 another bank, 2 the step cap, 3 no plain page,
  * 4 an opcode the big loop handles (g_lean_break_op), 5 IRQ or deadline;
  * and the instructions each loop interpreted: [6] big, [7] lean. */
-uint32_t g_lean_break[8], g_lean_break_op[256];
+uint32_t g_lean_break[8], g_lean_break_op[256], g_lean_interp_op[256];
 #endif
 #if SNESRECOMP_JIT816
 /* A transfer that is not forward (a loop head, a call's or return's target)
@@ -3195,6 +3195,7 @@ static __attribute__((noinline)) void bridge_lean_run(CpuState *cpu, Interp816 *
         steps++;
 #ifdef N64_JIT_EXITS
         g_lean_break[7]++;
+        g_lean_interp_op[pg[bpc & 0x1FFFu]]++;
 #endif
 #ifdef N64_TIME_CATS
         g_tcat_iters++;

@@ -781,6 +781,18 @@ static int host_main(void) {
                   n64_platform_log("[lean-break-op] %02x %lu\n", best, (unsigned long)g_lean_break_op[best]);
                   g_lean_break_op[best] = 0;
                 }
+                { extern uint32_t g_lean_interp_op[256];
+                  char line[200]; int ln = 0;
+                  for (int t = 0; t < 16; t++) {
+                    int best = 0;
+                    for (int o = 1; o < 256; o++) if (g_lean_interp_op[o] > g_lean_interp_op[best]) best = o;
+                    if (!g_lean_interp_op[best]) break;
+                    ln += snprintf(line + ln, sizeof line - (size_t)ln, " %02x:%lu", best, (unsigned long)g_lean_interp_op[best]);
+                    g_lean_interp_op[best] = 0;
+                  }
+                  for (int o = 0; o < 256; o++) g_lean_interp_op[o] = 0;
+                  line[ln] = 0;
+                  n64_platform_log("[lean-interp-op]%s\n", line); }
                 for (int t = 0; t < 8; t++) g_lean_break[t] = 0; }
               extern uint32_t g_lean_settle[7];
               n64_platform_log("[lean-settle] event dropped %lu; next: none/irq %lu, none/refresh %lu, beam %lu, refresh line %lu, deadline %lu, spc %lu\n",
