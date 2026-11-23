@@ -76,9 +76,21 @@ interpreted. Not covered: `SPCDBT_TEST` (it runs two APUs; the split's
 S-DSP is one per system), and the page-bit check build compares the
 interpreter's accesses only. A block's validity check asks the exact read
 test, which clears stale bits (nothing else does for a page only blocks
-read): "watched read" refusals went from about 290 a frame to none. Left:
-Joe & Mac 2 still refuses about 200 block runs a frame as "code" (a block
-that could store into a line of translated code).
+read): "watched read" refusals went from about 290 a frame to none. The
+"code" refusals (Joe & Mac 2: about 390 block runs a frame) were indexed
+stores: the driver's per-voice tables lie just below its code (`$0511+X`
+and the like, code from `$0600`), a block's store range for `abs+X` is the
+256 bytes the index could reach, and a block whose range holds a line of
+translated code never runs. Such a store now looks at the line it really
+goes to (the code bitmap, nine instructions) and leaves before the
+instruction if that holds code, as a store through a pointer already did;
+it is emitted only where the range holds code lines when the block is made,
+and a block refused later for such a range is dropped from the map and
+made again (`SPC_DBT_INDEXED_STORE_CHECK`, 2026-11-23). Refusals: none in
+the three games. Joe & Mac 2's SPC bucket 20.4 -> 15.7 ms a frame (total
+57.4 -> 52.5), SMW 24.3 -> 23.2 (88.3 -> 87.4), Pitfall unchanged (57.1);
+exact on all three, and the translator's random test passes its 32
+programs. `-DSPC_DBT_REFUSED_LOG` lists the blocks and ranges refused.
 
 What the profiles say:
 

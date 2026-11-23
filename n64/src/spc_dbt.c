@@ -78,6 +78,7 @@ typedef struct {
   uint8_t p, npages, nw, pad;
   uint8_t page[10], pflag[10];   /* pflag: 1 read, 2 written */
   uint16_t wlo[6], whi[6];       /* byte ranges stores may touch */
+  uint8_t windexed;              /* a bit for each of them that is an absolute indexed store's (256 bytes) */
   uint16_t tgt[2];               /* direct successors, translated with it */
   uint8_t ntgt;
 } Block;
@@ -109,6 +110,11 @@ int g_spc_dbt_trace_runs;   /* (spc_dbt_test.c: log each run) */
 uint16_t g_spc_dbt_watch[3] = { SPC_DBT_TEST_WATCH };   /* (and the ARAM bytes it shows) */
 uint8_t g_spc_dbt_rpages[32];
 uint32_t g_spc_dbt_code_flushes;
+/* 1: an indexed store whose range holds code lines checks its target at run
+ * time, and a block refused for such a range is translated again that way. */
+#ifndef SPC_DBT_INDEXED_STORE_CHECK
+#define SPC_DBT_INDEXED_STORE_CHECK 1
+#endif
 #ifndef SPC_DBT_VOLATILE_LINES
 #define SPC_DBT_VOLATILE_LINES 1
 #endif
@@ -237,6 +243,7 @@ static void br(int op, int rs, int rt, int l) {   /* BEQ 4, BNE 5 */
 static const int kSaved[] = { S0, S1, S2, S3, S4, S5, S6, S7, S8, RA };
 
 static int spc_dbt_valid(void *block, Spc *spc);
+static bool code_in(uint16_t lo, uint16_t hi);
 static void *spc_dbt_link(Spc *spc, uint32_t *stub, uint32_t pc, uint32_t budget);
 static void *spc_dbt_may_run(void *block, Spc *spc, uint32_t budget);
 
@@ -715,8 +722,33 @@ static bool addr_of(Ctx *c, int mode, Addr *a, int *len, uint8_t flag) {
         c->bail_used = true;
         NOP();
       }
+      if ((flag & 2) && SPC_DBT_INDEXED_STORE_CHECK &&
+          (wraps ? code_in(base, 0xffff) || code_in(0, hi) : code_in(base, hi))) {
+        /* A store whose 256 possible targets include lines of translated
+         * code (a driver's tables just below its code): as a block's store
+         * range it would keep the block from ever running. Look at the
+         * line the store really goes to instead, and leave before the
+         * instruction if it holds code (the interpreter's store flushes
+         * the translations), as a target anywhere does (wr_dummy). */
+        SRL(T1, T0, 8);
+        li(T2, (uint32_t)(uintptr_t)g_spc_dbt_code);
+        ADDU(T2, T2, T1);
+        LBU(T2, 0, T2);
+        SRL(T1, T0, 5);
+        ANDI(T1, T1, 7);
+        r_(T1, T2, T2, 0, 6);            /* srlv t2, t2, t1 */
+        ANDI(T2, T2, 1);
+        BNE(T2, ZERO, c->bail);
+        c->bail_used = true;
+        NOP();
+        add_page(c->b, (uint8_t)(base >> 8), flag);
+        add_page(c->b, (uint8_t)(hi >> 8), flag);
+        return true;
+      }
+      const int nw0 = c->b->nw;
       if (wraps) { add_range(c->b, base, 0xffff, flag); add_range(c->b, 0, hi, flag); }
       else add_range(c->b, base, hi, flag);
+      for (int k = nw0; k < c->b->nw; k++) c->b->windexed |= (uint8_t)(1u << k);
       return true;
     }
     default:
@@ -1777,7 +1809,31 @@ static int spc_dbt_valid(void *block, Spc *spc) {
     }
   }
   for (int i = 0; i < b->nw; i++)
-    if (code_in(b->wlo[i], b->whi[i])) { g_spc_dbt_stats[4]++; g_spc_dbt_refused[3]++; return 0; }
+    if (code_in(b->wlo[i], b->whi[i])) {
+      g_spc_dbt_stats[4]++; g_spc_dbt_refused[3]++;
+      if (SPC_DBT_INDEXED_STORE_CHECK && (b->windexed & (1u << i))) {
+        /* Code has come to lie in an indexed store's range: forget the
+         * block, so that it is translated again with the store checked
+         * (addr_of). Links to this one find it stale and ask for the new. */
+        void **pg = map_page((uint8_t)(b->pc >> 8));
+        if (pg && pg[b->pc & 255] == (void *)b) pg[b->pc & 255] = NULL;
+      }
+#ifdef SPC_DBT_REFUSED_LOG
+      /* Which blocks, and which of their store ranges lie on code lines. */
+      { extern void n64_platform_log(const char *fmt, ...);
+        static uint16_t seen[24]; static int n;
+        int k = 0;
+        while (k < n && seen[k] != b->pc) k++;
+        if (k == n && n < 24) {
+          seen[n++] = b->pc;
+          n64_platform_log("[spcdbt-code] block %04x stores %04x-%04x:", b->pc, b->wlo[i], b->whi[i]);
+          for (uint32_t l = b->wlo[i] >> 5; l <= (uint32_t)(b->whi[i] >> 5); l++)
+            if (g_spc_dbt_code[l >> 3] & (1u << (l & 7))) n64_platform_log(" %04lx", (unsigned long)(l << 5));
+          n64_platform_log("\n");
+        } }
+#endif
+      return 0;
+    }
   /* (A wait loop's block stays stale, so links into it ask C each time.) */
   if (!(g_spc_dbt_wait[b->pc >> 3] & (1u << (b->pc & 7)))) b->epoch = g_spc_dbt_epoch;
   return 1;
