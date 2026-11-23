@@ -802,6 +802,14 @@ static int host_main(void) {
               for (int t = 0; t < 7; t++) g_lean_settle[t] = 0; }
 #endif
             /* The opcodes translation most often stopped at. */
+            { extern uint8_t g_jit816_xlat[256];   /* the opcodes translated so far, as a 256-bit map */
+              char line[80]; int ln = 0;
+              for (int o = 0; o < 256; o += 8) {
+                unsigned b = 0;
+                for (int k = 0; k < 8; k++) b |= (unsigned)(g_jit816_xlat[o + k] & 1) << k;
+                ln += snprintf(line + ln, sizeof line - (size_t)ln, "%02x", b);
+              }
+              n64_platform_log("[jit816-xlat] %s\n", line); }
             extern uint32_t g_jit816_ended[256];
             for (int t = 0; t < 12; t++) {
               int best = 0;

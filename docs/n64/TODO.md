@@ -141,9 +141,56 @@ interpreted instructions run translated, at roughly 1.6 us each against
 (2026-11-20): the interpreter is the fallback and the reference; anything
 that runs in steady state should be translated.
 
-1. **The remaining opcodes.** About 90 of 256 have code; a block ends at
-   the first one without. `[jit816-end]` (translation) and
-   `[jit816-exit-op]` (`N64_JIT_EXITS`, run time) rank what is missing.
+1. **The remaining opcodes.** Done 2026-11-23 for all but 17: 239 of 256
+   have code. Without: BRK, COP, RTI, WDM, STP, WAI, XCE (they leave the
+   run or halt), MVN and MVP (the lean loop steps them), the indirect
+   jumps and JSR (a,X) (the lean loop interprets them after a peek), BRL,
+   PER, PEI and PEA (the interpreter's PEA has a special case for one
+   operand value, `0xC2AE`, that clears Y: find out what it is for before
+   translating it). `[jit816-end]` (translation), `[lean-interp-op]`
+   (`N64_JIT_EXITS`, what the lean loop interprets) and `[jit816-xlat]`
+   (which opcodes a run translated, a 256-bit map) rank what a scene uses.
+   Added this round: the direct page indexed modes, shifts and bit tests of
+   memory, absolute long, (dp), (dp),Y, (dp,X), [dp], sr,S and (sr,S),Y,
+   the stack and status operations (PHB PHK PHD PHP PLB PLD PLP), the flag
+   operations, and the transfers with S and D. A block ends after an
+   instruction that may change what its key or its entry checks hold
+   (`jit_op_ends`: the widths, D, the decimal and interrupt flags).
+   Whole stack, ms a frame, previous commit -> now: Joe & Mac 2 62.2 ->
+   57.4 (65816 buckets 15.1 -> 10.4), SMW 90.2 -> 88.3, Pitfall 56.9 ->
+   57.3 (unchanged within the build-to-build wobble); exact on all three.
+   **A bug found on the way:** the table of blocks seen once
+   (`s_jit_seen`) was indexed by the address XOR the widths, so a REP or
+   SEP of one width bit and the instruction two bytes after it shared an
+   entry and put each other's first visit out for good; neither was ever
+   translated. Joe & Mac 2 interpreted some 90 instructions a frame for
+   it. The widths now sit seven bits up.
+   **Only 32 of the 113 new opcodes are translated by the three games'
+   measured scenes.** The rest is covered by the torture test below.
+
+   **Differential test** (`n64/tools/jit816_torture.sh [seed]`): a
+   generated LoROM image of random 65816 programs and nothing else
+   (`jit816_torture.py`; no game code or data) runs in ares under the
+   interpreter (`JIT816=0`) and under the JIT, and the WRAM hash of every
+   second frame must agree. Each test sets the stack, D, the data bank, the
+   widths, the flags and the registers, runs 6-28 random instructions (all
+   documented opcodes except those that leave the test; forward branches,
+   counted loops, calls, jumps, block moves), then stores A, X, Y, P, S
+   and D. Tests run in sets of 16, each set 8 times, because a block is
+   translated on its second visit; a seed that every result changes is
+   mixed into the next test, so the passes differ. The frame's end cuts
+   the run at a master-clock deadline, so a wrong cycle count shows as
+   well: a planted error of one cycle in TXY made every sampled frame
+   differ, the first included. The generator keeps every access in RAM or
+   ROM (data bank $7E, direct page at most $1C00, an index register used
+   with a direct-page mode only while known small, long pointers written
+   just before use), which is what lets RAM alone be compared. Seeds 2 to
+   5: 634, 1,002, 1,094 and 1,130 frames, no difference; about two thirds of the
+   instructions run translated. Run it after any change to the translator.
+   Not covered: I/O registers from translated code (the games cover
+   those), emulation mode and code in RAM (the JIT does not run there).
+   Also fixed: `JIT816=0` builds again (a type the plain loop uses was
+   declared inside the lean loop's conditional).
 2. **Calls, returns and jumps in translated code** (JSR, JSL, RTS, RTL,
    JMP, JSR (a,X)): they are most block ends in Pitfall's gameplay, and
    each goes round the big loop, which is what keeps the 9 KB
@@ -229,7 +276,21 @@ that runs in steady state should be translated.
    Whole stack, ms a frame, before the audit -> now: Pitfall 66.3 -> 60.2
    (65816 buckets 25.4 -> 15.2), Joe & Mac 2 64.5 -> 64.4 (18.0 -> 16.2),
    SMW 88.1 -> 87.9 (7.8 -> 7.6; it has 586 translated instructions).
-   Left: (d) A, X, Y in ordinary registers across the block (the "work"
+   Stage 2d, done, exact (2026-11-22/23): A, X and Y in s0/s5/s6 across a
+   block; the direct page's low-byte penalty in the block's key instead
+   of 7 run-time words; a constant cycle cost as one `daddiu`: **21
+   words**. No time gained by the last step: its denser blocks landed on
+   the shared routines' cache lines (a PC profile showed the added samples
+   on the entry words of the read routine and the way out), so blocks now
+   keep off the word indexes, modulo the 16 KB cache, that the shared
+   routines occupy (`SNESRECOMP_JIT_KEEP_SHARED`, a tenth of the buffer).
+   The lean loop's own time still moves by about 1 ms with the blocks'
+   positions (Pitfall): the same question for `bridge_lean_run` and
+   `jit_find` belongs to the layout retrain (item 10).
+   N and Z in an ordinary register: looked at and left; the lazy register
+   is already one `mtc1` away, so it would save about half a word an
+   instruction.
+   Left: (d, done) A, X, Y in ordinary registers across the block (the "work"
    is now about 12 words an instruction, much of it mfc1/mtc1 and the lazy
    N/Z); branches about 25 words; the 384 KB buffer is not yet small
    enough to cut (Pitfall's translated set is 2,771 instructions, 254 KB).

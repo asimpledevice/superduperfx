@@ -2990,6 +2990,9 @@ enum { kBridgeScratchSlots = 4 };
 static BridgeRunScratch s_bridge_scratch[kBridgeScratchSlots];
 #endif
 
+/* A call a run interpreted (see tail_frames in _interp_run_core). */
+typedef struct BridgeTailFrame { uint16_t s_after; uint8_t size; uint32_t ret_pc24; } BridgeTailFrame;
+enum { kBridgeTailFrames = 16 };
 #if SNESRECOMP_INTERP_BURST == 2
 /* The lean loop. As the burst below, with the per-step questions
  * about time -- refresh line crossed, beam event reached, deadline
@@ -3010,9 +3013,6 @@ static BridgeRunScratch s_bridge_scratch[kBridgeScratchSlots];
 #ifndef SNESRECOMP_JIT816
 #define SNESRECOMP_JIT816 0
 #endif
-/* A call a run interpreted (see tail_frames in _interp_run_core). */
-typedef struct BridgeTailFrame { uint16_t s_after; uint8_t size; uint32_t ret_pc24; } BridgeTailFrame;
-enum { kBridgeTailFrames = 16 };
 #if SNESRECOMP_JIT816
 #if !SNESRECOMP_INTERP_REGS
 #error "SNESRECOMP_JIT816 needs SNESRECOMP_INTERP_REGS=1 (the registers translated code uses)"
