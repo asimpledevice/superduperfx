@@ -35,6 +35,18 @@ void data_cache_hit_writeback(volatile const void *, unsigned long);
 void inst_cache_hit_invalidate(volatile void *, unsigned long);
 extern const uint8_t cyclesPerOpcode[256];   /* interp816.c */
 
+/* 1: the dense forms (docs/n64/TODO.md, "a dense block form"). A block made
+ * with D = 0, a data bank that shows WRAM's first 8 KB below $2000 ($00-$3F,
+ * $80-$BF, $7E) and plain WRAM stores -- the context is a bit of the block's
+ * key, so nothing checks it at run time -- reads and writes WRAM where the
+ * address is known when it is translated (direct page, abs below $2000,
+ * long in $7E/$7F) with a load or a store at the host address, leaving what
+ * the bus functions leave: the bus latch, the write count, the access's
+ * clocks, and the cartridge's bus address where it can be seen (leaving the
+ * block right after the instruction). */
+#ifndef SNESRECOMP_JIT_DENSE
+#define SNESRECOMP_JIT_DENSE 0
+#endif
 #ifndef SNESRECOMP_JIT_XFER
 #define SNESRECOMP_JIT_XFER 1   /* JMP, JML, JSR, JSL, RTS, RTL in blocks */
 #endif
@@ -91,6 +103,8 @@ static uint32_t s_jit_st8, s_jit_st16;
  * bus latch is then its last byte's). A block ends with a thunk that loads
  * t1 and t2 and jumps here, and with its table. */
 static uint32_t s_jit_xcommon;
+static uint32_t s_jit_setbus;              /* word index: cart->cpuBusAddress = t6 (uses t9) */
+uint32_t g_jit816_dense[2];               /* instructions translated dense, their words */
 /* The words the shared routines take (every block's way in and out, its
  * reads and its stores). Blocks stay off the instruction cache's lines that
  * hold them (16 KB, direct mapped: the same word index modulo 4096), so that
@@ -554,6 +568,11 @@ static void jit816_flush(void) {
         J_JR(JRA);
         J_NOP();
     }
+    s_jit_setbus = s_jit_n;
+    { const int lo = jaddr(&g_snes); J_LW(JT9, lo, JB); }
+    J_LW(JT9, (int)offsetof(Snes, cart), JT9);
+    J_JR(JRA);
+    J_SW(JT6, (int)offsetof(Cart, cpuBusAddress), JT9);
     s_jit_xcommon = s_jit_n;
     {
         const int lnext = jlabel(), lnolatch = jlabel();
@@ -996,7 +1015,7 @@ static int jit_scan(uint32_t pc24, const uint8_t *pg, bool mf, bool xf, bool cou
 /* dl: the direct page register's low byte is not 0 (a direct-page access
  * then costs a cycle more). Part of a block's key: nothing a block runs
  * changes D. */
-static int jit_translate(uint32_t pc24, const uint8_t *pg, bool mf, bool xf, bool dl, bool place) {
+static int jit_translate(uint32_t pc24, const uint8_t *pg, bool mf, bool xf, bool dl, bool place, bool dense_key) {
     const uint32_t w_block = s_jit_n;
     const uint32_t mx = (mf ? 2u : 0u) | (xf ? 1u : 0u);
     const uint32_t bank = pc24 & 0xFF0000u;
@@ -1030,6 +1049,13 @@ static int jit_translate(uint32_t pc24, const uint8_t *pg, bool mf, bool xf, boo
 
     s_jit_nlabels = 0; s_jit_nfix = 0;
     s_jit_cache = SNESRECOMP_JIT_AXY_REGS != 0;
+    /* Dense: not a block that changes D or the data bank. */
+    bool dense = dense_key;
+    for (int i = 0; i < n; i++)
+        if (iop[i].op == JO_TCD || iop[i].op == JO_PLD || iop[i].op == JO_PLB) dense = false;
+    int ldense[kJitMaxInsns];             /* a dense instruction's way out at the event: the bus address first */
+    uint32_t dbus[kJitMaxInsns];          /* its last access's address (0xFFFFFFFF: not dense); bit 24: in the data bank */
+    for (int i = 0; i < n; i++) { ldense[i] = -1; dbus[i] = 0xFFFFFFFFu; }
     int label[kJitMaxInsns + 1], lexit[kJitMaxInsns];
     for (int i = 0; i <= n; i++) label[i] = jlabel();
     const int lthunk_next = jlabel(), lthunk_to = jlabel();
@@ -1238,6 +1264,7 @@ static int jit_translate(uint32_t pc24, const uint8_t *pg, bool mf, bool xf, boo
             continue;
         }
 
+        const uint32_t w_fixed = s_jit_n;
         if (bus) J_ORI(JS4, JZERO, (int)fixed);   /* (no bus access: the cost is a constant, taken at the step's end) */
         if (o.mode == JM_NONE) {
             switch (o.op) {
@@ -1447,6 +1474,52 @@ static int jit_translate(uint32_t pc24, const uint8_t *pg, bool mf, bool xf, boo
              * high byte's address). */
             if (o.mode == JM_IMM) {
                 J_ORI(JS2, JZERO, byte ? b1 : (b1 | b2 << 8));
+            } else if (dense && !rmw && !ptr &&
+                       (o.mode == JM_DP || (o.mode == JM_ABS && (uint32_t)(b1 | b2 << 8) < (byte ? 0x2000u : 0x1fffu)) ||
+                        (o.mode == JM_AL && (b3 == 0x7e || b3 == 0x7f) &&
+                         ((uint32_t)(b1 | b2 << 8) | (uint32_t)b3 << 16) < (byte ? 0x800000u : 0x7fffffu)))) {
+                /* WRAM at an address known now. off: its offset in WRAM. */
+                const uint32_t a16 = o.mode == JM_DP ? b1 : (uint32_t)(b1 | b2 << 8);
+                const uint32_t off = o.mode == JM_AL ? ((uint32_t)(b3 - 0x7e) << 16 | a16) : a16;
+                const uint32_t nb = byte ? 1u : 2u;
+                const uint32_t host = (uint32_t)(uintptr_t)g_snes->ram + off;
+                const uint32_t h1 = host + nb - 1u;                    /* the last byte's */
+                const uint32_t speed = cpu_region_speed_inline(o.mode == JM_AL ? ((uint32_t)b3 << 16 | a16) : a16);
+                s_jit_code[w_fixed] += speed * nb;                     /* (the ori of `fixed`) */
+                #define JDHI(h) (int)((((h) + 0x8000u) >> 16) & 0xffffu)
+                #define JDLO(h) (int)(int16_t)((h) & 0xffffu)
+                if (jit_op_store(o.op)) {
+                    const int f = o.op == JO_STA ? FA : o.op == JO_STX ? FX : FY;
+                    int rv = JZERO;
+                    if (o.op != JO_STZ) { rv = JT0; J_MFC1(JT0, f); }
+                    J_LUI(JAT, JDHI(host));
+                    J_SB(rv, JDLO(host), JAT);
+                    int rl = rv;                                       /* the last byte stored */
+                    if (!byte) {
+                        if (rv != JZERO) { J_SRL(JT1, JT0, 8); rl = JT1; }
+                        if (JDHI(h1) != JDHI(host)) J_LUI(JAT, JDHI(h1));
+                        J_SB(rl, JDLO(h1), JAT);
+                    }
+                    { const int lo = jaddr(&g_open_bus); J_SB(rl, lo, JB); }
+                    { const int lo = jaddr(&g_interp_bridge_write_epoch); J_LD(JT2, lo, JB); jI(25, JT2, JT2, (int)nb); J_SD(JT2, lo, JB); }
+                } else {
+                    J_LUI(JAT, JDHI(host));
+                    J_LBU(JS2, JDLO(host), JAT);
+                    if (!byte) {
+                        if (JDHI(h1) != JDHI(host)) J_LUI(JAT, JDHI(h1));
+                        J_LBU(JT0, JDLO(h1), JAT);
+                        { const int lo = jaddr(&g_open_bus); J_SB(JT0, lo, JB); }
+                        J_SLL(JT0, JT0, 8); J_OR(JS2, JS2, JT0);
+                    } else {
+                        const int lo = jaddr(&g_open_bus); J_SB(JS2, lo, JB);
+                    }
+                }
+                #undef JDHI
+                #undef JDLO
+                dbus[i] = o.mode == JM_DP ? (a16 + nb - 1u)
+                        : o.mode == JM_ABS ? (0x1000000u | (a16 + nb - 1u))
+                        : (((uint32_t)b3 << 16 | a16) + nb - 1u);
+                ldense[i] = jlabel();
             } else {
                 const uint32_t adr = (dpm || ptr || o.mode == JM_SR) ? b1 : (uint32_t)(b1 | b2 << 8);
                 /* An instruction that calls the C bus functions itself (a
@@ -1726,8 +1799,9 @@ static int jit_translate(uint32_t pc24, const uint8_t *pg, bool mf, bool xf, boo
         g_jit816_words[0] += w_step - w_start;
         if (bus) J_DSUBU(JR, JR, JS4); else jI(25, JR, JR, -(int)fixed);   /* (daddiu) */
         J_ADDIU(JS1, JS1, 1);
-        jbr(6, JR, JZERO, lthunk_next); J_ORI(JT0, JZERO, i);   /* blez: the event (the delay slot names the instruction) */
+        jbr(6, JR, JZERO, ldense[i] >= 0 ? ldense[i] : lthunk_next); J_ORI(JT0, JZERO, i);   /* blez: the event (the delay slot names the instruction) */
         g_jit816_words[1] += s_jit_n - w_step;
+        if (ldense[i] >= 0) { g_jit816_dense[0]++; g_jit816_dense[1] += s_jit_n - w_start; }
         { int k = o.mode;
           if (o.mode == JM_ABS && (b1 | b2 << 8) < 0x2000) k = 21;
           else if ((o.mode == JM_AL || o.mode == JM_ALX) && (b3 == 0x7e || b3 == 0x7f)) k = 22;
@@ -1740,8 +1814,30 @@ static int jit_translate(uint32_t pc24, const uint8_t *pg, bool mf, bool xf, boo
     }
     /* Past the last instruction: back to the interpreter, as its event exit
      * but counted as the block's end. Then the thunks and the table. */
+    /* (first: the dense instructions' way out at the event, which leaves
+     * the cartridge's bus address as their last access's; and the same for
+     * a dense last instruction, on the way past it) */
+    #define JIT_DBUS(k) do { \
+        if (dbus[k] & 0x1000000u) { J_MFC1(JT6, FDB); J_SLL(JT6, JT6, 16); J_ORI(JT6, JT6, (int)(dbus[k] & 0xffffu)); } \
+        else jli(JT6, dbus[k]); } while (0)
+    { const int lover = jlabel();
+      bool any = false;
+      for (int i = 0; i < n; i++) any |= ldense[i] >= 0;
+      if (any) {
+        jbr(4, JZERO, JZERO, lover); J_NOP();
+        for (int i = 0; i < n; i++) {
+            if (ldense[i] < 0) continue;
+            jbind(ldense[i]);                 /* (t0 = i, from the delay slot of the branch here) */
+            JIT_DBUS(i);
+            jjal_code(s_jit_setbus); J_NOP();
+            jbr(4, JZERO, JZERO, lthunk_next); J_NOP();
+        }
+        jbind(lover);
+      } }
     jbind(label[n]);
     const uint32_t w_tail = s_jit_n;
+    if (dbus[n - 1] != 0xFFFFFFFFu) { JIT_DBUS(n - 1); jjal_code(s_jit_setbus); J_NOP(); }
+    #undef JIT_DBUS
     J_ADDIU(JT5, JZERO, -2);
     jbr(4, JZERO, JZERO, lthunk_to); J_ORI(JT0, JZERO, n - 1);
     jbind(lthunk_next);
@@ -1782,12 +1878,12 @@ static int jit_translate(uint32_t pc24, const uint8_t *pg, bool mf, bool xf, boo
     uint32_t arith = 0;
     for (int i = 0; i < n; i++) if (iop[i].op == JO_ADC || iop[i].op == JO_SBC) arith = 0x80000000u;
 #if SNESRECOMP_JIT_EVICT   /* (the caller places the block, then adds its entries) */
-    s_jit_made.base = 0x80000000u | (dl ? 1u << 26 : 0u) | mx << 24 | bank;
+    s_jit_made.base = 0x80000000u | (dense_key ? 1u << 27 : 0u) | (dl ? 1u << 26 : 0u) | mx << 24 | bank;
     s_jit_made.arith = arith;
     for (int i = 0; i < n; i++) { s_jit_made.pc[i] = ipc[i]; s_jit_made.at[i] = at[i]; }
 #else
     for (int i = 0; i < n; i++)
-        jit_add(0x80000000u | (dl ? 1u << 26 : 0u) | mx << 24 | bank | ipc[i], at[i], pg, arith);
+        jit_add(0x80000000u | (dense_key ? 1u << 27 : 0u) | (dl ? 1u << 26 : 0u) | mx << 24 | bank | ipc[i], at[i], pg, arith);
 #endif
     g_jit816_stats[0]++;
     g_jit816_stats[1] += (uint32_t)n;
@@ -1806,7 +1902,11 @@ static uint32_t jit816_run(CpuState *cpu, Interp816 *in, uint32_t pc24, const ui
     if (!s_jit_n || g_memsel != s_jit_memsel) jit816_flush();
     const uint32_t mx = (cpu_m_flag() ? 2u : 0u) | (cpu_x_flag() ? 1u : 0u);
     const uint32_t dl = (cpu_D() & 0xffu) ? 1u : 0u;
-    const uint32_t key = 0x80000000u | dl << 26 | mx << 24 | (pc24 & 0xFFFFFFu);
+    /* The dense forms' context (SNESRECOMP_JIT_DENSE), part of the key. */
+    const uint32_t db = cpu_DB();
+    const uint32_t dense = (SNESRECOMP_JIT_DENSE && cpu_D() == 0 && s_jit_store_ok &&
+                            (db < 0x40u || (db >= 0x80u && db < 0xC0u) || db == 0x7Eu)) ? 1u : 0u;
+    const uint32_t key = 0x80000000u | dense << 27 | dl << 26 | mx << 24 | (pc24 & 0xFFFFFFu);
     JitEntry *e = jit_find(key);
     if (!e) {
         /* (the widths well away from the address's low bits: a REP or SEP and the
@@ -1823,7 +1923,7 @@ static uint32_t jit816_run(CpuState *cpu, Interp816 *in, uint32_t pc24, const ui
         }
         if (s_jit_nent > kJitEntries - kJitEntries / 4) jit816_flush();   /* (not expected: the buffer bounds the entries) */
         s_jit_n = kJitTileEnd + 2; s_jit_limit = kJitCodeWords; s_jit_full = false;
-        const int n = jit_translate(pc24, pg, (mx & 2) != 0, (mx & 1) != 0, dl != 0, false);
+        const int n = jit_translate(pc24, pg, (mx & 2) != 0, (mx & 1) != 0, dl != 0, false, dense != 0);
         if (n <= 0) {
             s_jit_full = false;
             g_jit816_stats[5]++; *seen = key ^ 0x40000000u;
@@ -1842,11 +1942,11 @@ static uint32_t jit816_run(CpuState *cpu, Interp816 *in, uint32_t pc24, const ui
 #else
         if (s_jit_nent > kJitEntries / 2 || s_jit_n > kJitCodeWords - kJitBlockRoom) jit816_flush();
         const uint32_t start = s_jit_n;
-        int n = jit_translate(pc24, pg, (mx & 2) != 0, (mx & 1) != 0, dl != 0, true);
+        int n = jit_translate(pc24, pg, (mx & 2) != 0, (mx & 1) != 0, dl != 0, true, dense != 0);
         if (n == -2) {   /* past the shared routines' lines */
             const uint32_t o = start % kJitICacheWords;
             s_jit_n = start - o + (o < s_jit_shared_end ? 0u : (uint32_t)kJitICacheWords) + s_jit_shared_end;
-            n = jit_translate(pc24, pg, (mx & 2) != 0, (mx & 1) != 0, dl != 0, false);
+            n = jit_translate(pc24, pg, (mx & 2) != 0, (mx & 1) != 0, dl != 0, false, dense != 0);
         }
         if (n <= 0) {
             if (n < 0) jit816_flush();

@@ -474,6 +474,33 @@ Projected for Joe & Mac 2: the non-branch instructions 16.5 -> about 7
 words; everything 20 -> about 13, until branches (12 words each),
 transfers and tails get the same treatment.
 
+**Step 2 built (`JITDENSE=1`, opt-in, off by default; 2026-11-24).** The
+context as bit 27 of the block's key, and direct loads and stores for
+direct page, abs below $2000 and long $7E/$7F operands of the loads,
+stores and read operations (not read-modify-write, pushes, pulls or
+indexed forms yet). The bus address is left by a cold stub on the event
+exit, and before the tail when the instruction is the block's last.
+Exact: the torture ROM (seed 1, 460 sampled frames) and the three games'
+state hashes, sync points and DSP marks.
+
+| | dense instructions | words each (with the step end) | before |
+|---|---|---|---|
+| Joe & Mac 2 | 1,351 | 15.1 | 21.4 |
+| Pitfall | 1,092 | 15.7 | 21.8 |
+| SMW | 187 | 13.2 | 19.1 |
+
+Not the 6-9 projected, and no faster (frame times within noise; Pitfall
+makes 909 blocks where it made 631: the same code under both contexts).
+The access itself is 2 words now; what is left around it is the
+bookkeeping an instruction does one at a time: the clock (the ori of the
+constant, the subtract, the count, the event test: 6 words), the bus
+latch (1-2), a store's write count (3-4), then the operation. So the
+order was wrong: step 3 is the step that matters, and it is wider than a
+time test -- a block has to keep the clock, the latch and the write count
+*per block* (known when translated, written where a block can leave or
+call out), which is a different shape of block from the one the JIT
+makes, not a mode of it. That is the next decision.
+
 Guest registers and the FPU (owner's question): the FPU cannot do the
 65816's arithmetic. Its registers hold the raw bits (which as floats are
 denormals: the VR4300 traps on them), and add.d on converted values gives

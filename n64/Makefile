@@ -297,6 +297,9 @@ JIT816 ?= 0
 ifeq ($(JIT816),1)
 INTERPREGS := 1
 N64_CFLAGS += -DSNESRECOMP_JIT816=1 -DSNESRECOMP_INTERP_BURST=2
+# JITDENSE=1: the JIT's dense forms (SNESRECOMP_JIT_DENSE, jit816.inc; a prototype).
+JITDENSE ?= 0
+N64_CFLAGS += -DSNESRECOMP_JIT_DENSE=$(JITDENSE)
 # With the JIT, both exact and faster on all three test games: the wait
 # detector behind its one-word filter, and the SPC caught up every 16,384
 # master clocks once it has guest time (instead of every 1,024).
