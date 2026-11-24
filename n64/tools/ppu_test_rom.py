@@ -259,6 +259,32 @@ def scenes(n):
             return f
         out.append(('mode%d' % mode, fn))
 
+    @add('mode2-big-windows')
+    def _(k):
+        f = Frame(); base(f, 0x02 | [0x00, 0x10, 0x20, 0x30, 0x40, 0x50][k % 6], 0x13)
+        for i, r in enumerate((0x210D, 0x210F, 0x2111)):
+            f.w2(r, 6 * k + 13 * i); f.w2(r + 1, 3 * k + 21 * i)
+        f.b(0x2123, 0x23 if k & 1 else 0x02)
+        f.b(0x2126, 24 + 6 * k); f.b(0x2127, 180 + 2 * k)
+        f.b(0x212E, 0x03); f.b(0x212F, 0x00)
+        return f
+
+    for mode in (4, 5, 6):
+        def fn(k, mode=mode):
+            lay = 0x13 if mode != 6 else 0x11
+            f = Frame(); base(f, mode | [0x00, 0x10, 0x20, 0x40][k % 4], lay if k % 3 else 0x10, lay & 3 if k % 3 == 0 else 0)
+            for i, r in enumerate((0x210D, 0x210F, 0x2111)):
+                f.w2(r, 5 * k + 19 * i); f.w2(r + 1, 4 * k + 27 * i)
+            f.b(0x2106, ((k % 15) + 1) << 4 | [0x00, 0x01, 0x03, 0x02][k % 4])
+            f.b(0x2123, 0x32 if k & 2 else 0x00)
+            f.b(0x2126, 40 + 3 * k); f.b(0x2127, 210 - 5 * k)
+            f.b(0x212E, lay & 3); f.b(0x212F, 0x00)
+            f.b(0x2130, 0x02 if k % 3 == 0 else 0x00)
+            f.b(0x2131, [0x00, 0x23, 0x63, 0xA1, 0x33][k % 5])
+            f.b(0x2132, 0xE0 | (k * 3 & 31))
+            return f
+        out.append(('mode%d-mix' % mode, fn))
+
     @add('mode3-direct')
     def _(k):
         f = Frame(); base(f, 3, 0x13)

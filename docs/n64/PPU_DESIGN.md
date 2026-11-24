@@ -667,10 +667,11 @@ None of the three games shows mode 7's rotation, EXTBG, direct colour or
 modes 2-6, so the comparison needed its own pictures.
 `n64/tools/ppu_test_rom.py` writes a LoROM image of generated data only:
 pseudo-random VRAM, CGRAM and OAM, a short loop, and a script of register
-writes a frame -- 20 scenes of 12 frames (mode 7: plain, zoom, rotation,
+writes a frame -- 25 scenes of 12 frames (mode 7: plain, zoom, rotation,
 flips and the large field, negative positions, sprites with windows,
 fixed-colour maths, the subscreen, mosaic, EXTBG, direct colour; modes 0-6;
-mode 1 with mosaic; mode 3 with direct colour). `n64/tools/ppu_test.sh`
+mode 1 with mosaic; mode 2 with 16x16 tiles and windows; modes 4-6 with
+mosaic, windows and colour math; mode 3 with direct colour). `n64/tools/ppu_test.sh`
 builds the runner around it with RENDER=2 and prints, a scene, the RDP
 lines, the software lines with their reasons, and the frames that differ.
 
@@ -696,8 +697,35 @@ its tile-layer palettes are built again. 16x16 tiles with a mosaic stay
 software lines. Test ROM: mode 1 with mosaic, and mosaic with windows in
 modes 0, 1 and 7, no frame differing; SMW's fades are RDP lines now.
 
-Left of the list: modes 2-6. Mode 3 needs an 8-bit tile row (two planes
-for its priority); 2, 4 and 6 the offset-per-tile columns; 5 and 6 the
-software PPU's reading of high resolution (the odd columns of 16-wide
-tiles). Modes 4-6 are compared with the per-pixel renderer, 2 and 3 with
-the line renderer.
+**Modes 2 to 6 (same day).** Every mode has a row builder now; all of them
+run on the CPU, a line at a time, and write plane rows.
+
+| mode | builder | reference | planes and order |
+|---|---|---|---|
+| 2 | `bg_opt_row` | `PpuDrawBackground_4bpp_opt` | BG1, BG2 of 16 colours; `ORDER_MODE2` |
+| 3 | `bg8_row` (BG1), the RSP's rows (BG2) | line renderer | BG1's priority 0 in the BG1 plane, priority 1 in the BG3 plane, 256-entry palette; `ORDER_MODE3` |
+| 4 | `bg_px_row` | per-pixel renderer | BG1 as mode 3, BG2 of 4 colours; `ORDER_MODE4` |
+| 5, 6 | `bg_px_row` | per-pixel renderer | BG1 of 16 colours, BG2 of 4 (mode 6: BG1 alone); `ORDER_MODE5` |
+
+Each copies what its reference does, including where the references
+disagree with each other: mode 2's offset columns come from the line
+renderer's rules (a segment a source tile, none in the leftmost column,
+16x16 tiles), modes 4 and 6's from the per-pixel renderer's; modes 5 and 6
+are the software PPU's 256-wide reading of the 512-wide picture (the main
+screen takes the odd columns, the subscreen and a mosaic layer the even
+ones); a mosaic exists in modes 4-6 (by block origin) and not in 2 and 3.
+`bg_px_row` fetches a tile again only when the pixel leaves it.
+
+Still software lines: direct colour in modes 3 and 4, 16x16 tiles in
+mode 3, 16x16 tiles with a mosaic in modes 0 and 1, interlace and
+pseudo-hires (SETINI), and what no mode draws on the RDP yet (two-screen
+colour math on a tile layer, the subscreen's sprites under backdrop math).
+
+Test ROM (25 scenes): all of modes 0-7 are RDP lines, no frame differing;
+the software lines left are mode 3 with direct colour and the lines of the
+`-mix` scenes whose colour math needs both screens.
+
+Cost is not measured against a game: none of the three uses these modes.
+The builders are plain C at a pixel or a tile a step; if a game leans on
+one, that builder is the place to look (the RSP, or tile-at-a-time code
+as `bg8_row`).

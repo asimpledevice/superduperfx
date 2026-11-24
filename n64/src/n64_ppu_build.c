@@ -998,9 +998,12 @@ static uint32_t line_unsupported(const Ppu *ppu, const Spans *s, int r, bool *ba
   const int mode = PPU_mode(ppu);
   /* Mode 7 has BG1 and OBJ (BG2 only with EXTBG, which is not drawn here,
    * nor direct colour). */
-  const uint8_t lmask = (mode == 3 || mode == 2) ? 0x13 : mode != 7 ? 0x1f : PPU_m7extBg(ppu) ? 0x13 : 0x11;
+  const uint8_t lmask = (mode >= 2 && mode <= 5) ? 0x13 : mode == 6 ? 0x11
+                      : mode != 7 ? 0x1f : PPU_m7extBg(ppu) ? 0x13 : 0x11;
   const uint8_t main = ppu->screenEnabled[0] & lmask, sub = ppu->screenEnabled[1] & lmask;
-  if (mode > 3 && mode != 7) why |= N64PPU_WHY_MODE;   /* (2: bg_opt_row; 3: bg8_row; 7: mode7_row) */
+  /* (every mode has a row builder: 2 bg_opt_row, 3 bg8_row, 4 to 6 bg_px_row, 7 mode7_row) */
+  /* Mode 4's BG1 has no direct colour here either. */
+  if (mode == 4 && PPU_directColor(ppu)) why |= N64PPU_WHY_MODE;
   /* Mode 3 (bg8_row and BG2's plane): 8x8 tiles, no direct colour. */
   if (mode == 3 && (((ppu->bgmode >> 4) & (main | sub) & 0x3) || PPU_directColor(ppu))) why |= N64PPU_WHY_MODE;
   /* (A mosaic layer's row is made on the CPU: mode7_row, bg_mosaic_row --
@@ -1092,11 +1095,12 @@ static __attribute__((noinline)) uint32_t line_palettes(N64PpuFrame *f, const Pp
   key.brightness = (uint8_t)b;
   const bool m7 = PPU_mode(ppu) == 7;
   const bool m7ext = m7 && PPU_m7extBg(ppu), m7direct = m7 && PPU_directColor(ppu);
-  const bool m3 = PPU_mode(ppu) == 3, m2 = PPU_mode(ppu) == 2;
-  const uint8_t submask = (m3 || m2) ? 0x3 : !m7 ? 0xf : m7ext ? 0x3 : 0x1;
+  const int mode = PPU_mode(ppu);
+  const bool m3 = mode == 3 || mode == 4, m2 = mode == 2;   /* (m3: BG1 of 256 colours) */
+  const uint8_t submask = (mode >= 2 && mode <= 5) ? 0x3 : mode == 6 ? 0x1 : !m7 ? 0xf : m7ext ? 0x3 : 0x1;
   key.mode = (uint8_t)(mflags | (add_sub ? 4 : 0) | (backdrop_math ? 8 : 0) | (lmath ? 16 : 0) | (m7 ? 32 : 0));
   /* A line with a mosaic layer draws its tile layers from planes (n64_ppu_build_line). */
-  const bool planes = m3 || m2 || (PPU_mode(ppu) <= 1 && PPU_mosaicSize(ppu) > 1 &&
+  const bool planes = (mode >= 2 && mode <= 6) || (PPU_mode(ppu) <= 1 && PPU_mosaicSize(ppu) > 1 &&
                              (ppu->mosaic & (ppu->screenEnabled[0] | ppu->screenEnabled[1]) & 0xf));
   key.pad = (uint8_t)((m7ext ? 1 : 0) | (m7direct ? 2 : 0) | (planes ? 4 : 0) | (m3 ? 8 : 0) | (m2 ? 16 : 0));
   key.sub = (uint8_t)(ppu->screenEnabled[1] & submask);
@@ -1126,7 +1130,7 @@ static __attribute__((noinline)) uint32_t line_palettes(N64PpuFrame *f, const Pp
     /* (mode 7: its BG1 palette and the sprites'; otherwise not mode 7's) */
     #define SEL_USED(sel) ((sel) == N64PPU_SEL_OBJ || \
         (m2 ? (sel) == N64PPU_SEL_LO16 || (sel) == N64PPU_SEL_HI16 \
-         : m3 ? (sel) == N64PPU_SEL_LO16 || (sel) == N64PPU_SEL_HI16 || (sel) == N64PPU_SEL_M7 \
+         : m3 ? (sel) < N64PPU_SEL_OBJ || (sel) == N64PPU_SEL_M7 \
          : !m7 ? (sel) < N64PPU_SEL_OBJ \
              : (sel) == (m7direct ? N64PPU_SEL_M7D : N64PPU_SEL_M7) || \
                (m7ext && ((sel) == N64PPU_SEL_M7E_LO || (sel) == N64PPU_SEL_M7E_HI))))
@@ -1400,6 +1404,117 @@ static __attribute__((noinline)) void bg_opt_row(N64PpuFrame *f, const Ppu *ppu,
   if (any_hi) bit_set(f->rows_hi[plane], r);
 }
 
+/* A layer of modes 4 to 6 for one line, a pixel at a time, as the software
+ * PPU's per-pixel renderer draws those modes (ppu_legacy.c:
+ * ppu_resolve_pixel, ppu_apply_offset_per_tile, ppu_sample_bg): mosaic by
+ * block origin (lines from mosaicStartLine); modes 5 and 6 sample the
+ * 512-wide picture's odd columns for the main screen and its even ones for
+ * the subscreen (and for a mosaic layer); offset per tile in modes 4 and 6.
+ * bpp 8 (mode 4's BG1): CGRAM indices, the tile's priority choosing the
+ * plane (plane_hi), as bg8_row; bpp 4 and 2: one plane, bytes as
+ * flush_run's. The tile is fetched again only when the pixel leaves it. */
+static __attribute__((noinline)) void bg_px_row(N64PpuFrame *f, const Ppu *ppu, int plane_lo, int plane_hi, int line,
+                                                int screen, int layer, int bpp) {
+  const int r = line - 1;
+  const uint16_t *vram = PpuRenderVram(ppu);
+  const int mode = PPU_mode(ppu);
+  const bool hires = mode == 5 || mode == 6, opt = mode == 4 || mode == 6;
+  const bool big = PPU_bigTiles(ppu, layer) != 0, wide = big || hires;
+  const int bits_x = wide ? 4 : 3, high_x = wide ? 0x200 : 0x100;
+  const int bits_y = big ? 4 : 3, high_y = big ? 0x200 : 0x100;
+  const unsigned xsc = ppu->bgXsc[layer];
+  const int map = (int)((xsc & 0xfc) << 8);
+  const bool wider = xsc & 1, higher = xsc & 2;
+  const int tileadr = PPU_bgTileAdr(ppu, layer);
+  const int hscroll = ppu->hScroll[layer], vscroll = ppu->vScroll[layer];
+  const bool mosaic_on = PPU_mosaicEnabled(ppu, layer) != 0;
+  const int size = (mosaic_on && PPU_mosaicSize(ppu) > 1) ? PPU_mosaicSize(ppu) : 1;
+  const int odd = (hires && !(screen || mosaic_on)) ? 1 : 0;
+  /* the offset table: BG3's map */
+  const unsigned oxsc = ppu->bgXsc[2];
+  const int obits = PPU_bigTiles(ppu, 2) ? 4 : 3, ohigh = PPU_bigTiles(ppu, 2) ? 0x200 : 0x100;
+  const int valid = layer == 0 ? 0x2000 : 0x4000;
+  int y0 = line;
+  if (size > 1) y0 -= (y0 - (int)ppu->mosaicStartLine) % size;
+  y0 += vscroll;
+  uint8_t *row[2] = {plane_row(f, plane_lo, r), plane_hi >= 0 ? plane_row(f, plane_hi, r) : NULL};
+  claim_row_lines(row[0]);
+  if (row[1]) claim_row_lines(row[1]);
+  uint8_t *dst[2] = {row[0] + N64PPU_PAD, row[1] ? row[1] + N64PPU_PAD : NULL};
+  bool any_lo = false, any_hi = false;
+  int last_tx = -1, last_y = -1;
+  uint16_t tile = 0, w[4] = {0, 0, 0, 0};
+  for (int x = 0; x < 256; ++x) {
+    int lx = x - (size > 1 ? x % size : 0);
+    int ly = y0;
+    lx += hscroll;
+    if (hires) lx = lx * 2 + odd;
+    if (opt) {
+      const int column = mode == 6 ? ((lx - (lx & 0xf)) - ((hscroll * 2) & 0xfff0)) >> 4
+                                   : ((lx - (lx & 0x7)) - (hscroll & 0xfff8)) >> 3;
+      if (column > 0) {
+        uint16_t off[2];
+        for (int k = 0; k < 2; ++k) {
+          const int ox = (column - 1) * 8 + ppu->hScroll[2], oy = k * 8 + ppu->vScroll[2];
+          int adr = (int)((oxsc & 0xfc) << 8) + (((oy >> obits) & 0x1f) << 5 | ((ox >> obits) & 0x1f));
+          if ((ox & ohigh) && (oxsc & 1)) adr += 0x400;
+          if ((oy & ohigh) && (oxsc & 2)) adr += (oxsc & 1) ? 0x800 : 0x400;
+          off[k] = vram[adr & 0x7fff];
+          if (mode == 4) break;
+        }
+        uint16_t hoff = off[0], voff = 0;
+        if (mode == 4) {
+          if (hoff & 0x8000) { voff = hoff; hoff = 0; }
+        } else voff = off[1];
+        const int px = lx, py = ly;
+        if (hoff & valid)
+          lx = mode == 6 ? ((((hoff & 0x3f8) + (column * 8)) * 2) | (px & 0xf)) : (((hoff & 0x3f8) + (column * 8)) | (px & 0x7));
+        if (voff & valid) ly = (voff & 0x3ff) + (py - vscroll);
+      }
+    }
+    lx &= 0x3ff; ly &= 0x3ff;
+    if ((lx >> 3) != last_tx || ly != last_y) {
+      last_tx = lx >> 3; last_y = ly;
+      int adr = map + (((ly >> bits_y) & 0x1f) << 5 | ((lx >> bits_x) & 0x1f));
+      if ((lx & high_x) && wider) adr += 0x400;
+      if ((ly & high_y) && higher) adr += wider ? 0x800 : 0x400;
+      tile = vram[adr & 0x7fff];
+      const int trow = (tile & 0x8000) ? 7 - (ly & 7) : (ly & 7);
+      int num = tile & 0x3ff;
+      if (wide && (((lx & 8) != 0) != ((tile & 0x4000) != 0))) num += 1;
+      if (big && (((ly & 8) != 0) != ((tile & 0x8000) != 0))) num += 0x10;
+      const int base = tileadr + (num & 0x3ff) * 4 * bpp + trow;
+      w[0] = vram[base & 0x7fff];
+      if (bpp > 2) w[1] = vram[(base + 8) & 0x7fff];
+      if (bpp > 4) { w[2] = vram[(base + 16) & 0x7fff]; w[3] = vram[(base + 24) & 0x7fff]; }
+    }
+    const int col = (tile & 0x4000) ? (lx & 7) : 7 - (lx & 7);
+    unsigned pixel = ((w[0] >> col) & 1u) | (((w[0] >> (8 + col)) & 1u) << 1);
+    if (bpp > 2) pixel |= (((w[1] >> col) & 1u) << 2) | (((w[1] >> (8 + col)) & 1u) << 3);
+    if (bpp > 4) pixel |= (((w[2] >> col) & 1u) << 4) | (((w[2] >> (8 + col)) & 1u) << 5) |
+                          (((w[3] >> col) & 1u) << 6) | (((w[3] >> (8 + col)) & 1u) << 7);
+    const bool hi = tile & 0x2000;
+    if (bpp == 8) {
+      dst[hi][x] = (uint8_t)pixel;
+      dst[!hi][x] = 0;
+    } else {
+      dst[0][x] = (uint8_t)((hi ? 128u : 0u) + ((tile >> 10) & 7) * (bpp == 4 ? 16u : 4u) + pixel);
+    }
+    if (pixel) { if (hi) any_hi = true; else any_lo = true; }
+  }
+#if N64_RSPBG
+  n64_bgrsp_cpu_wrote(row[0], N64PPU_STRIDE);
+  if (row[1]) n64_bgrsp_cpu_wrote(row[1], N64PPU_STRIDE);
+#endif
+  if (bpp == 8) {
+    if (any_lo) bit_set(f->rows[plane_lo], r);
+    if (any_hi) bit_set(f->rows[plane_hi], r);
+  } else {
+    if (any_lo) bit_set(f->rows[plane_lo], r);
+    if (any_hi) bit_set(f->rows_hi[plane_lo], r);
+  }
+}
+
 /* Mode 3's BG1 for one line (8x8 tiles of 8 bits a pixel, as
  * PpuDrawBackground_8bpp, ppu.c): a pixel is a CGRAM index, 0 transparent.
  * The tiles without the priority bit go to plane_lo's row, those with it
@@ -1608,8 +1723,11 @@ bool n64_ppu_build_line(const Ppu *ppu, int line, bool same_regs) {
   }
 
   L->kind = N64PPU_LINE_RDP;
-  L->lmath = PPU_mode(ppu) == 3 ? (uint8_t)((lmath & ~4) | ((lmath & 1) << 2)) : lmath;
+  const bool m8 = PPU_mode(ppu) == 3 || PPU_mode(ppu) == 4;   /* BG1 of 256 colours: two planes */
+  L->lmath = m8 ? (uint8_t)((lmath & ~4) | ((lmath & 1) << 2)) : lmath;
   L->order = PPU_mode(ppu) == 2 ? N64PPU_ORDER_MODE2
+           : PPU_mode(ppu) == 4 ? N64PPU_ORDER_MODE4
+           : PPU_mode(ppu) >= 5 && PPU_mode(ppu) <= 6 ? N64PPU_ORDER_MODE5
            : PPU_mode(ppu) == 3 ? N64PPU_ORDER_MODE3
            : PPU_mode(ppu) == 7 ? (PPU_m7extBg(ppu) ? (PPU_directColor(ppu) ? N64PPU_ORDER_MODE7_EXT_DIRECT : N64PPU_ORDER_MODE7_EXT)
                                                     : (PPU_directColor(ppu) ? N64PPU_ORDER_MODE7_DIRECT : N64PPU_ORDER_MODE7))
@@ -1624,7 +1742,7 @@ bool n64_ppu_build_line(const Ppu *ppu, int line, bool same_regs) {
     L->spans[k].math = (uint8_t)(s->math[k] ? (backdrop_math ? 1 : 0) | (lmath ? 2 : 0) : 0);
     L->spans[k].hide = s->mask_main[k];
     L->spans[k].hide_sub = s->mask_sub[k];
-    if (PPU_mode(ppu) == 3) {   /* "BG3" is BG1's priority-1 pixels (N64PPU_ORDER_MODE3) */
+    if (m8) {   /* "BG3" is BG1's priority-1 pixels (N64PPU_ORDER_MODE3, _MODE4) */
       L->spans[k].hide = (uint8_t)((L->spans[k].hide & ~4) | ((L->spans[k].hide & 1) << 2));
       L->spans[k].hide_sub = (uint8_t)((L->spans[k].hide_sub & ~4) | ((L->spans[k].hide_sub & 1) << 2));
     }
@@ -1634,8 +1752,9 @@ bool n64_ppu_build_line(const Ppu *ppu, int line, bool same_regs) {
    * layers off on this line get their row cleared now. */
   const bool m7 = PPU_mode(ppu) == 7;
   const bool m7ext = m7 && PPU_m7extBg(ppu);
-  const bool m3 = PPU_mode(ppu) == 3, m2 = PPU_mode(ppu) == 2;
-  const int nbg = m7 ? 1 : (m3 || m2) ? 2 : PPU_mode(ppu) == 0 ? 4 : 3;
+  const int mode = PPU_mode(ppu);
+  const bool m3 = mode == 3, m2 = mode == 2, m4 = mode == 4, m56 = mode == 5 || mode == 6;
+  const int nbg = m7 ? 1 : mode == 6 ? 1 : mode >= 2 ? 2 : mode == 0 ? 4 : 3;
 #if N64PPU_SCENE
   /* Clipped spans and the subscreen are drawn by the scene too, through
    * the black and math palettes (n64_ppu_scene_tlut). */
@@ -1653,13 +1772,26 @@ bool n64_ppu_build_line(const Ppu *ppu, int line, bool same_regs) {
         flush_run(f, screen, layer);
         bg_opt_row(f, ppu, (screen ? N64PPU_SUB_BG1 : N64PPU_BG1) + layer, line, screen, layer);
         if (!screen) L->main_layers |= (uint8_t)(1 << layer);
+      } else if (m4 && layer == 0 && (enabled[screen] & 1)) {
+        /* Mode 4's BG1: as mode 3's, a pixel at a time. */
+        flush_run(f, screen, 0);
+        flush_run(f, screen, 2);
+        bg_px_row(f, ppu, screen ? N64PPU_SUB_BG1 : N64PPU_BG1, screen ? N64PPU_SUB_BG3 : N64PPU_BG3, line, screen, 0, 8);
+        if (!screen) L->main_layers |= 0x05; else L->sub_layers |= 0x04;
+      } else if ((m4 && layer == 1) || (m56 && layer < nbg)) {
+        flush_run(f, screen, layer);
+        if (enabled[screen] & (1 << layer)) {
+          bg_px_row(f, ppu, (screen ? N64PPU_SUB_BG1 : N64PPU_BG1) + layer, -1, line, screen, layer,
+                    layer == 0 ? 4 : 2);
+          if (!screen) L->main_layers |= (uint8_t)(1 << layer);
+        } else if (screen) L->sub_layers &= (uint8_t)~(1 << layer);
       } else if (m3 && layer == 0 && (enabled[screen] & 1)) {
         /* Mode 3's BG1: 8 bits a pixel, its two priorities in two planes. */
         flush_run(f, screen, 0);
         flush_run(f, screen, 2);
         bg8_row(f, ppu, screen ? N64PPU_SUB_BG1 : N64PPU_BG1, screen ? N64PPU_SUB_BG3 : N64PPU_BG3, line);
         if (!screen) L->main_layers |= 0x05; else L->sub_layers |= 0x04;
-      } else if (m3 && layer == 2) {
+      } else if ((m3 || m4) && layer == 2) {
         /* (BG1's second plane: written with BG1, above) */
         if (!(enabled[screen] & 1)) { flush_run(f, screen, layer); if (screen) L->sub_layers &= (uint8_t)~4; }
       } else if (m7 && (layer == 0 || (layer == 1 && m7ext)) && (enabled[screen] & (1 << layer))) {
