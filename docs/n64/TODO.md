@@ -415,6 +415,45 @@ above but two were ever placed. This is item 10 of the 65816 list (retrain,
 "near the end"), now with a size: the pairs alone are 3.2 ms a frame, and
 they are the engine's, not a game's.
 
+**What the misses are made of (same build, a code-line trace of 60 frames
+replayed offline; emulation stage, misses a frame).** Owner 2026-11-24: no
+retrain; look for structural answers.
+
+| | misses/frame |
+|---|---|
+| as linked (direct-mapped 16 KB) | 35,700: engine text 22,950, compiled game code 6,420, SPC translated code 5,570, 65816 JIT code 770 |
+| the same trace in a fully associative 16 KB cache (what no placement beats) | 20,050: engine text 9,930, generated code 10,120 |
+| engine text alone, fully associative | 6,520 |
+| fully associative 32 KB / 64 KB | 14,300 / 10,460 |
+
+- 44% of the misses are placement, 56% are capacity: the working set does
+  not fit, whatever the layout. (PPU stage: 3,147 against a floor of 660,
+  so there it is placement.)
+- Generated code is visited 38,500 lines a frame and misses a quarter of
+  them even in the ideal cache: it is long straight-line code run once a
+  frame or once a burst (compiled game code: 256 KB touched in 60 frames,
+  one miss per 2.1 line visits; SPC code one per 3.9).
+- *Run it uncached?* No. Compiled game code out of the cache would remove
+  9,600 misses (its own and those it causes), 0.46 M cycles, and fetch
+  13,600 lines' instructions one memory access each.
+- *Give generated code its own part of the cache?* No. Engine text folded
+  into 12 KB: 48,800 misses; into 8 KB: 67,900. Keeping generated code off
+  the sets of the hottest 64-320 engine lines: 34,600-40,200, no better
+  than 35,700. Generated code is not what evicts the engine; the engine
+  evicts itself.
+- *Pack the hot engine functions into one block?* No gain with whole
+  functions (16 KB of the hottest: 36,200). With only their hot lines
+  (an ideal hot/cold split): 30,700.
+- *Denser generated code?* Yes, the largest: the same trace with compiled
+  game code and SPC code 4x denser, 25,500 (-5.2 ms); 8x, 21,700; SPC code
+  alone 2x, 31,700. (Before the cost of whatever makes it denser: shared
+  routines called instead of code inline.) A cold guest instruction costs
+  more in misses than in execution, so for code run once a frame a call
+  into a routine that is already in the cache beats inline code.
+
+Tools: ares's `ARES_ICTRACE` and n64/profile/icsim (the what-ifs above
+were one-off simulators over the same trace, not kept).
+
 See `PPU_DESIGN.md` ("Step 4: the scene builder", "The RSP must never wait
 on the RDP mid-command").
 
