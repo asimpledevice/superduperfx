@@ -266,6 +266,14 @@ maths the scene builder needs is "main + subscreen BG2" for OBJ and the
 backdrop: the subscreen drawn into its own buffer and an additive combine
 (step 6), which becomes SMW's first feature after the basic scene.
 
+*2026-11-24:* the backdrop part was already a palette (`tl_math`). The OBJ
+part applies only to sprites of palettes 4-7, and the map as a new game
+shows none, so lines without one in range are now RDP lines
+(`objmath_line`): the whole map, 253 ms a frame in ares down to 60. Lines
+that do hold such a sprite remain software lines; the additive combine is
+still the design for them, and the hardware page says it cannot be the
+RDP's own add (exact only below a sum of 47).
+
 **Copy-mode flips (`n64/rdptest`, ares first; hardware pending).** 16x8
 textures, RGBA16, CI8 and CI4 (palettes 0 and 3), drawn with texture
 rectangles, read back and compared:

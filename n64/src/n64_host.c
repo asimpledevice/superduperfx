@@ -121,14 +121,29 @@ static void present_rdp_frame(uint32_t frame, const char *line) {
   n64_ppu_build_finish();
 #endif
   const int diff = n64_ppu_draw_and_show(s_rdp_frame, line, N64_RENDER == 2);
+#ifdef N64_WATCH_WRAM
+  { /* -DN64_WATCH_WRAM=addr: log a WRAM byte whenever it changes (to tune a
+     * scripted run: a game's mode or scene number). */
+    static int s_last = -1;
+    const int v = g_snes->ram[N64_WATCH_WRAM];
+    if (v != s_last) {
+      n64_platform_log("[watch] frame %lu: wram[%05x] = %02x\n", (unsigned long)frame, (unsigned)N64_WATCH_WRAM, v);
+      s_last = v;
+    }
+  }
+#endif
 #ifdef N64PPU_WHY_LOG
   { /* Software-PPU lines per reason (bits of N64PPU_WHY_*), every 60 frames. */
     static uint32_t s_sw, s_rdp, s_why_or;
     s_sw += s_rdp_frame->software_lines; s_rdp += s_rdp_frame->rdp_lines;
     s_why_or |= s_rdp_frame->fallback_reasons;
     if (frame % 60 == 59) {
-      n64_platform_log("[ppuwhy] 60 frames: rdp lines %lu, software lines %lu, reasons %03lx\n",
-                       (unsigned long)s_rdp, (unsigned long)s_sw, (unsigned long)s_why_or);
+      /* (the registers as the frame ends, to tell the scenes apart) */
+      n64_platform_log("[ppuwhy] 60 frames: rdp lines %lu, software lines %lu, reasons %03lx; "
+                       "cgwsel %02x cgadsub %02x main %02x sub %02x mode %d\n",
+                       (unsigned long)s_rdp, (unsigned long)s_sw, (unsigned long)s_why_or,
+                       g_snes->ppu->cgwsel, g_snes->ppu->cgadsub, g_snes->ppu->screenEnabled[0],
+                       g_snes->ppu->screenEnabled[1], g_snes->ppu->bgmode & 7);
       s_sw = s_rdp = s_why_or = 0;
     }
   }

@@ -424,10 +424,22 @@ on the RDP mid-command").
      for the backdrop and sprite palettes 4-7; all of it software lines,
      166 ms a frame on the console). The backdrop part is a palette. The
      sprite part is an add of two pictures, which the hardware page shows
-     is exact on the RDP only below a sum of 47 of 31. First step there,
-     exact and cheap: only lines that hold a sprite of palettes 4-7 need
-     layer maths at all; the others can be RDP lines. Needs input playback
-     to reach the map in a test run.
+     is exact on the RDP only below a sum of 47 of 31.
+     **First step done (2026-11-24), exact:** when OBJ is the only
+     main-screen layer with maths, only sprites of palettes 4-7 take it,
+     so a line with none in range has no such pixel and is an RDP line
+     (`objmath_line`, n64_ppu_build.c; the lines that do hold one stay
+     software lines). The map as a new game shows it has none: 224 RDP
+     lines, and in ares 253 ms a frame (run 45, PPU 180, present 28)
+     becomes 60 (45, 10.4, 5.0). To get there unattended:
+     `-DN64_INPUT_SCRIPT -DN64_INPUT_SCRIPT_MASK=1 -DN64_INPUT_SCRIPT_TO=1400`
+     (the confirm button every 64 frames: title, file, players, the intro
+     scene's message; the map from frame 1461), and `-DN64_WATCH_WRAM=0x100`
+     logs the game's mode byte to tune such a script. Start as well pauses
+     the intro scene and never leaves it.
+     Still software in SMW's first minute: the title's opening (3 s:
+     backdrop maths with OBJ on the subscreen, `N64PPU_WHY_SUB_OBJ`) and
+     the mosaic fades.
      Half-add against a composed subscreen has no consumer yet. It is also not one pass: with a subscreen pixel the
      SNES halves, without one it adds the fixed colour unhalved, so the RDP
      needs a per-pixel mask -- a Z-buffer as mask (subscreen pixels marked;

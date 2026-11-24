@@ -706,6 +706,7 @@ static struct {
   uint32_t oam_count;
   uint8_t obj_size, valid;
   uint32_t mask[N64PPU_LINES][4];
+  uint32_t math_pal[4];   /* sprites of palettes 4-7: the ones colour math applies to */
 } s_obj_lines;
 
 static inline int obj_size_of(const Ppu *ppu, unsigned index) {
@@ -718,8 +719,10 @@ static inline int obj_x_of(const Ppu *ppu, unsigned index) {
 
 static void obj_lines_build(const Ppu *ppu) {
   memset(s_obj_lines.mask, 0, sizeof s_obj_lines.mask);
+  memset(s_obj_lines.math_pal, 0, sizeof s_obj_lines.math_pal);
   for (unsigned spr = 0; spr < 128; ++spr) {
     const unsigned index = spr * 2;
+    if (ppu->oam[index + 1] & 0x0800) s_obj_lines.math_pal[spr >> 5] |= 1u << (spr & 31);
     const int size = obj_size_of(ppu, index);
     if (obj_x_of(ppu, index) + size <= 0) continue;
     const unsigned y = ppu->oam[index] >> 8;
@@ -962,7 +965,23 @@ static bool obj_line_scene(N64PpuFrame *f, const Ppu *ppu, int r) {
 
 /* ---- Lines --------------------------------------------------------------- */
 
-static uint32_t line_unsupported(const Ppu *ppu, const Spans *s, bool *backdrop_math, uint8_t *lmath) {
+/* Colour math between a main-screen layer and a composed subscreen needs
+ * two colours a pixel, which the RDP path does not have (software lines).
+ * When OBJ is the only main-screen layer with math, only sprites of
+ * palettes 4-7 take it, so a line without one in range has no such pixel.
+ * objmath_regs: the registers say so; objmath_line: and row r holds one. */
+static inline bool objmath_regs(const Ppu *ppu) {
+  return (PPU_mathEnabled(ppu) & ppu->screenEnabled[0] & 0x1f) == 0x10 && PPU_addSubscreen(ppu) &&
+         (ppu->screenEnabled[1] & 0x1f);
+}
+static __attribute__((noinline)) bool objmath_line(const Ppu *ppu, int r) {
+  if (!objmath_regs(ppu)) return false;
+  obj_lines_ensure(ppu);
+  const uint32_t *m = s_obj_lines.mask[r], *h = s_obj_lines.math_pal;
+  return ((m[0] & h[0]) | (m[1] & h[1]) | (m[2] & h[2]) | (m[3] & h[3])) != 0;
+}
+
+static uint32_t line_unsupported(const Ppu *ppu, const Spans *s, int r, bool *backdrop_math, uint8_t *lmath) {
   uint32_t why = 0;
   const int mode = PPU_mode(ppu);
   const uint8_t main = ppu->screenEnabled[0], sub = ppu->screenEnabled[1];
@@ -984,8 +1003,9 @@ static uint32_t line_unsupported(const Ppu *ppu, const Spans *s, bool *backdrop_
     /* Layer math with the fixed colour is a palette (tl_fix); with a
      * composed subscreen it needs two colours per pixel. */
     const uint8_t layers = (uint8_t)(PPU_mathEnabled(ppu) & main & 0x1f);
-    if (layers && PPU_addSubscreen(ppu) && (sub & 0x1f)) why |= N64PPU_WHY_COLOR_MATH;
-    else *lmath = layers;
+    if (layers && PPU_addSubscreen(ppu) && (sub & 0x1f)) {
+      if (layers != 0x10 || objmath_line(ppu, r)) why |= N64PPU_WHY_COLOR_MATH;
+    } else *lmath = layers;
     if (PPU_mathEnabled(ppu) & 0x20) *backdrop_math = true;
     if (*backdrop_math && PPU_addSubscreen(ppu) && (sub & 0x10)) why |= N64PPU_WHY_SUB_OBJ;
   }
@@ -1124,7 +1144,7 @@ bool n64_ppu_build_line(const Ppu *ppu, int line, bool same_regs) {
    * palettes and layers are that line's (they depend on nothing else, and
    * the scene draws every BG layer of an RDP line, so there are no plane
    * rows to queue). Only the sprites are per line. */
-  if (same_regs && r > 0 && f->line[f->ref[r - 1]].kind == N64PPU_LINE_RDP) {
+  if (same_regs && r > 0 && f->line[f->ref[r - 1]].kind == N64PPU_LINE_RDP && !objmath_line(ppu, r)) {
     const N64PpuLine *P = &f->line[f->ref[r - 1]];
     N64PpuLine t;   /* line_sprites writes these three fields only */
     t.obj_scene = 0;
@@ -1158,7 +1178,7 @@ bool n64_ppu_build_line(const Ppu *ppu, int line, bool same_regs) {
   line_spans(ppu, s);
   bool backdrop_math;
   uint8_t lmath;
-  uint32_t why = line_unsupported(ppu, s, &backdrop_math, &lmath);
+  uint32_t why = line_unsupported(ppu, s, r, &backdrop_math, &lmath);
 
   if (!why) why |= line_palettes(f, ppu, L, backdrop_math, lmath);
   if (why) {
