@@ -78,6 +78,11 @@ enum {
   N64PPU_ORDER_MODE7_DIRECT = 4,
   N64PPU_ORDER_MODE7_EXT = 5,           /* with BG2 below OBJ 0 and, its priority pixels, above OBJ 1 */
   N64PPU_ORDER_MODE7_EXT_DIRECT = 6,
+  /* Mode 3: BG1 has 8 bits a pixel, so no room in a plane byte for its
+   * priority: its priority-1 tiles' pixels are in BG3's plane (free in
+   * this mode; the line's layer bits for "BG3" are BG1's), both through
+   * the 256-entry palette (N64PPU_SEL_M7); BG2 as in mode 1. */
+  N64PPU_ORDER_MODE3 = 7,
   N64PPU_ORDERS
 };
 
@@ -197,12 +202,18 @@ static const int8_t kN64PpuOrder[N64PPU_ORDERS][13] = {
     N64PPU_BG2, N64PPU_OBJ0, N64PPU_BG1, N64PPU_OBJ1, N64PPU_BG2 | N64PPU_HI, N64PPU_OBJ2, N64PPU_OBJ3, -1 },
   [N64PPU_ORDER_MODE7_EXT_DIRECT] = {
     N64PPU_BG2, N64PPU_OBJ0, N64PPU_BG1, N64PPU_OBJ1, N64PPU_BG2 | N64PPU_HI, N64PPU_OBJ2, N64PPU_OBJ3, -1 },
+  [N64PPU_ORDER_MODE3] = {
+    N64PPU_BG2, N64PPU_OBJ0, N64PPU_BG1, N64PPU_OBJ1, N64PPU_BG2 | N64PPU_HI, N64PPU_OBJ2, N64PPU_BG3, N64PPU_OBJ3, -1 },
 };
 
 /* Palette selector for an order entry (plane | N64PPU_HI). */
 static inline int n64ppu_entry_sel(int order, int entry) {
   const int plane = entry & 0xf;
   if (plane >= N64PPU_OBJ0) return N64PPU_SEL_OBJ;
+  if (order == N64PPU_ORDER_MODE3) {
+    if (plane == N64PPU_BG2) return (entry & N64PPU_HI) ? N64PPU_SEL_HI16 : N64PPU_SEL_LO16;
+    return N64PPU_SEL_M7;
+  }
   if (order >= N64PPU_ORDER_MODE7) {
     if (plane == N64PPU_BG2) return (entry & N64PPU_HI) ? N64PPU_SEL_M7E_HI : N64PPU_SEL_M7E_LO;
     return (order == N64PPU_ORDER_MODE7_DIRECT || order == N64PPU_ORDER_MODE7_EXT_DIRECT) ? N64PPU_SEL_M7D : N64PPU_SEL_M7;
