@@ -388,6 +388,32 @@ on the RDP mid-command").
    (later lines fall back after a change). BG layers have no such check: a
    frame that writes VRAM in a mid-frame forced blank draws its earlier
    lines from the later VRAM.
+0. **Present no longer waits for the RDP (2026-11-24, `N64_PRESENT_ASYNC`).**
+   `n64_ppu_draw_and_show` ended in `rdpq_detach_wait`, only to draw the
+   status text on the finished frame and show it: 7 to 12 ms a frame of the
+   CPU standing still (70% of the present phase by PC samples). Now the
+   status line is the frame's last rectangles (a small RGBA16 texture), the
+   RDP's completion callback shows the frame, and `n64_ppu_present_sync`
+   waits for that callback just before the next frame is built -- the first
+   point where anything the queued commands read (planes, TLUTs, the VRAM
+   snapshot) is written again. So the next frame's emulation runs while the
+   last one is drawn, with no second copy of anything; the frame-late
+   pipeline (`N64_PIPELINE`) is off with it. In ares the wait at that point
+   is 0 to 2 us a frame. With a word-wise compare for the per-line "same as
+   the line above?" questions (`n64_mem_eq`: newlib's memcmp goes byte by
+   byte), ms a frame, run + ppu + present:
+
+   | | before | now |
+   |---|---|---|
+   | Joe & Mac 2 | 34.1 + 6.2 + 11.1 = 51.5 | 33.0 + 4.9 + 4.1 = 42.1 |
+   | Pitfall | 37.1 + 6.8 + 9.5 = 53.5 | 34.3 + 5.7 + 2.7 = 42.8 |
+   | SMW | 59.2 + 12.3 + 18.5 = 90.0 | 60.0 + 8.3 + 7.1 = 75.4 |
+
+   Exact on the three games (emulation is untouched; picture and status
+   line checked by screenshot). RENDER=2 and `N64_PRESENT_RDPWAIT` keep
+   the wait. **To confirm on the EverDrive:** ares does not model the RDP's
+   time, so there the wait before building may be more than nothing; the
+   log line `[present] waited ...` says how much.
 4. **Double-buffered tile caches and TLUTs**, so the next frame's sync never
    waits for the RDP (`rdpq_fence`) and TLUT slots are never rewritten
    while the RDP may read them; frame pacing in Green; an RDP watchdog.

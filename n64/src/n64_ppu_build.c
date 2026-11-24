@@ -10,6 +10,7 @@
  * is read from VRAM once instead of once per line. This is memory-bound code
  * on the N64. */
 #include "n64_ppu_build.h"
+#include "n64_memeq.h"
 
 #include <malloc.h>
 #include <stdlib.h>
@@ -229,7 +230,7 @@ static uint8_t get_tlut_slow(N64PpuFrame *f, const Ppu *ppu, uint8_t kind, uint8
     key.flags = flags;
   }
   for (int i = N64PPU_SELS; i < f->tlut_count; ++i)
-    if (!memcmp(&s_state.keys[i], &key, sizeof key)) return (uint8_t)i;
+    if (n64_mem_eq(&s_state.keys[i], &key, sizeof key)) return (uint8_t)i;
   if (f->tlut_count == N64PPU_MAX_TLUTS) { *full = true; return 0; }
   const int i = f->tlut_count++;
   s_state.keys[i] = key;
@@ -928,7 +929,7 @@ static bool obj_line_scene(N64PpuFrame *f, const Ppu *ppu, int r) {
   const uint32_t *m = s_obj_lines.mask[r];
   const unsigned first = PPU_objPriority(ppu) ? (ppu->oamaddl & 0xfe) >> 1 : 0;
   if (s_objscene.last_valid && s_objscene.last_first == first &&
-      !memcmp(s_objscene.last_mask, m, sizeof s_objscene.last_mask))
+      n64_mem_eq(s_objscene.last_mask, m, sizeof s_objscene.last_mask))
     return s_objscene.last_ok;
   bool ok = true;
   int n = 0, tiles = 0;
@@ -1019,7 +1020,7 @@ static __attribute__((noinline)) void line_spans(const Ppu *ppu, Spans *s) {
   key.windowed[0] = ppu->screenWindowed[0];
   key.windowed[1] = ppu->screenWindowed[1];
   key.cgwsel = ppu->cgwsel;
-  if (s_state.lastspans.valid && !memcmp(&s_state.lastspans.key, &key, sizeof key)) {
+  if (s_state.lastspans.valid && n64_mem_eq(&s_state.lastspans.key, &key, sizeof key)) {
     *s = s_state.lastspans.spans;
     return;
   }
@@ -1051,7 +1052,7 @@ static __attribute__((noinline)) uint32_t line_palettes(N64PpuFrame *f, const Pp
   key.brightness = (uint8_t)b;
   key.mode = (uint8_t)(mflags | (add_sub ? 4 : 0) | (backdrop_math ? 8 : 0) | (lmath ? 16 : 0));
   key.sub = (uint8_t)(ppu->screenEnabled[1] & 0xf);
-  if (s_state.linepal.valid && !memcmp(&s_state.linepal.key, &key, sizeof key)) {
+  if (s_state.linepal.valid && n64_mem_eq(&s_state.linepal.key, &key, sizeof key)) {
     memcpy(L->tl_main, s_state.linepal.line.tl_main, sizeof L->tl_main);
     memcpy(L->tl_math, s_state.linepal.line.tl_math, sizeof L->tl_math);
     memcpy(L->tl_math_clip, s_state.linepal.line.tl_math_clip, sizeof L->tl_math_clip);

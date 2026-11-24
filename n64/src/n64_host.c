@@ -46,7 +46,11 @@
  * backgrounds meanwhile (one frame more display latency; emulation is
  * unchanged). Default with the RSP background path. */
 #ifndef N64_PIPELINE
-#if N64_RENDER && defined(N64_RSPBG)
+#if N64_RENDER == 1 && N64_PRESENT_ASYNC && !defined(N64_PRESENT_RDPWAIT)
+/* (the frame is drawn while the next one's emulation runs anyway:
+ * n64_ppu_rdp.h, N64_PRESENT_ASYNC) */
+#define N64_PIPELINE 0
+#elif N64_RENDER && defined(N64_RSPBG)
 #define N64_PIPELINE 1
 #else
 #define N64_PIPELINE 0
@@ -622,6 +626,7 @@ static int host_main(void) {
     n64_platform_set_phase(N64_PHASE_PPU);
     PpuBeginDrawing(g_ppu, (uint8_t *)s_pixels, kSnesW * 4, kPpuRenderFlags_NewRenderer);
 #if N64_RENDER
+    n64_ppu_present_sync();   /* the last frame's commands read what this builds */
     draw_frame_rdp(N64_RENDER == 2);
 #else
     n64_draw_ppu_frame();
@@ -1270,6 +1275,12 @@ static int host_main(void) {
                          (unsigned long)g_jit816_stats[3], (unsigned long)g_jit816_stats[4], (unsigned long)g_jit816_stats[5],
                          (unsigned long)g_jit816_stats[6], (unsigned long)g_jit816_stats[7], (unsigned long)g_jit816_nested,
                          (unsigned long)g_interp_bridge_steps); }
+#endif
+#if N64_RENDER
+      { extern uint32_t g_present_sync_us;   /* (inside the ppu figure) */
+        n64_platform_log("[present] waited for the last frame's RSP and RDP work before building: %lu us a frame\n",
+                         (unsigned long)(g_present_sync_us / 60));
+        g_present_sync_us = 0; }
 #endif
       n64_platform_log("[n64] frames %lu: avg/frame run %lu us, ppu %lu us, present %lu us\n",
                        (unsigned long)frame, (unsigned long)(acc_run / 60),

@@ -2,6 +2,7 @@
  * registers and CGRAM, built by Green's raster replay one line at a time
  * (draw_frame_rdp in n64_host.c). */
 #include "n64_ppu_desc.h"
+#include "n64_memeq.h"
 
 #include <stddef.h>
 #include <stdlib.h>
@@ -62,7 +63,7 @@ bool n64_ppu_desc_line(const Ppu *ppu, int line) {
   const uint8_t cg = (uint8_t)(s_desc.ncgram - 1);
   if (s_desc.nbands) {
     N64PpuBand *b = &s_desc.band[s_desc.nbands - 1];
-    if (b->y1 == line - 1 && b->cgram == cg && !memcmp(&b->regs, ppu, sizeof b->regs)) {
+    if (b->y1 == line - 1 && b->cgram == cg && n64_mem_eq(&b->regs, ppu, sizeof b->regs)) {
       b->y1 = (uint8_t)line;
       return true;
     }

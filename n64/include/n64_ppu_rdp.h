@@ -195,6 +195,17 @@ static inline int n64ppu_entry_sel(int order, int entry) {
 /* Draws a built frame into the display (libdragon side) and shows it.
  * Returns the number of pixels on RDP lines that differ from the software
  * rows when compare_with_software is set, else -1. */
+/* 1: n64_ppu_draw_and_show issues the frame's commands and returns: the
+ * RDP shows the frame when it has drawn it (the status line included), and
+ * the next frame's emulation runs meanwhile. n64_ppu_present_sync, called
+ * before anything the queued commands read is written again (the planes,
+ * TLUTs and VRAM snapshot: before the next frame is built), waits for them.
+ * 0: wait for the RDP in n64_ppu_draw_and_show, as the comparison with the
+ * software PPU and the RDP-time measurement need. */
+#ifndef N64_PRESENT_ASYNC
+#define N64_PRESENT_ASYNC 1
+#endif
+void n64_ppu_present_sync(void);
 int n64_ppu_draw_and_show(const N64PpuFrame *frame, const char *status,
                           int compare_with_software);
 

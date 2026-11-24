@@ -4,6 +4,7 @@
 
 #include "n64_ppu_rdp.h"
 #include "n64_platform.h"
+#include "n64_memeq.h"
 
 enum { kOx = 32, kOy = 8 };   /* SNES picture position in the 320x240 display */
 
@@ -563,7 +564,29 @@ extern surface_t *volatile g_hang_fb;
 #else
 #define DRAW_WHERE(v) ((void)0)
 #endif
+/* The frame handed to the RDP and not waited for (N64_PRESENT_ASYNC). */
+static bool s_present_pending;
+uint32_t g_present_sync_us;   /* waited in n64_ppu_present_sync */
+/* Set by the frame's last RDP command having run (the callback of
+ * rdpq_detach_cb, on the SP interrupt): its commands, and all they read,
+ * are done with. Waiting for that alone leaves newer RSP work -- sound --
+ * to go on. */
+static volatile bool s_present_done;
+static void present_done(void *fb) {
+  display_show((surface_t *)fb);
+  s_present_done = true;
+}
+void n64_ppu_present_sync(void) {
+  if (!s_present_pending) return;
+  const uint32_t t0 = TICKS_READ();
+  while (!s_present_done) {}
+  g_present_sync_us += (uint32_t)TICKS_TO_US((uint64_t)(TICKS_READ() - t0));
+  s_present_pending = false;
+}
+static uint16_t s_status_px[288 * 24] __attribute__((aligned(16)));
+
 int n64_ppu_draw_and_show(const N64PpuFrame *f, const char *status, int compare_with_software) {
+  n64_ppu_present_sync();   /* (a caller that built the frame has made it already) */
   DRAW_WHERE(0x21);
   uint32_t pt = PP_T();
   surface_t *fb = display_get();
@@ -590,7 +613,7 @@ int n64_ppu_draw_and_show(const N64PpuFrame *f, const char *status, int compare_
     int b = a + 1;
     const N64PpuLine *L = &f->line[f->ref[a]];
     while (b < N64PPU_LINES &&
-           (f->ref[b] == f->ref[a] || !memcmp(&f->line[f->ref[b]], L, sizeof *L))) ++b;
+           (f->ref[b] == f->ref[a] || n64_mem_eq(&f->line[f->ref[b]], L, sizeof *L))) ++b;
     if (L->kind == N64PPU_LINE_SOFTWARE) {
       const uint32_t st = SPLIT_T();
       draw_software_lines(f, a, b);
@@ -624,6 +647,51 @@ int n64_ppu_draw_and_show(const N64PpuFrame *f, const char *status, int compare_
     surface_t c = surface_make(rgba, FMT_RGBA16, 64, 8, 128);
     rdpq_tex_upload(TILE0, &c, NULL);
     rdpq_texture_rectangle(TILE0, 0, 20, 64, 28, 0, 0);
+  }
+#endif
+#if N64_PRESENT_ASYNC && !defined(N64_PRESENT_RDPWAIT) && !defined(N64PPU_DBG_PROBE)
+  if (!compare_with_software) {
+    /* The status line as the frame's last rectangles, then the frame is the
+     * RDP's to finish and show. */
+    int h = 0;
+    surface_t st = surface_make(s_status_px, FMT_RGBA16, 288, 24, 288 * 2);
+    if (status && status[0]) {
+      graphics_draw_box(&st, 0, 0, 288, 12, graphics_make_color(0, 0, 0, 255));
+      graphics_set_color(graphics_make_color(255, 255, 0, 255), 0);
+      graphics_draw_text(&st, 8, 2, status);
+      h = 12;
+    }
+#ifdef N64_PRESENT_PROF
+    if (h && g_present_line[0]) {
+      graphics_draw_box(&st, 0, 12, 288, 12, graphics_make_color(0, 0, 0, 255));
+      graphics_set_color(graphics_make_color(0, 255, 255, 255), 0);
+      graphics_draw_text(&st, 8, 14, g_present_line);
+      h = 24;
+    }
+#endif
+    if (h) {
+      data_cache_hit_writeback(s_status_px, sizeof s_status_px);
+      surface_t part = surface_make_sub(&st, 0, 0, 288, h);
+      rdpq_set_scissor(0, 0, fb->width, fb->height);
+      rdpq_set_mode_copy(false);
+      rdpq_tex_blit(&part, 16, N64_STATUS_Y - 2, NULL);
+    }
+    s_present_done = false;
+    rdpq_detach_cb(present_done, fb);
+    rspq_flush();
+    s_present_pending = true;
+    PP_ADD(1, pt);
+    {
+      static int n;
+      if (++n == 90 || n == 600) {
+        char buf[160]; int o = 0;
+        for (int p = 0; p < N64PPU_PLANES; ++p) o += snprintf(buf + o, sizeof buf - o, " %d", g_n64ppu_strips[p]);
+        n64_platform_log("[rdp] strips per plane:%s\n", buf);
+      }
+      memset(g_n64ppu_strips, 0, sizeof g_n64ppu_strips);
+    }
+    DRAW_WHERE(0x26);
+    return -1;
   }
 #endif
   { const uint32_t st = SPLIT_T();
