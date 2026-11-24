@@ -441,14 +441,30 @@ on the RDP mid-command").
      memory is what is short.
    - *What page 6 was for* (plan of 2026-11-20: "many tiles per load, and
      whether to retire the planes"): a tile layer costs the RDP 5.4 ms with
-     a load per tile -- what the scene does -- and 3.1 ms with 32 tiles to
-     a load, which the cache's layout was made for (tile k at t = 8k, a row
-     one TMEM word: 32 tiles are one 2 KB load). So: load the 32-tile block
-     a tile lies in and skip the load while the next tiles lie in it too.
-     The loads saved can be counted in ares; the time per load is the
-     page's (about 2.6 us). A plane layer is cheaper still for the RDP
-     (1.5 ms) but is built by the RSP and issued by the CPU, so the planes
-     are not retired on RDP time alone.
+     a load per tile -- what the scene did -- and 3.1 ms with 32 tiles to a
+     load. **Done (2026-11-24), as four groups of 8:** the scene microcode
+     loads tiles in aligned groups of 8 (512 bytes) and keeps four groups
+     in TMEM, the least recently used replaced (`Tile_slot`,
+     rsp_scene.S). Counted with `-DN64_SCENE_LOADSTAT` (loads a frame,
+     gameplay windows):
+
+     | | tiles = loads before | one group of 32 | 2 x 16 | **4 x 8** | 8 x 4 |
+     |---|---|---|---|---|---|
+     | Joe & Mac 2 | 702 | 134 | 122 | **133** | 171 |
+     | Pitfall | 1052 | 232 | 205 | **229** | 310 |
+     | SMW | 1661 | 663 | 391 | **275** | 283 |
+
+     One 32-tile group -- the page's variant C -- would have been slower
+     than a load a tile: the games' tile rows jump between groups, and the
+     page's TMEM counter (0.4 ms for 57 KB whichever way it is cut) says a
+     load's time follows its bytes, about 7 us a KB beside at most 2.6 us
+     a load. By those figures SMW's layer loads go from about 4.4 ms of RDP
+     time a frame to 1.6, Pitfall's 2.8 to 1.3, Joe & Mac 2's 1.9 to 0.8
+     (ares does not time the RDP; the owner's console decides). Pictures
+     against the software renderer (RENDER=2): no frame differs in any of
+     the three. A plane layer is cheaper still for the RDP (1.5 ms) but is
+     built by the RSP and issued by the CPU, so the planes are not retired
+     on RDP time alone.
    - *The PPU phase* is 5 to 8 ms: sprite evaluation for the range and
      time-over flags, HDMA transfers, the description's copies. No single
      part stands out any more.

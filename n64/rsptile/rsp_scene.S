@@ -11,10 +11,18 @@
 # normal or flipped half of the cache row, a negative DtDy for vertical
 # flips.
 #
-# The caller has set copy mode, the TLUT (loaded) and the scissor. Per tile:
-#   SYNC_LOAD, SET_TEXTURE_IMAGE (the tile, as RGBA16), LOAD_BLOCK (tile 1:
-#   32 16-bit texels, one 8-byte TMEM word per row), [SYNC_TILE, SET_TILE 0
-#   when the palette changes], TEXTURE_RECTANGLE (tile 0).
+# The caller has set copy mode, the TLUT (loaded) and the scissor. Tiles are
+# loaded in aligned groups of 8 (512 bytes: 64 TMEM words, a tile row a
+# word), and TMEM's lower half keeps four groups (Tile_slot), the least
+# recently used one replaced; a group is tile descriptor 0's rows
+# 64 * slot .. 64 * slot + 63. Per tile:
+#   [SYNC_LOAD, SET_TEXTURE_IMAGE (the group, as RGBA16), LOAD_BLOCK (tile
+#   1 + slot: 256 16-bit texels) when its group is not in TMEM], [SYNC_TILE,
+#   SET_TILE 0 when the palette changes], TEXTURE_RECTANGLE (tile 0).
+# (The owner's console, rdptest page 6: a layer's 896 tiles with a load
+# each 5.4 ms of RDP time, with 28 loads 3.1 ms; TMEM time follows the bytes
+# loaded, so one 32-tile group would cost more than it saves: the games'
+# tile rows jump between groups.)
 # The command ends with SYNC_LOAD, SYNC_TILE and SYNC_PIPE, so rdpq's own
 # commands that follow need no knowledge of what ran here.
 
@@ -61,6 +69,11 @@ ROW_HR:    .ds.b 1                  # the row's half (0 upper, 1 lower)
            .ds.b 1
     .align 3
 RECB:    .ds.b 512                  # tile records (SceneCmd_Tiles), 64 at a time
+# The tile groups in TMEM (Tile_slot): group number (tile >> 3, 0xffff:
+# none) and time of last use of each of the four slots, and the clock.
+SLOT_GRP:   .ds.b 8
+SLOT_AGE:   .ds.b 8
+SLOT_CLOCK: .ds.b 4
 
     .text
 
@@ -137,12 +150,8 @@ Scene_go:
     EMIT t0, zero
     lui t0, 0x2800                  # SYNC_TILE
     EMIT t0, zero
-    lui t0, 0x3510                  # SET_TILE 1: RGBA16, TMEM 0, pitch 0 (LOAD_BLOCK)
-    lui t1, 0x0100
-    EMIT t0, t1
-    lui t0, 0x3200                  # SET_TILE_SIZE 0: (0,0)-(15,7)
-    li t1, (60 << 12) | 28
-    EMIT t0, t1
+    jal Slots_begin
+    nop
     li a3, -1
     move k1, zero
     lbu s1, %lo(JOB + SCJ_R0)
@@ -328,18 +337,9 @@ Tile_loop:
     srlv t4, t4, t6
     andi t4, t4, 1
     bnez t4, Tile_next
-    sll t3, t3, 6
-    addu t9, s0, t3
-
-    lui t3, 0x2600                  # SYNC_LOAD
-    EMIT t3, zero
-    lui t3, 0x3D10                  # SET_TEXTURE_IMAGE: RGBA16, width 4
-    ori t3, t3, 3
-    EMIT t3, t9
-    lui t3, 0x3300                  # LOAD_BLOCK tile 1: 32 texels, dxt 1.0
-    lui t4, 0x0101
-    ori t4, t4, 0xF800
-    EMIT t3, t4
+    nop
+    jal Tile_slot                   # t9 = the tile's first row in TMEM
+    move t9, s0
     srl t6, t5, 10
     andi t6, t6, 7                  # palette
     beq t6, a3, 1f
@@ -371,6 +371,7 @@ Tile_loop:
     xori t7, t7, 7                  # 7 - row
     ori t4, t4, 0xFC00              # DtDy -1.0
 1:  sll t3, t3, 21                  # s << 5 << 16
+    addu t7, t7, t9
     sll t7, t7, 5
     or t3, t3, t7
     sw t3, 8(v1)
@@ -394,6 +395,103 @@ Tile_next:
 Row_next:
     b Row_loop
     move s1, s2
+    .endfunc
+
+# Start of a command: no group in TMEM; the load descriptors 1-4 (RGBA16,
+# pitch 0, TMEM word 64 * slot) and tile 0's size, (0,0)-(15,255): the four
+# groups' rows (SET_TILE 0 has no mask, so the size clamps).
+    .func Slots_begin
+Slots_begin:
+    li t0, -1
+    sw t0, %lo(SLOT_GRP) + 0
+    sw t0, %lo(SLOT_GRP) + 4
+    sw zero, %lo(SLOT_AGE) + 0
+    sw zero, %lo(SLOT_AGE) + 4
+    sw zero, %lo(SLOT_CLOCK)
+    lui t0, 0x3510                  # SET_TILE 1: TMEM 0
+    lui t1, 0x0100
+    EMIT t0, t1
+    ori t3, t0, 64                  # SET_TILE 2: TMEM 64
+    lui t1, 0x0200
+    EMIT t3, t1
+    ori t3, t0, 128
+    lui t1, 0x0300
+    EMIT t3, t1
+    ori t3, t0, 192
+    lui t1, 0x0400
+    EMIT t3, t1
+    lui t0, 0x3200                  # SET_TILE_SIZE 0: (0,0)-(15,255)
+    li t1, (60 << 12) | 1020
+    EMIT t0, t1
+    jr ra
+    nop
+    .endfunc
+
+# The TMEM rows of tile t3 (cache index) of the cache at t9: returns
+# t9 = the tile's first row for tile descriptor 0, after loading the tile's
+# group over the least recently used slot when no slot holds it.
+# Clobbers t2, t3, t4, t6, t7.
+    .func Tile_slot
+Tile_slot:
+    srl t4, t3, 3                   # the group
+    lhu t6, %lo(SLOT_GRP) + 0
+    beq t6, t4, Slot_have
+    li t7, 0                        # t7: slot * 2
+    lhu t6, %lo(SLOT_GRP) + 2
+    beq t6, t4, Slot_have
+    li t7, 2
+    lhu t6, %lo(SLOT_GRP) + 4
+    beq t6, t4, Slot_have
+    li t7, 4
+    lhu t6, %lo(SLOT_GRP) + 6
+    beq t6, t4, Slot_have
+    li t7, 6
+    # Not in TMEM: the slot used longest ago (an unused one's time is 0).
+    lhu t6, %lo(SLOT_AGE) + 0
+    li t7, 0
+    lhu t2, %lo(SLOT_AGE) + 2
+    subu t2, t2, t6
+    bgez t2, 1f
+    nop
+    lhu t6, %lo(SLOT_AGE) + 2
+    li t7, 2
+1:  lhu t2, %lo(SLOT_AGE) + 4
+    subu t2, t2, t6
+    bgez t2, 1f
+    nop
+    lhu t6, %lo(SLOT_AGE) + 4
+    li t7, 4
+1:  lhu t2, %lo(SLOT_AGE) + 6
+    subu t2, t2, t6
+    bgez t2, 1f
+    nop
+    li t7, 6
+1:  sh t4, %lo(SLOT_GRP)(t7)
+    sll t6, t4, 9                   # 512 bytes a group
+    addu t9, t9, t6
+    lui t6, 0x2600                  # SYNC_LOAD
+    EMIT t6, zero
+    lui t6, 0x3D10                  # SET_TEXTURE_IMAGE: RGBA16, width 4
+    ori t6, t6, 3
+    EMIT t6, t9
+    srl t2, t7, 1
+    addiu t2, t2, 1
+    sll t2, t2, 24                  # LOAD_BLOCK tile 1 + slot: 256 texels, dxt 1.0
+    lui t6, 0x000F
+    ori t6, t6, 0xF800
+    or t2, t2, t6
+    lui t6, 0x3300
+    EMIT t6, t2
+Slot_have:
+    lhu t6, %lo(SLOT_CLOCK) + 2
+    addiu t6, t6, 1
+    sh t6, %lo(SLOT_CLOCK) + 2
+    sh t6, %lo(SLOT_AGE)(t7)
+    andi t3, t3, 7
+    sll t9, t7, 2                   # slot * 8 tiles
+    addu t9, t9, t3
+    jr ra
+    sll t9, t9, 3                   # 8 rows a tile
     .endfunc
 
 # The pass's values that RDPQ_Send and the DMA helpers clobber (see the
@@ -459,12 +557,8 @@ Tiles_go:
     EMIT t0, zero
     lui t0, 0x2800                  # SYNC_TILE
     EMIT t0, zero
-    lui t0, 0x3510                  # SET_TILE 1: RGBA16, TMEM 0, pitch 0 (LOAD_BLOCK)
-    lui t1, 0x0100
-    EMIT t0, t1
-    lui t0, 0x3200                  # SET_TILE_SIZE 0: (0,0)-(15,7)
-    li t1, (60 << 12) | 28
-    EMIT t0, t1
+    jal Slots_begin
+    nop
     li a3, -1
     move k1, zero
     lhu s1, %lo(JOB + STJ_N)
@@ -495,18 +589,8 @@ Rec_have:
     andi t4, t4, 1
     bnez t4, Rec_next
     nop
-1:  sll t3, t3, 6
+1:  jal Tile_slot                   # t9 = the tile's first row in TMEM
     lw t9, %lo(JOB + STJ_CACHE)
-    addu t9, t9, t3
-    lui t3, 0x2600                  # SYNC_LOAD
-    EMIT t3, zero
-    lui t3, 0x3D10                  # SET_TEXTURE_IMAGE: RGBA16, width 4
-    ori t3, t3, 3
-    EMIT t3, t9
-    lui t3, 0x3300                  # LOAD_BLOCK tile 1: 32 texels, dxt 1.0
-    lui t4, 0x0101
-    ori t4, t4, 0xF800
-    EMIT t3, t4
     lbu t5, 7(t8)                   # t | palette << 4
     srl t6, t5, 4                   # palette
     beq t6, a3, 1f
@@ -543,6 +627,7 @@ Rec_have:
     andi t6, t3, 0x7f
     sll t6, t6, 21                  # s << 5 << 16
     andi t5, t5, 7
+    addu t5, t5, t9
     sll t5, t5, 5                   # t << 5
     or t6, t6, t5
     andi t3, t3, ST_VFLIP

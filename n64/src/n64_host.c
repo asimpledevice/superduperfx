@@ -160,6 +160,20 @@ static void present_rdp_frame(uint32_t frame, const char *line) {
                        (unsigned long)g_scene_obj_lines, (unsigned long)g_scene_obj_plane_lines,
                        (unsigned long)g_scene_obj_rects, (unsigned long)s_diff_frames);
     if (frame % 30 == 0) g_scene_obj_lines = g_scene_obj_plane_lines = g_scene_obj_rects = 0; }
+#ifdef N64_SCENE_LOADSTAT
+  if (frame % 60 == 0) {
+    extern uint32_t g_ls_loads[2][8], g_ls_tiles[2], g_ls_cmds[2];
+    for (int k = 0; k < 2; ++k) {
+      n64_platform_log("[loadstat] frame %lu %s cmds %lu tiles %lu loads 1x1 %lu 32x1 %lu 16x2 %lu 8x4 %lu 4x8 %lu 2x16 %lu 8x1 %lu 4x1 %lu\n",
+                       (unsigned long)frame, k ? "obj" : "bg", (unsigned long)g_ls_cmds[k], (unsigned long)g_ls_tiles[k],
+                       (unsigned long)g_ls_loads[k][0], (unsigned long)g_ls_loads[k][1], (unsigned long)g_ls_loads[k][2],
+                       (unsigned long)g_ls_loads[k][3], (unsigned long)g_ls_loads[k][4], (unsigned long)g_ls_loads[k][5],
+                       (unsigned long)g_ls_loads[k][6], (unsigned long)g_ls_loads[k][7]);
+      g_ls_tiles[k] = g_ls_cmds[k] = 0;
+      for (int p = 0; p < 8; ++p) g_ls_loads[k][p] = 0;
+    }
+  }
+#endif
 #endif
 }
 #endif

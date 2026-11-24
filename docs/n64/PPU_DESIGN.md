@@ -318,6 +318,17 @@ EverDrive (ares uses parallel-RDP).
   flipped tiles a candidate against keeping flipped copies in the cache,
   and puts three tile layers at 9-10 ms of RDP time a frame (beside the
   CPU, not on it).
+  *Acted on (2026-11-24):* the scene loads tiles in aligned groups of 8
+  and keeps four groups in TMEM (`Tile_slot`, rsp_scene.S): 702, 1052 and
+  1661 loads a frame in Joe & Mac 2, Pitfall and SMW become 133, 229 and
+  275. Variant C's one 32-tile group was not the answer: the games' tile
+  rows jump between groups (SMW would still load 663 times, each load
+  four times the bytes), and the TMEM counter being the same in B and C
+  says a load's time follows its bytes. `-DN64_SCENE_LOADSTAT` counts the
+  loads of each policy (`[loadstat]`); `=2` also keeps the groups from one
+  command to the next until something else loads a texture (SMW: 193
+  instead of 275; not built, since every command would have to know what
+  ran before it).
 - *256-wide framebuffer (page 2):* shown full width on the CRT, grid and
   edge lines visible.
 

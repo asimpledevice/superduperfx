@@ -38,6 +38,13 @@ static bool rows_any(const uint32_t *bits, int a, int b) {
 
 static uint16_t s_sw16[N64PPU_LINES * 256] __attribute__((aligned(16)));
 
+#ifdef N64_SCENE_LOADSTAT
+static bool s_ls_dirty = true;
+#define LS_DIRTY() (s_ls_dirty = true)
+#else
+#define LS_DIRTY() ((void)0)
+#endif
+
 static void draw_software_lines(const N64PpuFrame *f, int a, int b) {
   for (int r = a; r < b; ++r) {
     const uint32_t *src = f->sw_rows + (size_t)r * 256;
@@ -54,7 +61,7 @@ static void draw_software_lines(const N64PpuFrame *f, int a, int b) {
   rdpq_set_mode_copy(false);
   for (int y = a; y < b; y += 8) {
     const int y1 = y + 8 < b ? y + 8 : b;
-    rdpq_tex_upload_sub(TILE0, &s, NULL, 0, y, 256, y1);
+    rdpq_tex_upload_sub(TILE0, &s, NULL, 0, y, 256, y1); LS_DIRTY();
     rdpq_texture_rectangle(TILE0, kOx, kOy + y, kOx + 256, kOy + y1, 0, y);
   }
 }
@@ -74,7 +81,7 @@ static void draw_plane(const N64PpuFrame *f, int p, const uint32_t *rows, int a,
      * Write back exactly the rows the RDP is about to read. */
     data_cache_hit_writeback(f->plane[p] + (size_t)y * N64PPU_STRIDE, 8 * N64PPU_STRIDE);
     surface_t strip = surface_make_sub(&s, N64PPU_PAD, y, 256, 8);
-    rdpq_tex_upload(TILE0, &strip, NULL);
+    rdpq_tex_upload(TILE0, &strip, NULL); LS_DIRTY();
     rdpq_texture_rectangle(TILE0, kOx, kOy + y0, kOx + 256, kOy + y1, 0, y0 - y);
   }
 }
@@ -151,7 +158,7 @@ static void scene_frame_begin(void) {
   n64_ppu_build_take_vram_dirty(dirty);
   if (!s_synced) memset(dirty, 0xff, sizeof dirty);
   s_synced = true;
-  g_scene_sync_blocks += n64_tile_cache_sync_dirty(snap, dirty);
+  g_scene_sync_blocks += n64_tile_cache_sync_dirty(snap, dirty); LS_DIRTY();
   data_cache_hit_invalidate((void *)((uintptr_t)snap & ~15u), 0x10000 + 16);
   g_scene_sync_ticks += TICKS_READ() - t0;
 }
@@ -217,6 +224,46 @@ static const uint16_t *scene_tlut(const N64PpuBand *band, unsigned kind, unsigne
   return s_scene_tlut[i];
 }
 
+#ifdef N64_SCENE_LOADSTAT
+/* Statistics only: the TMEM loads a command's tiles would need when tiles
+ * are loaded in aligned groups of G and S groups are kept (least recently
+ * used replaced), for the policies below. TMEM's lower half holds 32 CI4
+ * tiles, so G * S <= 32. Policy 0 is today's: a load a tile. */
+static const struct { uint8_t g, s; } kLsPol[] = {{1, 1}, {32, 1}, {16, 2}, {8, 4}, {4, 8}, {2, 16}, {8, 1}, {4, 1}};
+#define LS_NPOL (sizeof kLsPol / sizeof kLsPol[0])
+uint32_t g_ls_loads[2][LS_NPOL], g_ls_tiles[2], g_ls_cmds[2];
+static struct { int32_t slot[16]; uint32_t age[16]; } s_ls[LS_NPOL];
+static uint32_t s_ls_clock;
+/* N64_SCENE_LOADSTAT=2: the groups stay loaded from one command to the next
+ * until something else loads a texture or the cache changes (ls_dirty). */
+static void ls_begin(int kind) {
+  if (N64_SCENE_LOADSTAT + 0 < 2 || s_ls_dirty)
+    for (unsigned p = 0; p < LS_NPOL; ++p)
+      for (int i = 0; i < 16; ++i) s_ls[p].slot[i] = -1;
+  s_ls_dirty = false;
+  g_ls_cmds[kind]++;
+}
+static void ls_tile(int kind, unsigned tile) {
+  g_ls_tiles[kind]++;
+  ++s_ls_clock;
+  for (unsigned p = 0; p < LS_NPOL; ++p) {
+    const int32_t grp = (int32_t)(tile / kLsPol[p].g);
+    int hit = -1, old = 0;
+    for (int i = 0; i < kLsPol[p].s; ++i) {
+      if (s_ls[p].slot[i] == grp) hit = i;
+      if (s_ls[p].age[i] < s_ls[p].age[old] || s_ls[p].slot[i] < 0) old = s_ls[p].slot[old] < 0 ? old : i;
+    }
+    if (p == 0 || hit < 0) {
+      g_ls_loads[kind][p]++;
+      hit = old;
+      s_ls[p].slot[hit] = grp;
+    }
+    s_ls[p].age[hit] = s_ls_clock;
+  }
+}
+static bool ls_empty(const uint8_t *e, unsigned tile) { return e && (e[tile >> 3] >> (tile & 7) & 1); }
+#endif
+
 /* Draws BG layer `layer`'s tiles of priority `hi` over rows [a, b) (within
  * the current scissor). Returns false when it cannot (the caller draws the
  * plane). */
@@ -267,6 +314,19 @@ static bool scene_draw_bg_(int layer, bool hi, int a, int b, int sx0, int sx1, u
      * a command: at most five tile rows of 33 tiles at 56 bytes, ~9.3 KB of
      * RDP commands, under RSPQ_RDP_ROOM, so a command never waits for the
      * RDP once Red has started it (docs/n64/PPU_DESIGN.md). */
+#ifdef N64_SCENE_LOADSTAT
+    for (int c0 = r0; c0 < r1; c0 += 32) {
+      const uint8_t *em = (const uint8_t *)((uintptr_t)(bpp == 4 ? n64_tile_cache_empty4() : n64_tile_cache_empty2()) | 0xA0000000u);
+      const int n = n64_scene_bg(&bg, s_scene_vram, c0, c0 + 32 < r1 ? c0 + 32 : r1, q, (int)(sizeof q / sizeof q[0]));
+      ls_begin(0);
+      for (int i = 0; i < n; ++i) {
+        if (!(q[i].flags & N64SCENE_PRIO) != !hi) continue;
+        if ((q[i].x0 > sx0 ? q[i].x0 : sx0) >= (q[i].x0 + 8 < sx1 ? q[i].x0 + 8 : sx1)) continue;
+        if (ls_empty(em, q[i].tile)) continue;
+        ls_tile(0, q[i].tile + (bpp == 4 ? 0 : 0x10000u));
+      }
+    }
+#endif
     for (int c0 = r0; c0 < r1; c0 += 32)
       n64_scene_rsp_bg(s_scene_vram, cache,
                        bpp == 4 ? n64_tile_cache_empty4() : n64_tile_cache_empty2(), bg.hs, bg.vs,
@@ -317,6 +377,14 @@ uint32_t g_scene_obj_rects;
 
 static void scene_obj_flush(uint8_t *recs, int n) {
 #if N64PPU_SCENE_RSP
+#ifdef N64_SCENE_LOADSTAT
+  { const uint8_t *em = (const uint8_t *)((uintptr_t)n64_tile_cache_empty4() | 0xA0000000u);
+    ls_begin(1);
+    for (int i = 0; i < n; ++i) {
+      const unsigned tile = (unsigned)recs[8 * i] << 8 | recs[8 * i + 1];
+      if (!ls_empty(em, tile)) ls_tile(1, tile);
+    } }
+#endif
   data_cache_hit_writeback(recs, (size_t)n * 8);
   n64_scene_rsp_tiles(recs, n, n64_tile_cache_c4(), n64_tile_cache_empty4(), kOx, kOy);
 #else
@@ -670,7 +738,7 @@ int n64_ppu_draw_and_show(const N64PpuFrame *f, const char *status, int compare_
     }
 #endif
     if (h) {
-      data_cache_hit_writeback(s_status_px, sizeof s_status_px);
+      data_cache_hit_writeback(s_status_px, sizeof s_status_px); LS_DIRTY();
       surface_t part = surface_make_sub(&st, 0, 0, 288, h);
       rdpq_set_scissor(0, 0, fb->width, fb->height);
       rdpq_set_mode_copy(false);
