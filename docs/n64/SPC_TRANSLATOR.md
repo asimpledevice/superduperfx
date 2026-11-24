@@ -317,3 +317,29 @@ each; ms a frame from the share of samples and the frame's time.
   Fewer SPC instructions run (waits), or the same ones in fewer words.
 - SMW's tracker is 6.3 ms on its own.
 - Everything else is a tail of parts under 1 ms each.
+
+**The front end's tracker in SMW (2026-11-24).** `dsp_fe_run` is 6 ms a
+frame there: 420 calls, 605 BRR blocks. What was tried:
+
+- `apu_feRead` asked a 16 KB table of per-line stamps for every block read;
+  it now asks one word first (`echoDirtyMax`: no line at all is late, the
+  usual case). 1.0 -> 0.4 ms. Kept; exact on the three games.
+- The voices' "next event" in one array beside the header, so a call reads
+  only the records of voices with work. No change in the samples. Kept (it
+  is no worse), but it was not the cost.
+- The data-cache profile (ares, 60 frames) gives `dsp_fe_run` 1,610
+  misses a frame, about 0.8 ms at 48 cycles each, and `apu_feBlock` one a
+  block (the record's new line). So misses are an eighth of it, not most
+  of it, as the PC samples alone had suggested.
+- By PC sample the time is at three places: the return from the block
+  callback (a quarter), the 9-byte copy of the block out of ARAM (a
+  sixth), the entry (an eighth). The copy fits its instruction count and
+  two misses; the other two do not add up from instructions and misses,
+  and are not explained yet.
+- Batching the calls was tried before (2026-11-22, notes in TODO.md):
+  exact, no gain.
+
+What would remove it rather than trim it: the S-DSP reading sample data
+from ARAM itself, with the store ledger covering only the pages that hold
+samples, so the front end makes no block records. That is a change to the
+audio split's contract, not to this function.

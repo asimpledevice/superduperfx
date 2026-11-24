@@ -1031,11 +1031,12 @@ static int host_main(void) {
       }
       n64_platform_log("[dspsync] 60 frames, syncs/samples:%s\n", b);
 #if SNESRECOMP_DSP_FRONTEND
-      { extern uint32_t g_dsp_fe_blocks, g_dsp_fe_runs, g_dsp_fe_events;
+      { extern uint32_t g_dsp_fe_blocks;
         static uint32_t b0, r0, e0;
+        const uint32_t fr = g_snes->apu->fe.runs, fev = g_snes->apu->fe.events;   /* (they start again when the front end is rebuilt) */
         n64_platform_log("[fe] 60 frames: blocks %lu, samples with work %lu, runs %lu\n", (unsigned long)(g_dsp_fe_blocks - b0),
-                         (unsigned long)(g_dsp_fe_events - e0), (unsigned long)(g_dsp_fe_runs - r0));
-        b0 = g_dsp_fe_blocks; r0 = g_dsp_fe_runs; e0 = g_dsp_fe_events; }
+                         (unsigned long)(fev - e0), (unsigned long)(fr - r0));
+        b0 = g_dsp_fe_blocks; r0 = fr; e0 = fev; }
 #if SNESRECOMP_DSP_STREAM
       { extern uint32_t g_apu_stream_slow_w, g_apu_stream_slow_r; extern uint16_t g_apu_stream_slow_adr;
         static uint32_t w0, rd0;

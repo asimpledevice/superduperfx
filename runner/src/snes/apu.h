@@ -136,6 +136,7 @@ struct Apu {
   uint32_t dspFlightEnd;     /* the in-flight batch's end sample */
   uint32_t echoTouch[0x10000 / 16];
   uint32_t echoDirty[0x10000 / 16];
+  uint32_t echoDirtyMax;   /* the latest stamp in echoDirty: while it is not late, no line is */
   /* Lines the pending batch touches, as runs (handed over at launch, so
    * the host can write them back and drop them from its cache). */
   uint16_t echoRunLine[16], echoRunCount[16];

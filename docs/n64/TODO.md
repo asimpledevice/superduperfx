@@ -362,8 +362,14 @@ that runs in steady state should be translated.
 8. **Export the block list** (address, M/X) so the recompiler compiles
    those routines ahead of time; later, run the ROM in a dummy system
    during recompilation to find them (owner, 2026-11-20).
-9. **Before making it the default:** the register test on the EverDrive
-   (`n64/regtest`), and a long soak per game.
+9. **Before making it the default:** ~~the register test on the EverDrive~~
+   (`n64/regtest`, owner's photo 2026-11-24: ALL OK. MTC1 keeps the high
+   half, 100 of 100; all 25 FPU registers keep 64 bits over 30 vblanks and
+   490 timer interrupts, split halves too; ErrorEPC round-trips 64 bits and
+   is kept over interrupts, cache operations and the console; a register
+   read-add-write costs 7.01 cycles in an FPU register against 7.01 in
+   cached RAM and 8.01 in ErrorEPC). What the JIT and the CPU state in FPU
+   registers rest on holds on hardware. Left: a long soak per game.
 10. **Layout.** The lean loop is in `.text.unlikely`, wherever the link puts
     it; the layout was trained without the JIT, the second interpreter core
     or the SPC translator. Owner: retrain near the end.

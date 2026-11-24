@@ -21,7 +21,7 @@ static uint32_t voice_next(const DspFrontEnd *fe, const DspFeVoice *v, uint32_t 
   if (v->pmod) return UINT32_MAX;
   uint32_t next = UINT32_MAX;
   if (v->pitch) {
-    /* Counter at sample `from` (no overflow before then: from <= v->next). */
+    /* Counter at sample `from` (no overflow before then: from <= its next event). */
     const uint32_t c = v->counter + (uint32_t)v->pitch * (from - v->t);
     /* Decode on the sample k where c + pitch * (k + 1) first exceeds $FFFF. */
     next = from + (0xffffu - c) / v->pitch;
@@ -36,7 +36,7 @@ static uint32_t voice_next(const DspFrontEnd *fe, const DspFeVoice *v, uint32_t 
 static void refresh_next(DspFrontEnd *fe) {
   uint32_t n = UINT32_MAX;
   for (int i = 0; i < 8; i++)
-    if (fe->v[i].next < n) n = fe->v[i].next;
+    if (fe->vnext[i] < n) n = fe->vnext[i];
   fe->next = n;
 }
 
@@ -290,19 +290,17 @@ static void voice_sample(DspFrontEnd *fe, int i, uint32_t s) {
   v->te = s + 1;
 }
 
-uint32_t g_dsp_fe_runs, g_dsp_fe_events;   /* statistics: calls with work, samples with work */
 void dsp_fe_run(DspFrontEnd *fe, uint32_t target) {
-  g_dsp_fe_runs++;
+  fe->runs++;
   while (fe->next < target) {
     const uint32_t s = fe->next;
     fe->events++;
-    g_dsp_fe_events++;
     for (int i = 0; i < 8; i++) {
+      if (fe->vnext[i] != s) continue;   /* (only a voice with work has its record read) */
       DspFeVoice *v = &fe->v[i];
-      if (v->next != s) continue;
       voice_catch_up(v, s);
       voice_sample(fe, i, s);
-      v->next = voice_next(fe, v, s + 1);
+      fe->vnext[i] = voice_next(fe, v, s + 1);
     }
     refresh_next(fe);
   }
@@ -350,7 +348,7 @@ void dsp_fe_init(DspFrontEnd *fe, const Dsp *d, const uint8_t *aram, uint32_t no
     v->use_gain = c->useGain;
     v->direct_gain = c->directGain;
     if (v->pmod) fe->untracked |= (uint8_t)(1u << i);
-    v->next = voice_next(fe, v, now);
+    fe->vnext[i] = voice_next(fe, v, now);
   }
   refresh_next(fe);
 }
@@ -367,7 +365,7 @@ uint16_t dsp_fe_counter(const DspFrontEnd *fe, int i) {
     voice_catch_up(v_, fe->now);                                             \
     env_catch_up(fe, v_, fe->now);                                           \
     stmt;                                                                    \
-    v_->next = voice_next(fe, v_, fe->now);                                  \
+    fe->vnext[(i)] = voice_next(fe, v_, fe->now);                            \
   } while (0)
 
 void dsp_fe_write(DspFrontEnd *fe, uint8_t adr, uint8_t val) {

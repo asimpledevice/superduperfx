@@ -281,6 +281,46 @@ either flipped tile copies in the tile cache or 1-cycle mode (4x slower
 fill rate) for those tiles; vertical flips are free. To confirm on the
 EverDrive (ares uses parallel-RDP).
 
+**On hardware (EverDrive, owner's photos, 2026-11-24; `n64/testroms/rdptest.z64`).**
+
+- *Flips (page 1):* as ares. Copy mode: none and V exact, H and HV wrong,
+  for RGBA16, CI8 and CI4 with either palette, the columns scrambled in
+  the same groups of four; 1-cycle mode exact in all four. 16 of 32 cases
+  differ, the 16 expected.
+- *Scissor (page 3):* as ares. Copy mode with the scissor's left edge
+  inside the rectangle is right only at d = 0 and wrong for the five other
+  offsets; clipped by hand (the rectangle started later, s advanced) it is
+  right for all six, and 1-cycle mode is right both ways. The scene
+  builder's by-hand clip stands.
+- *Colour maths (page 5), of 1,024 pairs of 5-bit values:* the blender's
+  50% is **exact for all** (the SNES's half-add). The blender's add is
+  right for 63 (it wraps: 2 + 31 gives 0). The combiner's add is right for
+  888: it clamps up to a point and wraps beyond (16 + 31 gives 0; the
+  wrong ones are the sums of 47 and more). Its subtract is right for 888
+  the same way (0 - 16 gives 31). Its half is right for 736 and one too
+  high for the rest. So of the SNES's maths only half-add is exact on the
+  RDP in one pass; add and subtract need the palette route (fixed colour,
+  done) or the software lines.
+- *RDP time for one 256x224 layer (page 6, the RDP's own counters):*
+
+  | | ms |
+  |---|---|
+  | A: 28 strips of 256x8 CI8, 1-cycle (the planes) | 1.53 |
+  | B: 896 tiles, a load and a copy-mode rectangle each | 5.41 |
+  | C: the same tiles, 32 to a load (28 loads), copy mode | 3.12 |
+  | D: as C in 1-cycle mode | 3.41 |
+
+  The pipe is busy for nearly all of each (TMEM about 0.4 ms in every
+  case). A layer from tiles costs the RDP two to three and a half times a
+  layer from a plane, and the number of loads matters more than the mode:
+  1-cycle is 9% slower than copy with the same loads, although it fills a
+  quarter as fast on paper. That makes 1-cycle mode for horizontally
+  flipped tiles a candidate against keeping flipped copies in the cache,
+  and puts three tile layers at 9-10 ms of RDP time a frame (beside the
+  CPU, not on it).
+- *256-wide framebuffer (page 2):* shown full width on the CRT, grid and
+  edge lines visible.
+
 **Transparency is the TLUT entry's alpha, not the index.** With CI4 and
 palette 3, texel 0 reads TLUT entry 48, which is opaque unless its alpha is
 0. For 4bpp layers the TLUT gives entries 16n alpha 0 (colour 0 of each

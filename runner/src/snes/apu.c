@@ -910,6 +910,7 @@ static void apu_feEcho(void *ctx, uint32_t unit, uint32_t count, uint32_t s_end,
     const uint32_t l = (first + k) & 0xfff;
     apu->echoTouch[l] = s_end;
     if (writes && (int32_t)(s_end - apu->echoDirty[l]) > 0) apu->echoDirty[l] = s_end;
+    if (writes && (int32_t)(s_end - apu->echoDirtyMax) > 0) apu->echoDirtyMax = s_end;
 #if SNESRECOMP_DSP_STREAM
     apu->echoPageTouch[l >> 4] = s_end;
     if (writes && (int32_t)(s_end - apu->echoPageDirty[l >> 4]) > 0) apu->echoPageDirty[l >> 4] = s_end;
@@ -967,6 +968,7 @@ static bool apu_echoDivert(Apu* apu, uint16_t adr, uint8_t val) {
    * batch is pending goes with the next one). */
   const uint32_t due = apu->dspEdges + 1;
   if ((int32_t)(due - apu->echoDirty[l]) > 0) apu->echoDirty[l] = due;
+  if ((int32_t)(due - apu->echoDirtyMax) > 0) apu->echoDirtyMax = due;
 #if SNESRECOMP_DSP_STREAM
   if ((int32_t)(due - apu->echoPageDirty[l >> 4]) > 0) apu->echoPageDirty[l >> 4] = due;
   apu_streamSetSlow(apu, l >> 4, true);
@@ -1174,6 +1176,9 @@ static void apu_feRead(void *ctx, int voice, uint32_t sample, uint16_t adr, unsi
   Apu *apu = ctx;
   (void)voice; (void)sample;
 #if SNESRECOMP_ECHO_IN_PLACE
+  /* (No line at all is late: the usual case, echo writes off or the S-DSP
+   * up to date. The per-line stamps are 16 KB, out of the data cache.) */
+  if (!apu_echoLate(apu, apu->echoDirtyMax)) return;
   bool late = false;
   for (uint32_t l = adr >> 4; l <= ((uint32_t)adr + len - 1) >> 4; l++)
     if (apu_echoLate(apu, apu->echoDirty[l & 0xfff])) {

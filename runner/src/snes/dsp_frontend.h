@@ -55,7 +55,6 @@ typedef void DspFeEchoFn(void *ctx, uint32_t unit, uint32_t count, uint32_t s_en
 
 typedef struct DspFeVoice {
   uint32_t t;          /* the counter is as of the start of sample t */
-  uint32_t next;       /* next sample with an event for this voice (UINT32_MAX: none) */
   uint16_t pitch, counter, offset;
   uint8_t srcn, prev_flags;
   bool key_on, key_off, pmod;
@@ -68,11 +67,17 @@ typedef struct DspFeVoice {
 } DspFeVoice;
 
 typedef struct DspFrontEnd {
-  DspFeVoice v[8];
+  /* What every call reads, together: on the N64 the front end runs a few
+   * hundred times a frame between stretches of SPC code, its data out of
+   * the 8 KB data cache each time, and a voice's own record is 40 bytes. */
   const uint8_t *aram;
   uint32_t now;        /* samples processed (the next sample's index) */
   uint32_t next;       /* earliest event over the voices */
   uint32_t even_base;  /* a sample index that was an even sample */
+  uint32_t vnext[8];   /* each voice's next sample with an event (UINT32_MAX: none) */
+  uint32_t events;     /* statistics: samples on which work was done */
+  uint32_t runs;       /* statistics: dsp_fe_run calls */
+  DspFeVoice v[8];
   uint16_t dir;
   uint8_t endx;
   uint8_t untracked;   /* voices not tracked (pitch modulation, or conflict below) */
@@ -88,7 +93,6 @@ typedef struct DspFrontEnd {
   DspFeReadFn *on_read;     /* optional; called after the bytes are read */
   DspFeEchoFn *on_echo;     /* optional */
   void *ctx;
-  uint32_t events;     /* statistics: samples on which work was done */
 } DspFrontEnd;
 
 /* Start from the S-DSP's current state (at sample `now`). */
