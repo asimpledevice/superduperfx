@@ -343,3 +343,37 @@ What would remove it rather than trim it: the S-DSP reading sample data
 from ARAM itself, with the store ledger covering only the pages that hold
 samples, so the front end makes no block records. That is a change to the
 audio split's contract, not to this function.
+
+## Density (2026-11-24)
+
+Why: SMW's translated SPC code takes 5,570 I-cache misses a frame (2.9 ms
+of the 6.7 ms spent in it). They are not in cold blocks: lines visited
+less than three times a frame take 390 of them; the 708 lines (22 KB)
+visited 3 to 30 and more times a frame, the music driver's loop, take
+5,180. So "cold blocks call shared routines" has nothing to work on here;
+what helps is fewer words in every block.
+
+Where a block's words go (SMW, main path, 13.5 words an SPC instruction;
+the cold paths are another 5.5): stores 19%, linking (entry and stubs)
+17%, delay-slot nops 12%, exits' edge test and budget 9%, edge tests 7%,
+front-end tests 7%, Z and N 7%, segment time 3%; what the instructions
+themselves do is about a fifth.
+
+- **Done:** link stubs of 2 words (the lui in the jal's delay slot), the
+  linked entry's j with the first check word as its delay slot, a
+  computed store's ADDU in its test's delay slot. Main path -4% (SMW
+  25,949 -> 24,834 words, Pitfall 84,126 -> 80,769); sound time
+  14.8 -> 14.6, 22.6 -> 22.4, 11.2 -> 10.5 ms (Joe & Mac 2, SMW, Pitfall).
+- **Rejected:** shared routines for reads and stores at a computed address
+  that may be anywhere (17 and 25 words inline, 4 and 5 as calls). Exact
+  (random test, three games), but none of the three games' blocks holds
+  such an access: the code is the same size to the word. Pitfall's frame
+  moved 2 ms with it all the same -- the shared code grew by 80 words and
+  every block moved: layout noise, at its usual size.
+- **Left, each about 2% of the main path:** Z and N as one register (one
+  move a definition instead of two), the front-end flag folded into the
+  edge register (one test instead of two before a store), the epoch
+  within reach of s0. Twice as dense, which the cache what-ifs priced at
+  about 2 ms, is not reachable by trimming: 45% of a block is the time
+  machinery (edges every 32 cycles, the front end, the budget, linking),
+  and that is the design, not slack.
