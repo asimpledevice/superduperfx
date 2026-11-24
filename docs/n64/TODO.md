@@ -374,6 +374,63 @@ that runs in steady state should be translated.
     it; the layout was trained without the JIT, the second interpreter core
     or the SPC translator. Owner: retrain near the end.
 
+## Compiled game code: density (measured 2026-11-24, SMW, lean emitter)
+
+Why: compiled game code takes 6,300-6,400 I-cache misses a frame in SMW,
+and 59% of its missing lines run once a frame or less (the cache what-ifs
+price it 4x denser at about 5 ms with the SPC code, 2x at about 1.7 ms
+alone).
+
+*Static* (all 3,655 routines of the pack; guest instructions decoded from
+the ROM at each block label): 1.84 M MIPS words for 94,081 guest
+instructions, **19.6 words a guest instruction**, blocks of 3.5
+instructions. A regression of a routine's words on what it holds (2,990
+routines, R^2 0.97):
+
+| | count | words each | share |
+|---|---|---|---|
+| a block (entry charge and its yield test, the branch that ends it) | 26,123 | 16.0 | 25% |
+| a routine (prologue, frame, epilogue, yield and unwind paths) | 2,990 | 83 | 15% |
+| ADC / SBC (the decimal path inline) | 4,103 | 53 / 59 | 14% |
+| LDA / STA | 32,984 | 6.1 / 5.0 | 11% |
+| JSR / JSL / RTS / RTL | 8,231 | 24 / 38 / 15 / 22 | 12% |
+| REP / SEP / PHP | 2,058 | 91 / 28 / 91 | 8% |
+| index and transfer operations (INY 25, TAY 20, PHX 33, INX 18: both widths emitted) | | | 5% |
+
+*What runs* (a code-line trace of frames 900-960 with the routines'
+addresses): 187 routines execute, 542 KB compiled, 8,102 lines touched --
+43% of the once-a-frame routines' words are on touched lines; the decimal
+paths, the yield paths and the other width are mostly not, so they cost
+ROM and RAM but few misses. On the touched lines of the 130 once-a-frame
+routines (43,108 words; roughly 12-17 for each guest instruction run):
+
+| | share |
+|---|---|
+| constants and moves (mostly helper arguments: every helper takes `cpu`) | 35% |
+| arithmetic, loads, stores | 19% |
+| mfc1/mtc1 (guest registers live in FPU registers) | 15% |
+| jal | 14% |
+| branches | 8% |
+| nops | 5% |
+| stack frame | 4% |
+
+and the calls (5,900): `recomp_block_enter_charge` 906, `cpu_write_a_m`
+857, `cpu_charge_dl` 495, `cpu_charge` 386, `cpu_charge_page` 245,
+push/pull 699, reads and writes about 1,700, routine entry 3 x 130. A
+third of all calls are cycle accounting.
+
+*What that offers* (touched words, so misses and executed instructions
+alike): the direct-page and page-cross charges inside the access helper
+they precede (740 calls, 6-7%); the block charge as a subtract and test on
+a pinned counter instead of a call (about 4%); helpers without the `cpu`
+argument where it is not in a delay slot (up to 10%). About a fifth in
+all -- 1.25x denser, not 2x. The static 19.6 would fall much further
+(decimal paths, REP/SEP/PHP and routine entry as shared code: about a
+third of the pack, 2.4 MB of the 7.4), which is ROM and code-cache RAM
+rather than time. Not started: an emitter change (host tool) with the
+whole recompiled corpus to re-validate; SMW is the consumer (the other
+two games spend 1.4-2.4 ms a frame in compiled code).
+
 ## PPU (scene builder, `SCENE=1`)
 
 **Waiting on the owner's console (ROMs sent 2026-11-24).** Each of the
