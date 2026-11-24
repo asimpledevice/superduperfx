@@ -629,6 +629,39 @@ retrain; look for structural answers.
 Tools: ares's `ARES_ICTRACE` and n64/profile/icsim (the what-ifs above
 were one-off simulators over the same trace, not kept).
 
+*I-cache reference (pasted by the owner 2026-11-24 from an AI search
+summary; kept for later, marked where we have not checked it ourselves).*
+- Geometry (as we measure and as ares models it): 16 KB, direct-mapped,
+  512 lines of 32 bytes (8 instructions); separate from the 8 KB D-cache.
+  Index = address bits 5-13, so two addresses a multiple of 0x4000 apart
+  share a line; bits 0-4 pick the instruction in the line.
+- Virtually indexed, physically tagged (unchecked by us: a 2-entry
+  instruction micro-TLB in front of the 32-entry TLB). KSEG0 and mapped
+  addresses use the cache; KSEG1 does not.
+- No coherency: the cache never notices RAM being written (by the CPU, a
+  DMA or the D-cache). Whoever writes code flushes the D-cache and
+  invalidates the I-cache lines (what both our translators do).
+- CACHE operations on the I-cache: Index Invalidate (0x00), Index Load Tag
+  (0x04, tag and valid bit to CP0 TagLo), Index Store Tag (0x08), Hit
+  Invalidate (0x10), Fill (0x14: fetch a line without jumping to it; it
+  blocks for as long as a miss would). Hit Write Back (0x18) also exists.
+- Levers it lists, with what we know of each:
+  - *Placement* (link order, padding, aligning hot loops to 32 bytes so
+    they span the fewest lines): the layout work; 44% of our misses are
+    placement, and packing whole hot functions did not help by itself.
+  - *An evictor at target + N x 0x4000* replaces exactly the target's
+    lines: of no use to us, but it is the mechanism of our ping-pong pairs.
+  - *Stale lines*: code keeps running from the cache after the RAM under it
+    is overwritten, for as long as nothing else uses those lines. So RAM
+    under resident code could in principle be reused; nothing guarantees
+    the lines stay, so not for anything that must be exact.
+  - *TLB aliasing*: with 4 KB pages, address bits 12-13 come from the page
+    number, so one physical page can sit at any of four cache positions,
+    chosen at run time. Our what-ifs say a fixed split of the cache
+    between kinds of code costs more than it saves; this is the tool if a
+    finer rule is ever found. Mapped code needs TLB entries (32, shared
+    with ROM paging) and a TLB miss costs far more than a cache miss.
+
 See `PPU_DESIGN.md` ("Step 4: the scene builder", "The RSP must never wait
 on the RDP mid-command").
 
