@@ -476,7 +476,7 @@ static void emit_shared(void) {
   /* link */
   s_link = s_ncode;
   SW(T0, F_TMP2, SP);
-  ADDIU(A1, RA, -12);                /* the stub's first word (ra: after its jal) */
+  ADDIU(A1, RA, -8);                 /* the stub's jal (ra: after its delay slot) */
   SRL(A2, T0, 16);
   MOVE(A0, RSPC);
   MOVE(A3, RBUD);
@@ -873,8 +873,8 @@ static void st(Ctx *c, int where, uint16_t adr, int src) {
     ANDI(T1, T1, 1 << ((a >> 8) & 7));
   }
   BNE(T1, ZERO, cold);
-  NOP();
-  if (where == 0) SB(src, (int)adr - 0x8000, RRAM);
+  /* (the delay slot: the address, which the cold path does not use) */
+  if (where == 0) { NOP(); SB(src, (int)adr - 0x8000, RRAM); }
   else if (where == 1) { ADDU(T1, RRAM, T0); SB(src, -0x8000, T1); }
   else { ADDU(T1, RRAM, RSP_); SB(src, 0x100 - 0x8000, T1); }
   CAT(5, w_st); g_spc_dbt_cat[10]++;
@@ -1050,19 +1050,18 @@ static void exit_to(Ctx *c, uint32_t used) {
   LW(T0, F_SAVE0, SP);
 }
 
-/* Ends the block going to pc: a link stub, 3 words -- lui t0, pc; jal;
- * nop. The jal is to s_link at first; spc_dbt_link rewrites it to the
+/* Ends the block going to pc: a link stub, 2 words -- jal; lui t0, pc (in
+ * its delay slot). The jal is to s_link at first; spc_dbt_link rewrites it to the
  * target block's linked entry (kEntryWords before its first instruction's
  * code: translate), which checks the block's epoch and the time left and
  * falls into the block, or goes to s_link with ra still the stub's, so the
  * stub is linked again if the target has changed. (The checks were in
  * every stub, 13 words; a block has two exits on average.) */
-enum { kStubWords = 3, kEntryWords = 8 };
+enum { kStubWords = 2, kEntryWords = 8 };
 static void exit_const(Ctx *c, uint16_t pc, uint32_t used) {
   exit_edges(c, pc, used, false);
-  LUI(T0, pc);
   jal_code(s_link);
-  NOP();
+  LUI(T0, pc);
   g_spc_dbt_cat[0] += kStubWords;
 }
 
@@ -1644,10 +1643,10 @@ static Block *translate(Apu *apu, uint16_t pc, uint8_t p, bool may_flush) {
   Block *b = &s_blocks[s_nblocks];
   memset(b, 0, sizeof *b);
   b->pc = pc;
-  /* The linked entry (exit_const): two words that leave for s_link, then
-   * the checks a link stub's jal lands on. */
+  /* The linked entry (exit_const): one word that leaves for s_link (the
+   * word after it, the first of the checks, is its delay slot: it only
+   * loads t2), then the checks a link stub's jal lands on. */
   j_(s_link);
-  NOP();
   {
     const uint32_t ea = (uint32_t)(uintptr_t)&b->epoch, ga = (uint32_t)(uintptr_t)&g_spc_dbt_epoch;
     LUI(T2, (int)(((ea + 0x8000u) >> 16) & 0xffff));
@@ -1983,10 +1982,10 @@ static void *spc_dbt_link(Spc *spc, uint32_t *stub, uint32_t pc, uint32_t budget
   if (!b || (void *)b == (void *)1) { g_spc_dbt_chainend[1]++; return NULL; }
   /* The stub's jal, to the block's linked entry. */
   const uint32_t w = 3u << 26 | ((((uint32_t)(uintptr_t)b->fn - 4u * kEntryWords) >> 2) & 0x03ffffff);
-  if (stub[1] != w) {
-    stub[1] = w;
-    data_cache_hit_writeback(stub, 12);
-    inst_cache_hit_invalidate(stub, 12);
+  if (stub[0] != w) {
+    stub[0] = w;
+    data_cache_hit_writeback(stub, 4);
+    inst_cache_hit_invalidate(stub, 4);
     g_spc_dbt_chainend[0]++;
   }
   return spc_dbt_may_run(b, spc, budget);
