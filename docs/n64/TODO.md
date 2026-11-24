@@ -472,6 +472,22 @@ retrain; look for structural answers.
   more in misses than in execution, so for code run once a frame a call
   into a routine that is already in the cache beats inline code.
 
+- *Run in "16 KB loops"?* Two forms, same trace. The sound side (SPC,
+  tracker, their generated code) run once a frame after the 65816 side:
+  32,700 (-8.5%; ideal cache 16,700). A kernel that is never evicted (the
+  hottest 256-384 engine lines in their own sets, everything else confined
+  to the rest): the kernel's misses go to 4-6 a frame and the total stays
+  at 33,200-34,800. The hottest 8 KB of engine text takes 81% of the
+  engine's line visits and is resident already; the misses are the tail,
+  about 2,300 engine lines (opcode handlers of three 65816 interpreters
+  and two SPC engines, register and DMA handlers) and 10,600 lines of
+  generated code, each visited a few times a frame. The frame is one wide
+  pass, not a loop; what narrows it is fewer bytes of host code per guest
+  operation and fewer engines doing the same job.
+- D-cache, same run: 23,250 misses a frame; `s_blue_stack` 17% and
+  `s_host_stack` 7%, both at their tops, which are 256 KB apart and so on
+  the same cache lines (to try: offset one by 4 KB).
+
 Tools: ares's `ARES_ICTRACE` and n64/profile/icsim (the what-ifs above
 were one-off simulators over the same trace, not kept).
 
