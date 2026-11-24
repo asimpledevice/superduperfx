@@ -145,12 +145,10 @@ static void ppu_draw_mode7_line_native(Ppu *p, int line) {
         }
         color = result;
       }
-      /* The legacy caller promises B,G,R,0 bytes, independent of host byte
-       * order and without an alignment requirement on the supplied buffer. */
-      dst[0] = brightness[(color >> 10) & 31];
-      dst[1] = brightness[(color >> 5) & 31];
-      dst[2] = brightness[color & 31];
-      dst[3] = 0;
+      { /* (one 32-bit pixel, blue in the low byte: see ppu_render_pixel) */
+        const uint32_t px = (uint32_t)brightness[(color >> 10) & 31] | (uint32_t)brightness[(color >> 5) & 31] << 8 |
+                            (uint32_t)brightness[color & 31] << 16;
+        memcpy(dst, &px, 4); }
       dst += 4;
     }
   }

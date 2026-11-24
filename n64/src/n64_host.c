@@ -154,8 +154,12 @@ static void present_rdp_frame(uint32_t frame, const char *line) {
 #endif
   static uint32_t s_diff_frames;   /* frames that differed (RENDER=2) */
   if (diff > 0) s_diff_frames++;
+#ifdef N64_RDP_LOG_ALL   /* (every frame: n64/tools/ppu_test.sh reads them by scene) */
+  if (N64_RENDER == 2)
+#else
   if (N64_RENDER == 2 && (frame < 8 || frame % 30 == 0 || diff > 0))
     if (frame < 600 || frame % 30 == 0 || s_diff_frames <= 20)
+#endif
       n64_platform_log("[rdp] frame %lu: rdp %d sw %d black %d lines, why %02lx, diff %d px\n",
                        (unsigned long)frame, s_rdp_frame->rdp_lines,
                        s_rdp_frame->software_lines, s_rdp_frame->black_lines,

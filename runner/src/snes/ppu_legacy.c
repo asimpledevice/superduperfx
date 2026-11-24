@@ -1,6 +1,7 @@
 #include "ppu_legacy.h"
 
 #include <stdint.h>
+#include <string.h>
 #include <stdbool.h>
 
 #include "snes.h"
@@ -143,10 +144,15 @@ static void ppu_render_pixel(Ppu *ppu, int x, int y) {
   }
   int row = y - 1;
   uint8 *pixelBuffer = (uint8 *)&ppu->renderBuffer[row * ppu->renderPitch + (x + ppu->extraLeftRight) * 4];
-  pixelBuffer[0] = ppu_brightness_level((unsigned)b, PPU_brightness(ppu));
-  pixelBuffer[1] = ppu_brightness_level((unsigned)g, PPU_brightness(ppu));
-  pixelBuffer[2] = ppu_brightness_level((unsigned)r, PPU_brightness(ppu));
-  pixelBuffer[3] = 0;
+  /* One 32-bit pixel, blue in the low byte, as PpuDrawWholeLine stores
+   * them (ppu.c): the same value whatever the host's byte order. (Written
+   * as four bytes B, G, R, 0, the pixel was only right on a little-endian
+   * host: on the N64 every line this renderer drew had its colours
+   * swapped.) */
+  const uint32_t px = (uint32_t)ppu_brightness_level((unsigned)b, PPU_brightness(ppu)) |
+                      (uint32_t)ppu_brightness_level((unsigned)g, PPU_brightness(ppu)) << 8 |
+                      (uint32_t)ppu_brightness_level((unsigned)r, PPU_brightness(ppu)) << 16;
+  memcpy(pixelBuffer, &px, 4);
 }
 
 static int ppu_resolve_pixel(Ppu *ppu, int x, int y, bool sub,

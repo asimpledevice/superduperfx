@@ -630,8 +630,14 @@ now, with the software PPU's mode 7 rules:
 - **Order** `N64PPU_ORDER_MODE7`: OBJ 0, BG1, OBJ 1, OBJ 2, OBJ 3. Windows,
   the colour window, fixed-colour maths and the subscreen are the spans'
   and palettes' as for any plane.
-- **Still software lines:** EXTBG (BG2 with a priority bit a pixel), direct
-  colour, mosaic.
+- **Mosaic, EXTBG and direct colour** (same day, against the test ROM
+  below): the sampler does the mosaic, by the rule of whichever software
+  renderer draws the line (see `mode7_row`'s comment: the two place a
+  mosaic differently); EXTBG's BG2 is a second plane row with the same
+  texels, drawn below OBJ 0 through a palette of the pixels without bit 7
+  and above OBJ 1 through one of those with it (`N64PPU_SEL_M7E_LO/HI`,
+  orders `N64PPU_ORDER_MODE7_EXT*`); direct colour is BG1's palette
+  computed from the entry number (`N64PPU_SEL_M7D`).
 - The registers change line by line under HDMA, so a mode 7 line never
   takes the "same registers as the line above" shortcut.
 
@@ -654,3 +660,27 @@ registers changed about 10 (`n64_ppu_build_line` 4.9, clearing the sprite
 planes' rows 2, the description, the spans). Next, if a game needs more:
 the sampler on the RSP (the lookups are scalar there too, but it runs
 beside the CPU), and the per-line work.
+
+## The PPU test ROM (2026-11-24)
+
+None of the three games shows mode 7's rotation, EXTBG, direct colour or
+modes 2-6, so the comparison needed its own pictures.
+`n64/tools/ppu_test_rom.py` writes a LoROM image of generated data only:
+pseudo-random VRAM, CGRAM and OAM, a short loop, and a script of register
+writes a frame -- 20 scenes of 12 frames (mode 7: plain, zoom, rotation,
+flips and the large field, negative positions, sprites with windows,
+fixed-colour maths, the subscreen, mosaic, EXTBG, direct colour; modes 0-6;
+mode 1 with mosaic; mode 3 with direct colour). `n64/tools/ppu_test.sh`
+builds the runner around it with RENDER=2 and prints, a scene, the RDP
+lines, the software lines with their reasons, and the frames that differ.
+
+It found a bug on its first day: the software PPU's per-pixel renderer
+(`ppu_render_pixel`, ppu_legacy.c: the lines with EXTBG or direct colour,
+and modes 4-6) stored a pixel as the bytes B, G, R, 0, which is the 32-bit
+pixel the rest expects only on a little-endian host. On the N64 those
+lines had red and blue exchanged and shifted. It stores the 32-bit value
+now.
+
+State after this commit: every mode 7 scene and modes 0 and 1 are RDP
+lines with no frame differing; mode 1 with mosaic and modes 2-6 are
+software lines.
