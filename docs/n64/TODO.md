@@ -376,6 +376,27 @@ that runs in steady state should be translated.
 
 ## PPU (scene builder, `SCENE=1`)
 
+**Waiting on the owner's console (ROMs sent 2026-11-24).** Each of the
+three games twice: `*_pertile.z64` (HEAD with rsp_scene.S of f41d996: a
+load a tile) and `*_groups.z64` (HEAD 5398ff2: groups of 8, four kept).
+Built with `JIT816=1 RSPDSP_STREAM=1 SCENE=1 SPCDBT=1` (+ `CODECACHE=1`
+SMW, `ROMPAGING=1` the others) and
+`EXTRA_CFLAGS="-DN64_PRESENT_PROF -DN64_PRESENT_RDPWAIT"`, which waits for
+the RDP every frame to read its counters (so slower than a normal build).
+To read on the cyan status line, same scene in both ROMs of a game: `p`
+RDP pipe busy and `t` TMEM busy, tenths of a ms a frame (0 in ares). The
+expectation: `p` falls (SMW layer loads about 4.4 -> 1.6 ms by rdptest
+page 6's figures), `t` may rise a little. A photo of SMW's world map in
+the groups ROM also confirms it is drawn by the RDP now (PPU ms on the
+yellow line; it was 166). What the answer decides: `p` still several ms ->
+keep groups between commands (275 -> 193 loads in SMW), then overdraw;
+`p` small -> the cost is the CPU's (the profile below).
+The owner's hwtest photo of 2026-11-24 was v1 of that ROM: its test 2
+"FAIL" is the known back-to-back quirk recorded on 2026-11-13, nothing new.
+
+**Next on the PPU after that (owner, 2026-11-24):** mode 7 on the RDP
+(modes above 1 are software lines; Joe & Mac 2 has stretches of it).
+
 **Where the CPU's PPU time goes (SMW level, 2026-11-24; sampling profile by
 phase, `PROFILE=1`, and ares's I-cache profile by stage).** The PPU stage
 is the frame's raster replay, 224 times: journal -> registers
