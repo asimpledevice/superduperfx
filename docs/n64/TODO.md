@@ -431,6 +431,60 @@ rather than time. Not started: an emitter change (host tool) with the
 whole recompiled corpus to re-validate; SMW is the consumer (the other
 two games spend 1.4-2.4 ms a frame in compiled code).
 
+## 65816 JIT: a dense block form (owner 2026-11-24: try a prototype)
+
+The JIT is as wide as the compiled C: 20 words a guest instruction (Joe &
+Mac 2: 8,937 instructions, work 85,895, step end 27,492, branches 23,293,
+transfers 23,063, tails 12,208, exit stubs 6,873). Census of what it
+translates (`[jit816-census]`, instructions / words with the 4-word step
+end; branches and transfers apart):
+
+| operand | Joe & Mac 2 | words each | SMW |
+|---|---|---|---|
+| none (implied, accumulator) | 1,230 | 9.1 | 49 |
+| immediate | 1,618 | 11.8 | 115 |
+| direct page | 1,046 | 21.2 | 97 |
+| direct page,X | 713 | 20.6 | 2 |
+| abs below $2000 | 579 | 22.0 | 126 |
+| abs elsewhere | 211 | 17.5 | 54 |
+| abs,X / abs,Y | 495 | 25 | 5 |
+| REP / SEP | 578 | 15.2 | 27 |
+| push / pull | 350 | 20 | 36 |
+| long in $7E/$7F | 21 | 20 | 10 |
+
+A quarter (JM2) to 43% (SMW) of them address WRAM at an address known
+when translated, given D = 0 and a data bank that mirrors WRAM's first
+8 KB; with an 8-bit X, direct page,X is WRAM too, and pushes and pulls
+with S inside page 1's neighbourhood.
+
+Plan for the prototype, in the existing JIT, opt-in:
+1. *The context in the block's key* (jit816_run computes it in C, so no
+   guard code): D = 0, the data bank's class, stores plain
+   (`cpu_wram_store_plain`), S in range. A block with TCD, PLD or PLB is
+   not dense.
+2. *Direct accesses* for those operands: `lui at / lbu` (the address is
+   WRAM's, absolute), 6-9 words an instruction with what must stay exact:
+   `g_open_bus` (one store), the write epoch (three words a store), the
+   access's 8 clocks folded into the instruction's constant, and
+   `cart->cpuBusAddress` left to the exit table (only SA-1 reads it, in C).
+3. *One time test a block* instead of one an instruction: enter only if
+   the block's longest path ends before `s_lean_event` (else the lean loop
+   interprets up to the event, as it does today past one).
+Projected for Joe & Mac 2: the non-branch instructions 16.5 -> about 7
+words; everything 20 -> about 13, until branches (12 words each),
+transfers and tails get the same treatment.
+
+Guest registers and the FPU (owner's question): the FPU cannot do the
+65816's arithmetic. Its registers hold the raw bits (which as floats are
+denormals: the VR4300 traps on them), and add.d on converted values gives
+no wrap at 8 or 16 bits, no carry, no AND/OR/shift, and nothing usable as
+an address without converting back; add.d is 3 cycles against 1. What
+removes the mfc1/mtc1 (15% of the words on the lines compiled code runs)
+is keeping A, X and Y in general registers: inside a JIT block they
+already are (s0, s5, s6); for the whole program it is task 20, three
+callee-saved registers reserved with -ffixed as the FPU ones were (newlib
+and libgcc rebuilt the same way).
+
 ## PPU (scene builder, `SCENE=1`)
 
 **Waiting on the owner's console (ROMs sent 2026-11-24).** Each of the

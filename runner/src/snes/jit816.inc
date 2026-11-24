@@ -130,6 +130,10 @@ uint32_t g_jit816_stats[8];               /* blocks, instructions translated, ru
  * step end (clock, SPC time, count, event test), 2 its exit stub (latch and
  * exit), 3 branches whole, 4 transfers whole, 5 a block's tail exit. */
 uint32_t g_jit816_words[6];
+/* Census (diagnostics): instructions translated and their words (work and
+ * step end), by kind of operand: the addressing modes (JM_*), then 21 abs
+ * below $2000 (WRAM's low mirror), 22 long in $7E/$7F, 23 pushes, 24 pulls. */
+uint32_t g_jit816_cls_n[26], g_jit816_cls_w[26];
 static CpuState *s_jit_cpu;
 static uint32_t s_jit_ret_limit;          /* a return that leaves S above this ends the run: the big loop's (0xFFFFFFFF: none) */
 static BridgeTailFrame *s_jit_tail;       /* the run's call records (tail_frames in _interp_run_core) */
@@ -1724,6 +1728,12 @@ static int jit_translate(uint32_t pc24, const uint8_t *pg, bool mf, bool xf, boo
         J_ADDIU(JS1, JS1, 1);
         jbr(6, JR, JZERO, lthunk_next); J_ORI(JT0, JZERO, i);   /* blez: the event (the delay slot names the instruction) */
         g_jit816_words[1] += s_jit_n - w_step;
+        { int k = o.mode;
+          if (o.mode == JM_ABS && (b1 | b2 << 8) < 0x2000) k = 21;
+          else if ((o.mode == JM_AL || o.mode == JM_ALX) && (b3 == 0x7e || b3 == 0x7f)) k = 22;
+          else if (push) k = 23;
+          else if (pull) k = 24;
+          g_jit816_cls_n[k]++; g_jit816_cls_w[k] += s_jit_n - w_start; }
         jbind(lexit[i]);
         tab[i] = (uint32_t)ipc[i] | (uint32_t)last_byte << 16 | (uint32_t)(ilen[i] - 1) << 24 | (bus ? 0u : 1u << 26);
         g_jit816_words[2] += 1;   /* (its table entry) */

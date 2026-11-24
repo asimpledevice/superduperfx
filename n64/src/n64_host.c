@@ -783,6 +783,11 @@ static int host_main(void) {
                            (unsigned long)((g_interp_bridge_bounces - s_b0) / 60));
 #if defined(SNESRECOMP_JIT816) && SNESRECOMP_JIT816
           if (frame >= 360 && s_tc_frames == 59) { extern uint32_t g_jit816_stats[8], g_jit816_nested;
+            { extern uint32_t g_jit816_cls_n[26], g_jit816_cls_w[26];
+              char b[400]; int o = 0;
+              for (int k = 0; k < 26; k++)
+                if (g_jit816_cls_n[k]) o += snprintf(b + o, sizeof b - (size_t)o, " %d:%lu/%lu", k, (unsigned long)g_jit816_cls_n[k], (unsigned long)g_jit816_cls_w[k]);
+              n64_platform_log("[jit816-census] kind:instructions/words%s\n", b); }
             { extern uint32_t g_jit816_words[6];
               n64_platform_log("[jit816-words] work %lu, step end %lu, exit stubs %lu, branches %lu, transfers %lu, tails %lu (all translations so far)\n",
                                (unsigned long)g_jit816_words[0], (unsigned long)g_jit816_words[1], (unsigned long)g_jit816_words[2],
