@@ -418,8 +418,17 @@ on the RDP mid-command").
    - *Software lines.* `N64PPU_WHY_LOG` on the three games' measured play:
      all 224 lines of every frame are RDP lines (Joe & Mac 2 has two
      60-frame stretches of mode 7, nothing else). No line falls back for
-     colour maths, so half-add against a composed subscreen on the RDP has
-     no consumer here. It is also not one pass: with a subscreen pixel the
+     colour maths *in those windows* -- but they do not reach SMW's world
+     map, which is the known consumer (PPU_DESIGN.md: mode 1, main
+     BG1+BG3+OBJ, sub BG2, `cgwsel 03`, `cgadsub 30`: plain add, no halving,
+     for the backdrop and sprite palettes 4-7; all of it software lines,
+     166 ms a frame on the console). The backdrop part is a palette. The
+     sprite part is an add of two pictures, which the hardware page shows
+     is exact on the RDP only below a sum of 47 of 31. First step there,
+     exact and cheap: only lines that hold a sprite of palettes 4-7 need
+     layer maths at all; the others can be RDP lines. Needs input playback
+     to reach the map in a test run.
+     Half-add against a composed subscreen has no consumer yet. It is also not one pass: with a subscreen pixel the
      SNES halves, without one it adds the fixed colour unhalved, so the RDP
      needs a per-pixel mask -- a Z-buffer as mask (subscreen pixels marked;
      decal compare draws on them, ordinary compare off them; front-to-back
@@ -430,12 +439,16 @@ on the RDP mid-command").
      192 KB (the mirrored halves of the 2bpp and 4bpp caches) against 9%
      more RDP time and new conversion and scene microcode. Worth it when
      memory is what is short.
-   - *What the hardware numbers point at instead:* a tile layer costs the
-     RDP 5.4 ms with a load per tile and 3.1 ms with 28 loads. The scene
-     loads every tile it draws. Keeping the last few loaded tiles in TMEM
-     (seven descriptors) and reusing them would cut loads wherever a row
-     repeats tiles; only hardware can time it (ares does not), so it wants
-     a page in rdptest first.
+   - *What page 6 was for* (plan of 2026-11-20: "many tiles per load, and
+     whether to retire the planes"): a tile layer costs the RDP 5.4 ms with
+     a load per tile -- what the scene does -- and 3.1 ms with 32 tiles to
+     a load, which the cache's layout was made for (tile k at t = 8k, a row
+     one TMEM word: 32 tiles are one 2 KB load). So: load the 32-tile block
+     a tile lies in and skip the load while the next tiles lie in it too.
+     The loads saved can be counted in ares; the time per load is the
+     page's (about 2.6 us). A plane layer is cheaper still for the RDP
+     (1.5 ms) but is built by the RSP and issued by the CPU, so the planes
+     are not retired on RDP time alone.
    - *The PPU phase* is 5 to 8 ms: sprite evaluation for the range and
      time-over flags, HDMA transfers, the description's copies. No single
      part stands out any more.
