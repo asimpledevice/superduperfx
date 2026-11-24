@@ -612,3 +612,45 @@ does not).
 
 RENDER=2 in ares with 1 and 2 in: SMW identical through frame 540, no
 retries (ares draws instantly, so only hardware exercises the check).
+
+## Mode 7 (2026-11-24)
+
+Mode 7 lines were software lines (`N64PPU_WHY_MODE`). They are RDP lines
+now, with the software PPU's mode 7 rules:
+
+- **BG1 is a plane row.** `mode7_row` (n64_ppu_build.c) samples the line
+  into BG1's plane (or SUB_BG1's) on the CPU, with the arithmetic of
+  `PpuDrawBackground_mode7` (ppu.c): the 13-bit scrolls and centre, the
+  matrix products masked to 1/4 texel, the flips, the large field's
+  outside (transparent or tile 0). A pixel is a CGRAM index, 0 transparent.
+- **Its palette** is selector `N64PPU_SEL_M7`: all 256 entries of CGRAM
+  (the fixed-colour and subscreen variants come from the same code as the
+  other selectors'), built only on mode 7 lines, which in turn skip the
+  tile layers' selectors.
+- **Order** `N64PPU_ORDER_MODE7`: OBJ 0, BG1, OBJ 1, OBJ 2, OBJ 3. Windows,
+  the colour window, fixed-colour maths and the subscreen are the spans'
+  and palettes' as for any plane.
+- **Still software lines:** EXTBG (BG2 with a priority bit a pixel), direct
+  colour, mosaic.
+- The registers change line by line under HDMA, so a mode 7 line never
+  takes the "same registers as the line above" shortcut.
+
+The sampler looks a texel up only when the position leaves the last one
+(its tile only when it leaves the tile), and without rotation (matrix C =
+0) the line stays on one row of the field, which is a shorter loop.
+
+Joe & Mac 2's mode 7 scene (frames 2650-2850; ares, ms a frame):
+
+| | run | PPU | present | frame |
+|---|---|---|---|---|
+| software lines | 22.9 | 115 | 27.8 | 166 |
+| RDP lines, first sampler | 22.9 | 45 | 4.6 | 73 |
+| RDP lines, this sampler | 22.8 | 28-34 | 4.5 | 56-62 |
+
+The picture against the software renderer (RENDER=2): no frame differs
+through the scene, 224 RDP lines a frame. Of the PPU's 30 ms, the sampler
+is about 17 (27 cycles a pixel) and the per-line work of a line whose
+registers changed about 10 (`n64_ppu_build_line` 4.9, clearing the sprite
+planes' rows 2, the description, the spans). Next, if a game needs more:
+the sampler on the RSP (the lookups are scalar there too, but it runs
+beside the CPU), and the per-line work.

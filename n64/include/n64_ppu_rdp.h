@@ -56,6 +56,7 @@ enum { N64PPU_HI = 0x10 };
  * pattern (every 16th entry for 4bpp, every 4th for 2bpp); OBJ for sprites. */
 enum {
   N64PPU_SEL_LO16, N64PPU_SEL_HI16, N64PPU_SEL_LO4, N64PPU_SEL_HI4, N64PPU_SEL_OBJ,
+  N64PPU_SEL_M7,             /* mode 7's BG1: all of CGRAM, entry 0 transparent */
   N64PPU_SELS
 };
 
@@ -70,6 +71,7 @@ enum {
   N64PPU_ORDER_MODE0 = 0,
   N64PPU_ORDER_MODE1 = 1,
   N64PPU_ORDER_MODE1_BG3TOP = 2,
+  N64PPU_ORDER_MODE7 = 3,    /* BG1 (one priority, 8 bits a pixel) between OBJ 0 and OBJ 1 */
   N64PPU_ORDERS
 };
 
@@ -181,12 +183,15 @@ static const int8_t kN64PpuOrder[N64PPU_ORDERS][13] = {
   [N64PPU_ORDER_MODE1_BG3TOP] = {
     N64PPU_BG3, N64PPU_OBJ0, N64PPU_OBJ1, N64PPU_BG2, N64PPU_BG1, N64PPU_OBJ2,
     N64PPU_BG2 | N64PPU_HI, N64PPU_BG1 | N64PPU_HI, N64PPU_OBJ3, N64PPU_BG3 | N64PPU_HI, -1 },
+  [N64PPU_ORDER_MODE7] = {
+    N64PPU_OBJ0, N64PPU_BG1, N64PPU_OBJ1, N64PPU_OBJ2, N64PPU_OBJ3, -1 },
 };
 
 /* Palette selector for an order entry (plane | N64PPU_HI). */
 static inline int n64ppu_entry_sel(int order, int entry) {
   const int plane = entry & 0xf;
   if (plane >= N64PPU_OBJ0) return N64PPU_SEL_OBJ;
+  if (order == N64PPU_ORDER_MODE7) return N64PPU_SEL_M7;
   const bool two_bpp = order == N64PPU_ORDER_MODE0 || plane == N64PPU_BG3;
   if (two_bpp) return (entry & N64PPU_HI) ? N64PPU_SEL_HI4 : N64PPU_SEL_LO4;
   return (entry & N64PPU_HI) ? N64PPU_SEL_HI16 : N64PPU_SEL_LO16;

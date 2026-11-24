@@ -144,6 +144,10 @@ static void present_rdp_frame(uint32_t frame, const char *line) {
                        (unsigned long)s_rdp, (unsigned long)s_sw, (unsigned long)s_why_or,
                        g_snes->ppu->cgwsel, g_snes->ppu->cgadsub, g_snes->ppu->screenEnabled[0],
                        g_snes->ppu->screenEnabled[1], g_snes->ppu->bgmode & 7);
+      { extern uint32_t g_n64ppu_m7_rows;
+        if (g_n64ppu_m7_rows) n64_platform_log("[ppuwhy] mode 7 rows built on the CPU: %lu; matrix now %d %d %d %d, m7sel %02x\n", (unsigned long)g_n64ppu_m7_rows,
+                                               g_snes->ppu->m7matrix[0], g_snes->ppu->m7matrix[1], g_snes->ppu->m7matrix[2], g_snes->ppu->m7matrix[3], g_snes->ppu->m7sel);
+        g_n64ppu_m7_rows = 0; }
       s_sw = s_rdp = s_why_or = 0;
     }
   }

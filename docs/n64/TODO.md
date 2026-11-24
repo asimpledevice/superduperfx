@@ -532,8 +532,10 @@ keep groups between commands (275 -> 193 loads in SMW), then overdraw;
 The owner's hwtest photo of 2026-11-24 was v1 of that ROM: its test 2
 "FAIL" is the known back-to-back quirk recorded on 2026-11-13, nothing new.
 
-**Next on the PPU after that (owner, 2026-11-24):** mode 7 on the RDP
-(modes above 1 are software lines; Joe & Mac 2 has stretches of it).
+**Mode 7 (owner, 2026-11-24): done as a CPU-sampled plane row** (PPU_DESIGN.md,
+"Mode 7"): Joe & Mac 2's scene 166 -> about 60 ms a frame, the picture
+exact. Left: EXTBG, direct colour and mosaic lines; modes 2-6 (software
+lines still); the sampler's 17 ms.
 
 **Where the CPU's PPU time goes (SMW level, 2026-11-24; sampling profile by
 phase, `PROFILE=1`, and ares's I-cache profile by stage).** The PPU stage
@@ -622,6 +624,15 @@ retrain; look for structural answers.
   generated code, each visited a few times a frame. The frame is one wide
   pass, not a loop; what narrows it is fewer bytes of host code per guest
   operation and fewer engines doing the same job.
+- *How much layout moves the PPU stage, seen the same day:* its time in
+  ordinary frames went 4.9 / 5.7 / 8.3 ms (Joe & Mac 2, Pitfall, SMW) ->
+  5.5 / 6.0 / 8.8 -> 6.6 / 8.2 / 11.5 over builds whose changes were in
+  the SPC translator and the JIT's counters, not the PPU. Packing the
+  stage's hottest functions into one block by hand, in the simulator: 8
+  functions in 16 KB take the stage from 3,145 misses to 1,768 and cost
+  the other stages 3,270; 8 KB and 12 KB blocks make the stage itself
+  worse (6,100 and 5,390). Where a block lands against everything else
+  decides it -- what a trained layout settles and a hand rule does not.
 - D-cache, same run: 23,250 misses a frame; `s_blue_stack` 17% and
   `s_host_stack` 7%, both at their tops, which are 256 KB apart and so on
   the same cache lines (to try: offset one by 4 KB).
