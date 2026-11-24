@@ -681,6 +681,23 @@ pixel the rest expects only on a little-endian host. On the N64 those
 lines had red and blue exchanged and shifted. It stores the 32-bit value
 now.
 
-State after this commit: every mode 7 scene and modes 0 and 1 are RDP
+State after that commit: every mode 7 scene and modes 0 and 1 are RDP
 lines with no frame differing; mode 1 with mosaic and modes 2-6 are
 software lines.
+
+**Mosaic in the tile modes (same day).** A layer with a mosaic gets its
+plane row made on the CPU, a line at a time (`bg_mosaic_row`), as
+`PpuDrawBackground_4bpp_mosaic` / `_2bpp_mosaic` draw it: the BG line is
+the mosaic block's first; across, the blocks lie on the screen's grid, and
+each part the layer's own windows cut the line into (`layer_parts`) starts
+again with the pixel under its first pixel. Such a line draws every tile
+layer from planes (the others' rows by the RSP as before the scene), so
+its tile-layer palettes are built again. 16x16 tiles with a mosaic stay
+software lines. Test ROM: mode 1 with mosaic, and mosaic with windows in
+modes 0, 1 and 7, no frame differing; SMW's fades are RDP lines now.
+
+Left of the list: modes 2-6. Mode 3 needs an 8-bit tile row (two planes
+for its priority); 2, 4 and 6 the offset-per-tile columns; 5 and 6 the
+software PPU's reading of high resolution (the odd columns of 16-wide
+tiles). Modes 4-6 are compared with the per-pixel renderer, 2 and 3 with
+the line renderer.

@@ -224,6 +224,26 @@ def scenes(n):
         f.b(0x2106, ((k % 15) + 1) << 4 | [0x01, 0x03, 0x07, 0x02, 0x04][k % 5])
         return f
 
+    @add('mosaic-windows')
+    def _(k):
+        f = Frame()
+        if k & 1:
+            base(f, 7, 0x11)
+            a, b, c, d = rot(k * 0.13, 0x110)
+            m7(f, a, b, c, d, 4 * k, 9 * k, 128, 112)
+            f.b(0x2123, 0x0A if k & 2 else 0x02)   # BG1: window 1, and window 2 on some frames
+        else:
+            base(f, 0x01 if k & 4 else 0x00, 0x17)
+            for i, r in enumerate((0x210D, 0x210F, 0x2111)):
+                f.w2(r, 7 * k + 11 * i); f.w2(r + 1, 2 * k + 33 * i)
+            f.b(0x2123, 0x2A if k & 2 else 0x22)   # BG1 and BG2: window 1 (BG1: and window 2)
+            f.b(0x2124, 0x03)                      # BG3: window 1 inverted
+        f.b(0x2126, 30 + 5 * k); f.b(0x2127, 150 + 4 * k); f.b(0x2128, 90 - 3 * k); f.b(0x2129, 230 - 2 * k)
+        f.b(0x212A, [0x00, 0x01, 0x02, 0x03][k % 4])   # the two windows' logic for BG1
+        f.b(0x212E, 0x17); f.b(0x212F, 0x00)
+        f.b(0x2106, ((3 * k) % 15 + 1) << 4 | 0x07)
+        return f
+
     @add('mode0')
     def _(k):
         f = Frame(); base(f, 0x00, 0x1F)
