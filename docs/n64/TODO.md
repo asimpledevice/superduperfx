@@ -414,6 +414,31 @@ on the RDP mid-command").
    the wait. **To confirm on the EverDrive:** ares does not model the RDP's
    time, so there the wait before building may be more than nothing; the
    log line `[present] waited ...` says how much.
+   **Looked at after it, 2026-11-24, and left:**
+   - *Software lines.* `N64PPU_WHY_LOG` on the three games' measured play:
+     all 224 lines of every frame are RDP lines (Joe & Mac 2 has two
+     60-frame stretches of mode 7, nothing else). No line falls back for
+     colour maths, so half-add against a composed subscreen on the RDP has
+     no consumer here. It is also not one pass: with a subscreen pixel the
+     SNES halves, without one it adds the fixed colour unhalved, so the RDP
+     needs a per-pixel mask -- a Z-buffer as mask (subscreen pixels marked;
+     decal compare draws on them, ordinary compare off them; front-to-back
+     with "covered" as a third value) is the design to test on an rdptest
+     page when a game needs it.
+   - *1-cycle mode for flipped tiles.* Its first reason was a smaller cache
+     to keep two copies of; nothing is kept twice now. What is left is
+     192 KB (the mirrored halves of the 2bpp and 4bpp caches) against 9%
+     more RDP time and new conversion and scene microcode. Worth it when
+     memory is what is short.
+   - *What the hardware numbers point at instead:* a tile layer costs the
+     RDP 5.4 ms with a load per tile and 3.1 ms with 28 loads. The scene
+     loads every tile it draws. Keeping the last few loaded tiles in TMEM
+     (seven descriptors) and reusing them would cut loads wherever a row
+     repeats tiles; only hardware can time it (ares does not), so it wants
+     a page in rdptest first.
+   - *The PPU phase* is 5 to 8 ms: sprite evaluation for the range and
+     time-over flags, HDMA transfers, the description's copies. No single
+     part stands out any more.
 4. **Double-buffered tile caches and TLUTs**, so the next frame's sync never
    waits for the RDP (`rdpq_fence`) and TLUT slots are never rewritten
    while the RDP may read them; frame pacing in Green; an RDP watchdog.
