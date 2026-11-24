@@ -376,6 +376,45 @@ that runs in steady state should be translated.
 
 ## PPU (scene builder, `SCENE=1`)
 
+**Where the CPU's PPU time goes (SMW level, 2026-11-24; sampling profile by
+phase, `PROFILE=1`, and ares's I-cache profile by stage).** The PPU stage
+is the frame's raster replay, 224 times: journal -> registers
+(`ppu_rasterApplyLine`, `ppu_write`), HDMA (`dma_doHdma`), the description
+and the line (`n64_ppu_desc_line`, `n64_ppu_build_line`, `line_sprites`,
+`clear_line`), and the software PPU's state-only line
+(`PpuDrawVisibleLine`: the sprite range/time flags). In the profiling build
+10.7 ms: replay and HDMA about 4.6, sprites about 2.5 (`line_sprites` 1.5),
+description and build about 2.5. The present stage's 5.5 ms is a third
+sound (`RtlRenderAudio` 1.3, `dsp_peek` 0.4) and 0.24 the status line's
+text.
+
+Part of that is not work. I-cache misses a frame (48 cycles each in ares,
+so 1,953 misses are a millisecond):
+
+| stage | misses/frame | ms |
+|---|---|---|
+| emulation | 35,682 | 18.3 |
+| PPU | 3,147 | 1.6 |
+| present | 1,584 | 0.8 |
+
+and the largest are pairs of functions that call each other from the same
+cache sets, each call evicting the other:
+
+| pair | misses/frame | ms |
+|---|---|---|
+| `dsp_fe_run` / `apu_feBlock` | 2,866 | 1.5 |
+| `PpuDrawVisibleLine` / `line_sprites` (/ `clear_line`: 231) | 1,790 | 0.9 |
+| `apu_runCycles_native` / `spc_dbt_run` | 984 | 0.5 |
+| `_interp_run_core` / `bridge_lean_run` | 656 | 0.3 |
+
+(code-cache modules, on the heap, are 12,839 of the emulation stage's.)
+icache_order.ld was trained before the JIT, the SPC translator, the tracker
+and the scene: `apu_runCycles_native` has outgrown its gap, 52 of the 529
+placed functions are no longer where planned, and none of the functions
+above but two were ever placed. This is item 10 of the 65816 list (retrain,
+"near the end"), now with a size: the pairs alone are 3.2 ms a frame, and
+they are the engine's, not a game's.
+
 See `PPU_DESIGN.md` ("Step 4: the scene builder", "The RSP must never wait
 on the RDP mid-command").
 
