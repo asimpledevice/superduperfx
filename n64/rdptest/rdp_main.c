@@ -14,7 +14,8 @@
  * layer drawn three ways, timed by the RDP's counters. Page 7: what a CPU
  * cache miss costs, alone and while the RDP draws, the RSP copies by DMA or
  * the cartridge is read (the RCP shares one channel to RDRAM between them).
- * A goes to the next. */
+ * Page 8: colour math added and subtracted in parts, in place on the
+ * framebuffer. A goes to the next. */
 #include <libdragon.h>
 #include <stdio.h>
 #include <string.h>
@@ -597,6 +598,83 @@ static void page_miss(void) {
   graphics_fill_screen(fb, graphics_make_color(0, 0, 64, 255));
   graphics_set_color(graphics_make_color(255, 255, 255, 255), 0);
   for (int i = 0; i < s_nlines; i++) graphics_draw_text(fb, 8, 8 + i * 12, s_lines[i]);
+  graphics_draw_text(fb, 8, 228, "A: next page (split add)");
+  display_show(fb);
+}
+
+/* ---- Page 8: add and subtract in parts, in place --------------------------
+ * The plan for two-screen colour math on the RDP (docs/n64/PPU_DESIGN.md,
+ * B2): the main colour p is in the framebuffer, the second colour m comes
+ * as parts of at most 15 (the combiner's add is right while the 5-bit sum
+ * stays below 47), and each pass loads the framebuffer's own pixels as
+ * TEXEL0 and a part as TEXEL1 and draws the sum back over them. Four
+ * 32x32 grids (rows p, columns m), a pixel a pair: add in three parts
+ * (15, 15, 1) and in two (15, 15: m = 31 counts as 30), subtract in three
+ * and in two. Read back against min(31, p + m) and max(0, p - m). */
+static uint16_t s_part[3][32 * 32] __attribute__((aligned(16)));
+static void page_split(void) {
+  display_init(RESOLUTION_320x240, DEPTH_16_BPP, 2, GAMMA_NONE, FILTERS_DISABLED);
+  surface_t *fb = display_get();
+  for (int r = 0; r < 32; r++)
+    for (int c = 0; c < 32; c++) {
+      const int a = c < 15 ? c : 15, b = c - a < 15 ? c - a : 15;
+      s_part[0][r * 32 + c] = grey16(a);
+      s_part[1][r * 32 + c] = grey16(b);
+      s_part[2][r * 32 + c] = grey16(c - a - b);
+    }
+  data_cache_hit_writeback(s_part, sizeof s_part);
+  rdpq_attach(fb, NULL);
+  rdpq_set_mode_fill(RGBA32(0, 0, 80, 255));
+  rdpq_fill_rectangle(0, 0, 320, 240);
+  static const char *const kName[4] = {"add 15+15+1", "add 15+15", "sub 15+15+1", "sub 15+15"};
+  for (int t = 0; t < 4; t++) {
+    const int x0 = 16 + t * 40, y0 = 16;
+    for (int p = 0; p < 32; p++) {            /* the main colour, a row a value */
+      rdpq_set_mode_fill(color_from_packed16(grey16(p)));
+      rdpq_fill_rectangle(x0, y0 + p, x0 + 32, y0 + p + 1);
+    }
+    const int parts = (t & 1) ? 2 : 3;
+    for (int k = 0; k < parts; k++) {
+      rdpq_set_mode_standard();
+      rdpq_mode_dithering(DITHER_NONE_NONE);
+      rdpq_mode_blender(0);
+      rdpq_set_env_color(RGBA32(255, 255, 255, 255));
+      if (t < 2) rdpq_mode_combiner(RDPQ_COMBINER2((ONE, ZERO, TEX0, TEX1), (ZERO, ZERO, ZERO, ONE), (ZERO, ZERO, ZERO, COMBINED), (ZERO, ZERO, ZERO, COMBINED)));
+      else rdpq_mode_combiner(RDPQ_COMBINER2((ZERO, TEX1, ENV, TEX0), (ZERO, ZERO, ZERO, ONE), (ZERO, ZERO, ZERO, COMBINED), (ZERO, ZERO, ZERO, COMBINED)));
+      surface_t own = surface_make_sub(fb, x0, y0, 32, 32);
+      surface_t part = surface_make(s_part[k], FMT_RGBA16, 32, 32, 64);
+      rdpq_tex_multi_begin();
+      rdpq_tex_upload(TILE0, &own, NULL);
+      rdpq_tex_upload(TILE1, &part, NULL);
+      rdpq_tex_multi_end();
+      rdpq_texture_rectangle(TILE0, x0, y0, x0 + 32, y0 + 32, 0, 0);
+      rdpq_sync_pipe();                        /* the next pass loads what this one drew */
+    }
+  }
+  rdpq_detach_wait();
+  const uint16_t *px = UncachedAddr(fb->buffer);
+  const int stride = fb->stride / 2;
+  graphics_set_color(graphics_make_color(255, 255, 255, 255), 0);
+  graphics_draw_text(fb, 8, 56, "Add and subtract in parts, in place");
+  graphics_draw_text(fb, 8, 68, "(rows p in the frame, columns m):");
+  for (int t = 0; t < 4; t++) {
+    const int x0 = 16 + t * 40, y0 = 16;
+    int exact = 0, worst = 0, wp = 0, wm = 0, wgot = 0;
+    for (int p = 0; p < 32; p++)
+      for (int m = 0; m < 32; m++) {
+        const int got = (px[(y0 + p) * stride + x0 + m] >> 11) & 31;
+        const int want = t < 2 ? (p + m > 31 ? 31 : p + m) : (p > m ? p - m : 0);
+        const int e = got - want;
+        if (!e) exact++;
+        if ((e < 0 ? -e : e) > (worst < 0 ? -worst : worst)) { worst = e; wp = p; wm = m; wgot = got; }
+      }
+    char l[48];
+    if (worst) snprintf(l, sizeof l, "%s %d/1024 w%+d p%d m%d=%d", kName[t], exact, worst, wp, wm, wgot);
+    else snprintf(l, sizeof l, "%s 1024/1024 exact", kName[t]);
+    debugf("[rdptest] %s\n", l);
+    graphics_draw_text(fb, 8, 88 + t * 12, l);
+  }
+  graphics_draw_text(fb, 8, 148, "w = worst error, at p and m");
   graphics_draw_text(fb, 8, 228, "A: back to the flip tests");
   display_show(fb);
 }
@@ -618,7 +696,7 @@ int main(void) {
     if (next) {
       rspq_wait();
       display_close();
-      page = (page + 1) % 7;
+      page = (page + 1) % 8;
       switch (page) {
       case 0: page_flips(); break;
       case 1: page_256(); break;
@@ -626,7 +704,8 @@ int main(void) {
       case 3: page_maths(); break;
       case 4: page_maths_text(); break;
       case 5: page_timing(); break;
-      default: page_miss(); break;
+      case 6: page_miss(); break;
+      default: page_split(); break;
       }
     }
   }

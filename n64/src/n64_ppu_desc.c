@@ -55,8 +55,26 @@ void n64_ppu_desc_begin(const Ppu *ppu) {
 /* Line `line` (1-based) with the registers the replay has just produced.
  * Returns true when it joined the previous line's band: same registers and
  * CGRAM version. */
+#ifndef N64PPU_DESC_COUNT
+#define N64PPU_DESC_COUNT 1   /* 0: compare the registers on every line (the reference) */
+#endif
 bool n64_ppu_desc_line(const Ppu *ppu, int line) {
   if (!s_open) return false;
+#if N64PPU_DESC_COUNT
+  /* No PPU write since the line above (ppu_write counts them, and the
+   * register block changes through nothing else): the band goes on. */
+  { extern uint32_t g_ppu_reg_writes;
+    static uint32_t s_writes;
+    const uint32_t w = g_ppu_reg_writes;
+    if (w == s_writes && s_desc.nbands && s_desc.band[s_desc.nbands - 1].y1 == line - 1 &&
+        ppu->cgramWriteCount == s_cgram_count && ppu->vramWriteCount == s_vram_count &&
+        ppu->oamWriteCount == s_oam_count) {
+      s_desc.band[s_desc.nbands - 1].y1 = (uint8_t)line;
+      return true;
+    }
+    s_writes = w;
+  }
+#endif
   if (ppu->cgramWriteCount != s_cgram_count) new_cgram(ppu);
   if (ppu->vramWriteCount != s_vram_count) s_desc.flags |= N64PPU_DESC_VRAM_CHANGED;
   if (ppu->oamWriteCount != s_oam_count) s_desc.flags |= N64PPU_DESC_OAM_CHANGED;

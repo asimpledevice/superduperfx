@@ -8,6 +8,9 @@
 #include <assert.h>
 
 #include "dma.h"
+#ifndef SNESRECOMP_HDMA_DIRECT
+#define SNESRECOMP_HDMA_DIRECT 1   /* 0: every HDMA byte through dma_transferByte (the reference) */
+#endif
 #include "snes.h"
 #include "ppu.h"
 #include "sdd1.h"
@@ -360,7 +363,9 @@ uint64_t dma_hdmaMasterEstimate(Dma* dma) {
   return any ? (18u + perLine) * 224u + 128u : 0;
 }
 
+extern uint32_t g_hdma_prof[4];
 static void dma_hdmaLoadDescriptor(Dma* dma, DmaChannel* ch) {
+  g_hdma_prof[2]++;
   ch->repCount = snes_read(dma->snes, (ch->aBank << 16) | ch->tableAdr++);
   ch->terminated = ch->repCount == 0;
   if (ch->indirect && !ch->terminated) {
@@ -400,6 +405,25 @@ void dma_primeHdmaFirstLine(Dma* dma) {
   }
 }
 
+/* HDMA counters for a profile: bytes moved, channel-lines with a transfer,
+ * table entries loaded, bytes that took the general path. */
+uint32_t g_hdma_prof[4];
+
+extern uint32_t g_ppu_reg_stamp[0x40];
+#if SNESRECOMP_HDMA_DIRECT
+static struct { uint8_t len, b0, mode, val[4]; uint32_t stamp[4]; } s_hdma_last[8];   /* (len 0: none yet) */
+#endif
+
+/* The host's bytes for [adr, adr + len) of a bank when that is plain work
+ * RAM with no wrap inside it; NULL otherwise (ROM, registers, a mapper). */
+static const uint8_t *hdma_ram(Snes *snes, uint8_t bank, uint16_t adr, int len) {
+  if (bank == 0x7e || bank == 0x7f)
+    return (uint32_t)adr + (uint32_t)len <= 0x10000u ? &snes->ram[((uint32_t)(bank & 1) << 16) | adr] : NULL;
+  if ((bank < 0x40 || (bank >= 0x80 && bank < 0xc0)) && (uint32_t)adr + (uint32_t)len <= 0x2000u)
+    return &snes->ram[adr];
+  return NULL;
+}
+
 void dma_doHdma(Dma* dma) {
   for (int i = 0; i < 8; i++) {
     DmaChannel* ch = &dma->channel[i];
@@ -419,6 +443,51 @@ void dma_doHdma(Dma* dma) {
 
     if (ch->doTransfer) {
       int len = transferLength[ch->mode & 7];
+      g_hdma_prof[0] += (uint32_t)len;
+      g_hdma_prof[1]++;
+#if SNESRECOMP_HDMA_DIRECT
+      /* The usual case, without the bus: a table (or its indirect data) in
+       * work RAM, written to PPU registers. dma_transferByte's other cases
+       * (S-DD1, a source that is not RAM, a B address beyond the PPU's)
+       * keep the general path below. */
+      { uint16_t *const ap = ch->indirect ? &ch->size : &ch->tableAdr;
+        const uint8_t *src = hdma_ram(dma->snes, ch->indirect ? ch->indBank : ch->aBank, *ap, len);
+        const Cart *cart = dma->snes->cart;
+        const uint8_t b0 = ch->bAdr;
+        if (src && !(cart && cart->type == CART_SDD1) && b0 < 0x40 - 3) {
+          const int *off = bAdrOffsets[ch->mode & 7];
+          /* The same bytes to the same registers as this channel's last
+           * transfer, and nothing has written those registers since: for
+           * registers whose write only stores the value (not the
+           * write-twice scrolls and matrix, not the OAM, VRAM and CGRAM
+           * ports, not MOSAIC, which restarts its line count) the PPU is
+           * already as the write would leave it. Most HDMA is this: a
+           * window or a colour held over many lines. */
+          typeof(s_hdma_last[0]) *m = &s_hdma_last[i];
+          bool again = m->len == len && m->b0 == b0 && m->mode == (ch->mode & 7);
+          for (int j = 0; again && j < len; j++) {
+            const unsigned r = (unsigned)b0 + (unsigned)off[j];
+            again = m->val[j] == src[j] && g_ppu_reg_stamp[r] == m->stamp[j] &&
+                    (r == 0x05 || (r >= 0x07 && r <= 0x0c) || (r >= 0x23 && r <= 0x33));
+          }
+          if (!again) {
+            g_ppu_wlog_src = kPpuWlogHdma;
+            for (int j = 0; j < len; j++) {
+              debug_server_on_reg_write((uint16_t)(0x2100u + b0 + off[j]), src[j]);
+              ppu_write(g_ppu, (uint8_t)(b0 + off[j]), src[j]);
+            }
+            g_ppu_wlog_src = kPpuWlogCpu;
+            m->len = (uint8_t)len; m->b0 = b0; m->mode = (uint8_t)(ch->mode & 7);
+            for (int j = 0; j < len; j++) {   /* (after all of them: a register written twice has its last stamp) */
+              m->val[j] = src[j];
+              m->stamp[j] = g_ppu_reg_stamp[(b0 + off[j]) & 0x3f];
+            }
+          } else g_hdma_prof[3] += (uint32_t)len;
+          *ap = (uint16_t)(*ap + len);
+          len = 0;
+        }
+      }
+#endif
       for (int j = 0; j < len; j++) {
         uint8_t bAdr = (uint8_t)(ch->bAdr + bAdrOffsets[ch->mode & 7][j]);
         g_ppu_wlog_src = kPpuWlogHdma;

@@ -91,6 +91,14 @@ static uint16_t ppu_getVramRemap(Ppu* ppu);
 static void PpuUpdateWidescreenOamHistory(Ppu *ppu, int line);
 
 
+/* The register block was replaced other than by ppu_write (a state load,
+ * a reset, the raster replay's start): as if every register were written. */
+extern uint32_t g_ppu_reg_writes, g_ppu_reg_stamp[0x40];
+static void ppu_regs_replaced(void) {
+  const uint32_t w = ++g_ppu_reg_writes;
+  for (int i = 0; i < 0x40; i++) g_ppu_reg_stamp[i] = w;
+}
+
 Ppu* ppu_init(void) {
   Ppu* ppu = calloc(1, sizeof(Ppu));  /* zero padding: saveload/co-sim hash determinism */
   if (ppu)
@@ -119,6 +127,7 @@ void ppu_reset(Ppu* ppu) {
     memcpy(overlayPitch, ppu->overlayRenderPitch, sizeof(overlayPitch));
     memcpy(overlayBuffer, ppu->overlayRenderBuffer, sizeof(overlayBuffer));
     memset(ppu, 0, sizeof(*ppu));
+    ppu_regs_replaced();
     ppu->renderBuffer = renderBuffer;
     ppu->renderPitch = (uint32_t)pitch;
     ppu->renderFlags = renderFlags;
@@ -138,6 +147,7 @@ void ppu_saveload(Ppu *ppu, SaveLoadInfo *sli) {
   uint32 version[2] = {'P' | 'P' << 8 | 'U' << 16 | '0' << 24, PPU_SAVESTATE_REGS_SIZE + PPU_SAVESTATE_MEM_SIZE};
   sli->func(sli, version, 8);
   sli->func(sli, &ppu->inidisp, PPU_SAVESTATE_REGS_SIZE);
+  ppu_regs_replaced();   /* (a load replaces them; on a save this only costs the next lines their shortcuts) */
   /* The write counters must move on a load (it replaces VRAM and OAM
    * wholesale) and must NOT move on a save: rewind and run-ahead save every
    * few frames, and a host pairing "OAM was just uploaded" with what produced
@@ -896,10 +906,12 @@ void PpuDrawDetachedLine(Ppu *ppu, int line) {
   ppu->timeOver = time_over;
 }
 
+static uint32_t s_line_state_frame = ~0u;   /* the frame PpuRunLineJob last ran a live line of */
 static void PpuRunLineJob(Ppu* ppu, int line, bool pixels, bool live) {
   /* Writes from here to the next ppu_runLine land on line + 1; no register
    * write happens inside a line's render. */
   if (live) {
+    s_line_state_frame = (uint32_t)snes_frame_counter;
     s_wlog_line = line + 1;
     s_wlog_line_frame = (uint32_t)snes_frame_counter;
     /* Per-line HDMA state must be captured here, not at end-of-frame: games can
@@ -951,7 +963,14 @@ void ppu_runLine(Ppu* ppu, int line) {
   PpuRunLineJob(ppu, line, true, true);
 }
 
+#ifndef SNESRECOMP_LINE_STATE_FAST
+#define SNESRECOMP_LINE_STATE_FAST 1   /* 0: every state-only line through PpuRunLineJob (the reference) */
+#endif
+static bool ppu_lineStateFast(Ppu *ppu, int line);
 void ppu_runLineState(Ppu* ppu, int line) {
+#if SNESRECOMP_LINE_STATE_FAST
+  if (ppu_lineStateFast(ppu, line)) return;
+#endif
   PpuRunLineJob(ppu, line, false, true);
 }
 
@@ -3098,6 +3117,38 @@ table:
   return count != 0;
 }
 
+#if SNESRECOMP_LINE_STATE_FAST
+static bool ppu_lineStateFast(Ppu *ppu, int line) {
+  /* What PpuRunLineJob leaves behind for a line without pixels, when the
+   * sprite table of ppu_evaluateSpritesFromLines is current (the tracked
+   * PPU, by its OAM write count) and the frame's first line has been
+   * through the job (its once-a-frame duties): the write log's line, the
+   * time-over flag and whether the line has sprites. A line over the
+   * 32-sprite limit, and anything unusual, takes the job. */
+  if (line > 0 && s_line_state_frame == (uint32_t)snes_frame_counter && !s_spr_lines_off &&
+      ppu == s_oam_tracked_ppu && s_spr_lines.ppu == ppu && s_spr_lines.valid &&
+      s_spr_lines.oam_count == ppu->oamWriteCount &&
+      s_spr_lines.key == (uint8_t)(PPU_objSize(ppu) | (PPU_objInterlace(ppu) ? 8 : 0) | 0x80) &&
+      !ppu->overlayRenderBuffer[kPpuOverlaySource_Obj] && !ppu->extraObjectCount &&
+      !(ppu->extraLeftCur || ppu->extraRightCur || ppu->wsHudOamHeight) &&
+      ppu->wsOamMotionLastLine >= 0 && line >= ppu->wsOamMotionLastLine) {
+    const unsigned l = (unsigned)(line - 1) & 255;
+    const unsigned count = s_spr_lines.count[l];
+    const bool limits = !(ppu->renderFlags & kPpuRenderFlags_NoSpriteLimits);
+    if (!(count > 32 && limits)) {
+      s_wlog_line = line + 1;
+      s_wlog_line_frame = (uint32_t)snes_frame_counter;
+      ppu->wsOamMotionLastLine = (int16_t)line;
+      if (PPU_forcedBlank(ppu)) { ppu->lineHasSprites = false; return true; }
+      if (limits && s_spr_lines.tiles[l] > 34) ppu->timeOver = true;
+      ppu->lineHasSprites = count != 0;
+      return true;
+    }
+  }
+  return false;
+}
+#endif
+
 #ifdef SNESRECOMP_SPR_LINES_CHECK
 unsigned long g_ppu_spr_lines_checked;   /* lines answered by the table */
 static bool ppu_evaluateSpritesSlow(Ppu* ppu, int line, bool counts_only);
@@ -3602,6 +3653,7 @@ void ppu_rasterRenderBegin(Ppu *ppu) {
   s_raster_port.oamSecondWrite = ppu->oamSecondWrite;
   s_raster_port.oamBuffer = ppu->oamBuffer;
   memcpy(&ppu->inidisp, f->regs, PPU_SAVESTATE_REGS_SIZE);
+  ppu_regs_replaced();
   ppu->scrollPrev = f->scrollPrev;
   ppu->scrollPrev2 = f->scrollPrev2;
   ppu->m7prev = f->m7prev;
@@ -3771,7 +3823,15 @@ int ppu_rasterDebugDump(char *out, int cap) {
   return pos;
 }
 
+/* Every PPU write, counted, and when each register was last written: the
+ * register block (ppu_register_fields.inc) changes through nothing else,
+ * so a host that saw the count stand still knows the block did, and one
+ * that saw a register's stamp stand still knows nothing wrote it. */
+uint32_t g_ppu_reg_writes = 1;
+uint32_t g_ppu_reg_stamp[0x40];
+
 void ppu_write_raw(Ppu* ppu, uint8_t adr, uint8_t val) {
+  g_ppu_reg_stamp[adr & 0x3f] = ++g_ppu_reg_writes;
   ppu_wlog_note(adr, val);
   /* Every path into the PPU -- CPU stores, DMA, beam HDMA -- is history the
    * raster journal must see; recording here rather than in one caller is
