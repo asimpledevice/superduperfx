@@ -11,7 +11,10 @@
  * the VI scales a 256-wide framebuffer on the TV.
  * Page 3: the scissor's left edge in copy mode. Page 4 and 5: colour maths
  * in the blender and the combiner against the SNES's results. Page 6: one
- * layer drawn three ways, timed by the RDP's counters. A goes to the next. */
+ * layer drawn three ways, timed by the RDP's counters. Page 7: what a CPU
+ * cache miss costs, alone and while the RDP draws, the RSP copies by DMA or
+ * the cartridge is read (the RCP shares one channel to RDRAM between them).
+ * A goes to the next. */
 #include <libdragon.h>
 #include <stdio.h>
 #include <string.h>
@@ -439,6 +442,161 @@ static void page_timing(void) {
   graphics_set_color(graphics_make_color(255, 255, 255, 255), 0);
   graphics_draw_box(fb, 0, 0, 320, 96, graphics_make_color(0, 0, 64, 255));
   for (int i = 0; i < s_nlines; i++) graphics_draw_text(fb, 8, 4 + i * 10, s_lines[i]);
+  graphics_draw_text(fb, 8, 228, "A: next page (cache misses)");
+  display_show(fb);
+}
+
+/* ---- Page 7: the cost of a cache miss ------------------------------------
+ * I-cache: 16 KB direct-mapped, 32-byte lines. Eight stubs ("jr ra") 16 KB
+ * apart share one line index, so calling them in turn misses every time;
+ * the same stubs on eight neighbouring lines never miss. The difference a
+ * call is a miss. D-cache (8 KB, 16-byte lines): the same with eight words
+ * 8 KB apart against eight on neighbouring lines. Uncached: a word read
+ * through KSEG1 from RDRAM and from the RSP's DMEM, against a cached one.
+ * Interrupts are off while a loop runs. Times in CPU cycles (93.75 MHz;
+ * Count ticks every other one). */
+enum { kStubs = 8, kCalls = 1000 };
+static uint32_t s_icode[kStubs * 4096 + 8] __attribute__((aligned(16384)));
+static uint32_t s_ddata[kStubs * 2048 + 4] __attribute__((aligned(8192)));
+static uint8_t s_pi_buf[256 * 1024] __attribute__((aligned(16)));
+static uint8_t s_dma_buf[4096] __attribute__((aligned(16)));
+typedef void (*StubFn)(void);
+static StubFn s_fn[2][kStubs];                 /* [0] neighbouring lines, [1] one line index */
+static volatile uint32_t *s_dp[2][kStubs];
+
+static __attribute__((noinline)) uint32_t call_loop(StubFn *fn) {
+  const uint32_t t0 = TICKS_READ();
+  for (int i = 0; i < kCalls; i++) fn[i & (kStubs - 1)]();
+  return TICKS_READ() - t0;
+}
+static __attribute__((noinline)) uint32_t read_loop(volatile uint32_t **p, uint32_t *sum) {
+  uint32_t a = 0;
+  const uint32_t t0 = TICKS_READ();
+  for (int i = 0; i < kCalls; i++) a += *p[i & (kStubs - 1)];
+  const uint32_t t = TICKS_READ() - t0;
+  *sum = a;
+  return t;
+}
+
+static void miss_setup(void) {
+  /* Lines half a cache away from the loops' own code and from the pointer tables. */
+  const uint32_t iline = ((((uint32_t)(uintptr_t)call_loop) >> 5) + 256) & 511;
+  const uint32_t dline = ((((uint32_t)(uintptr_t)s_dp) >> 4) + 256) & 511;
+  for (int k = 0; k < kStubs; k++) {
+    uint32_t *far = s_icode + k * 4096 + iline * 8;                 /* + k * 16 KB */
+    uint32_t *near = s_icode + ((iline + (uint32_t)k) & 511) * 8;   /* (k = 0: the same stub) */
+    far[0] = near[0] = 0x03E00008; far[1] = near[1] = 0;            /* jr ra; nop */
+    s_fn[1][k] = (StubFn)far; s_fn[0][k] = (StubFn)near;
+    s_dp[1][k] = s_ddata + k * 2048 + dline * 4;                    /* + k * 8 KB */
+    s_dp[0][k] = s_ddata + ((dline + (uint32_t)k) & 511) * 4;
+  }
+  data_cache_hit_writeback_invalidate(s_icode, sizeof s_icode);
+  inst_cache_hit_invalidate(s_icode, sizeof s_icode);
+  data_cache_hit_writeback_invalidate(s_ddata, sizeof s_ddata);
+}
+
+/* Cycles a miss, in tenths: I-cache and D-cache. base: the loops without misses. */
+static uint32_t s_base_i, s_base_d;
+static void miss_measure(uint32_t *ic, uint32_t *dc) {
+  uint32_t sum;
+  disable_interrupts();
+  call_loop(s_fn[1]);                                   /* warm the loop itself */
+  const uint32_t ti = call_loop(s_fn[1]);
+  read_loop(s_dp[1], &sum);
+  const uint32_t td = read_loop(s_dp[1], &sum);
+  enable_interrupts();
+  *ic = ti > s_base_i ? (ti - s_base_i) * 20 / kCalls : 0;
+  *dc = td > s_base_d ? (td - s_base_d) * 20 / kCalls : 0;
+}
+
+static void miss_line(const char *name, uint32_t ic, uint32_t dc, uint32_t job_ms10) {
+  char l[64];
+  if (job_ms10)
+    snprintf(l, sizeof l, "%s I %lu.%lu D %lu.%lu job %lums", name, (unsigned long)(ic / 10), (unsigned long)(ic % 10),
+             (unsigned long)(dc / 10), (unsigned long)(dc % 10), (unsigned long)(job_ms10 / 10));
+  else
+    snprintf(l, sizeof l, "%s I %lu.%lu D %lu.%lu", name, (unsigned long)(ic / 10), (unsigned long)(ic % 10),
+             (unsigned long)(dc / 10), (unsigned long)(dc % 10));
+  line(l);
+}
+
+static void page_miss(void) {
+  display_init(RESOLUTION_320x240, DEPTH_16_BPP, 2, GAMMA_NONE, FILTERS_DISABLED);
+  surface_t *fb = display_get();
+  miss_setup();
+  s_nlines = 0;
+  line("Cache miss, CPU cycles each:");
+  uint32_t sum, ic, dc;
+  /* The loops with no miss, and the time the measurement takes. */
+  disable_interrupts();
+  call_loop(s_fn[0]); s_base_i = call_loop(s_fn[0]);
+  read_loop(s_dp[0], &sum); s_base_d = read_loop(s_dp[0], &sum);
+  enable_interrupts();
+  const uint32_t w0 = TICKS_READ();
+  miss_measure(&ic, &dc);
+  const uint32_t window = TICKS_READ() - w0;
+  miss_line("idle     ", ic, dc, 0);
+
+  /* The RDP drawing: full-screen rectangles that read the framebuffer back. */
+  rdpq_attach(fb, NULL);
+  rdpq_set_mode_standard();
+  rdpq_mode_combiner(RDPQ_COMBINER_FLAT);
+  rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
+  rdpq_set_prim_color(RGBA32(40, 80, 160, 128));
+  for (int i = 0; i < 64; i++) rdpq_fill_rectangle(0, 0, 320, 240);
+  rspq_flush();
+  uint32_t j0 = TICKS_READ();
+  miss_measure(&ic, &dc);
+  const bool rdp_busy = (*DP_STATUS & DP_STATUS_BUSY) != 0;
+  rdpq_detach_wait();
+  miss_line(rdp_busy ? "RDP busy " : "RDP done!", ic, dc, (uint32_t)(TICKS_TO_US(TICKS_READ() - j0) / 100));
+
+  /* The RSP copying its 4 KB of DMEM to RDRAM, over and over. */
+  data_cache_hit_writeback_invalidate(s_dma_buf, sizeof s_dma_buf);
+  rspq_block_begin();
+  for (int i = 0; i < 256; i++) rspq_dma_to_rdram(s_dma_buf, 0, 4096, false);
+  rspq_block_t *dmas = rspq_block_end();
+  for (int i = 0; i < 16; i++) rspq_block_run(dmas);   /* (a block: the queue itself would make the CPU wait) */
+  const rspq_syncpoint_t sp = rspq_syncpoint_new();
+  rspq_flush();
+  j0 = TICKS_READ();
+  miss_measure(&ic, &dc);
+  const bool rsp_busy = !rspq_syncpoint_check(sp);
+  rspq_wait();
+  rspq_block_free(dmas);
+  miss_line(rsp_busy ? "RSP DMA  " : "RSP done!", ic, dc, (uint32_t)(TICKS_TO_US(TICKS_READ() - j0) / 100));
+
+  /* The cartridge being read into RDRAM. */
+  data_cache_hit_writeback_invalidate(s_pi_buf, sizeof s_pi_buf);
+  j0 = TICKS_READ();
+  const uint64_t ticket = dma_read_async(s_pi_buf, 0x10001000, sizeof s_pi_buf);
+  miss_measure(&ic, &dc);
+  const bool pi_busy = !dma_finished(ticket);
+  dma_wait_finished(ticket);
+  miss_line(pi_busy ? "cart DMA " : "cart done", ic, dc, (uint32_t)(TICKS_TO_US(TICKS_READ() - j0) / 100));
+
+  /* One word, uncached: RDRAM and the RSP's DMEM, against a cached word. */
+  { static volatile uint32_t *up[2][kStubs];
+    for (int k = 0; k < kStubs; k++) {
+      up[0][k] = (volatile uint32_t *)(((uint32_t)(uintptr_t)s_dp[0][k]) | 0xA0000000u);
+      up[1][k] = (volatile uint32_t *)(0xA4000000u + 0x800 + 4 * k);
+    }
+    disable_interrupts();
+    const uint32_t tr = read_loop(up[0], &sum), ts = read_loop(up[1], &sum);
+    enable_interrupts();
+    char l[64];
+    snprintf(l, sizeof l, "uncached: RDRAM %lu.%lu DMEM %lu.%lu",
+             (unsigned long)((tr - s_base_d) * 20 / kCalls / 10), (unsigned long)((tr - s_base_d) * 20 / kCalls % 10),
+             (unsigned long)((ts - s_base_d) * 20 / kCalls / 10), (unsigned long)((ts - s_base_d) * 20 / kCalls % 10));
+    line(l);
+  }
+  { char l[64];
+    snprintf(l, sizeof l, "(a measurement: %lu us; no-miss loop", (unsigned long)TICKS_TO_US(window)); line(l);
+    snprintf(l, sizeof l, " %lu.%lu and %lu.%lu cycles a turn)", (unsigned long)(s_base_i * 20 / kCalls / 10), (unsigned long)(s_base_i * 20 / kCalls % 10),
+             (unsigned long)(s_base_d * 20 / kCalls / 10), (unsigned long)(s_base_d * 20 / kCalls % 10)); line(l); }
+  graphics_fill_screen(fb, graphics_make_color(0, 0, 64, 255));
+  graphics_set_color(graphics_make_color(255, 255, 255, 255), 0);
+  for (int i = 0; i < s_nlines; i++) graphics_draw_text(fb, 8, 8 + i * 12, s_lines[i]);
   graphics_draw_text(fb, 8, 228, "A: back to the flip tests");
   display_show(fb);
 }
@@ -460,14 +618,15 @@ int main(void) {
     if (next) {
       rspq_wait();
       display_close();
-      page = (page + 1) % 6;
+      page = (page + 1) % 7;
       switch (page) {
       case 0: page_flips(); break;
       case 1: page_256(); break;
       case 2: page_scissor(); break;
       case 3: page_maths(); break;
       case 4: page_maths_text(); break;
-      default: page_timing(); break;
+      case 5: page_timing(); break;
+      default: page_miss(); break;
       }
     }
   }
