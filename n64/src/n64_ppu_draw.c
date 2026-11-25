@@ -37,6 +37,18 @@ static bool rows_any(const uint32_t *bits, int a, int b) {
 }
 
 static uint16_t s_sw16[N64PPU_LINES * 256] __attribute__((aligned(16)));
+/* -DN64_COMPOSE_RSPTIME: the time of a composed line, us, [0] on the RSP
+ * (waited for) and [1] on the CPU, [][0] the last band of 100 lines or more
+ * and [][1] the slowest such band. With COMPOSE_RSP=1 the frames alternate
+ * between the two, so one ROM measures both (and RENDER=2 checks both). */
+uint32_t g_compose_us[2][2];
+static uint32_t s_draw_frames;
+static void compose_time(int who, uint32_t ticks, int lines) {
+  if (lines < 100) return;
+  const uint32_t us = (uint32_t)(TICKS_TO_US((uint64_t)ticks) / (uint32_t)lines);
+  g_compose_us[who][0] = us;
+  if (us > g_compose_us[who][1]) g_compose_us[who][1] = us;
+}
 #if N64_COMPOSE_RSP
 #include "cmp_rsp.h"
 #endif
@@ -676,6 +688,7 @@ int n64_ppu_draw_and_show(const N64PpuFrame *f, const char *status, int compare_
     if (!s_cmp_init) { n64_cmprsp_init(); s_cmp_init = true; }
     n64_cmprsp_frame_begin(); }
 #endif
+  s_draw_frames++;
   PP_ADD(0, pt); pt = PP_T();
   data_cache_hit_writeback((void *)f->tlut, sizeof(f->tlut[0]) * (size_t)f->tlut_count);
 
@@ -714,11 +727,16 @@ int n64_ppu_draw_and_show(const N64PpuFrame *f, const char *status, int compare_
       rspq_wait();
       const uint32_t rt0 = TICKS_READ();
 #endif
+#ifdef N64_COMPOSE_RSPTIME
+      bool took = !(s_draw_frames & 1) && n64_cmprsp_band(f, a, b, s_sw16);
+#else
       bool took = n64_cmprsp_band(f, a, b, s_sw16);
+#endif
 #ifdef N64_COMPOSE_RSPTIME
       if (took) {
         static uint32_t s_ticks, s_lines, s_frames_logged;
         rspq_wait();
+        compose_time(0, TICKS_READ() - rt0, b - a);
         s_ticks += TICKS_READ() - rt0;
         s_lines += (uint32_t)(b - a);
         if (s_lines >= 8000) {
@@ -756,7 +774,15 @@ int n64_ppu_draw_and_show(const N64PpuFrame *f, const char *status, int compare_
 #endif
       if (!took)
 #endif
-      for (int r = a; r < b; ++r) n64_ppu_compose_line(f, r, s_sw16 + (size_t)r * 256);
+      {
+#ifdef N64_COMPOSE_RSPTIME   /* (the CPU's time for the band, the same way) */
+        const uint32_t ct0 = TICKS_READ();
+#endif
+        for (int r = a; r < b; ++r) n64_ppu_compose_line(f, r, s_sw16 + (size_t)r * 256);
+#ifdef N64_COMPOSE_RSPTIME
+        compose_time(1, TICKS_READ() - ct0, b - a);
+#endif
+      }
       draw_rows16(a, b);
       SPLIT_ADD(2, st);
     }

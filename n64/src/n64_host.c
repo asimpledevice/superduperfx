@@ -107,6 +107,9 @@ static void draw_frame_rdp(bool software_every_line) {
   ppu_rasterRenderEnd(g_ppu);
 }
 
+#if defined(N64_PPUTEST_STATUS) || defined(N64_COMPOSE_RSPTIME)
+static uint32_t s_ppt_bad, s_ppt_bad_frame, s_ppt_bad_px;
+#endif
 #if N64_RENDER
 /* Finish a built frame (the RSP's background rows) and show it. */
 #ifdef N64_PRESENT_PROF
@@ -154,6 +157,9 @@ static void present_rdp_frame(uint32_t frame, const char *line) {
 #endif
   static uint32_t s_diff_frames;   /* frames that differed (RENDER=2) */
   if (diff > 0) s_diff_frames++;
+#if defined(N64_PPUTEST_STATUS) || defined(N64_COMPOSE_RSPTIME)
+  if (diff > 0) { s_ppt_bad++; s_ppt_bad_frame = frame; s_ppt_bad_px = (uint32_t)diff; }
+#endif
 #ifdef N64_RDP_LOG_ALL   /* (every frame: n64/tools/ppu_test.sh reads them by scene) */
   if (N64_RENDER == 2)
 #else
@@ -698,6 +704,25 @@ static int host_main(void) {
              (unsigned long)frame, (unsigned long)((t1 - t0) / 1000),
              (unsigned long)((t2 - t1p) / 1000), (unsigned long)s_dsp_show_cold,
              (unsigned long)s_dsp_show_warm);
+#endif
+#ifdef N64_PPUTEST_STATUS
+    /* The PPU test ROM on hardware (no debug log there): this frame's RDP,
+     * composed and software lines, and with RENDER=2 the frames that have
+     * differed so far and the last differing frame's number and pixels. */
+    snprintf(line, sizeof line, "f%lu r%d c%d s%d bad%lu f%lu p%lu",
+             (unsigned long)frame, s_rdp_frame->rdp_lines - s_rdp_frame->compose_lines,
+             s_rdp_frame->compose_lines, s_rdp_frame->software_lines,
+             (unsigned long)s_ppt_bad, (unsigned long)s_ppt_bad_frame, (unsigned long)s_ppt_bad_px);
+#endif
+#ifdef N64_COMPOSE_RSPTIME
+    /* The PPU test ROM on hardware: software lines of this frame, frames
+     * that have differed (RENDER=2), and a composed line's time in us on
+     * the RSP and on the CPU, last/slowest band (n64_ppu_draw.c). */
+    { extern uint32_t g_compose_us[2][2];
+      snprintf(line, sizeof line, "f%lu s%d bad%lu R%lu/%lu C%lu/%lu",
+               (unsigned long)frame, s_rdp_frame->software_lines, (unsigned long)s_ppt_bad,
+               (unsigned long)g_compose_us[0][0], (unsigned long)g_compose_us[0][1],
+               (unsigned long)g_compose_us[1][0], (unsigned long)g_compose_us[1][1]); }
 #endif
 #if N64_PIPELINE
     pending = true;

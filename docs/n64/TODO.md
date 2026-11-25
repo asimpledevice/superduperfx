@@ -673,6 +673,35 @@ summary; kept for later, marked where we have not checked it ourselves).*
     finer rule is ever found. Mapped code needs TLB entries (32, shared
     with ROM paging) and a TLB miss costs far more than a cache miss.
 
+*A second summary (owner, 2026-11-25), on build-to-build layout noise.*
+Its premise is a hot set that fits beside everything else: pin 12-16 KB of
+routines and keep all other code off their lines. Ours does not fit (the
+emulation stage misses 20,055 lines a frame even with a fully associative
+cache), so the pinning schemes come out as the fixed split the what-ifs
+already rejected. What it adds:
+- *Three ways to keep other code off chosen lines:* holes in the link
+  layout (other code skips the same 12 KB of every 16 KB), TLB page
+  colours (as above), and filling a buffer's lines with `CACHE Fill` and
+  never running anything else at those indices. All three are the split.
+- *`CACHE Fill` before a loop* saves the first pass's misses only; ours
+  are steady-state.
+- *`-falign-functions=32` with `-ffunction-sections`:* a function starts
+  on a line, so an edit elsewhere cannot change how it straddles lines.
+  It costs up to 28 bytes a function, and capacity is 56% of our misses;
+  `icache_order.ld` already fixes the placed functions' addresses and
+  `check_placement.py` warns when one moves. Worth one measurement on the
+  placed set only (aligning what the order file lists), since that is
+  where the 8.3 -> 11.5 ms swing of the PPU stage came from.
+- *Wrong for this CPU:* it says the VR4300 has performance counters. It
+  has none; Count (and ares's profiler) is what there is.
+- *A candidate it suggests without saying so:* code we place at run time
+  -- the code-cache modules, the SPC translator's cache, the 65816 JIT's
+  -- gets its cache index from the address we load it at, with no TLB.
+  The profile names the pairs that evict each other (apu_runCycles_native
+  and spc_dbt_run, _interp_run_core and bridge_lean_run), so the loader
+  could choose a module's offset in 16 KB to miss the engine's hottest
+  lines. Not tried.
+
 See `PPU_DESIGN.md` ("Step 4: the scene builder", "The RSP must never wait
 on the RDP mid-command").
 
