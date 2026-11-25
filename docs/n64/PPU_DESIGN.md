@@ -667,11 +667,13 @@ None of the three games shows mode 7's rotation, EXTBG, direct colour or
 modes 2-6, so the comparison needed its own pictures.
 `n64/tools/ppu_test_rom.py` writes a LoROM image of generated data only:
 pseudo-random VRAM, CGRAM and OAM, a short loop, and a script of register
-writes a frame -- 25 scenes of 12 frames (mode 7: plain, zoom, rotation,
+writes a frame -- 30 scenes of 12 frames (mode 7: plain, zoom, rotation,
 flips and the large field, negative positions, sprites with windows,
 fixed-colour maths, the subscreen, mosaic, EXTBG, direct colour; modes 0-6;
 mode 1 with mosaic; mode 2 with 16x16 tiles and windows; modes 4-6 with
-mosaic, windows and colour math; mode 3 with direct colour). `n64/tools/ppu_test.sh`
+mosaic, windows and colour math; 16x16 tiles in mode 3 and under a mosaic;
+direct colour in modes 3 and 4; SETINI's bits; two-screen colour math in
+modes 0-3 and 7). `n64/tools/ppu_test.sh`
 builds the runner around it with RENDER=2 and prints, a scene, the RDP
 lines, the software lines with their reasons, and the frames that differ.
 
@@ -716,16 +718,55 @@ screen takes the odd columns, the subscreen and a mosaic layer the even
 ones); a mosaic exists in modes 4-6 (by block origin) and not in 2 and 3.
 `bg_px_row` fetches a tile again only when the pixel leaves it.
 
-Still software lines: direct colour in modes 3 and 4, 16x16 tiles in
-mode 3, 16x16 tiles with a mosaic in modes 0 and 1, interlace and
-pseudo-hires (SETINI), and what no mode draws on the RDP yet (two-screen
-colour math on a tile layer, the subscreen's sprites under backdrop math).
-
-Test ROM (25 scenes): all of modes 0-7 are RDP lines, no frame differing;
-the software lines left are mode 3 with direct colour and the lines of the
-`-mix` scenes whose colour math needs both screens.
-
 Cost is not measured against a game: none of the three uses these modes.
 The builders are plain C at a pixel or a tile a step; if a game leans on
 one, that builder is the place to look (the RSP, or tile-at-a-time code
 as `bg8_row`).
+
+## The last software lines (2026-11-25)
+
+What still fell back after modes 2-6, and what became of each:
+
+| case | now |
+|---|---|
+| 16x16 tiles in mode 3; with a mosaic in modes 0 and 1 | `bg_big_row` (as `PpuDrawBackgroundBig`, `PpuDrawBackground_8bpp`): any 16x16-tile layer of a line drawn from planes |
+| direct colour, mode 3 | nothing to do: the software line renderer has no direct colour in mode 3, so the RDP line already matches it |
+| direct colour, mode 4 | `N64PPU_SEL_M7D` when the line's BG1 tiles have palette number 0 (`bg_px_row` run dry tells); another palette number: software line (`N64PPU_WHY_DIRECT_COLOR`), since the colour takes three bits from it and a plane byte has no room |
+| pseudo-hires | ignored, as the software PPU's 256-wide picture ignores it |
+| interlace | only modes 5 and 6 change (`bg_px_row`: the field's rows) |
+| OBJ interlace | `expand_obj` (half-height sprites, every other row); such lines take sprites from planes, not the scene |
+| colour math with a colour from each screen | composed lines, below |
+
+**Composed lines (`N64PPU_LINE_COMPOSE`).** Layer math against a composed
+subscreen, and backdrop math with sprites on the subscreen, need two
+colours for a pixel, and the RDP's own add and subtract are not exact
+(page 5 of rdptest: only its 50% blend is). So the RDP does not combine
+them. Such a line gets every layer of both screens as plane rows (as a
+mosaic line does; sprites from `expand_obj`, the subscreen's too) and
+palettes of the 15-bit colours themselves (`kTlutRaw`). At draw time
+`n64_ppu_compose_line` finds each screen's top pixel -- eight pixels at a
+time, the top order entry first, words already full skipped -- then does
+the software PPU's math and brightness a pixel, and the row goes to the
+RDP as a 16-bit strip, the way a software line does. `N64PPU_COMPOSE=0`
+keeps the software lines.
+
+It is CPU work, and it reads the RSP's rows through the data cache (the
+lines are dropped again after). Measured on the test ROM's
+`math-two-screens` scene, which is the worst case (noise in every layer
+of both screens, so about 24 rows are read a line): 205 composed lines
+cost about 0.25 ms each for the top pixels and 0.22 ms for the pixel
+loop (`-DN64_COMPOSE_PROF`), and the frame's PPU and present time is
+175 ms against 225 ms with software lines. A real picture has few layers
+with pixels on a line and mostly opaque ones, so the first part shrinks;
+the second does not. No test game shows more than a few such lines (SMW:
+the title's opening, map lines with a sprite of palettes 4-7), so the
+gain in a game is still to measure when one does.
+The next step, if a game needs it: the same two loops on the RSP, which
+has the rows in reach, clamps in one instruction, and runs beside the
+CPU.
+
+Still software lines: mode 4 direct colour with a palette number other
+than 0, and a frame that runs out of palettes (`N64PPU_WHY_PALETTES`).
+
+Test ROM (30 scenes): no frame differing; software lines only in
+`mode4-direct`'s frames that use every palette number.

@@ -164,6 +164,17 @@ static void present_rdp_frame(uint32_t frame, const char *line) {
                        (unsigned long)frame, s_rdp_frame->rdp_lines,
                        s_rdp_frame->software_lines, s_rdp_frame->black_lines,
                        (unsigned long)s_rdp_frame->fallback_reasons, diff, s_rdp_frame->compose_lines);
+#ifdef N64_COMPOSE_PROF
+  { extern uint32_t g_compose_prof[4];
+    if (frame % 60 == 0 && g_compose_prof[3]) {
+      const uint32_t n = g_compose_prof[3];
+      n64_platform_log("[compose] %lu lines: top pixels %lu, pixel loop %lu, cache %lu ticks a line\n", (unsigned long)n,
+                       (unsigned long)(g_compose_prof[0] / n), (unsigned long)(g_compose_prof[1] / n),
+                       (unsigned long)(g_compose_prof[2] / n));
+      g_compose_prof[0] = g_compose_prof[1] = g_compose_prof[2] = g_compose_prof[3] = 0;
+    }
+  }
+#endif
 #if N64PPU_SCENE
   { /* Scene sprites: lines drawn from strips / from planes, rectangles. */
     extern uint32_t g_scene_obj_lines, g_scene_obj_plane_lines, g_scene_obj_rects, g_scene_mode_passes[8];

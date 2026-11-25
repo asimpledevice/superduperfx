@@ -1995,6 +1995,81 @@ static void line_sprites(N64PpuFrame *f, const Ppu *ppu, N64PpuLine *L, int line
  * again (n64_bgrsp_cpu_wrote; they are clean). */
 static inline bool row_bit(const uint32_t *bits, int r) { return (bits[r >> 5] >> (r & 31)) & 1; }
 
+/* One screen's top pixels for the span [x0, x1): for each pixel the plane
+ * byte (idx) and the number of the order entry it came from, counted from
+ * 1 (ent; 0: no layer, the backdrop). Eight pixels at a time, the top
+ * entry first, and a word whose pixels are all found is not looked at
+ * again. tls[e] is entry e's palette, objs bit e set for a sprite entry;
+ * returns the planes read, as bits. */
+#define C8(b) ((uint64_t)(b) * 0x0101010101010101ull)
+static unsigned compose_screen(const N64PpuFrame *f, const N64PpuLine *L, int r, int x0, int x1, bool sub,
+                               unsigned layers, unsigned hide, uint64_t *idx, uint64_t *ent,
+                               const uint16_t **tls, unsigned *objs) {
+  const int j0 = x0 >> 3, j1 = (x1 + 7) >> 3;
+  uint64_t done[32];
+  for (int j = j0; j < j1; ++j) {
+    /* the span's pixels of word j (the first pixel is the top byte) */
+    const int a = x0 > j * 8 ? x0 - j * 8 : 0, b = x1 < j * 8 + 8 ? x1 - j * 8 : 8;
+    uint64_t in = ~0ull >> (a * 8);
+    if (b < 8) in &= ~0ull << ((8 - b) * 8);
+    done[j] = ~in;
+    idx[j] &= ~in;
+    ent[j] &= ~in;
+  }
+  int n = 0;
+  while (kN64PpuOrder[L->order][n] >= 0) ++n;
+  unsigned read = 0;
+  for (int e = n; e > 0; --e) {
+    const int o = kN64PpuOrder[L->order][e - 1];
+    int p = o & 0xf;
+    const int layer = n64ppu_plane_layer(p);
+    const int sel = n64ppu_entry_sel(L->order, o);
+    tls[e] = f->tlut[L->tl_raw[sel]];
+    if (p >= N64PPU_OBJ0) *objs |= 1u << e;
+    if (!(layers & (1u << layer)) || (hide & (1u << layer))) continue;
+    if (sub && p < N64PPU_OBJ0) p = p - N64PPU_BG1 + N64PPU_SUB_BG1;
+    if (!row_bit((o & N64PPU_HI) ? f->rows_hi[p] : f->rows[p], r)) continue;
+    /* Opaque: colour bits (cm) not 0, and bit 7 as the selector wants it
+     * (hx: 0 set, 0x80 clear; dc: either). sel_source. */
+    uint64_t cm, hx = 0, dc = 0;
+    switch (sel) {
+      case N64PPU_SEL_LO16: cm = C8(0x0f); hx = C8(0x80); break;
+      case N64PPU_SEL_HI16: cm = C8(0x0f); break;
+      case N64PPU_SEL_LO4: cm = C8(0x03); hx = C8(0x80); break;
+      case N64PPU_SEL_HI4: cm = C8(0x03); break;
+      case N64PPU_SEL_M7: case N64PPU_SEL_M7D: cm = C8(0xff); dc = C8(0x80); break;
+      case N64PPU_SEL_M7E_LO: cm = C8(0x7f); hx = C8(0x80); break;
+      case N64PPU_SEL_M7E_HI: cm = C8(0x7f); break;
+      default: cm = C8(0x0f); break;   /* OBJ */
+    }
+    const uint8_t *src = f->plane[p] + (size_t)r * N64PPU_STRIDE + N64PPU_PAD;
+    const uint64_t eid = C8(e);
+    read |= 1u << p;
+    for (int j = j0; j < j1; ++j) {
+      const uint64_t d = done[j];
+      if (d == ~0ull) continue;
+      uint64_t w;
+      memcpy(&w, src + j * 8, 8);
+      const uint64_t t = w & cm;
+      uint64_t m = (((t & C8(0x7f)) + C8(0x7f)) | t) & ((w ^ hx) | dc) & C8(0x80);
+      m = (m | (m - (m >> 7))) & ~d;   /* 0x80 -> 0xff a byte, without a multiply */
+      if (!m) continue;
+      idx[j] |= w & m;
+      ent[j] |= eid & m;
+      done[j] = d | m;
+    }
+  }
+  return read;
+}
+
+#ifdef N64_COMPOSE_PROF   /* ticks (half the CPU clock) in: 0 the screens' top pixels, 1 the pixel loop, 2 dropping cache lines; 3 lines */
+uint32_t g_compose_prof[4];
+static inline uint32_t cp_now(void) { uint32_t v; __asm__ volatile("mfc0 %0, $9" : "=r"(v)); return v; }
+#define CP(i, t0) (g_compose_prof[i] += cp_now() - (t0))
+#else
+#define cp_now() 0u
+#define CP(i, t0) ((void)(t0))
+#endif
 __attribute__((noinline)) void n64_ppu_compose_line(const N64PpuFrame *f, int r, uint16_t *out) {
   const N64PpuLine *L = &f->line[f->ref[r]];
   static uint8_t s_tab[2][64];
@@ -2006,70 +2081,43 @@ __attribute__((noinline)) void n64_ppu_compose_line(const N64PpuFrame *f, int r,
       s_tab[1][v] = (uint8_t)bright(v, L->c_bright, true);
     }
   }
-  uint32_t mainb[256];
-  uint16_t subb[256];
+  uint64_t midx[32], ment[32], sidx[32], sent[32];
+  const uint16_t *tls[16];
+  unsigned objs = 0, read = 0;
   const bool addsub = (L->c_flags & 8) != 0, subtract = (L->c_flags & kMathSubtract) != 0;
   const bool halfc = (L->c_flags & kMathHalf) != 0;
   const unsigned fr = L->c_fixed & 31, fg = (L->c_fixed >> 5) & 31, fb = (L->c_fixed >> 10) & 31;
+  const unsigned bd = L->c_backdrop;
+  /* The order entries whose layer has math (bit e; bit 0: the backdrop). */
+  unsigned emath = (L->c_math & 0x20) ? 1u : 0;
+  for (int e = 1; kN64PpuOrder[L->order][e - 1] >= 0; ++e)
+    if (L->c_math & (1u << n64ppu_plane_layer(kN64PpuOrder[L->order][e - 1] & 0xf))) emath |= 1u << e;
   for (int k = 0; k < L->nspans; ++k) {
     const N64PpuSpan *sp = &L->spans[k];
     const int x0 = sp->x0, x1 = sp->x1;
-    const uint32_t bd = (uint32_t)L->c_backdrop << 1 | 1u | ((sp->math && (L->c_math & 0x20)) ? 0x10000u : 0);
-    for (int x = x0; x < x1; ++x) mainb[x] = bd;
-    bool any_math = (bd >> 16) != 0;
-    for (const int8_t *o = kN64PpuOrder[L->order]; *o >= 0; ++o) {
-      const int p = *o & 0xf;
-      const int layer = n64ppu_plane_layer(p);
-      if (!(L->main_layers & (1 << layer)) || (sp->hide & (1 << layer))) continue;
-      if (!row_bit((*o & N64PPU_HI) ? f->rows_hi[p] : f->rows[p], r)) continue;
-      const uint16_t *tl = f->tlut[L->tl_raw[n64ppu_entry_sel(L->order, *o)]];
-      const uint8_t *src = f->plane[p] + (size_t)r * N64PPU_STRIDE + N64PPU_PAD;
-      const uint32_t fl = (sp->math && (L->c_math & (1 << layer))) ? 0x10000u : 0;
-      if (p >= N64PPU_OBJ0) {
-        for (int x = x0; x < x1; ++x) {
-          const unsigned b = src[x];
-          const uint32_t e = tl[b];
-          if (e & 1) mainb[x] = e | (b >= 192 ? fl : 0);
-        }
-      } else {
-        for (int x = x0; x < x1; ++x) {
-          const uint32_t e = tl[src[x]];
-          if (e & 1) mainb[x] = e | fl;
-        }
-      }
-      any_math |= fl != 0;
-    }
-    const bool sub = addsub && any_math && L->sub_layers;
-    if (sub) {
-      memset(subb + x0, 0, (size_t)(x1 - x0) * 2);
-      for (const int8_t *o = kN64PpuOrder[L->order]; *o >= 0; ++o) {
-        int p = *o & 0xf;
-        const int layer = n64ppu_plane_layer(p);
-        if (!(L->sub_layers & (1 << layer)) || (sp->hide_sub & (1 << layer))) continue;
-        if (p < N64PPU_OBJ0) p = p - N64PPU_BG1 + N64PPU_SUB_BG1;
-        if (!row_bit((*o & N64PPU_HI) ? f->rows_hi[p] : f->rows[p], r)) continue;
-        const uint16_t *tl = f->tlut[L->tl_raw[n64ppu_entry_sel(L->order, *o)]];
-        const uint8_t *src = f->plane[p] + (size_t)r * N64PPU_STRIDE + N64PPU_PAD;
-        for (int x = x0; x < x1; ++x) {
-          const uint16_t e = tl[src[x]];
-          if (e & 1) subb[x] = e;
-        }
-      }
-    }
+    uint32_t t0 = cp_now();
+    read |= compose_screen(f, L, r, x0, x1, false, L->main_layers, sp->hide, midx, ment, tls, &objs);
+    const unsigned em = sp->math ? emath : 0;
+    const bool sub = addsub && em && L->sub_layers;
+    if (sub) read |= compose_screen(f, L, r, x0, x1, true, L->sub_layers, sp->hide_sub, sidx, sent, tls, &objs);
+    CP(0, t0); t0 = cp_now();
     const bool clip = sp->clip != 0;
     const uint8_t *const tab_sub = s_tab[halfc && !clip];              /* with a subscreen pixel */
     const uint8_t *const tab_fix = s_tab[halfc && !clip && !addsub];   /* with the fixed colour */
+    const uint8_t *const mi = (const uint8_t *)midx, *const me = (const uint8_t *)ment;
+    const uint8_t *const si = (const uint8_t *)sidx, *const se = (const uint8_t *)sent;
     for (int x = x0; x < x1; ++x) {
-      const uint32_t m = mainb[x];
-      unsigned cr = 0, cg = 0, cb = 0;
-      if (!clip) { cr = (m >> 1) & 31; cg = (m >> 6) & 31; cb = (m >> 11) & 31; }
+      const unsigned e = me[x], i = mi[x];
+      unsigned c = e ? (unsigned)tls[e][i] >> 1 : bd;
+      if (clip) c = 0;
+      unsigned cr = c & 31, cg = (c >> 5) & 31, cb = (c >> 10) & 31;
       const uint8_t *tab = s_tab[0];
-      if (m >> 16) {
+      if (((em >> e) & 1) && (!((objs >> e) & 1) || i >= 192)) {   /* (sprites: palettes 4-7) */
         unsigned r2 = fr, g2 = fg, b2 = fb;
         tab = tab_fix;
-        if (sub && (subb[x] & 1)) {
-          const unsigned s2 = subb[x];
-          r2 = (s2 >> 1) & 31; g2 = (s2 >> 6) & 31; b2 = (s2 >> 11) & 31;
+        if (sub && se[x]) {
+          const unsigned s2 = (unsigned)tls[se[x]][si[x]] >> 1;
+          r2 = s2 & 31; g2 = (s2 >> 5) & 31; b2 = (s2 >> 10) & 31;
           tab = tab_sub;
         }
         if (subtract) {
@@ -2080,14 +2128,23 @@ __attribute__((noinline)) void n64_ppu_compose_line(const N64PpuFrame *f, int r,
       }
       out[x] = (uint16_t)((unsigned)tab[cr] << 11 | (unsigned)tab[cg] << 6 | (unsigned)tab[cb] << 1 | 1u);
     }
+    CP(1, t0);
   }
-#if N64_RSPBG
-  /* Drop the BG rows' cache lines (every plane below OBJ0 and the subscreen's). */
-  for (int p = 0; p < N64PPU_PLANES; ++p)
-    if (p < N64PPU_OBJ0 || p >= N64PPU_SUB_BG1)
-      n64_bgrsp_cpu_wrote(f->plane[p] + (size_t)r * N64PPU_STRIDE, N64PPU_STRIDE);
+  const uint32_t t2 = cp_now();
+#ifdef N64_COMPOSE_PROF
+  g_compose_prof[3]++;
 #endif
+#if N64_RSPBG
+  /* Drop the cache lines of the BG rows read (the RSP's to write). */
+  for (int p = 0; p < N64PPU_PLANES; ++p)
+    if ((read & (1u << p)) && (p < N64PPU_OBJ0 || p >= N64PPU_SUB_BG1))
+      n64_bgrsp_cpu_wrote(f->plane[p] + (size_t)r * N64PPU_STRIDE, N64PPU_STRIDE);
+#else
+  (void)read;
+#endif
+  CP(2, t2);
 }
+#undef C8
 
 #if N64PPU_SCENE
 /* VRAM blocks stored to up to the last snapshot and not yet taken. */
