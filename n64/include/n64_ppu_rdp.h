@@ -139,6 +139,7 @@ typedef struct N64PpuLine {
    * bit 4 is OBJ), kMath* and 4 for the subscreen as second colour, and
    * the brightness. A span's math is 3 where the colour window allows math. */
   uint8_t tl_raw[N64PPU_SELS];
+  uint8_t tl_cgram;                           /* CGRAM itself, 256 15-bit colours (the RSP's table: n64/rspcmp) */
   uint16_t c_backdrop, c_fixed;
   uint8_t c_math, c_flags, c_bright;
 } N64PpuLine;

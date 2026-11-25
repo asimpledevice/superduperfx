@@ -178,7 +178,7 @@ static inline void clear_if_dirty(N64PpuFrame *f, int plane, int r) {   /* OBJ p
 
 /* ---- Palettes ------------------------------------------------------------ */
 
-enum { kTlutNormal = 1, kTlutMath = 2, kTlutFixed = 3, kTlutRaw = 4 };
+enum { kTlutNormal = 1, kTlutMath = 2, kTlutFixed = 3, kTlutRaw = 4, kTlutCgram = 5 };
 enum { kMathSubtract = 1, kMathHalf = 2, kMathClip = 4 };
 
 /* Brightness applied to a 0..62 colour-math sum, as the software PPU's
@@ -248,6 +248,10 @@ static uint8_t get_tlut_slow(N64PpuFrame *f, const Ppu *ppu, uint8_t kind, uint8
   s_state.keys[i] = key;
   uint16_t *t = f->tlut[i];
   const unsigned b = key.brightness;
+  if (kind == kTlutCgram) {
+    for (int c = 0; c < 256; ++c) t[c] = ppu->cgram[c] & 0x7fff;
+    return (uint8_t)i;
+  }
   for (int c = 0; c < 256; ++c) {
     const int src = sel_source(sel, c);
     if (src < 0) { t[c] = 0; continue; }
@@ -271,7 +275,7 @@ static uint8_t get_tlut_slow(N64PpuFrame *f, const Ppu *ppu, uint8_t kind, uint8
 /* Most lines reuse the previous line's palettes: remember the last result per
  * (kind, selector, flags) and skip the pool search when nothing moved. */
 static struct { uint32_t count; uint16_t backdrop; uint8_t brightness, valid, slot; }
-    s_tlut_memo[4][N64PPU_SELS][8];
+    s_tlut_memo[5][N64PPU_SELS][8];
 
 static uint8_t get_tlut(N64PpuFrame *f, const Ppu *ppu, uint8_t kind, uint8_t sel,
                         uint16_t backdrop, uint8_t flags, bool *full) {
@@ -1118,6 +1122,7 @@ static __attribute__((noinline)) uint32_t line_palettes(N64PpuFrame *f, const Pp
   if (compose) key.pad |= 64;
   if (s_state.linepal.valid && n64_mem_eq(&s_state.linepal.key, &key, sizeof key)) {
     memcpy(L->tl_raw, s_state.linepal.line.tl_raw, sizeof L->tl_raw);
+    L->tl_cgram = s_state.linepal.line.tl_cgram;
     memcpy(L->tl_main, s_state.linepal.line.tl_main, sizeof L->tl_main);
     memcpy(L->tl_math, s_state.linepal.line.tl_math, sizeof L->tl_math);
     memcpy(L->tl_math_clip, s_state.linepal.line.tl_math_clip, sizeof L->tl_math_clip);
@@ -1151,6 +1156,7 @@ static __attribute__((noinline)) uint32_t line_palettes(N64PpuFrame *f, const Pp
       /* The colours themselves: the CPU combines them (n64_ppu_compose_line). */
       for (int sel = 0; sel < N64PPU_SELS; ++sel)
         if (SEL_USED(sel)) L->tl_raw[sel] = get_tlut(f, ppu, kTlutRaw, (uint8_t)sel, 0, 0, &full);
+      L->tl_cgram = get_tlut(f, ppu, kTlutCgram, 0, 0, 0, &full);
     } else {
     for (int sel = sel0; sel < N64PPU_SELS; ++sel)
       if (SEL_USED(sel)) L->tl_main[sel] = get_tlut(f, ppu, kTlutNormal, (uint8_t)sel, 0, 0, &full);

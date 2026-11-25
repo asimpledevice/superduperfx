@@ -37,6 +37,9 @@ static bool rows_any(const uint32_t *bits, int a, int b) {
 }
 
 static uint16_t s_sw16[N64PPU_LINES * 256] __attribute__((aligned(16)));
+#if N64_COMPOSE_RSP
+#include "cmp_rsp.h"
+#endif
 
 #ifdef N64_SCENE_LOADSTAT
 static bool s_ls_dirty = true;
@@ -668,6 +671,11 @@ int n64_ppu_draw_and_show(const N64PpuFrame *f, const char *status, int compare_
 #if N64PPU_SCENE
   scene_frame_begin();
 #endif
+#if N64_COMPOSE_RSP
+  { static bool s_cmp_init;
+    if (!s_cmp_init) { n64_cmprsp_init(); s_cmp_init = true; }
+    n64_cmprsp_frame_begin(); }
+#endif
   PP_ADD(0, pt); pt = PP_T();
   data_cache_hit_writeback((void *)f->tlut, sizeof(f->tlut[0]) * (size_t)f->tlut_count);
 
@@ -697,6 +705,57 @@ int n64_ppu_draw_and_show(const N64PpuFrame *f, const char *status, int compare_
     else if (L->kind == N64PPU_LINE_COMPOSE) {
       /* (the rows the RSP made are finished: n64_ppu_build_finish) */
       const uint32_t st = SPLIT_T();
+#if N64_COMPOSE_RSP
+      /* On the RSP (n64/rspcmp), ahead of the strips in the queue; a band it
+       * cannot take is the CPU's. The RSP writes the rows: no line of them
+       * may sit in the CPU's cache with other contents. */
+      data_cache_hit_writeback_invalidate(s_sw16 + (size_t)a * 256, (size_t)(b - a) * 512);
+#ifdef N64_COMPOSE_RSPTIME   /* measurement: the RSP's time for a band, the queue empty before it */
+      rspq_wait();
+      const uint32_t rt0 = TICKS_READ();
+#endif
+      bool took = n64_cmprsp_band(f, a, b, s_sw16);
+#ifdef N64_COMPOSE_RSPTIME
+      if (took) {
+        static uint32_t s_ticks, s_lines, s_frames_logged;
+        rspq_wait();
+        s_ticks += TICKS_READ() - rt0;
+        s_lines += (uint32_t)(b - a);
+        if (s_lines >= 8000) {
+          n64_platform_log("[cmprsp] %lu lines, %lu us a line on the RSP (waited for)\n", (unsigned long)s_lines,
+                           (unsigned long)(TICKS_TO_US((uint64_t)s_ticks) / s_lines));
+          s_ticks = s_lines = 0; (void)s_frames_logged;
+        }
+      }
+#endif
+#ifdef N64_COMPOSE_CHECK   /* the RSP's rows against the CPU's */
+      if (took) {
+        static int s_logged;
+        static uint32_t s_rows, s_bad;
+        rspq_wait();
+        data_cache_hit_invalidate(s_sw16 + (size_t)a * 256, (size_t)(b - a) * 512);
+        for (int r = a; r < b; ++r) {
+          uint16_t want[256];
+          n64_ppu_compose_line(f, r, want);
+          const uint16_t *got = s_sw16 + (size_t)r * 256;
+          int n = 0, first = -1;
+          for (int x = 0; x < 256; ++x) if (got[x] != want[x]) { if (first < 0) first = x; ++n; }
+          s_rows++;
+          if (n) {
+            s_bad++;
+            if (s_logged++ < 12)
+              n64_platform_log("[cmpcheck] row %d: %d differ, first x %d rsp %04x cpu %04x (order %d spans %d flags %x math %x)\n",
+                               r, n, first, got[first], want[first], f->line[f->ref[r]].order,
+                               f->line[f->ref[r]].nspans, f->line[f->ref[r]].c_flags, f->line[f->ref[r]].c_math);
+          }
+        }
+        if ((s_rows & 0xfff) < (uint32_t)(b - a))
+          n64_platform_log("[cmpcheck] %lu rows, %lu differ\n", (unsigned long)s_rows, (unsigned long)s_bad);
+        data_cache_hit_invalidate(s_sw16 + (size_t)a * 256, (size_t)(b - a) * 512);
+      }
+#endif
+      if (!took)
+#endif
       for (int r = a; r < b; ++r) n64_ppu_compose_line(f, r, s_sw16 + (size_t)r * 256);
       draw_rows16(a, b);
       SPLIT_ADD(2, st);

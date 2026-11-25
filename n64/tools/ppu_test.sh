@@ -10,7 +10,8 @@
 #   n64/tools/ppu_test.sh [SECONDS] [SCENES] [SEED] [EXTRA MAKE FLAGS]
 #
 # Needs N64_INST and the ares of n64/profile/ares_run.sh. Work files go to
-# $PPUTEST_DIR (default: a new directory under ${TMPDIR:-/tmp}); the build is
+# $PPUTEST_DIR (default: a new directory under ${TMPDIR:-/tmp}); $PPUTEST_CFLAGS
+# adds compiler flags; the build is
 # the working tree's n64/ (make clean first).
 set -u
 SECS=${1:-240}; SCENES=${2:-}; SEED=${3:-1}; FLAGS=${4:-}
@@ -20,7 +21,7 @@ OUT=${PPUTEST_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/ppu_test.XXXXXX")}
 mkdir -p "$OUT"
 python3 "$HERE/ppu_test_rom.py" "$OUT/ppu.sfc" --seed "$SEED" --scenes "$SCENES" --list > "$OUT/scenes.txt" || exit 1
 ( cd "$N64" && make clean >/dev/null &&
-  make -j"$(nproc)" JIT816=1 SCENE=1 RENDER=2 $FLAGS "EXTRA_CFLAGS=-DN64_RDP_LOG_ALL" ROM="$OUT/ppu.sfc" > "$OUT/make.log" 2>&1 ) ||
+  make -j"$(nproc)" JIT816=1 SCENE=1 RENDER=2 $FLAGS "EXTRA_CFLAGS=-DN64_RDP_LOG_ALL ${PPUTEST_CFLAGS:-}" ROM="$OUT/ppu.sfc" > "$OUT/make.log" 2>&1 ) ||
   { echo "build failed: $OUT/make.log"; exit 1; }
 cp "$N64/snesrecomp_interp.z64" "$OUT/ppu.z64"
 "$N64/profile/ares_run.sh" "$OUT/ppu.z64" "$OUT/run" "$SECS" >/dev/null 2>&1

@@ -159,6 +159,22 @@ $(BUILD_DIR)/rsp_bg.o: rspbg/rsp_bg.S rspbg/bg_rsp_layout.h rspbg/rsp_bg_full.in
 		BUILD_DIR=$(BUILD_DIR) RSPASFLAGS="$(N64_RSPASFLAGS)" $@
 endif
 
+# COMPOSE_RSP=1: lines with two-screen colour math are composed on the RSP
+# (n64/rspcmp); COMPOSE_RSP=0 keeps the CPU's n64_ppu_compose_line (the
+# reference).
+COMPOSE_RSP ?= 0
+ifeq ($(COMPOSE_RSP),1)
+N64_CFLAGS += -DN64_COMPOSE_RSP=1 -Irspcmp
+OBJS += $(BUILD_DIR)/rspcmp/cmp_rsp.o $(BUILD_DIR)/rsp_cmp.o
+$(BUILD_DIR)/rspcmp/cmp_rsp.o: rspcmp/cmp_rsp.c rspcmp/cmp_rsp.h rspcmp/cmp_rsp_layout.h
+	@mkdir -p $(dir $@)
+	@echo "    [CC] $<"
+	$(CC) -c $(CFLAGS) -o $@ $<
+$(BUILD_DIR)/rsp_cmp.o: rspcmp/rsp_cmp.S rspcmp/cmp_rsp_layout.h
+	@$(MAKE) --no-print-directory -f $(N64_INST)/include/n64.mk SOURCE_DIR=rspcmp \
+		BUILD_DIR=$(BUILD_DIR) RSPASFLAGS="$(N64_RSPASFLAGS)" $@
+endif
+
 # APUTIME=1: log the time spent in SPC catch-ups per frame ("[aputime]"),
 # which other code's layout disturbs less than the frame's run time.
 APUTIME ?= 0
