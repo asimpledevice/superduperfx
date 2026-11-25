@@ -913,6 +913,56 @@ from `(2cl + 15) / 30` by at most a level; a layer's mosaic as a
 point-sampled shrink and enlarge of the layer drawn off screen, instead of
 `bg_mosaic_row`. Both touch only frames in transition.
 
+**Done the same day (A1, the flags half of A3, the description half of
+A2), and what the numbers meant.** Without the time categories, which
+weigh on every `ppu_write`, SMW's level reads: replay 0.3 ms, description
+1.2, build 3.2, line state 2.0, HDMA 2.7 -- for 448 HDMA bytes a frame,
+one channel sending two bytes a line. So no part is slow at what it does;
+each costs about a thousand cycles a line for being called at all, five
+bodies of code taking turns 224 times. What was built:
+
+- *HDMA* (`dma.c`): a transfer from work RAM to PPU registers goes
+  straight to `ppu_write`; and it is not made when the channel sends the
+  bytes of its last transfer to registers nothing has written since
+  (`g_ppu_reg_stamp`) and whose write only stores the value (BGMODE,
+  BGnSC, NBA, the window, screen and colour-math registers: not the
+  write-twice scrolls and matrix, the memory ports, or MOSAIC). SMW: 446
+  of 448 bytes a frame.
+- *The description*: `ppu_write` counts its writes (`g_ppu_reg_writes`;
+  whatever replaces the register block without it -- the replay's start, a
+  load, a reset -- counts as writing all of it), and a line on which the
+  count and the three memory counters have not moved extends the band
+  without the compare.
+- *The state-only line*: `ppu_runLineState` answers from the sprite table
+  (`ppu_lineStateFast`) when the table is current and the frame's first
+  line has been through `PpuRunLineJob`.
+
+| us a frame, SMW level | before | after |
+|---|---|---|
+| replay | 290 | 280 |
+| description | 1,220 | 180 |
+| build | 3,220 | 2,820 |
+| line state | 2,070 | 940 |
+| HDMA | 2,670 | 800 |
+| the stage (with the timers) | 10,820 | 6,280 |
+
+The games' state hashes equal the build before, and RENDER=2 shows no
+differing frame in the three games or the test ROM. Each change has its
+reference behind a macro (`SNESRECOMP_HDMA_DIRECT`, `N64PPU_DESC_COUNT`,
+`SNESRECOMP_LINE_STATE_FAST`).
+
+Left: the build's 2.8 ms (the quiet line still goes through
+`line_sprites`: the per-frame sprite verdicts of A3 and the `ref`
+shortcut of A2), and the line state's and HDMA's remaining 0.9 and 0.8,
+which are the price of the calls. The step after those is the loop
+itself: replay, HDMA and the description for all 224 lines first, then
+the build from the bands, so each body of code runs once a frame instead
+of taking turns.
+
+**Fact F2/F3 in ares (rdptest page 8):** add and subtract in three parts,
+in place on the framebuffer, are right for all 1,024 pairs; in two parts
+1,023 (m = 31 counts as 30). Hardware photo pending.
+
 ### B. Two-screen colour math on the RDP
 
 Today the RSP composes these lines (n64/rspcmp): 0.14 ms of RSP time a
