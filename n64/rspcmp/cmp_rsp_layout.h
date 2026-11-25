@@ -12,7 +12,7 @@
 /* 0x20: eight u16, loaded as one vector */
 #define CMP_MPARAMS  0x20   /* e0 spans with math (bit k), e1 clipped spans, e2 the fixed colour,
                              * e3 1 to add / 0xffff to subtract, e4 2 * brightness,
-                             * e5 0xffff: halve with a subscreen pixel, e6: with the fixed colour */
+                             * e5 0x180: halve with a subscreen pixel (else 0), e6: with the fixed colour */
 #define CMP_BASES    0x30   /* u32[24] RDRAM address of the entry's plane row 0 + N64PPU_PAD */
 #define CMP_PARAMS   0x90   /* [24] eight u16 an entry (below) */
 #define CMP_SIZE     0x210

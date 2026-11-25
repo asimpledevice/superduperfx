@@ -110,8 +110,8 @@ bool n64_cmprsp_band(const N64PpuFrame *f, int a, int b, uint16_t *out) {
   put16(d + CMP_MPARAMS + 4, L->c_fixed);
   put16(d + CMP_MPARAMS + 6, (L->c_flags & 1) ? 0xffff : 1);
   put16(d + CMP_MPARAMS + 8, 2u * L->c_bright);
-  put16(d + CMP_MPARAMS + 10, half ? 0xffff : 0);
-  put16(d + CMP_MPARAMS + 12, (half && !addsub) ? 0xffff : 0);
+  put16(d + CMP_MPARAMS + 10, half ? 0x180 : 0);
+  put16(d + CMP_MPARAMS + 12, (half && !addsub) ? 0x180 : 0);
   data_cache_hit_writeback(d, CMP_SIZE);
   /* The sprites' plane rows are the CPU's: the RSP reads RDRAM. */
   for (int p = N64PPU_OBJ0; p <= N64PPU_OBJ3; ++p)

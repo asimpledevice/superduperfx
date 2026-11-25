@@ -345,6 +345,14 @@ def scenes(n):
         f.b(0x212E, 0x11 if k % 5 == 1 else 0x01); f.b(0x212F, 0x13 if k % 5 == 2 else 0x00)
         return f
 
+    # The common shape of it: one layer shown through another, whole screen.
+    @add('math-one-layer')
+    def _(k):
+        f = Frame(); base(f, 0x01, 0x01, 0x02)
+        f.w2(0x210D, 2 * k); f.w2(0x210E, k); f.w2(0x210F, 90 - 3 * k); f.w2(0x2110, 2 * k)
+        f.b(0x2130, 0x02); f.b(0x2131, [0x61, 0x21, 0xA1][k % 3])
+        return f
+
     @add('mode3-direct')
     def _(k):
         f = Frame(); base(f, 3, 0x13)

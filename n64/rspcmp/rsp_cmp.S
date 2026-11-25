@@ -23,6 +23,14 @@
 #    division as * 2185 >> 16 (exact for c < 32, l < 16); pack RGBA5551.
 #
 # Not here: direct colour (the CPU composes those lines).
+#
+# Timing. The RSP issues one scalar and one vector instruction a cycle at
+# best, and an instruction that reads a vector register stalls until three
+# cycles after the one that wrote it (a general register: two). So every
+# loop below works on several groups of pixels at once, a stage at a time
+# -- the same operation for each group, then the next -- which puts four
+# or more instructions between a result and its use. Compare and VMRG stay
+# together (VCC is one register, and no stall hangs on it).
 
 #include <rsp_queue.inc>
 #include "cmp_rsp_layout.h"
@@ -42,7 +50,7 @@ SAVED_UNUSED: .ds.b 8               # rspq needs a non-empty saved state
 RSPQ_EndSavedState
 
     .align 4
-CONSTS: .half 0x7fff, 31, 15, 2185, 0, 0, 0, 0
+CONSTS: .half 0x7fff, 0x1f00, 31, 15, 2185, 0x0100, 0xffff, 1
 
     .bss
     .align 4
@@ -59,6 +67,7 @@ ROW:    .ds.b 256
     .text
 
 # s3 return address   s7 row   s6 entries left (shifted)   s5 entry index
+# s2 the subscreen has entries
 # DMA helpers clobber t0, t2, at, s0, s4.
 
 CmpCmd_Line:
@@ -81,21 +90,27 @@ CmpCmd_Line:
     li t4, %lo(TAB) + 512
 1:  lqv $v01, 0x00, t3
     lqv $v02, 0x10, t3
+    lqv $v03, 0x20, t3
+    lqv $v04, 0x30, t3
     vor $v01, $v01, vshift8, e(0)
     vor $v02, $v02, vshift8, e(0)
-    addiu t3, t3, 32
-    sqv $v01, 0x1e0, t3
+    vor $v03, $v03, vshift8, e(0)
+    vor $v04, $v04, vshift8, e(0)
+    addiu t3, t3, 64
+    sqv $v01, 0x1c0, t3
+    sqv $v02, 0x1d0, t3
+    sqv $v03, 0x1e0, t3
     bne t3, t4, 1b
-    sqv $v02, 0x1f0, t3
+    sqv $v04, 0x1f0, t3
 
     # Planes: main = the backdrop (index 0) with its math flag, sub = nothing,
     # spans = span 0.
     lhu t3, %lo(DESC + CMP_BDFLAG)
     mtc2 t3, $v01.e0
-    vor $v01, vzero, $v01, e(0)
-    vor $v02, vzero, vshift, e(7)
     li t3, %lo(SPANP)
     li t4, %lo(SPANP) + 512
+    vor $v02, vzero, vshift, e(7)
+    vor $v01, vzero, $v01, e(0)
 1:  sqv $v02, 0x00, t3
     sqv $v01, 0x200, t3
     addiu t3, t3, 16
@@ -124,7 +139,7 @@ Spans_done:
 
     # ---- 1. top pixels ------------------------------------------------
     move s5, zero
-    srl t9, s6, 12                  # the subscreen's entries (for step 2)
+    srl s2, s6, 12                  # the subscreen's entries (for step 2)
 Entry_loop:
     beqz s6, Entries_done
     andi t3, s6, 1
@@ -148,27 +163,133 @@ Entry_loop:
     li t4, %lo(SUBP)
 1:  li t6, %lo(SPANP)
     li t7, %lo(ROW) + 256
-2:  luv $v01, 0, 0, t5              # byte << 7
-    lqv $v05, 0x00, t6
-    lqv $v06, 0x00, t4
-    vxor $v02, $v01, $v10, e(0)
-    vand $v02, $v02, $v10, e(1)
-    vmudl $v03, $v01, vshift8, e(5) # >> 6
-    vand $v03, $v03, $v10, e(3)
-    vmudl $v04, $v01, vshift8, e(3) # >> 4
-    vand $v04, $v04, $v10, e(4)
-    vor $v03, $v03, $v04
-    vor $v03, $v03, $v10, e(5)
-    vand $v05, $v05, $v10, e(6)
-    vge $v07, $v02, $v10, e(2)      # opaque
-    vmrg $v05, $v05, vzero          # ... its span bit, or 0
-    vne $v07, $v05, vzero           # opaque and shown in its span
-    vmrg $v06, $v03, $v06
-    addiu t5, t5, 8
-    addiu t6, t6, 16
-    sqv $v06, 0x00, t4
+    # One span and no per-pixel flag (every entry but the main screen's
+    # sprites with math): the short loop. 32 pixels a pass in both.
+    lhu t3, 8(t3)                   # e4
+    lhu t8, %lo(DESC + CMP_NSPANS)
+    addiu t8, t8, -1
+    or t3, t3, t8
+    bnez t3, 2f
+    nop
+4:
+    luv $v01, 0, 0, t5
+    luv $v02, 0, 8, t5
+    luv $v03, 0, 16, t5
+    luv $v04, 0, 24, t5
+    lqv $v05, 0x00, t4
+    lqv $v06, 0x10, t4
+    lqv $v07, 0x20, t4
+    lqv $v08, 0x30, t4
+    vxor $v11, $v01, $v10, e(0)
+    vxor $v12, $v02, $v10, e(0)
+    vxor $v13, $v03, $v10, e(0)
+    vxor $v14, $v04, $v10, e(0)
+    vmudl $v15, $v01, vshift8, e(5)
+    vmudl $v16, $v02, vshift8, e(5)
+    vmudl $v17, $v03, vshift8, e(5)
+    vmudl $v18, $v04, vshift8, e(5)
+    vand $v11, $v11, $v10, e(1)
+    vand $v12, $v12, $v10, e(1)
+    vand $v13, $v13, $v10, e(1)
+    vand $v14, $v14, $v10, e(1)
+    vand $v15, $v15, $v10, e(3)
+    vand $v16, $v16, $v10, e(3)
+    vand $v17, $v17, $v10, e(3)
+    vand $v18, $v18, $v10, e(3)
+    vor $v15, $v15, $v10, e(5)
+    vor $v16, $v16, $v10, e(5)
+    vor $v17, $v17, $v10, e(5)
+    vor $v18, $v18, $v10, e(5)
+    vge $v09, $v11, $v10, e(2)
+    vmrg $v05, $v15, $v05
+    vge $v09, $v12, $v10, e(2)
+    vmrg $v06, $v16, $v06
+    vge $v09, $v13, $v10, e(2)
+    vmrg $v07, $v17, $v07
+    vge $v09, $v14, $v10, e(2)
+    vmrg $v08, $v18, $v08
+    addiu t5, t5, 32
+    sqv $v05, 0x00, t4
+    sqv $v06, 0x10, t4
+    sqv $v07, 0x20, t4
+    sqv $v08, 0x30, t4
+    bne t5, t7, 4b
+    addiu t4, t4, 64
+    b Entry_next
+    nop
+2:
+    luv $v01, 0, 0, t5
+    luv $v02, 0, 8, t5
+    luv $v03, 0, 16, t5
+    luv $v04, 0, 24, t5
+    lqv $v05, 0x00, t4
+    lqv $v06, 0x10, t4
+    lqv $v07, 0x20, t4
+    lqv $v08, 0x30, t4
+    lqv $v19, 0x00, t6
+    lqv $v20, 0x10, t6
+    lqv $v21, 0x20, t6
+    lqv $v22, 0x30, t6
+    vxor $v11, $v01, $v10, e(0)
+    vxor $v12, $v02, $v10, e(0)
+    vxor $v13, $v03, $v10, e(0)
+    vxor $v14, $v04, $v10, e(0)
+    vmudl $v15, $v01, vshift8, e(5)
+    vmudl $v16, $v02, vshift8, e(5)
+    vmudl $v17, $v03, vshift8, e(5)
+    vmudl $v18, $v04, vshift8, e(5)
+    vmudl $v23, $v01, vshift8, e(3)
+    vmudl $v24, $v02, vshift8, e(3)
+    vmudl $v25, $v03, vshift8, e(3)
+    vmudl $v26, $v04, vshift8, e(3)
+    vand $v11, $v11, $v10, e(1)
+    vand $v12, $v12, $v10, e(1)
+    vand $v13, $v13, $v10, e(1)
+    vand $v14, $v14, $v10, e(1)
+    vand $v15, $v15, $v10, e(3)
+    vand $v16, $v16, $v10, e(3)
+    vand $v17, $v17, $v10, e(3)
+    vand $v18, $v18, $v10, e(3)
+    vand $v23, $v23, $v10, e(4)
+    vand $v24, $v24, $v10, e(4)
+    vand $v25, $v25, $v10, e(4)
+    vand $v26, $v26, $v10, e(4)
+    vand $v19, $v19, $v10, e(6)
+    vand $v20, $v20, $v10, e(6)
+    vand $v21, $v21, $v10, e(6)
+    vand $v22, $v22, $v10, e(6)
+    vor $v15, $v15, $v23
+    vor $v16, $v16, $v24
+    vor $v17, $v17, $v25
+    vor $v18, $v18, $v26
+    vor $v15, $v15, $v10, e(5)
+    vor $v16, $v16, $v10, e(5)
+    vor $v17, $v17, $v10, e(5)
+    vor $v18, $v18, $v10, e(5)
+    vne $v09, $v19, vzero
+    vmrg $v11, $v11, vzero
+    vne $v09, $v20, vzero
+    vmrg $v12, $v12, vzero
+    vne $v09, $v21, vzero
+    vmrg $v13, $v13, vzero
+    vne $v09, $v22, vzero
+    vmrg $v14, $v14, vzero
+    vge $v09, $v11, $v10, e(2)
+    vmrg $v05, $v15, $v05
+    vge $v09, $v12, $v10, e(2)
+    vmrg $v06, $v16, $v06
+    vge $v09, $v13, $v10, e(2)
+    vmrg $v07, $v17, $v07
+    vge $v09, $v14, $v10, e(2)
+    vmrg $v08, $v18, $v08
+    addiu t5, t5, 32
+    addiu t6, t6, 64
+    sqv $v05, 0x00, t4
+    sqv $v06, 0x10, t4
+    sqv $v07, 0x20, t4
+    sqv $v08, 0x30, t4
     bne t5, t7, 2b
-    addiu t4, t4, 16
+    addiu t4, t4, 64
 Entry_next:
     srl s6, s6, 1
     b Entry_loop
@@ -176,94 +297,187 @@ Entry_next:
 Entries_done:
 
     # ---- 2. colours ---------------------------------------------------
+    # (a value is the table offset as it stands). 8 pixels a pass; the
+    # stores go through t4, which runs 16 behind t5.
     li t5, %lo(MAINP)
+    li t4, %lo(MAINP) - 16
     li t6, %lo(MAINP) + 512
-    beqz t9, 1f
+    beqz s2, 1f
     nop
     li t6, %lo(MAINP) + 1024        # the subscreen's plane too
-1:  lhu t3, 0(t5)
-    lhu t4, 2(t5)
-    andi t3, t3, 0x3fe
-    andi t4, t4, 0x3fe
-    lhu t3, %lo(TAB)(t3)
-    lhu t4, %lo(TAB)(t4)
-    sh t3, 0(t5)
-    addiu t5, t5, 4
+1:  addiu t4, t4, 16
+    lhu a0, 0(t5)
+    lhu a1, 2(t5)
+    lhu a2, 4(t5)
+    lhu a3, 6(t5)
+    lhu v0, 8(t5)
+    lhu v1, 10(t5)
+    lhu k0, 12(t5)
+    lhu k1, 14(t5)
+    lhu a0, %lo(TAB)(a0)
+    lhu a1, %lo(TAB)(a1)
+    lhu a2, %lo(TAB)(a2)
+    lhu a3, %lo(TAB)(a3)
+    lhu v0, %lo(TAB)(v0)
+    lhu v1, %lo(TAB)(v1)
+    lhu k0, %lo(TAB)(k0)
+    lhu k1, %lo(TAB)(k1)
+    addiu t5, t5, 16
+    sh a0, 0(t4)
+    sh a1, 2(t4)
+    sh a2, 4(t4)
+    sh a3, 6(t4)
+    sh v0, 8(t4)
+    sh v1, 10(t4)
+    sh k0, 12(t4)
     bne t5, t6, 1b
-    sh t4, -2(t5)
+    sh k1, 14(t4)
 
     # ---- 3. math, brightness, RGBA5551 --------------------------------
+    # 16 pixels a pass: two groups, their three channels as six streams.
     li t3, %lo(CONSTS)
-    lqv $v20, 0x00, t3              # 0x7fff, 31, 15, 2185
+    lqv $v20, 0x00, t3              # 0x7fff, 0x1f00, 31, 15, 2185, 0x100, ones, 1
     li t3, %lo(DESC + CMP_MPARAMS)
     lqv $v21, 0x00, t3
-    vnor $v23, vzero, vzero         # ones
-    vor $v24, vzero, $v21, e(5)     # halve with a subscreen pixel
-    vor $v25, vzero, $v21, e(6)     # halve with the fixed colour
-    vor $v26, vzero, $v21, e(2)     # the fixed colour
     li t5, %lo(MAINP)
-    li t6, %lo(SPANP)
-    li t7, %lo(MAINP) + 512
-
-.macro CHANNEL a, b, place, pe
-    # \a: the main screen's channel, \b: the second colour's
-    vmudn \b, \b, $v21, e(3)        # +b or -b
-    vadd \b, \a, \b
-    vge \b, \b, vzero               # not below 0
-    vmudl $v14, \b, vshift8, e(0)   # >> 1
-    vxor $v14, $v14, \b
-    vand $v14, $v14, $v08
-    vxor \b, \b, $v14               # halved where asked
-    vlt \b, \b, $v20, e(1)          # not above 31
-    vxor \b, \b, \a
-    vand \b, \b, $v05
-    vxor \a, \a, \b                 # the result where the pixel has math
-    vmudn \a, \a, $v21, e(4)        # * 2 l
-    vadd \a, \a, $v20, e(2)         # + 15
-    vmudl \a, \a, $v20, e(3)        # / 30
-    vmudn \a, \a, \place, e(\pe)
-    vor $v15, $v15, \a
-.endm
-
+    li t7, 16
+    vor $v25, vzero, vshift, e(7)   # ones (the alpha bit)
+    vor $v24, vzero, $v21, e(5)     # halving with a subscreen pixel: 0x180 or 0
 Math_loop:
-    lqv $v01, 0x00, t5              # main: colour, bit 15 math
-    lqv $v02, 0x200, t5             # sub: colour, bit 15 present
-    lqv $v03, 0x00, t6              # span bit
-    vand $v04, $v03, $v21, e(1)
-    vne $v04, $v04, vzero
-    vmrg $v04, vzero, $v23          # ones where the span is not clipped
-    vand $v05, $v03, $v21, e(0)
-    vne $v05, $v05, vzero
-    vmrg $v05, $v01, vzero          # the main value where the span has math
-    vlt $v06, $v05, vzero
-    vmrg $v05, $v23, vzero          # ones where the pixel has math
-    vand $v11, $v02, $v20, e(0)     # the subscreen's colour
-    vlt $v06, $v02, vzero           # ... where it has a pixel
-    vmrg $v08, $v24, $v25           # halve?
-    vmrg $v11, $v11, $v26           # the second colour
-    vand $v08, $v08, $v04           # (never where clipped)
-    vand $v10, $v01, $v20, e(0)
-    vand $v10, $v10, $v04           # the main colour, black where clipped
-    vor $v15, vzero, vshift, e(7)   # alpha
-    # red
-    vand $v12, $v10, $v20, e(1)
-    vand $v13, $v11, $v20, e(1)
-    CHANNEL $v12, $v13, vshift8, 4  # << 11
-    # green
-    vmudl $v12, $v10, vshift8, e(4) # >> 5
-    vmudl $v13, $v11, vshift8, e(4)
-    vand $v12, $v12, $v20, e(1)
-    vand $v13, $v13, $v20, e(1)
-    CHANNEL $v12, $v13, vshift, 1   # << 6
-    # blue
-    vmudl $v12, $v10, vshift, e(1)  # >> 10
-    vmudl $v13, $v11, vshift, e(1)
-    CHANNEL $v12, $v13, vshift, 6   # << 1
-    addiu t6, t6, 16
-    sqv $v15, 0x00, t5
-    addiu t5, t5, 16
-    bne t5, t7, Math_loop
+    addiu t7, t7, -1
+    lqv $v03, -0x200, t5
+    lqv $v06, -0x1f0, t5
+    lqv $v01, 0x00, t5
+    lqv $v04, 0x10, t5
+    lqv $v02, 0x200, t5
+    lqv $v05, 0x210, t5
+    vand $v07, $v03, $v21, e(1)
+    vand $v08, $v06, $v21, e(1)
+    vand $v09, $v02, $v20, e(0)
+    vand $v10, $v05, $v20, e(0)
+    vand $v11, $v03, $v21, e(0)
+    vand $v12, $v06, $v21, e(0)
+    vand $v13, $v01, $v20, e(0)
+    vand $v14, $v04, $v20, e(0)
+    # ones where the span is not clipped
+    vne $v17, $v07, vzero
+    vmrg $v07, vzero, $v20, e(6)
+    vne $v17, $v08, vzero
+    vmrg $v08, vzero, $v20, e(6)
+    # the second colour and its halving, by whether the subscreen has a pixel
+    vlt $v17, $v02, vzero
+    vmrg $v09, $v09, $v21, e(2)
+    vmrg $v15, $v24, $v21, e(6)
+    vlt $v17, $v05, vzero
+    vmrg $v10, $v10, $v21, e(2)
+    vmrg $v16, $v24, $v21, e(6)
+    # the main value where the span has math
+    vne $v17, $v11, vzero
+    vmrg $v11, $v01, vzero
+    vne $v17, $v12, vzero
+    vmrg $v12, $v04, vzero
+    vand $v13, $v13, $v07
+    vand $v14, $v14, $v08
+    # no second colour and no halving where the pixel has no math
+    vlt $v17, $v11, vzero
+    vmrg $v09, $v09, vzero
+    vmrg $v15, $v15, vzero
+    vlt $v17, $v12, vzero
+    vmrg $v10, $v10, vzero
+    vmrg $v16, $v16, vzero
+    # the channels, times 256: red, green, blue of the main colour
+    vmudn $v18, $v13, vshift8, e(7)
+    vmudn $v19, $v13, vshift, e(4)
+    vmudl $v22, $v13, vshift8, e(1)
+    vmudn $v23, $v14, vshift8, e(7)
+    vmudn $v26, $v14, vshift, e(4)
+    vmudl $v27, $v14, vshift8, e(1)
+    vand $v15, $v15, $v07
+    vand $v16, $v16, $v08
+    vand $v18, $v18, $v20, e(1)
+    vand $v19, $v19, $v20, e(1)
+    vand $v22, $v22, $v20, e(1)
+    vand $v23, $v23, $v20, e(1)
+    vand $v26, $v26, $v20, e(1)
+    vand $v27, $v27, $v20, e(1)
+    # the factor: 0x100 keeps, 0x80 halves
+    vxor $v15, $v15, $v20, e(5)
+    vxor $v16, $v16, $v20, e(5)
+    vmudn $v28, $v09, vshift8, e(7)
+    vmudn $v29, $v09, vshift, e(4)
+    vmudl $v01, $v09, vshift8, e(1)
+    vmudn $v02, $v10, vshift8, e(7)
+    vmudn $v03, $v10, vshift, e(4)
+    vmudl $v05, $v10, vshift8, e(1)
+    vand $v28, $v28, $v20, e(1)
+    vand $v29, $v29, $v20, e(1)
+    vand $v01, $v01, $v20, e(1)
+    vand $v02, $v02, $v20, e(1)
+    vand $v03, $v03, $v20, e(1)
+    vand $v05, $v05, $v20, e(1)
+    vmudn $v28, $v28, $v21, e(3)
+    vmudn $v29, $v29, $v21, e(3)
+    vmudn $v01, $v01, $v21, e(3)
+    vmudn $v02, $v02, $v21, e(3)
+    vmudn $v03, $v03, $v21, e(3)
+    vmudn $v05, $v05, $v21, e(3)
+    vadd $v18, $v18, $v28
+    vadd $v19, $v19, $v29
+    vadd $v22, $v22, $v01
+    vadd $v23, $v23, $v02
+    vadd $v26, $v26, $v03
+    vadd $v27, $v27, $v05
+    vge $v18, $v18, vzero
+    vge $v19, $v19, vzero
+    vge $v22, $v22, vzero
+    vge $v23, $v23, vzero
+    vge $v26, $v26, vzero
+    vge $v27, $v27, vzero
+    vmudl $v18, $v18, $v15
+    vmudl $v19, $v19, $v15
+    vmudl $v22, $v22, $v15
+    vmudl $v23, $v23, $v16
+    vmudl $v26, $v26, $v16
+    vmudl $v27, $v27, $v16
+    vlt $v18, $v18, $v20, e(2)
+    vlt $v19, $v19, $v20, e(2)
+    vlt $v22, $v22, $v20, e(2)
+    vlt $v23, $v23, $v20, e(2)
+    vlt $v26, $v26, $v20, e(2)
+    vlt $v27, $v27, $v20, e(2)
+    # brightness
+    vmudn $v18, $v18, $v21, e(4)
+    vmudn $v19, $v19, $v21, e(4)
+    vmudn $v22, $v22, $v21, e(4)
+    vmudn $v23, $v23, $v21, e(4)
+    vmudn $v26, $v26, $v21, e(4)
+    vmudn $v27, $v27, $v21, e(4)
+    vadd $v18, $v18, $v20, e(3)
+    vadd $v19, $v19, $v20, e(3)
+    vadd $v22, $v22, $v20, e(3)
+    vadd $v23, $v23, $v20, e(3)
+    vadd $v26, $v26, $v20, e(3)
+    vadd $v27, $v27, $v20, e(3)
+    vmudl $v18, $v18, $v20, e(4)
+    vmudl $v19, $v19, $v20, e(4)
+    vmudl $v22, $v22, $v20, e(4)
+    vmudl $v23, $v23, $v20, e(4)
+    vmudl $v26, $v26, $v20, e(4)
+    vmudl $v27, $v27, $v20, e(4)
+    # RGBA5551
+    vmudn $v06, $v18, vshift8, e(4)
+    vmadn $v06, $v19, vshift, e(1)
+    vmadn $v06, $v22, vshift, e(6)
+    vmadn $v06, $v25, vshift, e(7)
+    vmudn $v04, $v23, vshift8, e(4)
+    vmadn $v04, $v26, vshift, e(1)
+    vmadn $v04, $v27, vshift, e(6)
+    vmadn $v04, $v25, vshift, e(7)
+    sqv $v06, 0x00, t5
     nop
+    sqv $v04, 0x10, t5
+    bnez t7, Math_loop
+    addiu t5, t5, 32
 
     # The row out.
     lw s0, %lo(DESC + CMP_OUT)
