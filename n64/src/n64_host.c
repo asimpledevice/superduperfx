@@ -79,6 +79,9 @@ void n64_ppu_desc_end(const struct Ppu *ppu);
 /* The beam driver's raster replay (snes_beam_frame_driver_draw_ppu_frame),
  * with each line expanded for the RDP and the software PPU run only where
  * needed. */
+#ifdef N64_PPUSTAGE_PROF
+static inline uint32_t ps_count(void) { uint32_t v; __asm__ volatile("mfc0 %0, $9" : "=r"(v)); return v; }
+#endif
 static void draw_frame_rdp(bool software_every_line) {
   snes_set_hdma_beam_enabled(g_snes, false);
   ppu_rasterRenderBegin(g_ppu);
@@ -91,17 +94,42 @@ static void draw_frame_rdp(bool software_every_line) {
     g_n64ppu_desc_live_pitch = g_ppu->renderPitch; }
 #endif
   n64_ppu_desc_begin(g_ppu);
+#ifdef N64_PPUSTAGE_PROF   /* where the stage's time goes, a part: us a frame, logged every 60 frames */
+#define PS_T() ps_count()
+#define PS_ADD(i, t0) (s_ps[i] += ps_count() - (t0))
+#define PS_US(t) ((unsigned long)((uint64_t)(t) * 64 / 3000 / 60))   /* Count: 46.875 MHz; a frame of 60 */
+  static uint32_t s_ps[6], s_ps_frames, s_ps_same, s_ps_lines;
+#else
+#define PS_T() 0u
+#define PS_ADD(i, t0) ((void)(t0))
+#endif
   for (int line = 1; line <= 224; line++) {
     uint8_t hdmaen;
+    uint32_t pt = PS_T();
     ppu_rasterApplyLine(g_ppu, line - 1);
     if (ppu_rasterTakeHdmaen(&hdmaen))
       dma_startDma(g_snes->dma, hdmaen, true);
+    PS_ADD(0, pt); pt = PS_T();
     const bool same = n64_ppu_desc_line(g_ppu, line);
+    PS_ADD(1, pt); pt = PS_T();
     const bool rdp_ok = n64_ppu_build_line(g_ppu, line, same);
+    PS_ADD(2, pt); pt = PS_T();
     if (software_every_line || !rdp_ok) ppu_runLine(g_ppu, line);
     else ppu_runLineState(g_ppu, line);
+    PS_ADD(3, pt); pt = PS_T();
     dma_doHdma(g_snes->dma);
+    PS_ADD(4, pt);
+#ifdef N64_PPUSTAGE_PROF
+    s_ps_same += same; s_ps_lines++;
+#endif
   }
+#ifdef N64_PPUSTAGE_PROF
+  if (++s_ps_frames == 60) {
+    n64_platform_log("[ppustage] us a frame: replay %lu, description %lu, build %lu, line state %lu, HDMA %lu; lines like the one above %lu%%\n",
+                     PS_US(s_ps[0]), PS_US(s_ps[1]), PS_US(s_ps[2]), PS_US(s_ps[3]), PS_US(s_ps[4]), (unsigned long)(s_ps_same * 100 / (s_ps_lines ? s_ps_lines : 1)));
+    memset(s_ps, 0, sizeof s_ps); s_ps_frames = s_ps_same = s_ps_lines = 0;
+  }
+#endif
   n64_ppu_build_end(g_ppu);
   n64_ppu_desc_end(g_ppu);
   ppu_rasterRenderEnd(g_ppu);

@@ -814,3 +814,170 @@ than 0, and a frame that runs out of palettes (`N64PPU_WHY_PALETTES`).
 
 Test ROM (31 scenes): no frame differing; software lines only in
 `mode4-direct`'s frames that use every palette number.
+## Plans: the CPU's per-line work, and colour math on the RDP (2026-11-25)
+
+Owner decisions this day: minute, documented picture differences are
+accepted for fades and mosaic in exchange for less CPU work; plan the
+elimination of the PPU stage's per-line work, and a path for two-screen
+colour math on the RDP.
+
+### A. The PPU stage on the CPU
+
+The stage replays the frame a line at a time (`draw_frame_rdp`,
+n64_host.c): journal -> registers, description, build, the software PPU's
+state-only line, HDMA; 224 times whatever the frame holds. Measured a part
+(`-DN64_PPUSTAGE_PROF`, ares, us a frame):
+
+| part | SMW, title | SMW, level | Joe & Mac 2, level | JM2, its mode 7 scene |
+|---|---|---|---|---|
+| replay (`ppu_rasterApplyLine`) | 420 | 540 | 450 | 3,500 |
+| description (`n64_ppu_desc_line`) | 840 | 1,390 | 780 | 1,760 |
+| build (`n64_ppu_build_line`) | 3,900 | 3,700 | 3,000 | 10,600 |
+| line state (`ppu_runLineState`) | 880 | 2,340 | 1,500 | 1,720 |
+| HDMA (`dma_doHdma`) | 1,200 | 5,460 | 560 | 920 |
+| lines equal to the line above | 99% | 99% | 99% | 55% |
+
+(The timers add to the stage: 14.7 ms with them against about 10 without
+in SMW's level, so read the columns as shares.) Two things the sampled
+profile of the 24th did not show: HDMA is the largest part in SMW's level,
+5.5 ms for writes that leave 99% of the lines as the line above; and
+replay proper is small.
+
+The idea for all three: a line on which nothing changed should cost
+almost nothing, and work that depends on OAM alone should be done once a
+frame.
+
+**A1. HDMA: a direct path, then no work for values that repeat.**
+- `dma_doHdma` moves each byte through `dma_transferByte`: the S-DD1
+  check, `snes_read` (the whole bus decode, the mapper, ROM paging), the
+  debug hook, `snes_writeBBus`. First find out what SMW's level does a
+  line (channels, bytes, direct or indirect, repeat or not): a counter a
+  frame, logged.
+- A channel's line as one call: resolve the table (and the indirect data)
+  to a host pointer once per table entry -- WRAM and ROM are both plain
+  memory to the host -- and write its 1 to 4 bytes with `ppu_write`
+  directly when the B address is a PPU register (it almost always is).
+  Anything else (S-DD1, a table that crosses a mapping, a B address
+  outside $2100-$213F) keeps today's path.
+- A mask in `Dma` of channels that are active and not terminated:
+  `dma_doHdma` returns at once on 0 and walks only the set bits.
+- Then, if the counter shows it: a repeat-mode channel that writes the
+  bytes it wrote on the line above to registers nothing else has written
+  since leaves the PPU as it was. That needs care with the write-twice
+  registers (a scroll's value depends on the latch), so it is an option
+  to measure after the direct path, not the first step.
+- `ppu_write` bumps one counter, `regWriteCount`: a line on which it has
+  not moved has the registers of the line above, with no comparison (A2
+  uses this).
+- Check: the state hashes of the three games (`gx.sh C`), which cover the
+  registers the game can read back, and RENDER=2.
+
+**A2. Description and build: bands, not lines.**
+- `n64_ppu_desc_line` compares the whole register block with the band's
+  on every line (its I-cache footprint alone was 1,165 misses a frame).
+  With `regWriteCount`, CGRAM's, VRAM's and OAM's counters unchanged since
+  the line above, extend the band and return true without the compare.
+- `n64_ppu_build_line` with `same`: when the line's sprite verdict equals
+  the line above's (A3 makes that a table lookup), set `ref[r] = ref[r-1]`
+  and return; no temporary line, no `line_sprites` call.
+- Lines drawn from planes (mode 7, mosaic, modes 2-6, composed lines) keep
+  their per-line row builders: their content is per line by nature.
+- Check: RENDER=2 on the games and the PPU test ROM (its scenes change
+  registers every frame, and `mosaic-windows` and `setini` mid-screen).
+
+**A3. Sprites: once a frame.**
+- OAM and the OBJ registers rarely change during a frame. When
+  `oamWriteCount` and OBSEL are what they were at the frame's first line,
+  one pass over the 224 lines computes what each line needs: the sprites
+  in range (already `s_obj_lines.mask`), the scene verdict
+  (`obj_line_scene`: 32 sprites, 34 tiles, priority conflicts), the first
+  sprite of the rotation, and the range-over and time-over flags that
+  `PpuRunLineJob` computes a line at a time through `ppu_evaluateSprites`
+  (they are a function of the same masks and tile counts).
+- The line loop then reads a byte a line; `ppu_runLineState` is not called
+  for lines the pass covered. A change of OAM or OBSEL mid-frame falls
+  back to the per-line code from that line on.
+- Check: the state hashes (the flags are readable at $213E), RENDER=2,
+  and the PPU test ROM's sprite scenes.
+
+Order: A1 (the largest part in SMW, and A2 and A3 use its counter), then
+A3 (the line state and most of the build's time on a quiet line are
+sprites), then A2; a measurement after each with `-DN64_PPUSTAGE_PROF`. Each is exact; none
+needs the tolerance.
+
+**What the tolerance buys (later, if fades or mosaic show up in a
+profile):** a brightness below 15 as one combiner multiply over the
+finished band (Kaze's "fades are a multiply over the frame") instead of
+palettes rebuilt for every brightness step -- the RDP rounds differently
+from `(2cl + 15) / 30` by at most a level; a layer's mosaic as a
+point-sampled shrink and enlarge of the layer drawn off screen, instead of
+`bg_mosaic_row`. Both touch only frames in transition.
+
+### B. Two-screen colour math on the RDP
+
+Today the RSP composes these lines (n64/rspcmp): 0.14 ms of RSP time a
+line, 32 ms for a full screen. Two ways to use the RDP were asked about.
+
+**B1. The RDP does the lookups, the RSP only the math: not recommended.**
+The RDP would composite each screen into a buffer and the RSP add the two
+rows. But the lookups are a third of the RSP's time a line (the scalar
+loop), the top-pixel search is already cheap in vectors, the RSP still
+needs to know which main pixels have math (the RDP's buffer has no spare
+bit: copy mode writes the palette entry, whose alpha bit must be 1 to be
+drawn at all), and the RSP would have to wait for the RDP mid-frame, which
+the design forbids. A third saved, for two more composites and a wait.
+
+**B2. All of it on the RDP: plausible, to be proven a fact at a time.**
+From the Majora's Mask filters (above): the framebuffer is a texture; two
+tiles give two inputs a pixel; the combiner is `(A - B) * C + D` with
+texture alpha usable on the colour side; a memory pass costs on the order
+of a millisecond. And from our hardware page 5: the blender's 50% is exact,
+the combiner's add is exact while the 5-bit sum stays below 47, its
+subtract while the difference stays above -16.
+
+1. *The main screen goes to the framebuffer as now, but in 1-cycle mode
+   writing Z without comparing:* layers with math write a far Z, layers
+   without a near one (the backdrop's is the fill). Painter's order leaves
+   the top layer's Z at each pixel: a mask of "this pixel has math" that
+   costs no colour bit. (Sprites: palettes 4-7 far, 0-3 near.)
+2. *The subscreen goes to a small buffer B, through split palettes:* a
+   channel value s becomes min(s, 15) in the first palette set, min(s - 15,
+   15) in the second, s - 30 in the third (0 or 1). The fixed colour, split
+   the same way, is B's fill, so "no subscreen pixel" needs no case in the
+   unhalved modes.
+3. *Add passes:* for each part, rows of the framebuffer as TEXEL0 and of B
+   as TEXEL1 (four rows of each fit TMEM), 2-cycle,
+   `(TEXEL1 - 0) * 1 + TEXEL0` with Z compare so only math pixels are
+   written, in place. No sum reaches 47 (31 + 15), so each clamps right.
+   Subtract: `(TEXEL0 - TEXEL1)`, parts of at most 15.
+4. *Half:* where the subscreen has a pixel (B's alpha bit: a drawn pixel
+   has it, the fill has not), the blender's 50% of B over the framebuffer,
+   under the Z mask and alpha compare, then those pixels' Z set near so
+   the fixed-colour passes skip them (Z as a third state).
+5. *Memory:* Z and B only for the rows in hand: the colour and Z image
+   addresses can point above a buffer of 32 rows, the scissor keeping the
+   RDP inside it. About 40 KB in all, not a second and third screen.
+
+Passes for a plain add: the main composite (1-cycle instead of copy), three
+subscreen composites (usually one layer each), three add passes. If each
+is 1 to 3 ms for a full screen, 10 to 15 ms of RDP time against 32 ms of
+RSP time, and the RSP is free. With the third part dropped (a subscreen
+channel of 31 added as 30: one level, where the main channel is 0) it is
+two and two; that is a tolerance to ask for when the numbers are in.
+
+**Facts to establish first, as pages of rdptest (ares, then photos):**
+- F1. Z written without compare in 1-cycle mode by alpha-compared CI
+  rectangles, and a later Z-compare-only pass: is the mask exact at
+  transparent texels and at rectangle edges?
+- F2. The split add and subtract over all 1,024 channel pairs, parts
+  (15, 15, 1) and (15, 15): every result right?
+- F3. A strip loaded from the framebuffer and drawn back onto the same
+  rows; colour and Z images addressed above a short buffer.
+- F4. The 50% blend under Z and alpha compare, and Z set by that pass.
+- F5. Time a pass, by the RDP's counters, in 2-cycle mode with two loads
+  a strip.
+
+**Then:** `COMPOSE_RDP=1` beside the RSP and CPU versions, for add and
+subtract first, checked by RENDER=2 on the test ROM's math scenes; the
+default follows the measured times. No test game needs it today, so the
+facts (F1-F5) are the work worth doing now; the rest waits for them.
