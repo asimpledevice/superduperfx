@@ -697,10 +697,29 @@ already rejected. What it adds:
 - *A candidate it suggests without saying so:* code we place at run time
   -- the code-cache modules, the SPC translator's cache, the 65816 JIT's
   -- gets its cache index from the address we load it at, with no TLB.
-  The profile names the pairs that evict each other (apu_runCycles_native
-  and spc_dbt_run, _interp_run_core and bridge_lean_run), so the loader
-  could choose a module's offset in 16 KB to miss the engine's hottest
-  lines. Not tried.
+  **Tried the same day and rejected** (`n64/profile/icsim/icplace.c`
+  replays a trace with chosen units moved; SMW, 60 frames, I-cache misses
+  of the emulation stage):
+
+  | placement | misses | |
+  |---|---|---|
+  | as loaded | 2,399,000 | |
+  | best offset for each of the 60 units most involved, searched on the same frames | -12% | a ceiling: fitted to the frames and to the game |
+  | every module where the fixed code's heat under it is least, heat measured on another window | -6 to -9% | game-agnostic: the heat is the engine's, and it holds across windows |
+  | the same, also spreading modules apart from each other | 0 to -1% | few modules are hot together; stacking them on the cold lines is right |
+  | only the 16 / 64 modules that ran most (92 / 293 KB) | -2% / -4% | the gain is spread thin |
+  | gap-free: 1 to 16 open regions filled front to back, a module to the coolest next position | 0 to -3%, as random | packed solid, modules cover every line whatever the order |
+  | the SPC and JIT buffers rotated to their best start | -4% | fitted to SMW; "keep the first N lines off the heat" gave 0 or worse |
+
+  At 48 cycles a miss the game-agnostic row is 1 to 2 ms of a 60 ms frame,
+  and only for a title with the code cache. It needs each module at a
+  position of its choice, which leaves gaps, and there is no memory for
+  gaps: SMW keeps 417 modules (1,108 KB) resident and the heap had about
+  1,150 KB for them. A prototype (a PC-sampling timer for the heat, an
+  allocator choosing positions in 64 KB chunks) ran out of room 41 times,
+  the cache shrank to 497 KB, and a frame went from 55 ms to over 300.
+  Without the gaps there is no gain. So: not without the memory-budget
+  work, and then for a percent or two. The prototype is not in the tree.
 
 See `PPU_DESIGN.md` ("Step 4: the scene builder", "The RSP must never wait
 on the RDP mid-command").
