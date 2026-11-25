@@ -159,10 +159,10 @@ $(BUILD_DIR)/rsp_bg.o: rspbg/rsp_bg.S rspbg/bg_rsp_layout.h rspbg/rsp_bg_full.in
 		BUILD_DIR=$(BUILD_DIR) RSPASFLAGS="$(N64_RSPASFLAGS)" $@
 endif
 
-# COMPOSE_RSP=1: lines with two-screen colour math are composed on the RSP
-# (n64/rspcmp); COMPOSE_RSP=0 keeps the CPU's n64_ppu_compose_line (the
-# reference).
-COMPOSE_RSP ?= 0
+# COMPOSE_RSP=1 (default): lines with two-screen colour math are composed
+# on the RSP (n64/rspcmp); COMPOSE_RSP=0 keeps the CPU's
+# n64_ppu_compose_line (the reference; -DN64_COMPOSE_CHECK compares them).
+COMPOSE_RSP ?= 1
 ifeq ($(COMPOSE_RSP),1)
 N64_CFLAGS += -DN64_COMPOSE_RSP=1 -Irspcmp
 OBJS += $(BUILD_DIR)/rspcmp/cmp_rsp.o $(BUILD_DIR)/rsp_cmp.o

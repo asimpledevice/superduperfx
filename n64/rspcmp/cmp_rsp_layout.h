@@ -24,6 +24,7 @@
  * The value is 2 * CGRAM index, with 0x200 for "has math" (main) or
  * "present" (sub). */
 #define CMP_MAX_ENTRIES 12
+#define CMP_MAX_LINES 16     /* lines a command */
 #define CMP_ROW_STRIDE 272   /* N64PPU_STRIDE */
 
 #endif

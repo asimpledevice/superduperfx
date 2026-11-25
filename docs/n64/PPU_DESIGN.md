@@ -667,7 +667,7 @@ None of the three games shows mode 7's rotation, EXTBG, direct colour or
 modes 2-6, so the comparison needed its own pictures.
 `n64/tools/ppu_test_rom.py` writes a LoROM image of generated data only:
 pseudo-random VRAM, CGRAM and OAM, a short loop, and a script of register
-writes a frame -- 30 scenes of 12 frames (mode 7: plain, zoom, rotation,
+writes a frame -- 31 scenes of 12 frames (mode 7: plain, zoom, rotation,
 flips and the large field, negative positions, sprites with windows,
 fixed-colour maths, the subscreen, mosaic, EXTBG, direct colour; modes 0-6;
 mode 1 with mosaic; mode 2 with 16x16 tiles and windows; modes 4-6 with
@@ -750,23 +750,67 @@ the software PPU's math and brightness a pixel, and the row goes to the
 RDP as a 16-bit strip, the way a software line does. `N64PPU_COMPOSE=0`
 keeps the software lines.
 
-It is CPU work, and it reads the RSP's rows through the data cache (the
-lines are dropped again after). Measured on the test ROM's
-`math-two-screens` scene, which is the worst case (noise in every layer
-of both screens, so about 24 rows are read a line): 205 composed lines
-cost about 0.25 ms each for the top pixels and 0.22 ms for the pixel
-loop (`-DN64_COMPOSE_PROF`), and the frame's PPU and present time is
-175 ms against 225 ms with software lines. A real picture has few layers
-with pixels on a line and mostly opaque ones, so the first part shrinks;
-the second does not. No test game shows more than a few such lines (SMW:
-the title's opening, map lines with a sprite of palettes 4-7), so the
-gain in a game is still to measure when one does.
-The next step, if a game needs it: the same two loops on the RSP, which
-has the rows in reach, clamps in one instruction, and runs beside the
-CPU.
+On the CPU it reads the RSP's rows through the data cache (the lines are
+dropped again after), and the test ROM's `math-two-screens` scene -- the
+worst case: noise in every layer of both screens, about 24 rows read a
+line -- costs about 0.25 ms a line for the top pixels and 0.22 ms for the
+pixel loop (`-DN64_COMPOSE_PROF`).
+
+**On the RSP (`n64/rspcmp`, `COMPOSE_RSP=1`, the default).** The same
+work as a microcode, `rsp_cmp.S`; the CPU function stays as the reference
+and as the path for what the microcode has not (direct colour; more
+bands than a frame's 48 descriptors). `cmp_rsp.c` writes a descriptor a
+band (spans, the entries' plane addresses and selector rules, the math's
+parameters, the address of CGRAM as 256 colours) and a word a line (the
+row and which entries have pixels on it); a command is up to 16 lines.
+For each line the microcode:
+
+1. paints each screen's entries bottom first into a plane of 16-bit
+   values, 2 x CGRAM index plus 0x200 for "has math" (main) or "is there"
+   (sub): the entry's row comes in by DMA, `LUV` loads 8 bytes as
+   byte << 7, one compare decides opaque, `VMRG` takes the pixel;
+2. turns values into colours with one table for every entry (a BG byte's
+   low 7 bits and an OBJ byte's 8 are CGRAM indices), whose second half
+   repeats the colours with bit 15 set so the flag rides through the
+   lookup -- scalar, the only part that is;
+3. does the math 16 pixels a pass: second colour (subscreen or fixed),
+   add or subtract a channel, clamp, halve by a per-pixel factor,
+   brightness as `(2cl + 15) * 2185 >> 16`, pack, and DMAs the row out
+   for the strip the RDP draws next.
+
+*The pipeline matters more than the instruction count.* ares models it
+(and the hardware has it): one scalar and one vector instruction issue a
+cycle at best, and an instruction reading a vector register stalls until
+three cycles after the one that wrote it (a general register: two). The
+first version, written as plain dependent chains, took 325 us of RSP time
+a line; staged across pixel groups (the same operation for four groups,
+then the next; the math as two groups' three channels, six streams) the
+same work takes 144 us. Compare and `VMRG` can stay adjacent: `VCC` is
+not a vector register and no stall hangs on it.
+
+Measured (ares, test ROM, PPU + present time of a frame on the CPU, and
+the RSP's time a composed line with the queue otherwise empty):
+
+| scene | software lines | composed on the CPU | on the RSP | RSP a line |
+|---|---|---|---|---|
+| `math-one-layer` (BG1 over subscreen BG2, 224 lines) | 220 ms | 122 ms | 41 ms | 0.14 ms |
+| `math-two-screens` (worst case, 205 lines) | 225 ms | 175 ms | 92 ms | 0.18 ms |
+
+(The worst case's 92 ms is mostly its 61 ms of building noise layers'
+rows, which is not the math.) Every row the RSP made was compared with
+the CPU's (`-DN64_COMPOSE_CHECK`): none differs.
+
+What it costs elsewhere: a full screen is about 32 ms of RSP time in the
+frame, in commands of 2-3 ms. The queue is first in, first out, and the
+S-DSP's batches do not use the high-priority queue, so a batch queued
+behind a frame's composed lines waits for them, as it waits for the
+scene's work today. Not measured: how late that makes audio in a game,
+since no test game has more than a few composed lines. If it matters,
+the commands are already short enough for the high-priority queue to cut
+in between them.
 
 Still software lines: mode 4 direct colour with a palette number other
 than 0, and a frame that runs out of palettes (`N64PPU_WHY_PALETTES`).
 
-Test ROM (30 scenes): no frame differing; software lines only in
+Test ROM (31 scenes): no frame differing; software lines only in
 `mode4-direct`'s frames that use every palette number.

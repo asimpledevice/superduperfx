@@ -15,15 +15,18 @@ enum { kMaxBands = 48 };
 static uint32_t s_ovl;
 static uint8_t *s_desc;   /* kMaxBands descriptors */
 static int s_nbands;
+static uint32_t *s_list;  /* a word a line (the commands' lists), 8-aligned a band */
+static int s_nlist;
 uint32_t g_cmprsp_lines, g_cmprsp_bands;
 
 void n64_cmprsp_init(void) {
   s_ovl = rspq_overlay_register(&rsp_cmp);
   s_desc = memalign(16, (size_t)CMP_SIZE * kMaxBands);
-  if (!s_desc) abort();
+  s_list = memalign(16, sizeof(uint32_t) * (N64PPU_LINES + 2 * kMaxBands + CMP_MAX_LINES));
+  if (!s_desc || !s_list) abort();
 }
 
-void n64_cmprsp_frame_begin(void) { s_nbands = 0; }
+void n64_cmprsp_frame_begin(void) { s_nbands = 0; s_nlist = 0; }
 
 static inline void put16(uint8_t *p, unsigned v) { p[0] = (uint8_t)(v >> 8); p[1] = (uint8_t)v; }
 static inline void put32(uint8_t *p, uint32_t v) { put16(p, v >> 16); put16(p + 2, v & 0xffff); }
@@ -113,11 +116,17 @@ bool n64_cmprsp_band(const N64PpuFrame *f, int a, int b, uint16_t *out) {
   put16(d + CMP_MPARAMS + 10, half ? 0x180 : 0);
   put16(d + CMP_MPARAMS + 12, (half && !addsub) ? 0x180 : 0);
   data_cache_hit_writeback(d, CMP_SIZE);
-  /* The sprites' plane rows are the CPU's: the RSP reads RDRAM. */
-  for (int p = N64PPU_OBJ0; p <= N64PPU_OBJ3; ++p)
+  /* The sprites' plane rows are the CPU's (and without RSPBG every plane's):
+   * the RSP reads RDRAM. */
+  for (int p = 0; p < N64PPU_PLANES; ++p) {
+#if N64_RSPBG
+    if (p < N64PPU_OBJ0 || p > N64PPU_OBJ3) continue;
+#endif
     data_cache_hit_writeback(f->plane[p] + (size_t)a * N64PPU_STRIDE, (size_t)(b - a) * N64PPU_STRIDE);
+  }
   s_nbands++;
   g_cmprsp_bands++;
+  uint32_t *list = s_list + s_nlist;
   for (int r = a; r < b; ++r) {
     uint32_t active = 0;
     for (int i = 0; i < 2 * CMP_MAX_ENTRIES; ++i) {
@@ -125,8 +134,14 @@ bool n64_cmprsp_band(const N64PpuFrame *f, int a, int b, uint16_t *out) {
       const uint32_t *rows = hi[i] ? f->rows_hi[planes[i]] : f->rows[planes[i]];
       if ((rows[r >> 5] >> (r & 31)) & 1) active |= 1u << i;
     }
-    rspq_write(s_ovl, 0, PhysicalAddr(d), ((uint32_t)r << 24) | active);
-    g_cmprsp_lines++;
+    list[r - a] = ((uint32_t)r << 24) | active;
   }
+  s_nlist += (b - a + 1) & ~1;
+  data_cache_hit_writeback(list, sizeof(uint32_t) * (size_t)(b - a));
+  for (int k = 0; k < b - a; k += CMP_MAX_LINES) {
+    const int n = b - a - k < CMP_MAX_LINES ? b - a - k : CMP_MAX_LINES;
+    rspq_write(s_ovl, 0, PhysicalAddr(d), PhysicalAddr(list + k), (uint32_t)n);
+  }
+  g_cmprsp_lines += (uint32_t)(b - a);
   return true;
 }

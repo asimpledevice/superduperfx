@@ -2,9 +2,12 @@
 # a command, exactly as n64_ppu_compose_line does on the CPU
 # (n64/src/n64_ppu_build.c), which stays as the reference.
 #
-# CmpCmd_Line: word 0 the RDRAM address of the band's descriptor
-# (cmp_rsp_layout.h), word 1 row << 24 | entries with pixels on the row
-# (bit i: main entry i, bit 12 + i: subscreen entry i).
+# CmpCmd_Lines: word 0 the RDRAM address of the band's descriptor
+# (cmp_rsp_layout.h), word 1 the RDRAM address of a list of lines, word 2
+# how many (1 to CMP_MAX_LINES). A list word is row << 24 | entries with
+# pixels on the row (bit i: main entry i, bit 12 + i: subscreen entry i).
+# A command is at most 16 lines, a few milliseconds, so the queue's other
+# users get their turn between them.
 #
 # 1. Top pixels. Each screen has a plane of 256 16-bit values, 2 * CGRAM
 #    index, + 0x200 for a main pixel with math or a subscreen pixel that is
@@ -41,7 +44,7 @@
     .data
 
 RSPQ_BeginOverlayHeader
-    RSPQ_DefineCommand CmpCmd_Line, 8
+    RSPQ_DefineCommand CmpCmd_Lines, 12
 RSPQ_EndOverlayHeader
 
 RSPQ_BeginSavedState
@@ -63,22 +66,28 @@ MAINP:  .ds.b 512                   # values, then colours, then the finished ro
 SUBP:   .ds.b 512
     .align 3
 ROW:    .ds.b 256
+LIST:   .ds.b 4 * CMP_MAX_LINES
 
     .text
 
 # s3 return address   s7 row   s6 entries left (shifted)   s5 entry index
-# s2 the subscreen has entries
+# s2 the subscreen has entries   s1 the list's next word   fp lines left
 # DMA helpers clobber t0, t2, at, s0, s4.
 
-CmpCmd_Line:
+CmpCmd_Lines:
     move s3, ra
     li t0, 0xffffff
     and s0, a0, t0
-    srl s7, a1, 24
-    and s6, a1, t0
+    move s1, a1
+    move fp, a2
     li s4, %lo(DESC)
     jal DMAIn
     li t0, DMA_SIZE(CMP_SIZE, 1)
+    move s0, s1
+    li s4, %lo(LIST)
+    jal DMAIn
+    li t0, DMA_SIZE(4 * CMP_MAX_LINES, 1)
+    li s1, %lo(LIST)
     ctc2 zero, COP2_CTRL_VCO
 
     # The colour table, and its copy with bit 15.
@@ -103,6 +112,11 @@ CmpCmd_Line:
     bne t3, t4, 1b
     sqv $v04, 0x1f0, t3
 
+Line_loop:
+    lw t3, 0(s1)
+    li t0, 0xffffff
+    srl s7, t3, 24
+    and s6, t3, t0
     # Planes: main = the backdrop (index 0) with its math flag, sub = nothing,
     # spans = span 0.
     lhu t3, %lo(DESC + CMP_BDFLAG)
@@ -484,7 +498,10 @@ Math_loop:
     sll t3, s7, 9
     addu s0, s0, t3
     li s4, %lo(MAINP)
+    jal DMAOut                      # (and waits: the next line reuses the plane)
     li t0, DMA_SIZE(512, 1)
-    move ra, s3                     # DMAOut returns straight to rspq
-    j DMAOut
+    addiu fp, fp, -1
+    bnez fp, Line_loop
+    addiu s1, s1, 4
+    jr s3
     nop
