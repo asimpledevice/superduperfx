@@ -32,6 +32,9 @@ void n64_ppu_build_take_vram_dirty(uint32_t out[8]);
 /* Complete the frame description: wait for the RSP's background rows and
  * merge their row flags. Call before drawing the frame. */
 void n64_ppu_build_finish(void);
+/* A N64PPU_LINE_COMPOSE row r (0-based) of a finished frame, as 256
+ * RGBA5551 pixels. */
+void n64_ppu_compose_line(const N64PpuFrame *f, int r, uint16_t *out);
 /* Before VRAM may change again (the next frame's emulation): wait until
  * the RSP has its snapshot of it. */
 void n64_ppu_build_release_vram(void);

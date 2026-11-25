@@ -45,6 +45,7 @@ static bool s_ls_dirty = true;
 #define LS_DIRTY() ((void)0)
 #endif
 
+static void draw_rows16(int a, int b);
 static void draw_software_lines(const N64PpuFrame *f, int a, int b) {
   for (int r = a; r < b; ++r) {
     const uint32_t *src = f->sw_rows + (size_t)r * 256;
@@ -55,6 +56,11 @@ static void draw_software_lines(const N64PpuFrame *f, int a, int b) {
                           (((p >> 3) & 31) << 1) | 1);
     }
   }
+  draw_rows16(a, b);
+}
+
+/* Rows [a, b) of s_sw16 as they are (software and composed lines). */
+static void draw_rows16(int a, int b) {
   data_cache_hit_writeback(s_sw16 + (size_t)a * 256, (size_t)(b - a) * 512);
   surface_t s = surface_make(s_sw16, FMT_RGBA16, 256, N64PPU_LINES, 512);
   rdpq_set_scissor(0, 0, 320, 240);
@@ -578,7 +584,7 @@ static __attribute__((noinline)) int compare(const N64PpuFrame *f, const surface
   static int s_cmp_frame;
   const bool map = ++s_cmp_frame == 300;
   for (int r = 0; r < N64PPU_LINES; ++r) {
-    if (f->line[f->ref[r]].kind != N64PPU_LINE_RDP) continue;
+    if (f->line[f->ref[r]].kind != N64PPU_LINE_RDP && f->line[f->ref[r]].kind != N64PPU_LINE_COMPOSE) continue;
     const uint16_t *row = (const uint16_t *)((const uint8_t *)fb->buffer + (size_t)(r + kOy) * fb->stride) + kOx;
     if (map) {
       char m[257]; int bad = 0;
@@ -688,6 +694,13 @@ int n64_ppu_draw_and_show(const N64PpuFrame *f, const char *status, int compare_
       SPLIT_ADD(2, st);
     }
     else if (L->kind == N64PPU_LINE_RDP) draw_rdp_band(f, a, b);
+    else if (L->kind == N64PPU_LINE_COMPOSE) {
+      /* (the rows the RSP made are finished: n64_ppu_build_finish) */
+      const uint32_t st = SPLIT_T();
+      for (int r = a; r < b; ++r) n64_ppu_compose_line(f, r, s_sw16 + (size_t)r * 256);
+      draw_rows16(a, b);
+      SPLIT_ADD(2, st);
+    }
     /* N64PPU_LINE_BLACK: already black. */
     a = b;
   }

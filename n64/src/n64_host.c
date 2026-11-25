@@ -160,10 +160,10 @@ static void present_rdp_frame(uint32_t frame, const char *line) {
   if (N64_RENDER == 2 && (frame < 8 || frame % 30 == 0 || diff > 0))
     if (frame < 600 || frame % 30 == 0 || s_diff_frames <= 20)
 #endif
-      n64_platform_log("[rdp] frame %lu: rdp %d sw %d black %d lines, why %02lx, diff %d px\n",
+      n64_platform_log("[rdp] frame %lu: rdp %d sw %d black %d lines, why %02lx, diff %d px, composed %d\n",
                        (unsigned long)frame, s_rdp_frame->rdp_lines,
                        s_rdp_frame->software_lines, s_rdp_frame->black_lines,
-                       (unsigned long)s_rdp_frame->fallback_reasons, diff);
+                       (unsigned long)s_rdp_frame->fallback_reasons, diff, s_rdp_frame->compose_lines);
 #if N64PPU_SCENE
   { /* Scene sprites: lines drawn from strips / from planes, rectangles. */
     extern uint32_t g_scene_obj_lines, g_scene_obj_plane_lines, g_scene_obj_rects, g_scene_mode_passes[8];

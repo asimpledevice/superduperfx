@@ -320,6 +320,31 @@ def scenes(n):
         f.b(0x2133, [0x01, 0x02, 0x08, 0x03, 0x0B, 0x09][(k // 2) % 6])
         return f
 
+    # Colour math with a colour from each screen (composed lines).
+    @add('math-two-screens')
+    def _(k):
+        mode = [0x01, 0x09, 0x00, 0x03, 0x07, 0x02, 0x11, 0x01][k % 8]
+        m = mode & 7
+        lay = {0: 0x1F, 1: 0x17, 2: 0x13, 3: 0x13, 7: 0x11}[m]
+        tm = [lay, lay & 0x15, lay & 0x13, 0x10][k % 4]
+        ts = [lay & 0x0F, lay, 0x10, lay & 0x12][k % 4] or 0x01
+        f = Frame(); base(f, mode, tm, ts)
+        for i, r in enumerate((0x210D, 0x210F, 0x2111, 0x2113)):
+            f.w2(r, (2 + i) * k + 7 * i); f.w2(r + 1, (3 - i) * k + 50 * i)
+        if m == 7:
+            a, b, c, d = rot(k * 0.17, 0x120)
+            m7(f, a, b, c, d, 3 * k, 5 * k, 128, 112)
+        f.b(0x2100, [0x0F, 0x0F, 0x09, 0x04][(k // 3) % 4])
+        f.b(0x2130, 0x02 | [0x00, 0x10, 0x20, 0x80, 0x90, 0x00][k % 6])      # subscreen; math and clip windows
+        f.b(0x2131, [0x3F, 0x7F, 0xBF, 0xFF, 0x21, 0x52, 0x13, 0xB5, 0x30, 0x0F][k % 10])
+        f.b(0x2132, 0x20 | (k & 31)); f.b(0x2132, 0x40 | (2 * k & 31)); f.b(0x2132, 0x80 | (31 - k & 31))
+        f.b(0x2125, 0x20 if k % 3 else 0xA2)                               # colour window: 1 (and 2, OBJ window 1)
+        f.b(0x2126, 30 + 4 * k); f.b(0x2127, 190 - 2 * k); f.b(0x2128, 100); f.b(0x2129, 240 - 3 * k)
+        f.b(0x212B, [0x00, 0x04, 0x08, 0x0C][k % 4])
+        f.b(0x2123, 0x02 if k % 5 == 0 else 0)
+        f.b(0x212E, 0x11 if k % 5 == 1 else 0x01); f.b(0x212F, 0x13 if k % 5 == 2 else 0x00)
+        return f
+
     @add('mode3-direct')
     def _(k):
         f = Frame(); base(f, 3, 0x13)

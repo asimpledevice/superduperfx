@@ -28,6 +28,10 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#ifndef N64PPU_COMPOSE
+#define N64PPU_COMPOSE 1   /* 0: lines with two-screen colour math stay with the software PPU */
+#endif
+
 enum {
   N64PPU_LINES = 224,
   N64PPU_PAD = 8,                       /* left pad: fine scroll lands here */
@@ -67,6 +71,10 @@ enum {
   N64PPU_LINE_RDP = 0,       /* composite planes */
   N64PPU_LINE_SOFTWARE = 1,  /* software PPU row in sw_rows */
   N64PPU_LINE_BLACK = 2,     /* forced blank */
+  /* Colour math that needs a colour from each screen for a pixel: the two
+   * screens are composed from the plane rows and combined on the CPU
+   * (n64_ppu_compose_line), and the RDP draws the finished row. */
+  N64PPU_LINE_COMPOSE = 3,
 };
 
 /* Per-line composition order (back to front). */
@@ -125,6 +133,14 @@ typedef struct N64PpuLine {
   uint8_t tl_fix_clip[N64PPU_SELS];           /* same with the main colour clipped */
   uint16_t fill, fill_clip;                   /* backdrop without math */
   uint16_t fill_math, fill_math_clip;         /* backdrop with fixed-colour math */
+  /* N64PPU_LINE_COMPOSE: palettes of the 15-bit colours ((colour << 1) | 1,
+   * 0 transparent), the backdrop's and the fixed colour's 15 bits, the
+   * layers with math (CGADSUB's bits 0-5; main_layers' and sub_layers'
+   * bit 4 is OBJ), kMath* and 4 for the subscreen as second colour, and
+   * the brightness. A span's math is 3 where the colour window allows math. */
+  uint8_t tl_raw[N64PPU_SELS];
+  uint16_t c_backdrop, c_fixed;
+  uint8_t c_math, c_flags, c_bright;
 } N64PpuLine;
 
 /* A sprite's 8x8 tile over a run of rows (the scene builder's sprites,
@@ -168,6 +184,7 @@ typedef struct N64PpuFrame {
 
   /* Statistics for the current frame. */
   int rdp_lines, software_lines, black_lines;
+  int compose_lines;                    /* of rdp_lines: N64PPU_LINE_COMPOSE */
   uint32_t fallback_reasons;            /* N64PPU_WHY_* bits seen this frame */
 } N64PpuFrame;
 
