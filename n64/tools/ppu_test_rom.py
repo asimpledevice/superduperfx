@@ -109,6 +109,7 @@ def base(f, mode, tm, ts=0):
     f.b(0x2130, 0); f.b(0x2131, 0)
     f.b(0x2132, 0xE0)          # fixed colour 0
     f.b(0x2133, 0)
+    f.b(0x2133, 0)
 
 
 def m7(f, a, b, c, d, hofs, vofs, cx, cy, sel=0):
@@ -285,6 +286,40 @@ def scenes(n):
             return f
         out.append(('mode%d-mix' % mode, fn))
 
+    @add('mode3-big')
+    def _(k):
+        f = Frame(); base(f, 0x03 | [0x10, 0x20, 0x30][k % 3], 0x13 if k % 4 else 0x12, 0x01 if k % 4 == 0 else 0)
+        f.w2(0x210D, 7 * k); f.w2(0x210E, 3 * k); f.w2(0x210F, 90 - 5 * k); f.w2(0x2110, 2 * k)
+        f.b(0x2130, 0x02 if k % 4 == 0 else 0); f.b(0x2131, 0x20 if k % 4 == 0 else 0)
+        return f
+
+    @add('mode1-mosaic-big')
+    def _(k):
+        f = Frame(); base(f, 0x01 | [0x10, 0x20, 0x40, 0x70, 0x30][k % 5], 0x17)
+        for i, r in enumerate((0x210D, 0x210F, 0x2111)):
+            f.w2(r, 5 * k + 17 * i); f.w2(r + 1, 3 * k + 40 * i)
+        f.b(0x2106, ((k % 15) + 1) << 4 | [0x01, 0x03, 0x07, 0x02, 0x04, 0x05][k % 6])
+        f.b(0x2123, 0x22 if k & 1 else 0); f.b(0x2126, 50 + 2 * k); f.b(0x2127, 190 - k); f.b(0x212E, 0x03)
+        return f
+
+    @add('mode4-direct')
+    def _(k):
+        f = Frame(); base(f, 4, 0x13 if k % 3 else 0x12, 0x01 if k % 3 == 0 else 0)
+        f.w2(0x210D, 3 * k); f.w2(0x210E, 5 * k); f.w2(0x210F, 60 - k); f.w2(0x2110, k)
+        if k % 4: f.b(0x2107, 0x7C)   # BG1's map: the one of palette number 0 (other frames: any palette, software lines)
+        f.b(0x2130, 0x03 if k % 3 == 0 else 0x01); f.b(0x2131, 0x20 if k % 3 == 0 else 0)
+        return f
+
+    @add('setini')
+    def _(k):
+        mode = [1, 5, 6, 3, 7, 0][k % 6]
+        f = Frame(); base(f, mode, {1: 0x17, 5: 0x13, 6: 0x11, 3: 0x13, 7: 0x11, 0: 0x1F}[mode])
+        for i, r in enumerate((0x210D, 0x210F, 0x2111)):
+            f.w2(r, 3 * k + 9 * i); f.w2(r + 1, 6 * k + 20 * i)
+        if mode == 7: m7(f, 0x100, 0x20, -0x20, 0x100, 4 * k, 2 * k, 128, 112)
+        f.b(0x2133, [0x01, 0x02, 0x08, 0x03, 0x0B, 0x09][(k // 2) % 6])
+        return f
+
     @add('mode3-direct')
     def _(k):
         f = Frame(); base(f, 3, 0x13)
@@ -316,6 +351,10 @@ def build(seed, which, nframes):
         # runs of equal words now and then: flat areas as well as noise
         if i & 0x3F0 == 0x100: lo, hi = (i >> 4) & 0xFF, (i >> 6) & 0xFF
         rom[2 * BANK + 2 * i] = lo; rom[2 * BANK + 2 * i + 1] = hi
+    # A tilemap whose entries all have palette number 0 (word $7C00; mode 4's direct colour).
+    for i in range(0x7C00, 0x8000):
+        v = rng.randrange(0x10000) & 0xE3FF
+        rom[2 * BANK + 2 * i] = v & 0xFF; rom[2 * BANK + 2 * i + 1] = v >> 8
     # CGRAM: 256 colours, entry 0 a dark blue.
     for i in range(256):
         v = rng.randrange(0x8000) if i else 0x2800

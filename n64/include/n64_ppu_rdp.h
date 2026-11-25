@@ -86,6 +86,7 @@ enum {
   N64PPU_ORDER_MODE2 = 8,    /* BG1 and BG2 of 16 colours, with their priorities; no BG3 picture (it is the offset table) */
   N64PPU_ORDER_MODE4 = 9,    /* as mode 3, BG2 of 4 colours */
   N64PPU_ORDER_MODE5 = 10,   /* as mode 2, BG2 of 4 colours (mode 6: BG1 alone) */
+  N64PPU_ORDER_MODE4_DIRECT = 11,   /* mode 4, BG1 with direct colour (tile palette 0) */
   N64PPU_ORDERS
 };
 
@@ -211,6 +212,8 @@ static const int8_t kN64PpuOrder[N64PPU_ORDERS][13] = {
     N64PPU_BG2, N64PPU_OBJ0, N64PPU_BG1, N64PPU_OBJ1, N64PPU_BG2 | N64PPU_HI, N64PPU_OBJ2, N64PPU_BG3, N64PPU_OBJ3, -1 },
   [N64PPU_ORDER_MODE4] = {
     N64PPU_BG2, N64PPU_OBJ0, N64PPU_BG1, N64PPU_OBJ1, N64PPU_BG2 | N64PPU_HI, N64PPU_OBJ2, N64PPU_BG3, N64PPU_OBJ3, -1 },
+  [N64PPU_ORDER_MODE4_DIRECT] = {
+    N64PPU_BG2, N64PPU_OBJ0, N64PPU_BG1, N64PPU_OBJ1, N64PPU_BG2 | N64PPU_HI, N64PPU_OBJ2, N64PPU_BG3, N64PPU_OBJ3, -1 },
   [N64PPU_ORDER_MODE5] = {
     N64PPU_BG2, N64PPU_OBJ0, N64PPU_BG1, N64PPU_OBJ1, N64PPU_BG2 | N64PPU_HI, N64PPU_OBJ2, N64PPU_BG1 | N64PPU_HI, N64PPU_OBJ3, -1 },
 };
@@ -223,9 +226,9 @@ static inline int n64ppu_entry_sel(int order, int entry) {
     if (plane == N64PPU_BG2) return (entry & N64PPU_HI) ? N64PPU_SEL_HI16 : N64PPU_SEL_LO16;
     return N64PPU_SEL_M7;
   }
-  if (order == N64PPU_ORDER_MODE4) {
+  if (order == N64PPU_ORDER_MODE4 || order == N64PPU_ORDER_MODE4_DIRECT) {
     if (plane == N64PPU_BG2) return (entry & N64PPU_HI) ? N64PPU_SEL_HI4 : N64PPU_SEL_LO4;
-    return N64PPU_SEL_M7;
+    return order == N64PPU_ORDER_MODE4 ? N64PPU_SEL_M7 : N64PPU_SEL_M7D;
   }
   if (order == N64PPU_ORDER_MODE5) {
     if (plane == N64PPU_BG2) return (entry & N64PPU_HI) ? N64PPU_SEL_HI4 : N64PPU_SEL_LO4;
