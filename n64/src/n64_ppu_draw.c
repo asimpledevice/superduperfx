@@ -639,6 +639,9 @@ uint32_t g_present_prof[5];
  * waiting for the RDP (N64_PRESENT_RDPWAIT): 0 pipeline busy, 1 TMEM busy,
  * 2 command buffer busy. And a second status line the host formats. */
 uint32_t g_present_rdp[3];
+#ifdef N64_COMPOSE_CHECK
+uint32_t g_cmpcheck[5];
+#endif
 char g_present_line[48];
 #define DPC_STATUS_REG (*(volatile uint32_t *)0xA410000C)
 #define DPC_COUNTER(off) ((*(volatile uint32_t *)(0xA4100000 + (off))) & 0xffffff)
@@ -751,6 +754,7 @@ int n64_ppu_draw_and_show(const N64PpuFrame *f, const char *status, int compare_
       if (took) {
         static int s_logged;
         static uint32_t s_rows, s_bad;
+        extern uint32_t g_cmpcheck[5];   /* rows checked, rows differing; the last one: x, the RSP's and the CPU's pixel */
         rspq_wait();
         data_cache_hit_invalidate(s_sw16 + (size_t)a * 256, (size_t)(b - a) * 512);
         for (int r = a; r < b; ++r) {
@@ -760,8 +764,10 @@ int n64_ppu_draw_and_show(const N64PpuFrame *f, const char *status, int compare_
           int n = 0, first = -1;
           for (int x = 0; x < 256; ++x) if (got[x] != want[x]) { if (first < 0) first = x; ++n; }
           s_rows++;
+          g_cmpcheck[0] = s_rows;
           if (n) {
             s_bad++;
+            g_cmpcheck[1] = s_bad; g_cmpcheck[2] = (uint32_t)first; g_cmpcheck[3] = got[first]; g_cmpcheck[4] = want[first];
             if (s_logged++ < 12)
               n64_platform_log("[cmpcheck] row %d: %d differ, first x %d rsp %04x cpu %04x (order %d spans %d flags %x math %x)\n",
                                r, n, first, got[first], want[first], f->line[f->ref[r]].order,

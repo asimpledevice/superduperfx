@@ -817,6 +817,15 @@ static int host_main(void) {
                  (unsigned long)(g_present_prof[1] / 60 / 4700), (unsigned long)(s_pp_finish / 60 / 100),
                  (unsigned long)(s_pp_audio / 60 / 100), (unsigned long)(g_present_rdp[0] / 60 / 6250),
                  (unsigned long)(g_present_rdp[1] / 60 / 6250));
+#ifdef N64_COMPOSE_CHECK
+        { /* the RSP's composed rows against the CPU's, on hardware: rows
+           * checked, rows differing, and the last differing row's first
+           * pixel (x, RSP, CPU) */
+          extern uint32_t g_cmpcheck[5];
+          o = snprintf(g_present_line, 48, "K%lu bad%lu x%lu %04lx/%04lx", (unsigned long)g_cmpcheck[0],
+                       (unsigned long)g_cmpcheck[1], (unsigned long)g_cmpcheck[2], (unsigned long)g_cmpcheck[3],
+                       (unsigned long)g_cmpcheck[4]); }
+#endif
 #if N64PPU_DESC
         { /* the frame description (step 1): bands in the last frame */
           extern const struct N64PpuDesc *n64_ppu_desc(void);
