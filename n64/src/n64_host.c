@@ -826,6 +826,14 @@ static int host_main(void) {
                        (unsigned long)g_cmpcheck[1], (unsigned long)g_cmpcheck[2], (unsigned long)g_cmpcheck[3],
                        (unsigned long)g_cmpcheck[4]); }
 #endif
+#ifdef N64_COMPOSE_POSTCHECK
+        { /* (n64_ppu_draw.c) bad frames/frames, first row+rows, x, RSP/CPU pixel, changes of row 40 */
+          extern uint32_t g_cmppost[8];
+          o = snprintf(g_present_line, 48, "P%lu/%lu r%lu+%lu x%lu %04lx/%04lx s%lu", (unsigned long)g_cmppost[1],
+                       (unsigned long)g_cmppost[0], (unsigned long)g_cmppost[2], (unsigned long)g_cmppost[3],
+                       (unsigned long)g_cmppost[4], (unsigned long)g_cmppost[5], (unsigned long)g_cmppost[6],
+                       (unsigned long)g_cmppost[7]); }
+#endif
 #if N64PPU_DESC
         { /* the frame description (step 1): bands in the last frame */
           extern const struct N64PpuDesc *n64_ppu_desc(void);

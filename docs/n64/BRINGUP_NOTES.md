@@ -3031,3 +3031,35 @@ should be treated as unreliable and verified the same way.
 4. PPU stage: decoded-tile cache for BG expansion, then BG line building
    on the RSP overlapped with emulation (see LESSONS.md).
 5. RDP coverage: layer colour math, mosaic, Mode 7 (a textured plane).
+
+### EverDrive results, 2026-11-25 (rdptest pages 7 and 8; the compose flicker)
+
+**Cache-miss cost on hardware** (rdptest page 7, CPU cycles a miss):
+
+| while | I-cache | D-cache |
+|---|---|---|
+| idle | 52.1 | 41.9 |
+| RDP busy | 54.3 | 44.0 |
+| RSP DMA running | 78.7 | 78.4 |
+| cartridge DMA | 52.1 | 42.0 |
+
+An uncached word: RDRAM 32.0, DMEM 28.0. So ares's 48 / 41 is 8% low for
+instructions and right for data; the RDP costs a miss 4-5%; an RSP DMA to or
+from RDRAM makes a miss 50% (I) to 87% (D) dearer. RSP work that streams
+through RDRAM (the composed lines: a plane row in and a finished row out per
+entry and line) taxes every CPU miss made beside it.
+
+**Add and subtract in parts** (page 8): 15+15+1 is exact for both (1024 of
+1024), 15+15 misses one case each, as in ares. Facts F2 and F3 of the
+RDP colour-math plan hold on hardware.
+
+**Composed lines flicker on hardware** (Super Mario World's player-select
+screen: main screen BG3 only, BG1 + BG2 + OBJ on the subscreen, added to a
+black backdrop; 224 composed lines). On bad frames the subscreen is
+missing. ares draws it steadily. With N64_COMPOSE_CHECK (the CPU waits for
+the RSP after each band and compares) the hardware shows bad 0 and no
+flicker: the microcode's rows are right when nothing of the CPU's runs
+beside it. That build also has the retrained layout and the 16 KB anchors,
+so the cause is not yet separated: N64_COMPOSE_POSTCHECK (compares after the
+frame, no change to what runs beside the RSP) and N64_COMPOSE_WAIT (only the
+wait) are the experiments.

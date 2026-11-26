@@ -642,6 +642,9 @@ uint32_t g_present_rdp[3];
 #ifdef N64_COMPOSE_CHECK
 uint32_t g_cmpcheck[5];
 #endif
+#ifdef N64_COMPOSE_POSTCHECK
+uint32_t g_cmppost[8];
+#endif
 char g_present_line[48];
 #define DPC_STATUS_REG (*(volatile uint32_t *)0xA410000C)
 #define DPC_COUNTER(off) ((*(volatile uint32_t *)(0xA4100000 + (off))) & 0xffffff)
@@ -735,6 +738,9 @@ int n64_ppu_draw_and_show(const N64PpuFrame *f, const char *status, int compare_
       bool took = !(s_draw_frames & 1) && n64_cmprsp_band(f, a, b, s_sw16);
 #else
       bool took = n64_cmprsp_band(f, a, b, s_sw16);
+#endif
+#ifdef N64_COMPOSE_WAIT   /* (hardware experiment: nothing of the CPU's beside the RSP's composing) */
+      if (took) rspq_wait();
 #endif
 #ifdef N64_COMPOSE_RSPTIME
       if (took) {
@@ -896,6 +902,37 @@ int n64_ppu_draw_and_show(const N64PpuFrame *f, const char *status, int compare_
   g_present_rdp[1] += DPC_COUNTER(0x1c);
   g_present_rdp[2] += DPC_COUNTER(0x14);
 #endif
+#endif
+#ifdef N64_COMPOSE_POSTCHECK
+  /* The RSP's composed rows against the CPU's once the frame is finished
+   * (after the wait above: needs N64_PRESENT_RDPWAIT), so the comparison
+   * changes nothing about what ran beside the RSP. 0 frames, 1 frames with
+   * a differing row; of the last such frame: 2 first row, 3 rows, 4 x,
+   * 5 the RSP's pixel, 6 the CPU's; 7 frames whose row 40 is not the
+   * frame before's. */
+  { extern uint32_t g_cmppost[8];
+    static uint16_t s_prev40[256];
+    int first = -1, rows = 0;
+    for (int r = 0; r < N64PPU_LINES; ++r) {
+      if (f->line[f->ref[r]].kind != N64PPU_LINE_COMPOSE) continue;
+      uint16_t want[256];
+      const uint16_t *got = s_sw16 + (size_t)r * 256;
+      data_cache_hit_invalidate(s_sw16 + (size_t)r * 256, 512);
+      n64_ppu_compose_line(f, r, want);
+      for (int x = 0; x < 256; ++x)
+        if (got[x] != want[x]) {
+          if (first < 0) { first = r; g_cmppost[4] = (uint32_t)x; g_cmppost[5] = got[x]; g_cmppost[6] = want[x]; }
+          ++rows;
+          break;
+        }
+      if (r == 40) {
+        if (memcmp(s_prev40, got, sizeof s_prev40)) g_cmppost[7]++;
+        memcpy(s_prev40, got, sizeof s_prev40);
+      }
+      data_cache_hit_invalidate(s_sw16 + (size_t)r * 256, 512);
+    }
+    g_cmppost[0]++;
+    if (first >= 0) { g_cmppost[1]++; g_cmppost[2] = (uint32_t)first; g_cmppost[3] = (uint32_t)rows; } }
 #endif
   int mismatches = -1;
   if (compare_with_software) mismatches = compare(f, fb);
