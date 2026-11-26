@@ -1884,12 +1884,12 @@ bool n64_ppu_build_line(const Ppu *ppu, int line, bool same_regs) {
   const int mode = PPU_mode(ppu);
   const bool m3 = mode == 3, m2 = mode == 2, m4 = mode == 4, m56 = mode == 5 || mode == 6;
   const int nbg = m7 ? 1 : mode == 6 ? 1 : mode >= 2 ? 2 : mode == 0 ? 4 : 3;
+  const bool mosaic_line = PPU_mode(ppu) <= 1 && PPU_mosaicSize(ppu) > 1 &&
+                           (ppu->mosaic & (ppu->screenEnabled[0] | ppu->screenEnabled[1]) & 0xf);
 #if N64PPU_SCENE
   /* Clipped spans and the subscreen are drawn by the scene too, through
    * the black and math palettes (n64_ppu_scene_tlut). */
   /* (not a line with a mosaic layer: its rows are planes, the layer's own made here) */
-  const bool mosaic_line = PPU_mode(ppu) <= 1 && PPU_mosaicSize(ppu) > 1 &&
-                           (ppu->mosaic & (ppu->screenEnabled[0] | ppu->screenEnabled[1]) & 0xf);
   const bool scene_line_ok = PPU_mode(ppu) <= 1 && !mosaic_line && !compose;   /* (the others: planes) */
   L->scene_bg = scene_line_ok ? 3 : 0;
 #endif

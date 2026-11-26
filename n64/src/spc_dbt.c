@@ -57,7 +57,9 @@ uint32_t g_spc_dbt_stats[8];   /* blocks made, flushes, runs, cycles run, refuse
 uint32_t g_spc_dbt_refused[4];   /* direct page, watched read, watched write, code */
 
 enum { kCodeWords = 65536, kBlocks = 1536, kMaxInsns = 32, kMapPages = 48 };
-static uint32_t s_code[kCodeWords] __attribute__((aligned(32)));
+/* On a 16 KB boundary (the instruction cache's size), so the cache lines the
+ * translations use are the same in every build: see s_jit_code. */
+static uint32_t s_code[kCodeWords] __attribute__((aligned(16384)));
 static uint32_t s_ncode, s_epilogue, s_exit, s_edge, s_fe, s_enter, s_link, s_dyn, s_wstore, s_edge_fe;
 static void *s_target;   /* the block s_enter starts */
 /* Bumped whenever a block's entry conditions may have changed (page marks,

@@ -68,7 +68,11 @@ enum { kJitCodeWords = SNESRECOMP_JIT_CODE_KB * 256,
        kJitBlockRoom = 3072,   /* words kept free for the block being made (a block of 32 long instructions) */
        kJitLaps = 8,       /* laps in a row without progress before a loop inside a block leaves for the big loop */
        kJitRunMax = 4096   /* instructions after which a loop leaves in any case */ };
-static uint32_t s_jit_code[kJitCodeWords] __attribute__((aligned(32)));
+/* On a 16 KB boundary: the instruction cache is 16 KB direct-mapped, so the
+ * cache lines this code uses do not depend on where the linker happened to
+ * put the array (it moved with every change in program size, and with it the
+ * conflicts with the engine functions icache_order.ld pins). */
+static uint32_t s_jit_code[kJitCodeWords] __attribute__((aligned(16384)));
 static uint32_t s_jit_n;           /* words used */
 static uint32_t s_jit_epilogue;    /* word index */
 static uint32_t s_jit_rd8, s_jit_rd16;   /* word indexes of the shared read routines */

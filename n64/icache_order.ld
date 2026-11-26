@@ -2,1063 +2,1312 @@
 .text : {
   *(.boot)
   . = ALIGN(16);
-  . = MAX(., 0x3c00);
-  *(.text._interp_run_core)
-  . = MAX(., 0x6300);
-  *(.text.interp816_runOpcode)
-  *(.text.bridge_lean_run*)   /* SNESRECOMP_INTERP_BURST=2: the lean loop, beside the core it calls (placed by hand) */
-  . = MAX(., 0x8f60);
-  *(.text.spc_runOpcode)
-  . = MAX(., 0xd600);
+  . = MAX(., 0x4800);
   *(.text.snes_advance_beam)
-  . = MAX(., 0xe700);
-  *(.text.bridge_bus_read_word)
-  . = MAX(., 0xf400);
-  *(.text.apu_runCycles_native)
-  . = MAX(., 0x10200);
-  *(.text.ppu_write)
-  . = MAX(., 0x10b00);
-  *(.text.interp816_init)
-  . = MAX(., 0x10f00);
-  *(.text.ReadRegWord)
-  . = MAX(., 0x11de0);
-  *(.text.rtl_sync_apu_to_cpu_locked)
-  . = MAX(., 0x12aa0);
-  *(.text.apu_runToGuestCycle)
-  . = MAX(., 0x13ba0);
-  *(.text.bridge_timing_bus.part.0)
-  . = MAX(., 0x13c60);
-  *(.text.interp816_readOpcode)
-  . = MAX(., 0x13c80);
-  *(.text.RtlGuestScopeCheckpoint)
-  . = MAX(., 0x15400);
-  *(.text.bridge_apu_flush)
-  . = MAX(., 0x17100);
-  *(.text.cpu_read16)
-  . = MAX(., 0x1a600);
-  *(.text.bridge_bus_read)
-  . = MAX(., 0x1ae00);
-  *(.text.snes_sync_master_clock)
-  . = MAX(., 0x1b600);
-  *(.text.interp816_setZN)
-  . = MAX(., 0x1bd00);
-  *(.text.spc_read)
-  . = MAX(., 0x1c280);
-  *(.text.snes_master_clocks_until_irq)
-  . = MAX(., 0x1ca80);
-  *(.text.expand_obj)
-  . = MAX(., 0x1e6a0);
-  *(.text.cart_note_cpu_bus)
-  . = MAX(., 0x1e6c0);
-  *(.text.n64_ppu_build_line)
-  . = MAX(., 0x1f200);
-  *(.text.RtlApuUnlock)
-  . = MAX(., 0x1f800);
-  *(.text.rtl_apu_guest_cycle_at.constprop.0)
-  . = MAX(., 0x1f9a0);
-  *(.text.PpuDrawVisibleLine)
-  . = MAX(., 0x21700);
-  *(.text.spc_readOpcode)
-  . = MAX(., 0x21f00);
+  . = MAX(., 0x4fe0);
+  *(.text.unlikely.bridge_lean_run)
+  . = MAX(., 0x7360);
   *(.text.cpu_read8)
-  . = MAX(., 0x226c0);
-  *(.text.rtl_apu_extended_frame_timing)
-  . = MAX(., 0x22a00);
-  *(.text.snes_master_clocks_to_next_beam_event)
-  . = MAX(., 0x23220);
-  *(.text.interp816_readOpcodeWord)
-  . = MAX(., 0x23400);
-  *(.text.rtl_apu_frame_timeline_active)
-  . = MAX(., 0x23640);
-  *(.text.audio_trace_on_guest_sync)
-  . = MAX(., 0x23680);
-  *(.text.bridge_continuous_read)
-  . = MAX(., 0x23cc0);
-  *(.text.cpu_write8)
-  . = MAX(., 0x24020);
-  *(.text.dma_doDma.part.0)
-  . = MAX(., 0x24200);
-  *(.text.RtlApuLock)
-  . = MAX(., 0x24220);
-  *(.text.audio_trace_set_producer)
-  . = MAX(., 0x24240);
-  *(.text.interp816_readWord)
-  . = MAX(., 0x24320);
-  *(.text.line_palettes)
-  . = MAX(., 0x24fe0);
-  *(.text.snes_writeBBus)
-  . = MAX(., 0x25700);
-  *(.text.line_spans)
-  . = MAX(., 0x26300);
-  *(.text.spc_write)
-  . = MAX(., 0x265a0);
-  *(.text.ppu_rasterRecord)
-  . = MAX(., 0x26800);
-  *(.text.interp_bridge_lle_master_deadline_reached)
-  . = MAX(., 0x26fa0);
-  *(.text.snes_read)
-  . = MAX(., 0x27400);
-  *(.text.bridge_bus_write)
-  . = MAX(., 0x276a0);
-  *(.text.cart_getRomPtr.part.0)
-  . = MAX(., 0x279e0);
-  *(.text.WsShadowOnVramWrite)
-  . = MAX(., 0x28300);
-  *(.text.RtlGuestScopeActive)
-  . = MAX(., 0x28320);
-  *(.text.__rspq_deferred_poll)
-  . = MAX(., 0x28800);
-  *(.text.snes_refresh_charge)
-  . = MAX(., 0x288e0);
-  *(.text.flush_run)
-  . = MAX(., 0x290e0);
-  *(.text.interp_bridge_lle_deadline_pause)
-  . = MAX(., 0x29160);
-  *(.text.dma_cycle)
-  . = MAX(., 0x299a0);
-  *(.text.snes_writeReg)
-  . = MAX(., 0x2a160);
-  *(.text.dma_transferByte.part.0)
-  . = MAX(., 0x2a900);
-  *(.text.WatchdogCheck)
-  . = MAX(., 0x2aae0);
-  *(.text.cpu_write16)
-  . = MAX(., 0x2b040);
-  *(.text.recomp_block_enter_charge)
-  . = MAX(., 0x2b100);
-  *(.text.spc_doBranch)
-  . = MAX(., 0x2b140);
-  *(.text.dma_doHdma)
-  . = MAX(., 0x2ba60);
-  *(.text.apu_dspLogRam)
-  . = MAX(., 0x2bf00);
-  *(.text.ppu_getVramRemap)
-  . = MAX(., 0x2c320);
-  *(.text.spc_adrDp)
-  . = MAX(., 0x2c8e0);
-  *(.text.cpu_charge)
-  . = MAX(., 0x2cee0);
-  *(.text.PpuRunLineJob)
-  . = MAX(., 0x2d5a0);
-  *(.text.ppu_rasterApplyLine)
-  . = MAX(., 0x2db00);
-  *(.text.cpu_sync_p_nz)
-  . = MAX(., 0x2dd60);
-  *(.text.spc_readOpcodeWord)
-  . = MAX(., 0x2e260);
-  *(.text.cpu_charge_page)
-  . = MAX(., 0x2e6e0);
-  *(.text.RecompStackPush)
-  . = MAX(., 0x2ef00);
-  *(.text.cpu_charge_dl)
-  . = MAX(., 0x2f000);
-  *(.text.recomp_enter_rt)
-  . = MAX(., 0x2f260);
-  *(.text.cpu_host_return_pc24.part.0)
-  . = MAX(., 0x2f360);
-  *(.text.recomp_frame)
-  . = MAX(., 0x2fb00);
-  *(.text.__MI_handler)
-  . = MAX(., 0x30360);
-  *(.text.recomp_call)
-  . = MAX(., 0x30600);
-  *(.text.rspq_syncpoint_wait)
-  . = MAX(., 0x30940);
-  *(.text.apu_cpuWrite)
-  . = MAX(., 0x30e40);
-  *(.text.cpu_pull8)
-  . = MAX(., 0x30e60);
-  *(.text.texload_set_rect)
-  . = MAX(., 0x31160);
-  *(.text.__rsp_check_assert)
-  . = MAX(., 0x311e0);
-  *(.text.WriteReg)
-  . = MAX(., 0x31b40);
-  *(.text.cpu_read_absX8)
-  . = MAX(., 0x32160);
-  *(.text.RomPtr)
-  . = MAX(., 0x32400);
-  *(.text.spc_pushByte)
-  . = MAX(., 0x32440);
-  *(.text.ppu_runLineState)
-  . = MAX(., 0x327e0);
-  *(.text.apu_cpuRead)
-  . = MAX(., 0x33140);
-  *(.text.RecompStackPop)
-  . = MAX(., 0x331e0);
-  *(.text.spc_pullByte)
-  . = MAX(., 0x33680);
-  *(.text.recomp_enter)
-  . = MAX(., 0x339a0);
-  *(.text.cart_getRomPtr)
-  . = MAX(., 0x33ba0);
-  *(.text.host_main)
-  . = MAX(., 0x34b80);
-  *(.text.cpu_push8)
-  . = MAX(., 0x34bc0);
-  *(.text.cpu_take_tailcall_return_context)
-  . = MAX(., 0x35160);
-  *(.text.interp_bridge_run_ex2)
-  . = MAX(., 0x35480);
-  *(.text.__rdpq_autosync_change)
-  . = MAX(., 0x35d00);
-  *(.text.tier2_discover)
-  . = MAX(., 0x36440);
-  *(.text.decode.constprop.0)
-  . = MAX(., 0x366c0);
-  *(.text.dma_startDma)
-  . = MAX(., 0x36ee0);
-  *(.text.cpu_dispatch_inline_arg_bytes)
-  . = MAX(., 0x37020);
-  *(.text.cpu_read_dp8)
-  . = MAX(., 0x37040);
-  *(.text.texload_tile)
-  . = MAX(., 0x37340);
-  *(.text.ppu_rasterTakeHdmaen)
-  . = MAX(., 0x37640);
-  *(.text.cpu_write_dp8)
-  . = MAX(., 0x37660);
-  *(.text._cpu_dispatch_lookup)
-  . = MAX(., 0x37ec0);
-  *(.text.cpu_dispatch_has_entry)
-  . = MAX(., 0x383c0);
-  *(.text.spc_adrDpWord)
-  . = MAX(., 0x38700);
-  *(.text._ram_guard_blocks)
-  . = MAX(., 0x38920);
-  *(.text.sync_interp_to_cpu)
-  . = MAX(., 0x38a00);
-  *(.text.draw_plane)
-  . = MAX(., 0x38be0);
-  *(.text.rdpq_tex_upload_sub)
-  . = MAX(., 0x39060);
-  *(.text.interp816_pushWord)
-  . = MAX(., 0x390a0);
-  *(.text.bridge_bounce_flush_thresh)
-  . = MAX(., 0x39120);
-  *(.text.__rdpq_write8_syncchange)
-  . = MAX(., 0x39600);
-  *(.text.cpu_sram_offset)
-  . = MAX(., 0x39720);
-  *(.text.interp816_pullByte)
-  . = MAX(., 0x39b00);
-  *(.text.interp_edge_note)
-  . = MAX(., 0x39f60);
-  *(.text.__display_callback)
-  . = MAX(., 0x3aaa0);
-  *(.text._cpu_dispatch_find)
-  . = MAX(., 0x3b200);
-  *(.text.snes_dma_write)
-  . = MAX(., 0x3b9e0);
-  *(.text.spc_pushWord)
-  . = MAX(., 0x3c020);
-  *(.text.apu_native_timer)
-  . = MAX(., 0x3c2a0);
-  *(.text.RtlRenderAudio)
-  . = MAX(., 0x3cb80);
-  *(.text.interp816_pushByte)
-  . = MAX(., 0x3cd60);
-  *(.text.interp_tier_run_call_frame)
-  . = MAX(., 0x3d1e0);
-  *(.text.rdpq_set_tile)
-  . = MAX(., 0x3d560);
-  *(.text.interp816_pullWord)
-  . = MAX(., 0x3dd00);
-  *(.text.data_cache_hit_writeback)
-  . = MAX(., 0x3dd60);
-  *(.text.__rdpq_fixup_write8_syncchange)
-  . = MAX(., 0x3dea0);
-  *(.text.__rdpq_write8_syncchangeuse)
-  . = MAX(., 0x3e200);
-  *(.text.cpu_dispatch_pc_paired)
-  . = MAX(., 0x3e360);
-  *(.text.cpu_read_dp16)
-  . = MAX(., 0x3e380);
-  *(.text.__rdpq_write8)
-  . = MAX(., 0x3e460);
-  *(.text._dispatch_log_record)
-  . = MAX(., 0x3e8c0);
-  *(.text.get_tlut)
-  . = MAX(., 0x3ef40);
-  *(.text.snesdsp_rsp_apu_launch)
-  . = MAX(., 0x3f320);
-  *(.text.tex_loader_load)
-  . = MAX(., 0x3f440);
-  *(.text.rdpq_set_texture_image)
-  . = MAX(., 0x3fb60);
-  *(.text.tier2_capture_enabled)
-  . = MAX(., 0x3ff20);
-  *(.text.si_interrupt)
-  . = MAX(., 0x40420);
-  *(.text.joybus_exec_async)
-  . = MAX(., 0x407a0);
-  *(.text.surface_make_sub)
-  . = MAX(., 0x408c0);
-  *(.text.__rdpq_texture_rectangle_offline)
-  . = MAX(., 0x40c60);
-  *(.text.tier2_record)
-  . = MAX(., 0x41200);
-  *(.text.get_ticks)
-  . = MAX(., 0x41240);
-  *(.text.cpu_write_absX8)
-  . = MAX(., 0x413e0);
-  *(.text.rdpq_tex_upload)
-  . = MAX(., 0x41420);
-  *(.text.exception_reset_time)
-  . = MAX(., 0x41aa0);
-  *(.text.__vblank_interrupt)
-  . = MAX(., 0x41f20);
-  *(.text.__rdpq_texture_rectangle)
-  . = MAX(., 0x420e0);
-  *(.text.enable_interrupts)
-  . = MAX(., 0x42380);
-  *(.text.cpu_write_dp16)
-  . = MAX(., 0x42500);
-  *(.text.vi_show)
-  . = MAX(., 0x42800);
+  . = MAX(., 0xa000);
+  *(.text._interp_run_core)
+  . = MAX(., 0xc700);
+  *(.text.cart_note_cpu_bus)
+  . = MAX(., 0xd3e0);
+  *(.text.ppu_write)
+  . = MAX(., 0xdfe0);
   *(.text.ReadRegOpenBus)
-  . = MAX(., 0x42de0);
-  *(.text.cpu_read_absY8)
-  . = MAX(., 0x42ec0);
-  *(.text.disable_interrupts)
-  . = MAX(., 0x43300);
-  *(.text.emit_reg)
-  . = MAX(., 0x43d20);
-  *(.text.dsp_peek)
-  . = MAX(., 0x44420);
-  *(.text.RecompStackPushInterpreter)
-  . = MAX(., 0x44600);
-  *(.text.dispatch_has_rom_mirror)
-  . = MAX(., 0x44a80);
-  *(.text.cpu_read_absX16)
-  . = MAX(., 0x44e60);
-  *(.text.bridge_bus_write_word)
-  . = MAX(., 0x45160);
-  *(.text.spc_readWord)
-  . = MAX(., 0x45320);
-  *(.text.interp816_writeWord)
-  . = MAX(., 0x45580);
-  *(.text.data_cache_hit_invalidate)
-  . = MAX(., 0x45da0);
-  *(.text.joypad_vi_interrupt_callback)
-  . = MAX(., 0x45fe0);
-  *(.text.vi_set_origin)
-  . = MAX(., 0x462c0);
-  *(.text.cpu_tailcall_inherit_return_context)
-  . = MAX(., 0x463a0);
-  *(.text.cpu_read_longx8)
-  . = MAX(., 0x46500);
-  *(.text.cpu_fast_map_validate)
-  . = MAX(., 0x46560);
-  *(.text.n64_ppu_draw_and_show)
-  . = MAX(., 0x47160);
-  *(.text.unlikely.bridge_ibrwatch_enter.isra.0)
-  . = MAX(., 0x47260);
-  *(.text.joypad_read_callback)
-  . = MAX(., 0x47420);
-  *(.text.cpu_read_dpx8)
-  . = MAX(., 0x47c20);
-  *(.text.snesdsp_rsp_pack)
-  . = MAX(., 0x48100);
-  *(.text.joypad_read_async.part.0)
-  . = MAX(., 0x48440);
-  *(.text.apu_dspSyncFor)
-  . = MAX(., 0x48b80);
-  *(.text.joybus_msg_send)
-  . = MAX(., 0x49100);
-  *(.text.__vi_validate_config)
-  . = MAX(., 0x49720);
-  *(.text.audio_callback.part.0)
-  . = MAX(., 0x4a0e0);
-  *(.text.dsp_write)
-  . = MAX(., 0x4abe0);
-  *(.text.snesdsp_rsp_unpack)
-  . = MAX(., 0x4b5a0);
-  *(.text.WriteRegWord)
-  . = MAX(., 0x4b700);
-  *(.text.vi_write_idx_masked)
-  . = MAX(., 0x4ba20);
-  *(.text.vi_write_end)
-  . = MAX(., 0x4c2c0);
-  *(.text.interp816_getFlags)
-  . = MAX(., 0x4c6a0);
-  *(.text.interp816_setFlags)
-  . = MAX(., 0x4c780);
-  *(.text.__entropy_add)
-  . = MAX(., 0x4c900);
-  *(.text.vi_write_masked)
-  . = MAX(., 0x4cc60);
-  *(.text.__vi_interrupt)
-  . = MAX(., 0x4cd40);
-  *(.text.snes_beam_frame_driver_run_frame)
-  . = MAX(., 0x4d240);
-  *(.text.vi_write_begin)
-  . = MAX(., 0x4d360);
-  *(.text.apu_dspMarkDirEntry)
-  . = MAX(., 0x4d5c0);
-  *(.text.apu_dspStartBatch)
-  . = MAX(., 0x4d700);
-  *(.text.interp_bridge_lle_unwind_pending)
-  . = MAX(., 0x4daa0);
-  *(.text.recomp_write_internal_reg)
-  . = MAX(., 0x4dac0);
-  *(.text.SprStatus00_EmptySlot_M1X1)
-  . = MAX(., 0x4dc00);
-  *(.text.cpu_read_absY16)
-  . = MAX(., 0x4dc40);
-  *(.text.snes_readReg)
-  . = MAX(., 0x4de00);
-  *(.text.ModifyMap16IDForSpecialBlocks_M1X1)
-  . = MAX(., 0x4e260);
-  *(.text.RtlRunFrame)
-  . = MAX(., 0x4ef80);
-  *(.text.cpu_write_dpx8)
-  . = MAX(., 0x4f500);
-  *(.text.rtl_snes_charge_master_cycles)
-  . = MAX(., 0x4f600);
-  *(.text.cpu_write_absY8)
-  . = MAX(., 0x4f700);
-  *(.text.ppudma_record_dma)
-  . = MAX(., 0x4f720);
-  *(.text.rspq_flush_internal)
-  . = MAX(., 0x4f800);
-  *(.text.math_color)
-  . = MAX(., 0x4f9a0);
-  *(.text.cart_readLorom)
-  . = MAX(., 0x4fce0);
-  *(.text.n64_ppu_build_begin)
-  . = MAX(., 0x50120);
-  *(.text.snesdsp_rsp_apu_join)
-  . = MAX(., 0x504e0);
-  *(.text.rspq_next_buffer)
-  . = MAX(., 0x50ae0);
-  *(.text.audio_callback)
-  . = MAX(., 0x50c60);
-  *(.text.GetPlayerLevelCollisionMap16ID_WallRun_M1X1)
-  . = MAX(., 0x50c80);
-  *(.text.dma_wait_finished)
-  . = MAX(., 0x50e60);
-  *(.text.apu_dspMark.part.0)
-  . = MAX(., 0x50ec0);
-  *(.text.pack_coefficients)
-  . = MAX(., 0x51000);
-  *(.text.CheckPlayerAttackToNormalSpriteCollision_M1X1)
-  . = MAX(., 0x512a0);
-  *(.text.cart_read)
-  . = MAX(., 0x51760);
-  *(.text.n64_ppu_build_finish)
-  . = MAX(., 0x51900);
-  *(.text.CheckNormalSpriteLevelColl_Ceiling_M1X1)
-  . = MAX(., 0x51920);
-  *(.text.rspq_sp_interrupt)
-  . = MAX(., 0x519e0);
-  *(.text.RunPlayerBlockCode_00F309_M1X1)
-  . = MAX(., 0x51a00);
-  *(.text.recomp_read_internal_reg)
-  . = MAX(., 0x51a20);
-  *(.text.interp_bridge_set_master_deadline)
-  . = MAX(., 0x51a40);
-  *(.text.rspq_flush)
-  . = MAX(., 0x51b00);
-  *(.text.graphics_draw_character)
-  . = MAX(., 0x523a0);
-  *(.text.data_cache_hit_writeback_invalidate)
-  . = MAX(., 0x526e0);
-  *(.text.rspq_syncpoint_new)
-  . = MAX(., 0x52800);
-  *(.text.cpu_read_dpx16)
-  . = MAX(., 0x52b60);
+  . = MAX(., 0x10300);
   *(.text.bridge_bus_read_slow)
-  . = MAX(., 0x52e20);
-  *(.text.UpdateNormalSpritePosition_Y_01ABD8_M1X1)
-  . = MAX(., 0x52f40);
-  *(.text.rdpq_tex_upload_tlut)
-  . = MAX(., 0x530a0);
-  *(.text.HandleNormalSpriteLevelColl_019441_M1X1)
-  . = MAX(., 0x530c0);
-  *(.text.joypad_poll.part.0)
-  . = MAX(., 0x53b60);
-  *(.text.set_envx_outx.part.0.constprop.0)
-  . = MAX(., 0x54320);
-  *(.text.RtlApuWrite)
-  . = MAX(., 0x54800);
-  *(.text.rspq_wait)
-  . = MAX(., 0x54b40);
-  *(.text.interp_bridge_lle_resume_pc)
-  . = MAX(., 0x54b60);
-  *(.text.cart_irq_pending)
-  . = MAX(., 0x54c00);
-  *(.text.get_ticks_us)
-  . = MAX(., 0x54c60);
-  *(.text.CheckNormalSpriteToNormalSpriteCollision_M1X1)
-  . = MAX(., 0x54de0);
-  *(.text.acct_switch)
-  . = MAX(., 0x55380);
-  *(.text.PpuDecodeOamX)
-  . = MAX(., 0x55420);
-  *(.text.HandleNormalSpriteLevelColl_01933B_M1X1)
-  . = MAX(., 0x55500);
-  *(.text.RunPlayerBlockCode_00F2C9_M1X1)
-  . = MAX(., 0x55520);
-  *(.text.UpdateNormalSpritePosition_X_01ABCC_M1X1)
-  . = MAX(., 0x555e0);
-  *(.text.snes_mod_audio_mix)
-  . = MAX(., 0x55aa0);
-  *(.text.sub_019435_M1X1)
-  . = MAX(., 0x55ae0);
-  *(.text.SubSprGfx2Entry1_M1X1)
-  . = MAX(., 0x55b80);
-  *(.text.__retarget_lock_acquire_recursive)
-  . = MAX(., 0x55d60);
-  *(.text.run_interrupt)
-  . = MAX(., 0x55f00);
-  *(.text.joypad_auto_read)
-  . = MAX(., 0x56080);
-  *(.text.n64_platform_time_us)
-  . = MAX(., 0x56160);
-  *(.text.interp_bridge_run_interrupt)
-  . = MAX(., 0x56400);
-  *(.text.pi_enqueue)
-  . = MAX(., 0x56860);
-  *(.text.apu_schedulePortWrite)
-  . = MAX(., 0x569e0);
-  *(.text.interp_bridge_flush_apu_pending)
-  . = MAX(., 0x56a80);
-  *(.text.apu_dspFrameSync)
-  . = MAX(., 0x56aa0);
-  *(.text.sub_019330_M1X1)
-  . = MAX(., 0x56c40);
-  *(.text.read_line)
-  . = MAX(., 0x56e00);
-  *(.text.__retarget_lock_release_recursive)
-  . = MAX(., 0x56e20);
-  *(.text.pi_poll)
-  . = MAX(., 0x571e0);
-  *(.text.cpu_write_absX16)
-  . = MAX(., 0x57220);
-  *(.text.CheckNormalSpriteToNormalSpriteColl_01A4BA_M1X0)
-  . = MAX(., 0x57260);
-  *(.text.joypad_read_iobit)
-  . = MAX(., 0x572a0);
-  *(.text.SetNormalSpriteYSpeedBasedOnSlope_M1X1)
-  . = MAX(., 0x572c0);
-  *(.text.cpu_write_absY16)
-  . = MAX(., 0x57420);
-  *(.text.recomp_cache_call_absent)
-  . = MAX(., 0x575e0);
-  *(.text.RunPlayerBlockCode_00F2C2_M1X1)
-  . = MAX(., 0x57600);
-  *(.text.SubOffscreen_Bank01_EraseSprite_M1X1)
-  . = MAX(., 0x57620);
-  *(.text.CheckIfNormalSpriteOffScreen_M1X1)
-  . = MAX(., 0x57680);
-  *(.text.interp_bridge_run_until_quiescent)
-  . = MAX(., 0x57800);
-  *(.text.rdpq_set_color_image)
-  . = MAX(., 0x57b60);
-  *(.text.ppu_wlog_note_reg)
-  . = MAX(., 0x57e00);
-  *(.text.ppu_rasterFieldBoundary)
-  . = MAX(., 0x57f40);
-  *(.text.HexToDec_M1X1)
-  . = MAX(., 0x57f60);
-  *(.text.HandleNormalSpriteLevelColl_019211_M1X1)
-  . = MAX(., 0x57f80);
-  *(.text.PlayerGFXRt_00E45D_M1X1)
-  . = MAX(., 0x58020);
-  *(.text.n64_platform_set_phase)
-  . = MAX(., 0x58040);
-  *(.text.CheckPlayerToNormalSpriteCollision_M1X1)
-  . = MAX(., 0x58060);
-  *(.text.CheckNormalSpriteLevelColl_Wall_M1X1)
-  . = MAX(., 0x58080);
-  *(.text.GetDrawInfo_Bank01_Recomp_M1X1)
-  . = MAX(., 0x580a0);
-  *(.text.n64_platform_codepack_finish)
-  . = MAX(., 0x582a0);
-  *(.text.interp_bridge_lle_yield_unwind)
-  . = MAX(., 0x58460);
-  *(.text.HandleNormalSpriteGravity_M1X1)
-  . = MAX(., 0x58480);
-  *(.text.HandleNormalSpriteLevelCollision_M1X1)
-  . = MAX(., 0x58600);
-  *(.text._ram_guard_find)
-  . = MAX(., 0x587e0);
-  *(.text.dma_hdmaLoadDescriptor)
-  . = MAX(., 0x58980);
-  *(.text.msu1_mix)
-  . = MAX(., 0x589c0);
-  *(.text.__clip_blit)
-  . = MAX(., 0x58ac0);
-  *(.text.ParseLevelSpriteList_M1X1)
-  . = MAX(., 0x58ae0);
-  *(.text.HandleStandardLevelCameraScroll_00F8AB_M1X1)
-  . = MAX(., 0x58e60);
-  *(.text.reserve)
-  . = MAX(., 0x59120);
-  *(.text.GameMode14_InLevel_00C47E_M1X1)
-  . = MAX(., 0x59140);
-  *(.text.UploadLevelExAnimationData_M1X1)
-  . = MAX(., 0x59160);
-  *(.text.PlayerDraw_M1X1)
-  . = MAX(., 0x59180);
-  *(.text.UpdateStatusBarCounters_M1X1)
-  . = MAX(., 0x591c0);
-  *(.text.ppudma_frame_snapshot)
-  . = MAX(., 0x591e0);
-  *(.text.GameMode12_PrepareLevel_00919B_M1X1)
-  . = MAX(., 0x59200);
-  *(.text.HandlePlayerPhysics_00D742_M0X1)
-  . = MAX(., 0x59240);
-  *(.text.dma_wait_and_disable_interrupts)
-  . = MAX(., 0x59420);
-  *(.text.cpu_write_dpx16)
-  . = MAX(., 0x59460);
-  *(.text.HandleStandardLevelCameraScroll_M1X1)
-  . = MAX(., 0x59480);
-  *(.text.LoadStripeImage_M1X1)
-  . = MAX(., 0x594a0);
-  *(.text.n64_platform_audio_pump)
-  . = MAX(., 0x59560);
-  *(.text.attach)
-  . = MAX(., 0x59780);
-  *(.text.snes_set_hdma_beam_enabled)
-  . = MAX(., 0x597a0);
-  *(.text.lle_resume_set)
-  . = MAX(., 0x59a00);
-  *(.text.joypad_read_port.part.0)
-  . = MAX(., 0x59ae0);
-  *(.text.audio_get_buffer_length)
-  . = MAX(., 0x59b00);
-  *(.text.UpdateStatusBarCounters_Loop2_M1X1)
-  . = MAX(., 0x59b40);
-  *(.text.SprXXX_Generic_BobOmbEntry_M1X0)
-  . = MAX(., 0x59b60);
-  *(.text.audio_can_write)
-  . = MAX(., 0x59ba0);
-  *(.text.CalculateRowOrColumnOfTilemapToUpdate_M1X0)
-  . = MAX(., 0x59bc0);
-  *(.text.n64_platform_codepack_begin)
-  . = MAX(., 0x59d00);
-  *(.text.HandlePlayerLevelColl_00E9C8_M0X1)
-  . = MAX(., 0x59d20);
-  *(.text.ProcessMinorExtendedSprites_M1X1)
-  . = MAX(., 0x59da0);
-  *(.text.graphics_draw_text)
+  . = MAX(., 0x115a0);
+  *(.text.snes_master_clocks_until_irq)
+  . = MAX(., 0x12e00);
+  *(.text.apu_runCycles_native)
+  . = MAX(., 0x14000);
+  *(.text.spc_runOpcode)
+  . = MAX(., 0x15620);
+  *(.text.dsp_fe_run)
+  . = MAX(., 0x16400);
+  *(.text.unlikely.jit_find)
+  . = MAX(., 0x16b00);
+  *(.text.snes_readReg)
+  . = MAX(., 0x16e00);
+  *(.text.rtl_apu_frame_timeline_active)
+  . = MAX(., 0x16e40);
+  *(.text.cpu_wram_store_plain)
+  . = MAX(., 0x18720);
+  *(.text.snes_sync_master_clock)
+  . = MAX(., 0x18f00);
+  *(.text.snes_master_clocks_to_next_beam_event)
+  . = MAX(., 0x19500);
+  *(.text.jit_rd8)
+  . = MAX(., 0x197e0);
+  *(.text.bridge_timing_bus.part.0)
+  . = MAX(., 0x19fe0);
+  *(.text.dma_doDma.part.0)
+  . = MAX(., 0x1c300);
+  *(.text.cpu_write8)
+  . = MAX(., 0x1cd00);
+  *(.text.cart_getRomPtr.part.0)
+  . = MAX(., 0x1d5e0);
+  *(.text.snes_writeReg)
+  . = MAX(., 0x1e2e0);
+  *(.text.recomp_read_internal_reg)
+  . = MAX(., 0x1eb00);
+  *(.text.env_catch_up_jump)
+  . = MAX(., 0x1ee60);
+  *(.text.WsShadowOnVramWrite)
+  . = MAX(., 0x1f1e0);
+  *(.text.dma_doHdma)
+  . = MAX(., 0x1ff00);
+  *(.text.snes_refresh_charge)
+  . = MAX(., 0x20000);
+  *(.text.cpu_write16)
+  . = MAX(., 0x20c00);
+  *(.text.interp_bridge_lle_master_deadline_reached)
+  . = MAX(., 0x21500);
+  *(.text.WatchdogCheck)
+  . = MAX(., 0x21ae0);
+  *(.text.n64_ppu_build_line)
+  . = MAX(., 0x23c00);
+  *(.text.dma_cycle)
+  . = MAX(., 0x23ce0);
+  *(.text.interp816_runOpcode)
+  . = MAX(., 0x25c00);
+  *(.text.apu_cpuWrite)
+  . = MAX(., 0x26900);
+  *(.text.interp_bridge_lle_deadline_pause)
+  . = MAX(., 0x26d00);
+  *(.text.snes_read)
+  . = MAX(., 0x27260);
+  *(.text.snes_writeBBus)
+  . = MAX(., 0x276c0);
+  *(.text.line_sprites)
+  . = MAX(., 0x28400);
+  *(.text.ppu_rasterRecord)
+  . = MAX(., 0x28580);
+  *(.text.RtlGuestScopeActive)
+  . = MAX(., 0x28d00);
+  *(.text.dsp_fe_write)
+  . = MAX(., 0x29740);
+  *(.text.bridge_continuous_read)
+  . = MAX(., 0x29900);
+  *(.text.cpu_read16)
+  . = MAX(., 0x29fc0);
+  *(.text.RtlGuestScopeCheckpoint)
+  . = MAX(., 0x2a200);
+  *(.text.dma_transferByte.part.0)
+  . = MAX(., 0x2a500);
+  *(.text.apu_cpuRead)
+  . = MAX(., 0x2ad40);
+  *(.text.spc_dbt_fe)
+  . = MAX(., 0x2b580);
+  *(.text.apu_feRead)
+  . = MAX(., 0x2b740);
+  *(.text.recomp_block_enter_charge)
+  . = MAX(., 0x2bc60);
+  *(.text.cpu_charge)
+  . = MAX(., 0x2c100);
+  *(.text.env_gain)
+  . = MAX(., 0x2ca00);
+  *(.text.spc_dbt_edge)
+  . = MAX(., 0x2d3c0);
+  *(.text.spc_dbt_run)
+  . = MAX(., 0x2d7c0);
+  *(.text.ppu_runLineState)
+  . = MAX(., 0x2de00);
+  *(.text.host_main)
+  . = MAX(., 0x2f9a0);
+  *(.text.ppu_rasterApplyLine)
+  . = MAX(., 0x2ff60);
+  *(.text.n64_ppu_desc_line)
+  . = MAX(., 0x306c0);
+  *(.text.cpu_charge_dl)
+  . = MAX(., 0x30720);
+  *(.text.spc_dbt_link)
+  . = MAX(., 0x30a00);
+  *(.text.clear_line)
+  . = MAX(., 0x30d00);
+  *(.text.bridge_bus_write)
+  . = MAX(., 0x31740);
+  *(.text.cart_getRomPtr)
+  . = MAX(., 0x31cc0);
+  *(.text.cpu_charge_page)
+  . = MAX(., 0x32000);
+  *(.text.recomp_enter)
+  . = MAX(., 0x32200);
+  *(.text.voice_next)
+  . = MAX(., 0x32800);
+  *(.text.apu_native_waitSkip)
+  . = MAX(., 0x33700);
+  *(.text.cpu_read_absX8)
+  . = MAX(., 0x33ca0);
+  *(.text.ppu_getVramRemap)
+  . = MAX(., 0x340c0);
+  *(.text.spc_dbt_io_read)
+  . = MAX(., 0x345a0);
+  *(.text.recomp_enter_rt)
+  . = MAX(., 0x345e0);
+  *(.text.apu_yellow_post)
+  . = MAX(., 0x35440);
+  *(.text.cpu_take_tailcall_return_context)
+  . = MAX(., 0x35600);
+  *(.text.recomp_call)
+  . = MAX(., 0x35c00);
+  *(.text.recomp_frame)
+  . = MAX(., 0x362a0);
+  *(.text.spc_readOpcode)
+  . = MAX(., 0x36440);
+  *(.text.cpu_push8)
+  . = MAX(., 0x36a00);
+  *(.text.spc_read)
+  . = MAX(., 0x37100);
+  *(.text.RecompStackPush)
+  . = MAX(., 0x37b60);
+  *(.text._ram_guard_blocks)
+  . = MAX(., 0x37e00);
+  *(.text.RomPtr)
+  . = MAX(., 0x385c0);
+  *(.text.cpu_read_dp8)
+  . = MAX(., 0x388e0);
+  *(.text.cpu_host_return_pc24.part.0)
+  . = MAX(., 0x38be0);
+  *(.text.cpu_pull8)
+  . = MAX(., 0x39200);
+  *(.text.cpu_sram_offset)
+  . = MAX(., 0x39b00);
+  *(.text.apu_feBlock)
+  . = MAX(., 0x39e40);
+  *(.text.RecompStackPop)
+  . = MAX(., 0x39f00);
+  *(.text.RtlRenderAudio)
+  . = MAX(., 0x3ab00);
+  *(.text.cpu_dispatch_inline_arg_bytes)
+  . = MAX(., 0x3ac60);
+  *(.text.n64_ppu_draw_and_show)
+  . = MAX(., 0x3d000);
+  *(.text.WriteReg)
+  . = MAX(., 0x3d780);
+  *(.text.cpu_read_dp16)
+  . = MAX(., 0x3d8a0);
+  *(.text.interp816_readOpcodeWord)
+  . = MAX(., 0x3e020);
+  *(.text.interp816_adrAbx.constprop.0)
+  . = MAX(., 0x3e500);
+  *(.text.ppu_rasterTakeHdmaen)
+  . = MAX(., 0x3e800);
+  *(.text.cpu_write_dp16)
+  . = MAX(., 0x3ee60);
+  *(.text.bridge_bus_read)
+  . = MAX(., 0x3f200);
+  *(.text.interp816_readOpcode)
+  . = MAX(., 0x3f900);
+  *(.text.__MI_handler)
+  . = MAX(., 0x40000);
+  *(.text.spc_dbt_io_write)
+  . = MAX(., 0x40260);
+  *(.text.__rspq_deferred_poll)
+  . = MAX(., 0x40500);
+  *(.text.objmath_line)
+  . = MAX(., 0x40c00);
+  *(.text.apu_feNow)
+  . = MAX(., 0x413c0);
+  *(.text._cpu_dispatch_find)
+  . = MAX(., 0x414e0);
+  *(.text.cpu_write_dp8)
+  . = MAX(., 0x41a80);
+  *(.text.rtl_sync_apu_to_cpu_locked)
+  . = MAX(., 0x420e0);
+  *(.text.unlikely.interp_edge_note)
+  . = MAX(., 0x422c0);
+  *(.text.apu_feEcho)
+  . = MAX(., 0x42700);
+  *(.text.dma_startDma)
+  . = MAX(., 0x43100);
+  *(.text.spc_write)
+  . = MAX(., 0x438c0);
+  *(.text.spc_readOpcodeWord)
+  . = MAX(., 0x44100);
+  *(.text.interp816_pushByte)
+  . = MAX(., 0x44500);
+  *(.text.bridge_bounce_flush_thresh)
+  . = MAX(., 0x44d80);
+  *(.text.rspq_ring_write)
+  . = MAX(., 0x452e0);
+  *(.text.cpu_dispatch_has_entry)
+  . = MAX(., 0x453e0);
+  *(.text.dsp_peek)
+  . = MAX(., 0x45760);
+  *(.text.unlikely.jit_decode)
+  . = MAX(., 0x45e00);
+  *(.text.apu_native_timer)
+  . = MAX(., 0x466e0);
+  *(.text.scene_draw_bg)
+  . = MAX(., 0x47220);
+  *(.text.cpu_dispatch_pc_paired)
+  . = MAX(., 0x47560);
+  *(.text._dispatch_log_record)
+  . = MAX(., 0x47ca0);
+  *(.text.interp816_pushWord)
+  . = MAX(., 0x47d00);
+  *(.text.apu_streamPost)
+  . = MAX(., 0x48620);
+  *(.text.apu_spcWriteRam)
+  . = MAX(., 0x489e0);
+  *(.text.cpu_write_absX8)
+  . = MAX(., 0x48a80);
+  *(.text.n64_ppu_build_begin)
+  . = MAX(., 0x49000);
+  *(.text.cpu_read_absY8)
+  . = MAX(., 0x49260);
+  *(.text.enable_interrupts)
+  . = MAX(., 0x49680);
+  *(.text.apu_runToGuestCycle)
+  . = MAX(., 0x49c00);
+  *(.text.PpuRunLineJob)
+  . = MAX(., 0x4a4c0);
+  *(.text.get_ticks)
+  . = MAX(., 0x4a700);
+  *(.text.dsp_write)
+  . = MAX(., 0x4af40);
+  *(.text.bridge_apu_flush.part.0)
+  . = MAX(., 0x4b400);
+  *(.text.emit_reg)
+  . = MAX(., 0x4c160);
+  *(.text.PpuDrawVisibleLine)
+  . = MAX(., 0x4e2a0);
+  *(.text.spc_dbt_may_run)
+  . = MAX(., 0x4eaa0);
+  *(.text.spc_readWord)
+  . = MAX(., 0x4ef60);
+  *(.text.snes_dma_write)
+  . = MAX(., 0x4f7e0);
+  *(.text.cpu_read_longx8)
+  . = MAX(., 0x4fb00);
+  *(.text.interp816_setZN.isra.0)
+  . = MAX(., 0x501e0);
+  *(.text.cart_read)
+  . = MAX(., 0x50820);
+  *(.text.cpu_read_dpx8)
+  . = MAX(., 0x50b00);
+  *(.text.cpu_tailcall_inherit_return_context)
+  . = MAX(., 0x50b40);
+  *(.text.RtlApuUnlock)
+  . = MAX(., 0x50b80);
+  *(.text.rspq_next_buffer)
+  . = MAX(., 0x515e0);
+  *(.text.spc_doBranch)
+  . = MAX(., 0x51a00);
+  *(.text.data_cache_hit_writeback)
+  . = MAX(., 0x51f00);
+  *(.text.cpu_read_absX16)
+  . = MAX(., 0x522c0);
+  *(.text.cpu_write_absY8)
+  . = MAX(., 0x523e0);
+  *(.text.scene_tlut)
+  . = MAX(., 0x52740);
+  *(.text.snes_beam_frame_driver_run_frame)
+  . = MAX(., 0x52fe0);
+  *(.text.cart_readLorom)
+  . = MAX(., 0x53600);
+  *(.text.unlikely.bridge_wait_replay.isra.0)
+  . = MAX(., 0x54300);
+  *(.text.__display_callback)
+  . = MAX(., 0x54760);
+  *(.text.__rsp_check_assert)
+  . = MAX(., 0x54840);
+  *(.text.disable_interrupts)
+  . = MAX(., 0x55080);
+  *(.text.interp_bridge_run_ex2)
+  . = MAX(., 0x557e0);
+  *(.text.__vblank_interrupt)
+  . = MAX(., 0x56200);
+  *(.text.cpu_read_absY16)
+  . = MAX(., 0x56600);
+  *(.text.audio_callback.part.0)
+  . = MAX(., 0x56840);
+  *(.text.apu_streamSetSlow)
+  . = MAX(., 0x56cc0);
+  *(.text.rtl_apu_guest_cycle_at.constprop.0)
+  . = MAX(., 0x56de0);
+  *(.text.get_tlut)
+  . = MAX(., 0x57da0);
+  *(.text.wlog_addr_note_direct)
+  . = MAX(., 0x584c0);
+  *(.text.cpu_dispatch_pc_from)
+  . = MAX(., 0x58b00);
+  *(.text.spc_dbt_valid.part.0)
+  . = MAX(., 0x58f00);
+  *(.text.n64_scene_rsp_bg)
+  . = MAX(., 0x595c0);
+  *(.text.echo_catch_up)
+  . = MAX(., 0x59a60);
+  *(.text.exception_reset_time)
   . = MAX(., 0x59ee0);
-  *(.text.cpu_read_longx16)
-  . = MAX(., 0x5a160);
-  *(.text.__rdpq_set_scissor)
-  . = MAX(., 0x5a2c0);
-  *(.text.ProcessBounceAndSmokeSprites_Return02904C_M0X1)
-  . = MAX(., 0x5a2e0);
-  *(.text.HandleScrollSpriteAndLayer3Scrolling_M1X1)
-  . = MAX(., 0x5a300);
-  *(.text.dsp_available)
-  . = MAX(., 0x5a360);
-  *(.text.GameMode14_InLevel_Bank02_M1X1)
-  . = MAX(., 0x5a380);
-  *(.text.GameMode08_FileSelect_M1X1)
-  . = MAX(., 0x5a400);
-  *(.text.HandleNormalSpriteLevelColl_01928E_M1X1)
-  . = MAX(., 0x5a440);
-  *(.text.HandleCapeLevelColl_029540_M1X1)
+  *(.text.audio_trace_set_producer)
+  . = MAX(., 0x59f40);
+  *(.text.spc_pullByte)
+  . = MAX(., 0x59f80);
+  *(.text.cpu_write_longx8)
   . = MAX(., 0x5a460);
-  *(.text.display_try_get)
-  . = MAX(., 0x5a600);
-  *(.text.RunPlayerBlockCode_EB77_M1X1)
-  . = MAX(., 0x5a620);
-  *(.text.PlayerGFXRt_00F636_M1X1)
-  . = MAX(., 0x5a6e0);
-  *(.text.joypad_auto_read_reg_addr)
-  . = MAX(., 0x5a7e0);
-  *(.text.PlayerGFXRt_00E45D_M1X0)
-  . = MAX(., 0x5a800);
-  *(.text.StunnedShellDraw_M1X1)
-  . = MAX(., 0x5aa00);
-  *(.text.joypad_read_port)
-  . = MAX(., 0x5aa40);
-  *(.text.SprStatus09_Stunned_019624_M1X1)
-  . = MAX(., 0x5aa60);
-  *(.text.render_audio)
-  . = MAX(., 0x5aa80);
-  *(.text.HandlePlayerLevelColl_00EA0D_M1X1)
-  . = MAX(., 0x5ad60);
-  *(.text.__rdpq_fill_rectangle)
-  . = MAX(., 0x5aea0);
-  *(.text.SprStatus09_Stunned_M1X1)
-  . = MAX(., 0x5aee0);
-  *(.text.UpdatePaletteFromIndexedTable_00AE47_M1X1)
-  . = MAX(., 0x5af40);
-  *(.text.CheckPlayerToNormalSpriteColl_ProcessInteract_M1X1)
-  . = MAX(., 0x5af60);
-  *(.text.ProcessScoreSprites_M1X1)
-  . = MAX(., 0x5afa0);
-  *(.text.resume_ring_note)
-  . = MAX(., 0x5b040);
-  *(.text.snes_refresh_exempt)
-  . = MAX(., 0x5b080);
-  *(.text.UploadPlayerGFX_M1X1)
-  . = MAX(., 0x5b0a0);
-  *(.text.GameMode07_9C8F_M1X1)
-  . = MAX(., 0x5b0c0);
-  *(.text.SprXXX_Generic_NakedKoopaEntry_M1X1)
-  . = MAX(., 0x5b0e0);
-  *(.text.get_interrupts_state)
-  . = MAX(., 0x5b100);
-  *(.text.DamagePlayer_DisableButtons_M1X1)
-  . = MAX(., 0x5b120);
-  *(.text.SetPlayerPose_M1X1)
-  . = MAX(., 0x5b240);
-  *(.text.__rdpq_interrupt)
-  . = MAX(., 0x5b300);
-  *(.text.PollJoypadInputs_M1X1)
-  . = MAX(., 0x5b320);
-  *(.text.interp_bridge_lle_took_wai)
-  . = MAX(., 0x5b340);
-  *(.text.RunPlayerBlockCode_M1X1)
-  . = MAX(., 0x5b360);
-  *(.text.StunnedShellGFXRt_01980F_M1X1)
-  . = MAX(., 0x5b380);
-  *(.text.UpdateStatusBarCounters_DrawItemBoxItem_M1X1)
-  . = MAX(., 0x5b3a0);
-  *(.text.kirq_begin_wait_pi)
-  . = MAX(., 0x5b3c0);
-  *(.text.UpdateCurrentPlayerPositionRAM_M1X1)
-  . = MAX(., 0x5b540);
-  *(.text.rdpq_set_z_image)
-  . = MAX(., 0x5b600);
-  *(.text.audio_write_begin)
-  . = MAX(., 0x5b760);
-  *(.text.cart_sync_coprocessors)
-  . = MAX(., 0x5b820);
-  *(.text.HandlePlayerPhysics_UpdatePMeterEx_M1X1)
-  . = MAX(., 0x5b840);
-  *(.text.dma_read_async)
-  . = MAX(., 0x5b980);
-  *(.text.graphics_draw_box)
-  . = MAX(., 0x5bba0);
-  *(.text.ppu_rasterRenderBegin)
-  . = MAX(., 0x5bcc0);
-  *(.text.ProcessExtendedSprites_M1X1)
-  . = MAX(., 0x5bd00);
-  *(.text.CheckPlayerAndNormalSpriteCollisions_M1X1)
-  . = MAX(., 0x5be00);
-  *(.text.__rdpq_fill_rectangle_offline)
-  . = MAX(., 0x5c040);
-  *(.text.__rdpq_reset_render_mode)
-  . = MAX(., 0x5c140);
-  *(.text.ResetPlayerLevelCollisionRAM_M1X1)
-  . = MAX(., 0x5c2a0);
-  *(.text.pi_interrupt)
-  . = MAX(., 0x5c320);
-  *(.text.UpdatePlayerSpritePosition_M1X1)
-  . = MAX(., 0x5c340);
-  *(.text.PlayerGFXRt_01EA70_M1X1)
-  . = MAX(., 0x5c3a0);
-  *(.text.rdpq_set_mode_standard)
-  . = MAX(., 0x5c480);
-  *(.text.ppudma_note_interrupt)
-  . = MAX(., 0x5c4e0);
-  *(.text.__rdpq_fixup_mode4)
+  *(.text.bridge_apu_flush.isra.0)
+  . = MAX(., 0x5abe0);
+  *(.text.__rdpq_autosync_change)
+  . = MAX(., 0x5b200);
+  *(.text.vi_show)
+  . = MAX(., 0x5b5e0);
+  *(.text.flush_run)
+  . = MAX(., 0x5c300);
+  *(.text.reap)
   . = MAX(., 0x5c5c0);
-  *(.text.Spr0DE_Load5Eeries_M1X1)
-  . = MAX(., 0x5c5e0);
-  *(.text.ProcessSpinningCoinSprites_M1X1)
-  . = MAX(., 0x5c600);
-  *(.text.StandardSpriteToSpriteCollisionChecks_GetMarioClipping_M1X1)
-  . = MAX(., 0x5c620);
-  *(.text.ppu_rasterRenderEnd)
-  . = MAX(., 0x5c740);
-  *(.text.CheckPowerUpSpecificPlayerAttacks_M1X1)
-  . = MAX(., 0x5c760);
-  *(.text.audio_trace_on_output_priming)
-  . = MAX(., 0x5c7a0);
-  *(.text.snes_set_raster_irq_beam_enabled)
-  . = MAX(., 0x5c7c0);
-  *(.text.CheckIfLevelTilemapsNeedScrollUpdate_M1X1)
-  . = MAX(., 0x5c7e0);
-  *(.text.UploadLevelLayer1And2Tilemaps_M1X1)
+  *(.text.jit_wr8)
+  . = MAX(., 0x5c6e0);
+  *(.text.RtlApuLock)
+  . = MAX(., 0x5c880);
+  *(.text.audio_trace_on_guest_sync)
   . = MAX(., 0x5c9a0);
-  *(.text.audio_write_end)
+  *(.text.dsp_fe_echo_sync)
+  . = MAX(., 0x5c9e0);
+  *(.text.rtl_apu_extended_frame_timing)
   . = MAX(., 0x5ca20);
-  *(.text.HandlePlayerPhysics_StoreAndReturn_M0X1)
-  . = MAX(., 0x5ca40);
-  *(.text.dma_read)
-  . = MAX(., 0x5ca80);
-  *(.text.code_cache_load)
-  . = MAX(., 0x5cb00);
-  *(.text.ProcessShooterSprites_M1X1)
-  . = MAX(., 0x5cb20);
-  *(.text.interp_tier_dispatch_tail)
-  . = MAX(., 0x5cbc0);
-  *(.text.GetDrawInfo_Bank23_Recomp_ReturnsTwice_M1X1)
-  . = MAX(., 0x5cc60);
-  *(.text.n64_platform_codepack_load)
-  . = MAX(., 0x5cca0);
-  *(.text.CheckAvailableExtendedSpriteSlot_M1X1)
-  . = MAX(., 0x5ccc0);
-  *(.text.CheckPlayerPositionRelativeToSprite_Bank01_X_M1X1)
-  . = MAX(., 0x5cd00);
-  *(.text.HandlePlayerPhysics_D92E_M1X1)
-  . = MAX(., 0x5cd20);
-  *(.text.UploadLevelTilemapHDMA_M1X1)
-  . = MAX(., 0x5cd60);
-  *(.text.GameMode07_TitleScreenDemo_FadeOutToTitleScreen_M1X1)
-  . = MAX(., 0x5cd80);
-  *(.text.n64_ppu_build_end)
-  . = MAX(., 0x5ce60);
-  *(.text.rdpq_fence)
-  . = MAX(., 0x5cfa0);
-  *(.text.joypad_latch)
-  . = MAX(., 0x5d1a0);
-  *(.text.window_bit)
-  . = MAX(., 0x5d2a0);
-  *(.text.SprStatus09_Stunned_019554_M1X1)
-  . = MAX(., 0x5d2c0);
-  *(.text.RestoreSP1AfterMarioStart_M1X1)
-  . = MAX(., 0x5d320);
-  *(.text.snes_readBBus)
-  . = MAX(., 0x5d500);
-  *(.text.rtl_render_wait)
-  . = MAX(., 0x5d600);
-  *(.text.Tier2CoverageTick)
-  . = MAX(., 0x5d6e0);
-  *(.text.SetMode7PPUPointersAndLayer1Scroll_NMI_8449_M1X1)
-  . = MAX(., 0x5d720);
-  *(.text.DamagePlayer_Kill_M1X0)
-  . = MAX(., 0x5d740);
-  *(.text.SmwRunDecompressFromWRAM_M1X1)
-  . = MAX(., 0x5d760);
-  *(.text.UpdatePaletteFromIndexedTable_M1X1)
-  . = MAX(., 0x5d780);
-  *(.text.SprXXX_Generic_018931_M1X1)
-  . = MAX(., 0x5d7a0);
-  *(.text.ProcessStunnedNormalSprite_M1X1)
+  *(.text.apu_yellow_running)
+  . = MAX(., 0x5cc00);
+  *(.text.bridge_bus_read_word.part.0)
+  . = MAX(., 0x5d2e0);
+  *(.text.data_cache_hit_writeback_invalidate)
   . = MAX(., 0x5d7c0);
-  *(.text.RunPlayerBlockCode_00F28C_M1X1)
-  . = MAX(., 0x5d7e0);
-  *(.text.joybus_identify_callback)
-  . = MAX(., 0x5da40);
-  *(.text.CheckWhichControllersArePluggedIn_M1X1)
-  . = MAX(., 0x5da60);
-  *(.text.times)
-  . = MAX(., 0x5daa0);
-  *(.text.HandleLevelTileAnimations_M1X1)
-  . = MAX(., 0x5dac0);
-  *(.text.PlayerState00_HandleLRScrolling_M1X1)
-  . = MAX(., 0x5dae0);
-  *(.text.CODE_05BC4A_M1X1)
-  . = MAX(., 0x5db00);
-  *(.text.CheckPlayerPositionRelativeToSprite_Bank01_Y_M1X1)
-  . = MAX(., 0x5db20);
-  *(.text.__rdpq_fixup_mode3)
-  . = MAX(., 0x5dc00);
-  *(.text.timer_poll)
-  . = MAX(., 0x5dd80);
-  *(.text.joypad_detect_callback)
-  . = MAX(., 0x5dee0);
-  *(.text.vi_get_refresh_rate)
-  . = MAX(., 0x5e060);
-  *(.text.rtl_apu_port_observers_read)
-  . = MAX(., 0x5e320);
-  *(.text.dma_initHdma)
-  . = MAX(., 0x5e3c0);
-  *(.text.n64_run_frame)
-  . = MAX(., 0x5e3e0);
-  *(.text.CheckIfBlockWasHit_M1X1)
-  . = MAX(., 0x5e400);
-  *(.text.n64_bgrsp_frame_begin)
-  . = MAX(., 0x5e420);
-  *(.text.joybus_identify_async.part.0)
-  . = MAX(., 0x5e7e0);
-  *(.text.__rdpq_set_color_image)
-  . = MAX(., 0x5e920);
-  *(.text.SprStatus09_Stunned_01956A_M1X1)
-  . = MAX(., 0x5e940);
-  *(.text.RunPlayerBlockCode_CheckIfGrabbingThrowBlock_M1X1)
-  . = MAX(., 0x5e960);
-  *(.text.InitializeCapeSwingOrNetPunch_M1X1)
-  . = MAX(., 0x5e980);
-  *(.text.ppu_rasterBegin)
-  . = MAX(., 0x5ea40);
-  *(.text.StandardSpriteToSpriteCollisionChecks_GetSpriteClippingA_M1X1)
-  . = MAX(., 0x5ea60);
-  *(.text.n64_bgrsp_release_vram)
-  . = MAX(., 0x5eac0);
-  *(.text.recomp_cache_poll)
-  . = MAX(., 0x5eb20);
-  *(.text.display_get)
-  . = MAX(., 0x5ec80);
-  *(.text.ppu_handleVblank)
-  . = MAX(., 0x5ecc0);
-  *(.text.snes_master_clocks_until_line)
-  . = MAX(., 0x5ed60);
-  *(.text.SprXXX_Generic_018B43_M1X1)
-  . = MAX(., 0x5ed80);
-  *(.text.pi_manual_interrupt_poll)
-  . = MAX(., 0x5f040);
-  *(.text.n64_bgrsp_submit)
-  . = MAX(., 0x5f160);
-  *(.text.n64_platform_read_pad)
-  . = MAX(., 0x5f2a0);
-  *(.text.ppu_checkOverscan)
+  *(.text.RtlRunFrame)
+  . = MAX(., 0x5e900);
+  *(.text.apu_streamRegion)
+  . = MAX(., 0x5ec00);
+  *(.text.WriteRegWord)
+  . = MAX(., 0x5ede0);
+  *(.text.recomp_write_internal_reg)
+  . = MAX(., 0x5f120);
+  *(.text.spc_adrDp)
+  . = MAX(., 0x5f320);
+  *(.text.ProcessNormalSprites_GetNormalSpriteOAMIndexAndDecrementTimers_M1X1)
   . = MAX(., 0x5f380);
-  *(.text.PpuBeginDrawing)
-  . = MAX(., 0x5f440);
-  *(.text.ChangeNormalSpriteDirection_CheckIfTouchingWall_M1X1)
-  . = MAX(., 0x5f460);
-  *(.text.graphics_set_color)
-  . = MAX(., 0x5f480);
-  *(.text.WatchdogFrameStart)
-  . = MAX(., 0x5f600);
-  *(.text.__rdpq_set_fill_color)
-  . = MAX(., 0x5f700);
-  *(.text.display_show)
-  . = MAX(., 0x5f860);
-  *(.text.SpawnNormalSpriteTurnAroundSmoke_M1X1)
-  . = MAX(., 0x5f880);
-  *(.text.joybus_get_identifier)
-  . = MAX(., 0x5f920);
-  *(.text.kirq_begin_wait_vi)
-  . = MAX(., 0x5f940);
-  *(.text.joypad_set_pad)
+  *(.text.__rdpq_write8)
+  . = MAX(., 0x5f780);
+  *(.text.joybus_exec_async)
   . = MAX(., 0x5fa00);
-  *(.text.__rdpq_set_mode_fill)
-  . = MAX(., 0x5fa80);
-  *(.text.joypad_inputs_from_n64_controller_read)
-  . = MAX(., 0x5fb40);
-  *(.text.inst_cache_hit_invalidate)
-  . = MAX(., 0x5fbe0);
-  *(.text.n64_bgrsp_sync_vram)
-  . = MAX(., 0x5fce0);
-  *(.text.RunPlayerBlockCode_00EE3A_M1X1)
-  . = MAX(., 0x5fd00);
-  *(.text.RunPlayerBlockCode_00F3E9_M1X1)
-  . = MAX(., 0x5fd20);
-  *(.text.n64_ppu_build_release_vram)
-  . = MAX(., 0x5fd40);
-  *(.text.vi_get_bpp)
-  . = MAX(., 0x5fe00);
-  *(.text.audio_trace_on_consume)
-  . = MAX(., 0x5fe80);
-  *(.text.n64_bgrsp_flags)
-  . = MAX(., 0x5fea0);
-  *(.text.Sample11_M1X1)
-  . = MAX(., 0x5fec0);
-  *(.text.rdpq_attach)
-  . = MAX(., 0x5ff00);
-  *(.text.n64_bgrsp_wait)
-  . = MAX(., 0x5ffa0);
-  *(.text.rdpq_detach_cb)
-  . = MAX(., 0x60060);
-  *(.text.dsp_advance)
-  . = MAX(., 0x600c0);
-  *(.text.joypad_accessory_polled)
-  . = MAX(., 0x60240);
-  *(.text.rdpq_sync_full)
-  . = MAX(., 0x60360);
-  *(.text.HandleStandardLevelCameraScroll_00F8AB_M0X1)
-  . = MAX(., 0x60380);
-  *(.text.sys_hw_memset16)
-  . = MAX(., 0x60420);
-  *(.text.graphics_make_color)
-  . = MAX(., 0x604e0);
-  *(.text.n64_bgrsp_kick)
-  . = MAX(., 0x60500);
-  *(.text.timer_callback)
-  . = MAX(., 0x605a0);
-  *(.text.__TI_handler)
-  . = MAX(., 0x60620);
-  *(.text.SpawnPlayerTurnAroundSmoke_M1X1)
-  . = MAX(., 0x60640);
-  *(.text.SprXXX_Generic_SpriteLockedPath_018B03_M1X1)
-  . = MAX(., 0x60660);
-  *(.text.sub_1891F_M1X1)
-  . = MAX(., 0x60680);
-  *(.text.SprXXX_Generic_Spr0to13Gfx_M1X1)
-  . = MAX(., 0x606a0);
-  *(.text.HandlePlayerPhysics_00D764_M1X1)
-  . = MAX(., 0x606c0);
-  *(.text.sbrk)
+  *(.text.si_interrupt)
+  . = MAX(., 0x60160);
+  *(.text.dispatch_has_rom_mirror)
+  . = MAX(., 0x60720);
+  *(.text.interp_bridge_lle_unwind_pending)
   . = MAX(., 0x607e0);
-  *(.text.joypad_get_buttons)
-  . = MAX(., 0x60880);
-  *(.text.HandlePlayerPhysics_UpdatePMeter_M1X1)
-  . = MAX(., 0x608a0);
-  *(.text.joypad_poll)
-  . = MAX(., 0x60900);
-  *(.text.joypad_get_inputs)
-  . = MAX(., 0x609a0);
-  *(.text.display_set_fps_limit)
-  . = MAX(., 0x60aa0);
-  *(.text.timer_update_compare)
-  . = MAX(., 0x60ae0);
-  *(.text.SprStatus0B_Carried_01A0B1_M1X1)
-  . = MAX(., 0x60b00);
-  *(.text.CheckPlayerToNormalSpriteColl_ReturnNoContact_M1X1)
-  . = MAX(., 0x60b20);
-  *(.text.audio_trace_on_output_underflow)
-  . = MAX(., 0x60b60);
-  *(.text.SprStatus0B_Carried_019F9B_M1X1)
-  . = MAX(., 0x60b80);
-  *(.text.SpawnNormalSpriteTurnAroundSmoke_Entry2_M1X1)
-  . = MAX(., 0x60ba0);
-  *(.text.SprStatus0B_Carried_M1X1)
-  . = MAX(., 0x60bc0);
+  *(.text.__rdpq_write8_syncchange)
+  . = MAX(., 0x60d00);
+  *(.text.rtl_snes_charge_master_cycles)
+  . = MAX(., 0x60d40);
+  *(.text.line_palettes)
+  . = MAX(., 0x61dc0);
+  *(.text.data_cache_hit_invalidate)
+  . = MAX(., 0x61f00);
+  *(.text.SprStatus00_EmptySlot_M1X1)
+  . = MAX(., 0x62000);
+  *(.text.__rdpq_fixup_mode3)
+  . = MAX(., 0x62240);
+  *(.text.cpu_pull16)
+  . = MAX(., 0x622c0);
+  *(.text.joypad_vi_interrupt_callback)
+  . = MAX(., 0x628e0);
+  *(.text.rspq_sp_interrupt)
+  . = MAX(., 0x62e20);
+  *(.text.ProcessNormalSprites_HandleSprite_M1X1)
+  . = MAX(., 0x63320);
+  *(.text.interp816_adrDp)
+  . = MAX(., 0x63b60);
+  *(.text.obj_lines_collect)
+  . = MAX(., 0x63f40);
+  *(.text.vi_write_end)
+  . = MAX(., 0x64420);
+  *(.text.__rdpq_fixup_mode4)
+  . = MAX(., 0x64700);
+  *(.text.joypad_read_async.part.0)
+  . = MAX(., 0x64ae0);
+  *(.text.vi_write_idx_masked)
+  . = MAX(., 0x65040);
+  *(.text.rdpq_tex_upload_tlut)
+  . = MAX(., 0x65300);
+  *(.text.cpu_write_absX16)
+  . = MAX(., 0x65360);
+  *(.text.__rdpq_fixup_write8_syncchange)
+  . = MAX(., 0x654e0);
+  *(.text.rdpq_set_mode_copy)
+  . = MAX(., 0x657a0);
+  *(.text.recomp_return_slow)
+  . = MAX(., 0x65aa0);
+  *(.text.cpu_write_dpx8)
+  . = MAX(., 0x65d00);
+  *(.text.ppudma_record_dma)
+  . = MAX(., 0x65e40);
+  *(.text.rdpq_set_mode_standard)
+  . = MAX(., 0x65f20);
+  *(.text.__rdpq_write8_syncchangeuse)
+  . = MAX(., 0x661c0);
+  *(.text.joybus_msg_send)
+  . = MAX(., 0x662e0);
+  *(.text.__rdpq_reset_render_mode)
+  . = MAX(., 0x669e0);
+  *(.text.graphics_draw_character)
+  . = MAX(., 0x67060);
+  *(.text.__vi_validate_config)
+  . = MAX(., 0x67460);
+  *(.text.joypad_poll.part.0)
+  . = MAX(., 0x67ac0);
+  *(.text.unlikely.jit_translate.constprop.0)
+  . = MAX(., 0x6b540);
+  *(.text.interp816_readWord)
+  . = MAX(., 0x6b800);
+  *(.text.tier2_discover)
+  . = MAX(., 0x6bb60);
+  *(.text.apu_yellow_progress)
+  . = MAX(., 0x6bc60);
+  *(.text.vi_write_begin)
+  . = MAX(., 0x6bca0);
+  *(.text.spc_pushByte)
+  . = MAX(., 0x6c4e0);
+  *(.text.jit_tail_call)
+  . = MAX(., 0x6c600);
+  *(.text.n64_ppu_scene_tlut)
+  . = MAX(., 0x6cc20);
+  *(.text.joypad_read_callback)
+  . = MAX(., 0x6d000);
+  *(.text.vi_set_origin)
+  . = MAX(., 0x6d420);
+  *(.text.__vi_interrupt)
+  . = MAX(., 0x6d5c0);
+  *(.text.interp_bridge_set_master_deadline)
+  . = MAX(., 0x6d7e0);
+  *(.text.enter_blue)
+  . = MAX(., 0x6d8e0);
+  *(.text.interp_bridge_run_until_quiescent)
+  . = MAX(., 0x6d9a0);
+  *(.text.translate)
+  . = MAX(., 0x72520);
+  *(.text.bridge_bus_read_word)
+  . = MAX(., 0x72580);
+  *(.text.vi_write_masked)
+  . = MAX(., 0x727a0);
+  *(.text.red_dispatch)
+  . = MAX(., 0x72f00);
+  *(.text.jit_rd16)
+  . = MAX(., 0x72fc0);
+  *(.text.jit_tail_ret)
+  . = MAX(., 0x73480);
+  *(.text.line_spans)
+  . = MAX(., 0x739a0);
+  *(.text.ProcessExtendedSprites_029B16_M1X1)
+  . = MAX(., 0x73d60);
+  *(.text.texload_tile)
+  . = MAX(., 0x74160);
+  *(.text.n64_ppu_desc)
+  . = MAX(., 0x741a0);
+  *(.text.__entropy_add)
+  . = MAX(., 0x74880);
+  *(.text.texload_set_rect)
+  . = MAX(., 0x74b80);
+  *(.text.PpuDecodeOamX)
+  . = MAX(., 0x74c80);
+  *(.text.interp816_pullByte)
+  . = MAX(., 0x74d00);
+  *(.text.RunPlayerBlockCode_00F309_M1X1)
+  . = MAX(., 0x74d40);
+  *(.text.n64_tile_cache_empty4)
+  . = MAX(., 0x74ee0);
+  *(.text.spc_pushWord)
+  . = MAX(., 0x74fa0);
+  *(.text.audio_callback)
+  . = MAX(., 0x75040);
+  *(.text.GetPlayerLevelCollisionMap16ID_Entry2_M0X1)
+  . = MAX(., 0x75080);
+  *(.text.__retarget_lock_release_recursive)
+  . = MAX(., 0x750c0);
+  *(.text.joypad_auto_read)
+  . = MAX(., 0x75340);
+  *(.text.n64_tile_cache_c4)
+  . = MAX(., 0x75560);
+  *(.text.graphics_draw_box)
+  . = MAX(., 0x757e0);
+  *(.text.ModifyMap16IDForSpecialBlocks_M1X1)
+  . = MAX(., 0x758c0);
+  *(.text.interp_bridge_lle_resume_pc)
+  . = MAX(., 0x75960);
+  *(.text.ppu_rasterFieldBoundary)
+  . = MAX(., 0x761e0);
+  *(.text.RtlApuWrite)
+  . = MAX(., 0x767e0);
+  *(.text.rdpq_set_tile)
+  . = MAX(., 0x771a0);
+  *(.text.recomp_nest_state_save)
+  . = MAX(., 0x773a0);
+  *(.text.apu_dspFrameSync)
+  . = MAX(., 0x77420);
+  *(.text.GenericGFXRtMoveTileOffscreenVertically_M1X1)
+  . = MAX(., 0x774c0);
+  *(.text.interp_bridge_run_interrupt)
+  . = MAX(., 0x77600);
+  *(.text.CheckNormalSpriteToNormalSpriteColl_01A5D3_M1X0)
+  . = MAX(., 0x77800);
+  *(.text.spc_adrDpWord)
+  . = MAX(., 0x77b20);
+  *(.text.RecompStackPushInterpreter)
+  . = MAX(., 0x77ba0);
+  *(.text.__retarget_lock_acquire_recursive)
+  . = MAX(., 0x77c00);
+  *(.text.ProcessExtendedSprites_029B16_M0X1)
+  . = MAX(., 0x77c40);
+  *(.text.GetPlayerLevelCollisionMap16ID_WallRun_M1X1)
+  . = MAX(., 0x77c80);
+  *(.text.blue_trampoline)
+  . = MAX(., 0x77ce0);
+  *(.text.obj_lines_build)
+  . = MAX(., 0x77f00);
+  *(.text.n64_platform_set_phase)
+  . = MAX(., 0x78500);
+  *(.text.tier2_record)
+  . = MAX(., 0x78800);
+  *(.text.CheckPlayerAttackToNormalSpriteCollision_M1X1)
+  . = MAX(., 0x788c0);
+  *(.text.unlikely.bridge_ibrwatch_enter.isra.0)
+  . = MAX(., 0x79140);
+  *(.text.__rdpq_set_scissor)
+  . = MAX(., 0x79780);
+  *(.text.n64_scene_rsp_tiles)
+  . = MAX(., 0x799a0);
+  *(.text.get_ticks_us)
+  . = MAX(., 0x79a20);
+  *(.text.SubSprGfx2Entry1_M1X1)
+  . = MAX(., 0x79a60);
+  *(.text.ProcessBounceAndSmokeSprites_BounceSprites_M1X1)
+  . = MAX(., 0x79aa0);
+  *(.text.tex_xblit_norotate_noscale)
+  . = MAX(., 0x79e00);
+  *(.text.tier2_entry_mx.isra.0)
+  . = MAX(., 0x79ee0);
+  *(.text.PlayerGFXRt_00E45D_M1X1)
+  . = MAX(., 0x79f20);
+  *(.text.cpu_fast_map_validate)
+  . = MAX(., 0x79fc0);
+  *(.text.ltd_texloader)
+  . = MAX(., 0x7a240);
+  *(.text.dma_wait_and_disable_interrupts)
+  . = MAX(., 0x7a460);
+  *(.text.__rdpq_interrupt)
+  . = MAX(., 0x7a540);
+  *(.text.__clip_blit)
+  . = MAX(., 0x7a700);
+  *(.text.draw_cb.1)
+  . = MAX(., 0x7ac00);
+  *(.text.interp816m_setFlags)
+  . = MAX(., 0x7ad20);
+  *(.text.ProcessBounceAndSmokeSprites_Return02904C_M1X1)
+  . = MAX(., 0x7ad60);
+  *(.text.n64_tile_cache_empty2)
+  . = MAX(., 0x7ada0);
+  *(.text.joypad_read_iobit)
+  . = MAX(., 0x7afa0);
+  *(.text.attach)
+  . = MAX(., 0x7b1e0);
+  *(.text.n64_tile_cache_tlut)
+  . = MAX(., 0x7b400);
+  *(.text.snes_mod_audio_mix)
+  . = MAX(., 0x7b960);
+  *(.text.RunPlayerBlockCode_00F2C9_M1X1)
+  . = MAX(., 0x7b9a0);
+  *(.text.GetDrawInfo_Bank01_Recomp_M1X1)
+  . = MAX(., 0x7ba00);
+  *(.text.cpu_push_interrupt_frame_at.constprop.0)
+  . = MAX(., 0x7bc00);
+  *(.text.audio_can_write)
+  . = MAX(., 0x7bca0);
+  *(.text.cpu_write_absY16)
+  . = MAX(., 0x7bd00);
+  *(.text.cpu_read_dpx16)
+  . = MAX(., 0x7bfe0);
+  *(.text.cart_irq_pending)
+  . = MAX(., 0x7c080);
+  *(.text.tier2_capture_enabled)
+  . = MAX(., 0x7c180);
+  *(.text.n64_tile_cache_c2)
+  . = MAX(., 0x7c2e0);
+  *(.text.ppu_wlog_note_reg)
+  . = MAX(., 0x7c500);
+  *(.text.n64_platform_read_pad)
+  . = MAX(., 0x7c680);
+  *(.text.n64_platform_time_us)
+  . = MAX(., 0x7c700);
+  *(.text.apu_dspOutput)
+  . = MAX(., 0x7c820);
+  *(.text.ProcessBounceAndSmokeSprites_SmokeSprites_M1X1)
+  . = MAX(., 0x7c860);
+  *(.text.unlikely.jit_xfer_ok)
+  . = MAX(., 0x7c940);
+  *(.text.interp_bridge_nest_save)
+  . = MAX(., 0x7cac0);
+  *(.text.rdpq_set_z_image)
+  . = MAX(., 0x7cbe0);
+  *(.text.tex_loader_load)
+  . = MAX(., 0x7cd40);
+  *(.text.snes_set_hdma_beam_enabled)
+  . = MAX(., 0x7d000);
+  *(.text.read_line)
+  . = MAX(., 0x7d280);
+  *(.text.interp816_pullWord)
+  . = MAX(., 0x7d460);
+  *(.text.rdpq_set_color_image)
+  . = MAX(., 0x7d860);
+  *(.text.display_try_get)
+  . = MAX(., 0x7da60);
+  *(.text.ppudma_frame_snapshot)
+  . = MAX(., 0x7dc40);
+  *(.text.__rdpq_fill_rectangle)
+  . = MAX(., 0x7de00);
+  *(.text.cpu_write_dpx16)
+  . = MAX(., 0x7dee0);
+  *(.text.rspq_flush_internal)
+  . = MAX(., 0x7df60);
+  *(.text.interp_bridge_flush_apu_pending)
+  . = MAX(., 0x7e2a0);
+  *(.text.dsp_fe_envx)
+  . = MAX(., 0x7e340);
+  *(.text.interp_bridge_lle_took_wai)
+  . = MAX(., 0x7e820);
+  *(.text.audio_write_begin)
+  . = MAX(., 0x7ea00);
+  *(.text.inst_cache_hit_invalidate)
+  . = MAX(., 0x7ea80);
+  *(.text.Tier2CoverageTick)
+  . = MAX(., 0x7ec20);
+  *(.text.lle_resume_set)
+  . = MAX(., 0x7ed20);
+  *(.text.audio_get_buffer_length)
+  . = MAX(., 0x7ed60);
+  *(.text.__rdpq_texture_rectangle)
+  . = MAX(., 0x7f160);
+  *(.text.cart_sync_coprocessors)
+  . = MAX(., 0x7f300);
+  *(.text.audio_write_end)
+  . = MAX(., 0x7f3a0);
+  *(.text.SprStatus08_M1X1)
+  . = MAX(., 0x7f3e0);
+  *(.text.UpdatePlayerSpritePosition_Axis_M1X1)
+  . = MAX(., 0x7f500);
+  *(.text.__rdpq_tex_blit)
+  . = MAX(., 0x7f800);
+  *(.text.apu_schedulePortWrite)
+  . = MAX(., 0x7fc40);
+  *(.text.__rdpq_set_color_image)
+  . = MAX(., 0x7fee0);
+  *(.text.blue_run_until_quiescent)
+  . = MAX(., 0x801a0);
+  *(.text.surface_make_sub)
+  . = MAX(., 0x80400);
+  *(.text.rdpq_tex_blit)
+  . = MAX(., 0x80460);
+  *(.text.graphics_draw_text)
+  . = MAX(., 0x80600);
+  *(.text.resume_ring_note)
+  . = MAX(., 0x80720);
+  *(.text.ProcessSpinningCoinSprites_029ADA_M1X1)
+  . = MAX(., 0x80760);
+  *(.text.n64_platform_audio_pump)
+  . = MAX(., 0x80880);
+  *(.text.acct_switch)
+  . = MAX(., 0x809e0);
+  *(.text.present_done)
+  . = MAX(., 0x80c00);
+  *(.text.ppu_rasterRenderBegin)
+  . = MAX(., 0x80e80);
+  *(.text.rdpq_set_texture_image)
+  . = MAX(., 0x81040);
+  *(.text.CODE_05BC4A_M0X1)
+  . = MAX(., 0x81400);
+  *(.text.joypad_latch)
+  . = MAX(., 0x81500);
+  *(.text.dma_hdmaLoadDescriptor)
+  . = MAX(., 0x81680);
+  *(.text.SmokeSpr03_TurnAroundSmoke_M1X1)
+  . = MAX(., 0x816e0);
+  *(.text.apu_yellow_publish)
+  . = MAX(., 0x81800);
+  *(.text.dma_wait_finished)
+  . = MAX(., 0x81d00);
+  *(.text.joypad_auto_read_reg_addr)
+  . = MAX(., 0x81f40);
+  *(.text.cpu_push16)
+  . = MAX(., 0x82140);
+  *(.text.rdpq_detach_cb)
+  . = MAX(., 0x82220);
+  *(.text.RunPlayerBlockCode_00F2C2_M1X1)
+  . = MAX(., 0x82260);
   *(.text.interp816_adrIax)
-  . = MAX(., 0x60c20);
-  *(.text.io_write)
-  . = MAX(., 0x60ce0);
-  *(.text.isviewer_write)
-  . = MAX(., 0x60dc0);
+  . = MAX(., 0x82500);
+  *(.text.__rdpq_fill_rectangle_offline)
+  . = MAX(., 0x825e0);
+  *(.text.interp_bridge_lle_yield_unwind)
+  . = MAX(., 0x82be0);
+  *(.text.rspq_flush)
+  . = MAX(., 0x82d20);
+  *(.text.vi_get_bpp)
+  . = MAX(., 0x82e60);
+  *(.text.rdpq_sync_full)
+  . = MAX(., 0x83180);
+  *(.text.sys_hw_memset16)
+  . = MAX(., 0x83200);
+  *(.text.rdpq_attach)
+  . = MAX(., 0x83260);
+  *(.text.rtl_render_wait)
+  . = MAX(., 0x83340);
+  *(.text.display_show)
+  . = MAX(., 0x83540);
+  *(.text.GameMode07_TitleScreenDemo_M1X1)
+  . = MAX(., 0x83580);
+  *(.text.HandleStandardLevelCameraScroll_M1X1)
+  . = MAX(., 0x835c0);
+  *(.text.Spr035_Yoshi_01F622_M1X1)
+  . = MAX(., 0x83620);
+  *(.text.n64_tile_cache_sync_dirty)
+  . = MAX(., 0x83a00);
+  *(.text.bridge_bus_write_word)
+  . = MAX(., 0x83ce0);
+  *(.text.ProcessShooterSprites_M1X1)
+  . = MAX(., 0x83d40);
+  *(.text.joybus_get_identifier)
+  . = MAX(., 0x83e60);
+  *(.text.interp_tier_dispatch_tail)
+  . = MAX(., 0x83fe0);
+  *(.text.jit_ptr24)
+  . = MAX(., 0x84040);
+  *(.text.HexToDec_M1X1)
+  . = MAX(., 0x84160);
+  *(.text.UploadPlayerGFX_M1X1)
+  . = MAX(., 0x841a0);
+  *(.text.ParseLevelSpriteList_M1X1)
+  . = MAX(., 0x841e0);
+  *(.text.SetPlayerPose_M1X1)
+  . = MAX(., 0x842a0);
+  *(.text.graphics_set_color)
+  . = MAX(., 0x84300);
+  *(.text.SetMode7PPUPointersAndLayer1Scroll_NMI_8449_M1X1)
+  . = MAX(., 0x84340);
+  *(.text.ProcessExtendedSprites_M1X1)
+  . = MAX(., 0x843c0);
+  *(.text.msu1_mix)
+  . = MAX(., 0x84400);
+  *(.text.ppudma_note_interrupt)
+  . = MAX(., 0x84440);
+  *(.text.ResetPlayerLevelCollisionRAM_M1X1)
+  . = MAX(., 0x84480);
+  *(.text.render_audio)
+  . = MAX(., 0x84500);
+  *(.text.UpdateStatusBarCounters_009051_M1X1)
+  . = MAX(., 0x84540);
+  *(.text.PlayerState00_M1X1)
+  . = MAX(., 0x845e0);
+  *(.text.ProcessScrollSprites_Layer1_M1X1)
+  . = MAX(., 0x84620);
+  *(.text.HandlePlayerLevelCollision_M1X1)
+  . = MAX(., 0x846e0);
+  *(.text.LoadStripeImage_M1X1)
+  . = MAX(., 0x84780);
+  *(.text.graphics_make_color)
+  . = MAX(., 0x84860);
+  *(.text.GameMode14_InLevel_HandlePlayerState_M1X1)
+  . = MAX(., 0x848a0);
+  *(.text.Spr035_Yoshi_01F0A2_M1X1)
+  . = MAX(., 0x84960);
+  *(.text.rspq_syncpoint_wait)
+  . = MAX(., 0x84b40);
+  *(.text.RunPlayerBlockCode_M1X1)
+  . = MAX(., 0x84b80);
+  *(.text.HandlePlayerLevelColl_00EA0D_M1X1)
+  . = MAX(., 0x84bc0);
+  *(.text.ProcessBounceAndSmokeSprites_M1X1)
+  . = MAX(., 0x84c00);
+  *(.text.Spr035_Yoshi_HandleOffYoshi_M1X1)
+  . = MAX(., 0x84c40);
+  *(.text.CheckWhichControllersArePluggedIn_M1X1)
+  . = MAX(., 0x84c80);
+  *(.text.CalculateRowOrColumnOfTilemapToUpdate_M1X0)
+  . = MAX(., 0x84ce0);
+  *(.text.dsp_available)
+  . = MAX(., 0x84d20);
+  *(.text.RunPlayerBlockCode_EB77_M1X1)
+  . = MAX(., 0x84d60);
+  *(.text.PlayerGFXRt_01EA8F_M1X1)
+  . = MAX(., 0x84da0);
+  *(.text.expand_obj)
+  . = MAX(., 0x85460);
+  *(.text.ppu_rasterRenderEnd)
+  . = MAX(., 0x855c0);
+  *(.text.PollJoypadInputs_M1X1)
+  . = MAX(., 0x85600);
+  *(.text.rtl_apu_port_observers_read)
+  . = MAX(., 0x859a0);
+  *(.text.snes_readBBus)
+  . = MAX(., 0x85ae0);
+  *(.text.HandleStandardLevelCameraScroll_00F8AB_M0X1)
+  . = MAX(., 0x85b20);
+  *(.text.kirq_begin_wait_vi)
+  . = MAX(., 0x85b60);
+  *(.text.ppu_checkOverscan)
+  . = MAX(., 0x85ba0);
+  *(.text.ExtSpr10_SpinJumpStars_M1X1)
+  . = MAX(., 0x85be0);
+  *(.text.GameMode14_InLevel_Bank02_M1X1)
+  . = MAX(., 0x85c20);
+  *(.text.CheckIfLevelTilemapsNeedScrollUpdate_M1X1)
+  . = MAX(., 0x85cc0);
+  *(.text.__rdpq_texture_rectangle_offline)
+  . = MAX(., 0x85fa0);
+  *(.text._flush_cache)
+  . = MAX(., 0x86020);
+  *(.text.UpdateStatusBarCounters_Loop2_M1X1)
+  . = MAX(., 0x86060);
+  *(.text.HandleStandardLevelCameraScroll_00F7F4_M0X1)
+  . = MAX(., 0x86100);
+  *(.text.PlayerGFXRt_00F636_M1X1)
+  . = MAX(., 0x86140);
+  *(.text.joypad_set_pad)
+  . = MAX(., 0x861c0);
+  *(.text.sync_range)
+  . = MAX(., 0x863c0);
+  *(.text.n64_bgrsp_snapshot)
+  . = MAX(., 0x86400);
+  *(.text.UploadLevelTilemapHDMA_M1X1)
+  . = MAX(., 0x86480);
+  *(.text.SmwRunDecompressFromWRAM_M1X1)
+  . = MAX(., 0x864c0);
+  *(.text.PlayerState00_00CD24_M1X1)
+  . = MAX(., 0x86500);
+  *(.text.UpdatePaletteFromIndexedTable_00AE47_M1X1)
+  . = MAX(., 0x86540);
+  *(.text.UpdateNormalSpritePosition_Y_01ABD8_M1X1)
+  . = MAX(., 0x86600);
+  *(.text.ProcessMinorExtendedSprites_M1X1)
+  . = MAX(., 0x86640);
+  *(.text.HandleLevelTileAnimations_M1X1)
+  . = MAX(., 0x86680);
+  *(.text.__rdpq_set_mode_fill)
+  . = MAX(., 0x86720);
+  *(.text.Spr035_Yoshi_01EF18_M1X1)
+  . = MAX(., 0x86760);
+  *(.text.PlayerState00_HandleLRScrolling_M1X1)
+  . = MAX(., 0x867a0);
+  *(.text.HandleCapeLevelColl_029540_M1X1)
+  . = MAX(., 0x86920);
+  *(.text.dsp_advance)
+  . = MAX(., 0x86a60);
+  *(.text.joypad_get_inputs)
+  . = MAX(., 0x86b20);
+  *(.text.cpu_read_longx16)
+  . = MAX(., 0x86b60);
+  *(.text.PlayerState00_00CD36_M1X1)
+  . = MAX(., 0x86bc0);
+  *(.text.n64_ppu_build_release_vram)
+  . = MAX(., 0x86c00);
+  *(.text.n64_ppu_build_finish)
+  . = MAX(., 0x86da0);
+  *(.text.DamagePlayer_DisableButtons_M1X1)
+  . = MAX(., 0x86de0);
+  *(.text.WatchdogFrameStart)
+  . = MAX(., 0x86e40);
+  *(.text.UpdatePaletteFromIndexedTable_M1X1)
+  . = MAX(., 0x86e80);
+  *(.text.CODE_0084C8_M1X1)
+  . = MAX(., 0x86f00);
+  *(.text.HandleScrollSpriteAndLayer3Scrolling_M1X1)
+  . = MAX(., 0x86f40);
+  *(.text.snes_master_clocks_until_line)
+  . = MAX(., 0x87000);
+  *(.text.PlayerState00_00CCE0_M1X1)
+  . = MAX(., 0x87040);
+  *(.text.audio_trace_on_output_priming)
+  . = MAX(., 0x87080);
+  *(.text.PlayerState00_CDAD_M1X1)
+  . = MAX(., 0x872e0);
+  *(.text.n64_ppu_build_end)
+  . = MAX(., 0x873e0);
+  *(.text.EraseSmokeSprite_M0X1)
+  . = MAX(., 0x87440);
+  *(.text.__rdpq_set_fill_color)
+  . = MAX(., 0x87600);
+  *(.text.HandlePlayerPhysics_00D742_M0X1)
+  . = MAX(., 0x87640);
+  *(.text.UploadLevelLayer1And2Tilemaps_M1X1)
+  . = MAX(., 0x87680);
+  *(.text.PlayerDraw_M1X1)
+  . = MAX(., 0x876c0);
+  *(.text.n64_bgrsp_frame_begin)
+  . = MAX(., 0x87700);
+  *(.text.audio_trace_on_consume)
+  . = MAX(., 0x877e0);
+  *(.text.CODE_05BC4A_M1X1)
+  . = MAX(., 0x87820);
+  *(.text.PlayerState00_CheckPlayerPitFall_M1X1)
+  . = MAX(., 0x878e0);
+  *(.text.ppu_handleVblank)
+  . = MAX(., 0x87940);
+  *(.text.UpdatePlayerSpritePosition_M1X1)
+  . = MAX(., 0x87ac0);
+  *(.text.n64_ppu_present_sync)
+  . = MAX(., 0x87b60);
+  *(.text.Spr035_Yoshi_CheckBerryTileCollisionWithAdultYoshiMouth_M1X1)
+  . = MAX(., 0x87c00);
+  *(.text.n64_ppu_desc_begin)
+  . = MAX(., 0x87f60);
+  *(.text.display_get)
+  . = MAX(., 0x88100);
+  *(.text.HandleCapeInteraction_M1X1)
+  . = MAX(., 0x88140);
+  *(.text.kirq_begin_wait_pi)
+  . = MAX(., 0x881c0);
+  *(.text.joypad_read_port)
+  . = MAX(., 0x88220);
+  *(.text.Spr035_Yoshi_MouthState00_M1X1)
+  . = MAX(., 0x88260);
+  *(.text.HandlePlayerPhysics_InAir_M1X1)
+  . = MAX(., 0x882a0);
+  *(.text.GenericExtendedSpriteGFXRt_FireballEntry_M1X1)
+  . = MAX(., 0x882e0);
+  *(.text.HandleNormalSpriteLevelColl_019441_M1X1)
+  . = MAX(., 0x88320);
+  *(.text.UpdateNormalSpritePosition_X_01ABCC_M1X1)
+  . = MAX(., 0x88360);
+  *(.text.GameMode14_InLevel_00C47E_M1X1)
+  . = MAX(., 0x883a0);
+  *(.text.InitializeScrollSprites_05BCE9_M0X1)
+  . = MAX(., 0x883e0);
+  *(.text.ProcessSpinningCoinSprites_M1X1)
+  . = MAX(., 0x88420);
+  *(.text.HandleNormalSpriteGravity_M1X1)
+  . = MAX(., 0x88460);
+  *(.text.UpdateCurrentPlayerPositionRAM_M1X1)
+  . = MAX(., 0x884a0);
+  *(.text.ProcessScoreSprites_M1X1)
+  . = MAX(., 0x88580);
+  *(.text.times)
+  . = MAX(., 0x885e0);
+  *(.text.sub_1EC50_M1X1)
+  . = MAX(., 0x88620);
+  *(.text.draw_plane)
+  . = MAX(., 0x88840);
+  *(.text.RunPlayerBlockCode_00F28C_M1X1)
+  . = MAX(., 0x88880);
+  *(.text.HandlePlayerPhysics_M1X1)
+  . = MAX(., 0x888c0);
+  *(.text.PlayerGFXRt_01EA70_M1X1)
+  . = MAX(., 0x88a00);
+  *(.text.ppu_rasterBegin)
+  . = MAX(., 0x88ae0);
+  *(.text.ProcessScrollSprites_Layer2_M1X1)
+  . = MAX(., 0x88b20);
+  *(.text.auto_01EC61_M1X1)
+  . = MAX(., 0x88b60);
+  *(.text.ProcessGeneratorSprite_M1X1)
+  . = MAX(., 0x88c20);
+  *(.text.window_bit)
+  . = MAX(., 0x88d40);
+  *(.text.SetPlayerPose_Entry4_M1X1)
+  . = MAX(., 0x88d80);
+  *(.text.CheckPlayerAndNormalSpriteCollisions_M1X1)
+  . = MAX(., 0x88dc0);
+  *(.text.PpuBeginDrawing)
+  . = MAX(., 0x88ea0);
+  *(.text.UpdateStatusBarCounters_DrawItemBoxItem_M1X1)
+  . = MAX(., 0x89000);
+  *(.text._ram_guard_find)
+  . = MAX(., 0x890a0);
+  *(.text.UpdateSpritePos_M1X1)
+  . = MAX(., 0x890e0);
+  *(.text.UploadLevelExAnimationData_M1X1)
+  . = MAX(., 0x89120);
+  *(.text.CheckNormalSpriteToNormalSpriteCollision_M1X1)
+  . = MAX(., 0x89400);
+  *(.text.joypad_read_port.part.0)
+  . = MAX(., 0x89500);
+  *(.text.n64_cmprsp_frame_begin)
+  . = MAX(., 0x89540);
+  *(.text.GameMode07_9C8F_M1X1)
+  . = MAX(., 0x89580);
+  *(.text.HandleNormalSpriteLevelCollision_M1X1)
+  . = MAX(., 0x895c0);
+  *(.text.HandleNormalSpriteLevelColl_01933B_M1X1)
+  . = MAX(., 0x89640);
+  *(.text.joypad_get_buttons)
+  . = MAX(., 0x89700);
+  *(.text.PlayerState00_00CD82_M1X1)
+  . = MAX(., 0x89780);
+  *(.text.UpdateMinorExtendedSpritePosition_X_M1X0)
+  . = MAX(., 0x897c0);
+  *(.text.Spr035_Yoshi_02D0E6_M1X1)
+  . = MAX(., 0x89800);
+  *(.text.HandleNormalSpriteLevelColl_0192C9_M1X1)
+  . = MAX(., 0x898e0);
+  *(.text.joypad_inputs_from_n64_controller_read)
+  . = MAX(., 0x899e0);
+  *(.text.math_color)
+  . = MAX(., 0x89b00);
+  *(.text.UpdateStatusBarCounters_M1X1)
+  . = MAX(., 0x89b40);
+  *(.text.snes_set_raster_irq_beam_enabled)
+  . = MAX(., 0x89b80);
+  *(.text.InitAndMainLoop_ProcessGameMode_M1X1)
+  . = MAX(., 0x89bc0);
+  *(.text.RestoreSP1AfterMarioStart_M1X1)
+  . = MAX(., 0x89c00);
+  *(.text.Spr07B_GoalTape_TriggerGoalTape_M1X1)
+  . = MAX(., 0x89c40);
+  *(.text.n64_ppu_build_take_vram_dirty)
+  . = MAX(., 0x89cc0);
+  *(.text.GameMode07_TitleScreenDemo_009CBE_M1X1)
+  . = MAX(., 0x89d00);
+  *(.text.CheckPowerUpSpecificPlayerAttacks_M1X1)
+  . = MAX(., 0x89d40);
+  *(.text.sub_01804A_M1X0)
+  . = MAX(., 0x89d80);
+  *(.text.CheckPlayerToNormalSpriteCollision_M1X1)
+  . = MAX(., 0x89dc0);
+  *(.text.n64_run_frame)
+  . = MAX(., 0x89e60);
+  *(.text.n64_bgrsp_release_vram)
+  . = MAX(., 0x89f00);
+  *(.text.StandardSpriteToSpriteCollisionChecks_03B8FB_M1X1)
+  . = MAX(., 0x89f40);
+  *(.text.SubOffscreen_Bank03_Entry1_M1X1)
+  . = MAX(., 0x89f80);
+  *(.text.joypad_poll)
+  . = MAX(., 0x8a020);
+  *(.text.HandlePlayerPhysics_UpdatePMeter_M1X1)
+  . = MAX(., 0x8a060);
+  *(.text.n64_bgrsp_kick)
+  . = MAX(., 0x8a0a0);
+  *(.text.SprSpr_MarioSprRts_M1X1)
+  . = MAX(., 0x8a0e0);
+  *(.text.n64_bgrsp_sync_vram)
+  . = MAX(., 0x8a240);
+  *(.text.jit_wr16)
+  . = MAX(., 0x8a300);
+  *(.text.Spr0BD_SlidingNakedBlueKoopa_M1X1)
+  . = MAX(., 0x8a340);
+  *(.text.vi_get_refresh_rate)
+  . = MAX(., 0x8a4a0);
+  *(.text.pi_manual_interrupt_poll)
+  . = MAX(., 0x8a5a0);
+  *(.text.addr_of)
+  . = MAX(., 0x8b460);
+  *(.text.rdpq_tex_upload_sub)
+  . = MAX(., 0x8b700);
+  *(.text.n64_ppu_desc_end)
+  . = MAX(., 0x8b7e0);
+  *(.text.UpdateExtendedSpritePosition_Y_M1X1)
+  . = MAX(., 0x8b820);
+  *(.text.dma_initHdma)
+  . = MAX(., 0x8b900);
+  *(.text.CheckWhatSlopeSpriteIsOn_M1X1)
+  . = MAX(., 0x8b940);
+  *(.text.Spr0BD_SlidingNakedBlueKoopa_0389FF_M1X1)
+  . = MAX(., 0x8bc00);
+  *(.text.pi_poll)
+  . = MAX(., 0x8c040);
+  *(.text.StandardSpriteToSpriteCollisionChecks_CheckContact_M1X1)
+  . = MAX(., 0x8c080);
+  *(.text.unlikely.jit_scan)
+  . = MAX(., 0x8c3c0);
+  *(.text.HandleNormalSpriteLevelColl_019211_M1X1)
+  . = MAX(., 0x8c400);
+  *(.text.GenericGFXRtDraw1Tile16x16_M1X1)
+  . = MAX(., 0x8c440);
+  *(.text.HandlePlayerPhysics_00D764_M1X1)
+  . = MAX(., 0x8c480);
   *(.text.write)
-  . = MAX(., 0x60f80);
-  *(.text.CheckAvailableScoreSpriteSlot_M1X1)
-  . = MAX(., 0x60fa0);
-  *(.text.CheckPlayerToNormalSpriteColl_01A87E_M1X1)
-  . = MAX(., 0x60fc0);
-  *(.text.SetupScoreSprite_M1X1)
-  . = MAX(., 0x60fe0);
-  *(.text.GenericGFXRtDraw2Tiles16x16sStacked_Sub_M1X1)
-  . = MAX(., 0x61000);
-  *(.text.__stderr_write)
-  . = MAX(., 0x61080);
-  *(.text.CheckPlayerToNormalSpriteColl_SetStunnedTimer_M1X1)
-  . = MAX(., 0x610a0);
-  *(.text.InitializeNormalSpriteRAMTables_ClearTables_M1X1)
-  . = MAX(., 0x610c0);
-  *(.text.CheckPlayerToNormalSpriteColl_01A8D8_M1X1)
-  . = MAX(., 0x610e0);
-  *(.text.CheckPlayerToNormalSpriteColl_01AA0B_M1X0)
-  . = MAX(., 0x61100);
-  *(.text.FindFreeNormalSpriteSlot_02A9E6_M1X1)
-  . = MAX(., 0x61120);
-  *(.text.n64_platform_log)
-  . = MAX(., 0x61180);
-  *(.text.debugf)
-  . = MAX(., 0x611c0);
-  *(.text.SprXXX_Generic_SpinyEntry_M1X1)
-  . = MAX(., 0x611e0);
-  *(.text.CheckPlayerToNormalSpriteColl_01AB31_M0X1)
-  . = MAX(., 0x61200);
-  *(.text.CheckPlayerToNormalSpriteColl_01AA42_M1X1)
-  . = MAX(., 0x61220);
-  *(.text.SpawnSpinJumpStars_07FC47_M1X1)
-  . = MAX(., 0x61240);
+  . = MAX(., 0x8c680);
+  *(.text.interp_tier_dispatch_tail_ex)
+  . = MAX(., 0x8c740);
+  *(.text.st)
+  . = MAX(., 0x8cd00);
+  *(.text.recomp_cache_poll)
+  . = MAX(., 0x8cd80);
+  *(.text.pi_enqueue)
+  . = MAX(., 0x8d060);
+  *(.text.rdpq_fence)
+  . = MAX(., 0x8d1e0);
+  *(.text.StandardSpriteToSpriteCollisionChecks_GetSpriteClippingA_M1X1)
+  . = MAX(., 0x8d220);
+  *(.text.isviewer_write)
+  . = MAX(., 0x8d320);
+  *(.text.sub_019435_M1X1)
+  . = MAX(., 0x8d360);
+  *(.text.rd)
+  . = MAX(., 0x8dd80);
+  *(.text.display_set_fps_limit)
+  . = MAX(., 0x8dee0);
+  *(.text.UpdateExtendedSpritePosition_X_M1X1)
+  . = MAX(., 0x8df20);
+  *(.text.audio_trace_on_output_underflow)
+  . = MAX(., 0x8dfa0);
+  *(.text.rdpq_tex_upload)
+  . = MAX(., 0x8e000);
+  *(.text.Spr0A1_BowserBowlingBall_MakeBallBounce_M1X0)
+  . = MAX(., 0x8e040);
+  *(.text.Sample11_M1X1)
+  . = MAX(., 0x8e080);
+  *(.text.Spr035_Yoshi_01F6CD_M1X1)
+  . = MAX(., 0x8e0c0);
+  *(.text.recomp_cache_call_absent)
+  . = MAX(., 0x8e2a0);
+  *(.text.InitializeCapeSwingOrNetPunch_M1X1)
+  . = MAX(., 0x8e2e0);
+  *(.text.rspq_syncpoint_new)
+  . = MAX(., 0x8e440);
+  *(.text.emit_dp2)
+  . = MAX(., 0x8e920);
+  *(.text.io_write)
+  . = MAX(., 0x8ea00);
+  *(.text.HandlePlayerPhysics_UpdatePMeterEx_M1X1)
+  . = MAX(., 0x8ea40);
+  *(.text.StandardSpriteToSpriteCollisionChecks_GetSpriteClippingB_M1X1)
+  . = MAX(., 0x8ea80);
+  *(.text.n64_platform_codepack_finish)
+  . = MAX(., 0x8ecc0);
+  *(.text.n64_platform_codepack_begin)
+  . = MAX(., 0x8ee40);
+  *(.text.fe_check.part.0)
+  . = MAX(., 0x8f160);
+  *(.text.cpu_resolve_ancestor_skip)
+  . = MAX(., 0x8f540);
+  *(.text.ProcessScoreSprites_Sub_M1X1)
+  . = MAX(., 0x8f580);
+  *(.text.SprStatus04_SpinJumpKill_M1X1)
+  . = MAX(., 0x8f5c0);
+  *(.text.exit_edges.isra.0)
+  . = MAX(., 0x8f880);
+  *(.text.interp816_writeWord)
+  . = MAX(., 0x8f980);
+  *(.text.add_page)
+  . = MAX(., 0x8fa20);
   *(.text.HandlePlayerPhysics_00D76B_M1X1)
-  . = MAX(., 0x61260);
-  *(.text.SpawnPlayerTurnAroundSmoke_00FE72_M1X1)
-  . = MAX(., 0x61280);
-  *(.text.CheckPlayerToNormalSpriteColl_01AB46_M1X1)
-  . = MAX(., 0x612a0);
-  *(.text.InitializeNormalSpriteRAMTables_PropertyTables_M0X1)
-  . = MAX(., 0x612c0);
+  . = MAX(., 0x8fa60);
+  *(.text.CheckPlayerPositionRelativeToSprite_Bank01_X_M1X1)
+  . = MAX(., 0x8faa0);
+  *(.text.unlikely.jput)
+  . = MAX(., 0x8fb00);
+  *(.text.recomp_nest_state_load)
+  . = MAX(., 0x8fd00);
+  *(.text.cpu_region_speed_inline)
+  . = MAX(., 0x8fdc0);
+  *(.text.code_cache_load)
+  . = MAX(., 0x8fe80);
+  *(.text.Spr035_Yoshi_01F668_M1X1)
+  . = MAX(., 0x8fec0);
+  *(.text.joybus_identify_callback)
+  . = MAX(., 0x90160);
+  *(.text.timer_poll)
+  . = MAX(., 0x90320);
+  *(.text.joypad_detect_callback)
+  . = MAX(., 0x904c0);
+  *(.text.dma_read_async)
+  . = MAX(., 0x90640);
+  *(.text.pi_interrupt)
+  . = MAX(., 0x906c0);
+  *(.text.RunPlayerBlockCode_00EFBC_M1X1)
+  . = MAX(., 0x90700);
+  *(.text.debugf)
+  . = MAX(., 0x90760);
+  *(.text.CheckWaterSlope_M1X1)
+  . = MAX(., 0x907a0);
+  *(.text.apu_feKeyOn)
+  . = MAX(., 0x90840);
+  *(.text.n64_platform_codepack_load)
+  . = MAX(., 0x908a0);
+  *(.text.CheckPlayerToNormalSpriteColl_ProcessInteract_M1X1)
+  . = MAX(., 0x908e0);
+  *(.text.joybus_identify_async.part.0)
+  . = MAX(., 0x90a40);
+  *(.text.dma_read)
+  . = MAX(., 0x90aa0);
+  *(.text.RunPlayerBlockCode_00EE85_M1X1)
+  . = MAX(., 0x90ae0);
+  *(.text.CheckPlayerToNormalSpriteColl_ReturnNoContact_M1X1)
+  . = MAX(., 0x90b20);
+  *(.text.unlikely.jli)
+  . = MAX(., 0x90cc0);
+  *(.text.unlikely.jit_op_x)
+  . = MAX(., 0x90d40);
+  *(.text.BufferScrollingTiles_Layer1_M1X1)
+  . = MAX(., 0x90d80);
+  *(.text.branch_end)
+  . = MAX(., 0x90f80);
+  *(.text.RunPlayerBlockCode_CheckIfPlayerTouchingHurtBlock_F127_M1X1)
+  . = MAX(., 0x90fc0);
+  *(.text.taken_exit)
+  . = MAX(., 0x91460);
+  *(.text.interp816m_getFlags)
+  . = MAX(., 0x914e0);
+  *(.text.reserve)
+  . = MAX(., 0x916c0);
+  *(.text.set_zn)
+  . = MAX(., 0x91780);
+  *(.text.add_range)
+  . = MAX(., 0x918c0);
+  *(.text.unlikely.J_MFC1)
+  . = MAX(., 0x91940);
+  *(.text.interp_bridge_nest_load)
+  . = MAX(., 0x91a20);
+  *(.text.n64_platform_log)
+  . = MAX(., 0x91ac0);
+  *(.text.unlikely.jbr.constprop.1)
+  . = MAX(., 0x91b40);
+  *(.text.Spr085_Unused_M1X0)
+  . = MAX(., 0x91b80);
+  *(.text.RunPlayerBlockCode_CheckIfGrabbingThrowBlock_M1X1)
+  . = MAX(., 0x91bc0);
+  *(.text.RunPlayerBlockCode_00EE3A_M1X1)
+  . = MAX(., 0x91c00);
+  *(.text.BufferScrollingTiles_Layer1_Main_M1X0)
+  . = MAX(., 0x91c40);
   *(.text.debugfv)
-  . = MAX(., 0x613a0);
-  *(.text.SpawnContactEffectFromAbove_M1X1)
-  . = MAX(., 0x613c0);
-  *(.text.InitializeNormalSpriteRAMTables_PropertyTables_M1X1)
-  . = MAX(., 0x613e0);
-  *(.text.SprXXX_Generic_018913_M1X1)
+  . = MAX(., 0x91d40);
+  *(.text.__stderr_write)
+  . = MAX(., 0x91de0);
+  *(.text.RecompStackPopYield)
+  . = MAX(., 0x91ea0);
+  *(.text.unlikely.jfix_all.part.0)
+  . = MAX(., 0x91f60);
+  *(.text.CheckNormalSpriteLevelColl_Floor_M1X1)
+  . = MAX(., 0x91fa0);
+  *(.text.interp_bridge_return_targets_owner)
+  . = MAX(., 0x92060);
+  *(.text.RunPlayerBlockCode_00EEE1_M1X1)
+  . = MAX(., 0x920a0);
+  *(.text.CheckPlayerPositionRelativeToSprite_Bank01_Y_M1X1)
+  . = MAX(., 0x920e0);
+  *(.text.wr_dummy)
+  . = MAX(., 0x92840);
+  *(.text.HandlePlayerPhysics_StoreAndReturn_M0X1)
+  . = MAX(., 0x92880);
+  *(.text.RunPlayerBlockCode_00F3E9_M1X1)
+  . = MAX(., 0x928c0);
+  *(.text.unlikely.jit_set_table)
+  . = MAX(., 0x92940);
+  *(.text.StandardSpriteToSpriteCollisionChecks_GetMarioClipping_M1X1)
+  . = MAX(., 0x92980);
+  *(.text.unlikely.jit_xfer_target.isra.0)
+  . = MAX(., 0x92a00);
+  *(.text.SmokeSpr05_Glitter_M1X1)
+  . = MAX(., 0x92a40);
+  *(.text.unlikely.jbr.constprop.0)
+  . = MAX(., 0x92ac0);
+  *(.text.unlikely.bridge_nlr_exit.isra.0)
+  . = MAX(., 0x92b80);
+  *(.text.unlikely.jit_place)
+  . = MAX(., 0x92c00);
+  *(.text.dsp_rate_values)
+  . = MAX(., 0x92c40);
+  *(.text.joypad_accessory_polled)
+  . = MAX(., 0x92e00);
+  *(.text.exit_const.isra.0)
 }

@@ -426,14 +426,18 @@ endif
 
 snesrecomp_interp.z64: $(BUILD_DIR)/snesrecomp_interp.dfs
 
-# After linking, warn when a function icache_order.ld places is not at its
-# planned address (one placed before it outgrew its gap and shifted the rest):
-# that build's timings are not comparable. The warning does not stop the build.
+# After linking, check that every function icache_order.ld places is at its
+# planned address. One that outgrew its slot moves every function placed
+# after it, and that build's timings are not comparable; the check names it.
+# A warning by default; PLACEMENT_STRICT=1 stops the build (use it for builds
+# that are measured or sent to hardware). To regenerate the layout see
+# "Instruction-cache layout" in docs/n64/TODO.md.
+PLACEMENT_STRICT ?= 0
 ifneq ($(ICACHE_ORDER),)
 snesrecomp_interp.z64: $(BUILD_DIR)/placement.check
 $(BUILD_DIR)/placement.check: $(BUILD_DIR)/snesrecomp_interp.elf icache_order.ld
-	@python3 profile/check_placement.py $< icache_order.ld --nm $(N64_NM) \
-		|| echo "*** WARNING: code placement shifted (see above) ***"
+	@python3 profile/check_placement.py $(BUILD_DIR)/snesrecomp_interp.map icache_order.ld \
+		|| { echo "*** WARNING: code placement shifted (see above) ***"; test "$(PLACEMENT_STRICT)" != 1; }
 	@touch $@
 endif
 

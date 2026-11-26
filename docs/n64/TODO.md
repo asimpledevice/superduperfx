@@ -721,6 +721,53 @@ already rejected. What it adds:
   Without the gaps there is no gain. So: not without the memory-budget
   work, and then for a percent or two. The prototype is not in the tree.
 
+**Instruction-cache layout: pinned harder and retrained (2026-11-25).**
+Three things let a build's code land on other cache lines than the ones
+`icache_order.ld` was trained for, and all three had happened:
+
+| what moved | why | now |
+|---|---|---|
+| 57 of the 529 placed functions | 21 had outgrown their slots (`n64_ppu_build_line` 6,368 bytes in 2,880) and pushed their followers | each slot is the function's largest size in any training build plus 12% (`icache_trg.py --slack`); `check_placement.py` names the function and the slot, and `PLACEMENT_STRICT=1` stops the build |
+| hot functions never placed (`dsp_fe_run`, `apu_feBlock`, `n64_ppu_desc_line`, `line_sprites`, `bridge_lean_run`) | newer than the training, or in a section not named after the symbol (`.text.unlikely.*`, a renamed copy) | retrained; a function is placed by the section at its address, whatever its name (654 placed, 99.5% of the graph weight) |
+| the 65816 JIT's and the SPC translator's code, and code-cache modules | the two buffers are `.bss` arrays and moved with every change in program size; the heap anchor was modulo 8 KB, so a program 8 KB larger put every module on the other half of the 16 KB cache | both arrays aligned to 16 KB; `heap_anchor` modulo 16 KB |
+
+The third was the large one and the reason builds differed by many
+milliseconds "by accident": the trainer treats run-time code as fixed
+where the trace saw it, and it was not fixed. A layout trained before the
+change predicted 0.71M misses for Pitfall and the build took 3.33M; after
+it, prediction and build agree (SMW 1,814,665 / 1,811,916, Pitfall 654,493
+/ 715,784, Joe & Mac 2 1,393,706 / 1,398,229).
+
+ares, same frames, old layout (shifted, as every recent build was) against
+the retrained one (JIT816, SPCDBT, RSPDSP_STREAM, SCENE; ms a frame as run
++ PPU + present, and I-cache misses in a 60-frame window):
+
+| Game | Before | After | Misses before | after |
+|---|---|---|---|---|
+| SMW | 59.7 + 6.6 + 4.6 = 70.9 | 55.8 + 6.3 + 4.6 = 66.6 | 2.38M | 1.81M |
+| Pitfall | 68.2 + 6.6 + 2.9 = 77.7 | 61.8 + 5.2 + 2.8 = 69.8 | 4.87M | 0.72M |
+| Joe & Mac 2 (held out) | 36.8 + 6.7 + 8.5 = 52.0 | 35.7 + 5.2 + 8.5 = 49.4 | 1.70M | 1.40M |
+
+Cost: 115 KB of RAM for SMW (.text 1,278 -> 1,392 KB: gaps and the growth
+room), and up to 16 KB before each of the two aligned arrays. The PPU test
+ROM and the JIT torture ROM are unchanged by it.
+
+To retrain (when `check_placement.py` reports a shift, or hot code is new):
+build the training games with `-DN64_DCPROF=<first frame>`, run each in
+ares with `ARES_ICTRACE=<file>` for a 60-frame code-line trace, then
+
+    python3 profile/icache_sweep.py -o icache_order.ld \
+        --train smw.elf smw.map smw.trace --train pit.elf pit.map pit.trace \
+        --held jm2.elf jm2.map jm2.trace
+
+which runs seeds 0-7, scores each in `icsim` on the training traces only
+and installs the best (geometric mean against the best seen per game).
+Rebuild and confirm in ares. The layout is trained on the configuration
+above; another one (no scene, no JIT) links with one to three functions
+reported as moved, since their sizes differ. What is still not pinned: functions outside
+the placed set (0.5% of the weight) follow in link order, and a code-cache
+module's address still depends on the order modules were loaded in.
+
 See `PPU_DESIGN.md` ("Step 4: the scene builder", "The RSP must never wait
 on the RDP mid-command").
 

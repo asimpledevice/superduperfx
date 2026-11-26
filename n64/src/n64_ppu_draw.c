@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "n64_ppu_rdp.h"
+#include "n64_ppu_build.h"   /* (n64_ppu_compose_line: also without the scene) */
 #include "n64_platform.h"
 #include "n64_memeq.h"
 

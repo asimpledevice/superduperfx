@@ -771,7 +771,8 @@ compare over 3,000 frames and ares `RENDER=2`: 0 px; PPU stage -1.3 ms.
 That change grew the frame description by 3 KB, which moved every engine
 heap object (allocated after it) to a new data-cache colour: the CPU stage
 went 87 -> 104 ms at frame 600 with no code change in it. The host now
-pads the heap top to `N64_HEAP_COLOR` modulo 8 KB just before `SnesInit`
+pads the heap top to `N64_HEAP_COLOR` modulo 8 KB (16 KB since 2026-11-25: the
+instruction cache's size, for code loaded from the heap) just before `SnesInit`
 (`heap_anchor` in n64_host.c; `-DN64_HEAP_COLOR=-1` only logs the
 colour). The engine's large objects come from the top; small ones may
 fill holes, so the anchor is the top, probed with a 32 KB block that is

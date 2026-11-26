@@ -358,11 +358,15 @@ static void render_audio(int16_t *stereo, int frames) {
 
 /* The engine's large heap objects (PPU, APU, WRAM-side state, ...) come from
  * the top of the heap; small ones may fill earlier holes. Pad the heap top
- * to a fixed colour modulo the 8 KB data cache before SnesInit, so a change
- * in what the host allocated earlier (the RDP frame description, buffers)
+ * to a fixed colour before SnesInit, so a change in what the host allocated
+ * earlier (the RDP frame description, buffers) or in the program's size
  * cannot move them all to new cache conflicts. Measured 2026-11-09: a 3 KB
- * larger host allocation made the CPU stage 17% slower. N64_HEAP_COLOR -1
- * only logs the colour the top has. */
+ * larger host allocation made the CPU stage 17% slower. The colour is modulo
+ * 16 KB, the instruction cache's size and twice the data cache's: code-cache
+ * modules are loaded from this heap too, and at modulo 8 KB a program 8 KB
+ * larger put them all on other instruction-cache lines than the ones
+ * icache_order.ld was trained against. N64_HEAP_COLOR -1 only logs the
+ * colour the top has. */
 #ifndef N64_HEAP_COLOR
 #define N64_HEAP_COLOR 0x1998   /* SMW attract, trace sweep 2026-11-09 */
 #endif
@@ -423,21 +427,22 @@ static uintptr_t heap_top(void) {
   const struct mallinfo mi = mallinfo();
   return (uintptr_t)sbrk(0) - (uintptr_t)mi.keepcost + 8;
 }
+enum { kHeapColours = 16384 };
 static void heap_anchor(long color) {
   const uintptr_t top = heap_top();
   if (color >= 0) {
-    uintptr_t d = ((uintptr_t)color - top) & 8191;
-    if (d && d < 32) d += 8192;
+    uintptr_t d = ((uintptr_t)color - top) & (kHeapColours - 1);
+    if (d && d < 32) d += kHeapColours;
     /* The pad must come from the top: a smaller free hole would serve a
-     * small request. Grow it in 8 KB steps (same colour) until it does. */
-    for (int k = 0; d && k < 64; ++k, d += 8192) {
+     * small request. Grow it in 16 KB steps (same colour) until it does. */
+    for (int k = 0; d && k < 32; ++k, d += kHeapColours) {
       void *p = malloc(d - 8);   /* chunk = request + header, 8-aligned */
       if ((uintptr_t)p == top) { s_heap_pad = p; break; }
       free(p);
     }
   }
-  n64_platform_log("[heap] top colour %04lx -> %04lx (want %ld)\n", (unsigned long)(top & 8191),
-                   (unsigned long)(heap_top() & 8191), color);
+  n64_platform_log("[heap] top colour %04lx -> %04lx (want %ld)\n", (unsigned long)(top & (kHeapColours - 1)),
+                   (unsigned long)(heap_top() & (kHeapColours - 1)), color);
 }
 #endif
 

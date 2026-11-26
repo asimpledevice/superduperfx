@@ -169,6 +169,14 @@ Status against this project, so the list is not re-evaluated from scratch.
   cache; the guarantee costs the rest more than it saves. The fragility it
   addresses is now checked after every link instead
   (`profile/check_placement.py`).
+- **Pin everything that executes, not only the linked functions.** A
+  trained layout assumes code generated or loaded at run time stays on the
+  cache lines the trace saw. A `.bss` code buffer moves with every change
+  in program size, and a heap anchored modulo 8 KB (the data cache) leaves
+  two possible positions in the 16 KB instruction cache. Until both were
+  fixed (16 KB alignment), a layout's predicted misses and the build's
+  differed by up to 4.7 times, and unrelated edits moved frame times by
+  several milliseconds.
 - **Outlining.** Replace repeated sequences in generated code (unaligned
   16-bit loads, rarely used flag materialisation) with a `jal` to one
   pinned copy: smaller call sites, one cached copy, a few cycles per call;
