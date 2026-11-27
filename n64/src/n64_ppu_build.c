@@ -229,6 +229,12 @@ static inline uint16_t sel_color(const Ppu *ppu, int sel, int src) {
   return ppu->cgram[src];
 }
 
+/* Most lines reuse the previous line's palettes: remember the last result per
+ * (kind, selector, flags) and skip the pool search when nothing moved. */
+static struct { uint32_t count; uint16_t backdrop, gen; uint8_t brightness, slot; }
+    s_tlut_memo[5][N64PPU_SELS][8];
+static uint16_t s_tlut_gen = 1;   /* an entry is this frame's when its gen is (no 4 KB to clear a frame) */
+
 static uint8_t get_tlut_slow(N64PpuFrame *f, const Ppu *ppu, uint8_t kind, uint8_t sel,
                              uint16_t backdrop, uint8_t flags, bool *full) {
   struct TlutKey key;
@@ -272,21 +278,16 @@ static uint8_t get_tlut_slow(N64PpuFrame *f, const Ppu *ppu, uint8_t kind, uint8
   return (uint8_t)i;
 }
 
-/* Most lines reuse the previous line's palettes: remember the last result per
- * (kind, selector, flags) and skip the pool search when nothing moved. */
-static struct { uint32_t count; uint16_t backdrop; uint8_t brightness, valid, slot; }
-    s_tlut_memo[5][N64PPU_SELS][8];
-
 static uint8_t get_tlut(N64PpuFrame *f, const Ppu *ppu, uint8_t kind, uint8_t sel,
                         uint16_t backdrop, uint8_t flags, bool *full) {
   typeof(s_tlut_memo[0][0][0]) *m = &s_tlut_memo[kind - 1][sel][flags & 7];
   const uint16_t bd = kind != kTlutNormal ? backdrop : 0;
-  if (m->valid && m->count == ppu->cgramWriteCount && m->backdrop == bd &&
+  if (m->gen == s_tlut_gen && m->count == ppu->cgramWriteCount && m->backdrop == bd &&
       m->brightness == PPU_brightness(ppu))
     return m->slot;
   const uint8_t slot = get_tlut_slow(f, ppu, kind, sel, backdrop, flags, full);
   if (!*full) {
-    m->valid = 1; m->count = ppu->cgramWriteCount; m->backdrop = bd;
+    m->gen = s_tlut_gen; m->count = ppu->cgramWriteCount; m->backdrop = bd;
     m->brightness = PPU_brightness(ppu); m->slot = slot;
   }
   return slot;
@@ -373,12 +374,20 @@ void n64_ppu_build_begin(N64PpuFrame *f, const uint32_t *sw_rows) {
   memset(f->rows, 0, sizeof(f->rows));
   memset(f->rows_hi, 0, sizeof(f->rows_hi));
   memset(s_state.runs, 0, sizeof(s_state.runs));
-  /* Fixed black palettes, one per selector, for clipped main pixels. */
-  for (int sel = 0; sel < N64PPU_SELS; ++sel)
-    for (int c = 0; c < 256; ++c)
-      f->tlut[N64PPU_TLUT_BLACK + sel][c] = sel_source(sel, c) >= 0 ? 1 : 0;
+  /* Fixed black palettes, one per selector, for clipped main pixels (the
+   * same every frame: made once). */
+  static const N64PpuFrame *s_black_of;
+  if (s_black_of != f) {
+    for (int sel = 0; sel < N64PPU_SELS; ++sel)
+      for (int c = 0; c < 256; ++c)
+        f->tlut[N64PPU_TLUT_BLACK + sel][c] = sel_source(sel, c) >= 0 ? 1 : 0;
+    s_black_of = f;
+  }
   f->tlut_count = N64PPU_SELS;
-  memset(s_tlut_memo, 0, sizeof s_tlut_memo);   /* slots are per frame */
+  if (++s_tlut_gen == 0) {   /* slots are per frame */
+    memset(s_tlut_memo, 0, sizeof s_tlut_memo);
+    s_tlut_gen = 1;
+  }
 #if N64PPU_SCENE
   obj_scene_frame_begin();
 #endif
@@ -744,6 +753,7 @@ static void obj_lines_build(const Ppu *ppu) {
     if (obj_x_of(ppu, index) + size <= 0) continue;
     const unsigned y = ppu->oam[index] >> 8;
     const int height = PPU_objInterlace(ppu) ? size / 2 : size;
+    if (y >= N64PPU_LINES && y + (unsigned)height <= 256) continue;   /* below the picture, not wrapping: on no line */
     for (int d = 0; d < height; ++d) {
       const unsigned l = (y + (unsigned)d) & 255;   /* row = (uint8)(line - y) < size */
       if (l < N64PPU_LINES) s_obj_lines.mask[l][spr >> 5] |= 1u << (spr & 31);
@@ -899,9 +909,10 @@ static bool obj_strips_build(N64PpuFrame *f, const Ppu *ppu) {
     s_objscene.x0[spr] = (int16_t)(sx < 0 ? 0 : sx);
     s_objscene.x1[spr] = (int16_t)(sx + size > 256 ? 256 : sx + size);
     if (sx + size <= 0) continue;                 /* never in range (obj_lines_build) */
+    const unsigned y = ppu->oam[index] >> 8;
+    if (y >= N64PPU_LINES && y + (unsigned)size <= 256) continue;   /* (the same: on no line, so no strip) */
     for (int col = 0; col < size; col += 8)
       if (col + sx > -8 && col + sx < 256) s_objscene.vis[spr]++;
-    const unsigned y = ppu->oam[index] >> 8;
     const int obj_adr = (oam1 & 0x100) ? PPU_objTileAdr2(ppu) : PPU_objTileAdr1(ppu);
     const bool hflip = (oam1 & 0x4000) != 0, vflip = (oam1 & 0x8000) != 0;
     const uint8_t flags = (uint8_t)(((oam1 >> 9) & 7) | (hflip ? N64PPU_OBJ_HFLIP : 0) |
@@ -937,20 +948,8 @@ static bool obj_strips_build(N64PpuFrame *f, const Ppu *ppu) {
   return true;
 }
 
-/* Whether the scene draws line r's sprites (see above). */
-static bool obj_line_scene(N64PpuFrame *f, const Ppu *ppu, int r) {
-  if (PPU_objInterlace(ppu)) return false;   /* every other row of a sprite: the plane (expand_obj) */
-  if (!s_objscene.built) {
-    s_objscene.built = 1;
-    s_objscene.oam_count = ppu->oamWriteCount;
-    s_objscene.obsel = ppu->obsel;
-    s_objscene.ok = obj_strips_build(f, ppu);
-    s_objscene.last_valid = 0;
-  }
-  if (!s_objscene.ok || s_objscene.oam_count != ppu->oamWriteCount || s_objscene.obsel != ppu->obsel)
-    return false;
-  const uint32_t *m = s_obj_lines.mask[r];
-  const unsigned first = PPU_objPriority(ppu) ? (ppu->oamaddl & 0xfe) >> 1 : 0;
+/* The verdict for the sprites m in range on a line, rotation from `first`. */
+static bool obj_mask_scene(N64PpuFrame *f, const uint32_t *m, unsigned first) {
   if (s_objscene.last_valid && s_objscene.last_first == first &&
       n64_mem_eq(s_objscene.last_mask, m, sizeof s_objscene.last_mask))
     return s_objscene.last_ok;
@@ -981,6 +980,23 @@ static bool obj_line_scene(N64PpuFrame *f, const Ppu *ppu, int r) {
   s_objscene.last_valid = 1;
   return ok;
 }
+
+/* Whether the scene draws line r's sprites (see above). */
+static bool obj_line_scene(N64PpuFrame *f, const Ppu *ppu, int r) {
+  if (PPU_objInterlace(ppu)) return false;   /* every other row of a sprite: the plane (expand_obj) */
+  if (!s_objscene.built) {
+    s_objscene.built = 1;
+    s_objscene.oam_count = ppu->oamWriteCount;
+    s_objscene.obsel = ppu->obsel;
+    s_objscene.ok = obj_strips_build(f, ppu);
+    s_objscene.last_valid = 0;
+  }
+  if (!s_objscene.ok || s_objscene.oam_count != ppu->oamWriteCount || s_objscene.obsel != ppu->obsel)
+    return false;
+  const unsigned first = PPU_objPriority(ppu) ? (ppu->oamaddl & 0xfe) >> 1 : 0;
+  return obj_mask_scene(f, s_obj_lines.mask[r], first);
+}
+
 #endif
 
 /* ---- Lines --------------------------------------------------------------- */
@@ -1200,6 +1216,15 @@ static __attribute__((noinline)) uint32_t line_palettes(N64PpuFrame *f, const Pp
 }
 
 static void line_sprites(N64PpuFrame *f, const Ppu *ppu, N64PpuLine *L, int line);
+#ifdef N64_PPUSTAGE_PROF   /* Count ticks in the parts of a line built in full (the host logs them) */
+uint32_t g_build_prof[6];   /* 0 spans and what the RDP cannot do, 1 palettes, 2 layers, 3 sprite table, 4 sprite verdicts, 5 sprite rows */
+static inline uint32_t bp_count(void) { uint32_t c; __asm__ volatile("mfc0 %0, $9" : "=r"(c)); return c; }
+#define BP_T() bp_count()
+#define BP_ADD(i, t0) (g_build_prof[i] += bp_count() - (t0))
+#else
+#define BP_T() 0u
+#define BP_ADD(i, t0) ((void)(t0))
+#endif
 
 /* Mode 7's BG1 (or BG2 with EXTBG: the same picture, bit 7 a priority) for
  * one line, into a plane row. A pixel is a CGRAM index, 0 transparent
@@ -1766,7 +1791,7 @@ bool n64_ppu_build_line(const Ppu *ppu, int line, bool same_regs) {
    * palettes and layers are that line's (they depend on nothing else, and
    * the scene draws every BG layer of an RDP line, so there are no plane
    * rows to queue). Only the sprites are per line. */
-  if (same_regs && r > 0 && f->line[f->ref[r - 1]].kind == N64PPU_LINE_RDP && !objmath_line(ppu, r) &&
+  if (same_regs && r > 0 && f->line[f->ref[r - 1]].kind == N64PPU_LINE_RDP && !(objmath_regs(ppu) && objmath_line(ppu, r)) &&
       PPU_mode(ppu) <= 1 &&   /* (mode 7's BG1 is a plane row a line: below; and a mosaic layer's) */
       !(PPU_mosaicSize(ppu) > 1 && (ppu->mosaic & (ppu->screenEnabled[0] | ppu->screenEnabled[1]) & 0xf))) {
     const N64PpuLine *P = &f->line[f->ref[r - 1]];
@@ -1800,10 +1825,12 @@ bool n64_ppu_build_line(const Ppu *ppu, int line, bool same_regs) {
     return true;
   }
   Spans *s = &s_state.spans[r];
+  uint32_t bt = BP_T();
   line_spans(ppu, s);
   bool backdrop_math;
   uint8_t lmath;
   uint32_t why = line_unsupported(ppu, s, r, &backdrop_math, &lmath);
+  BP_ADD(0, bt); bt = BP_T();
 
   /* Colour math with a colour from each screen (and nothing else in the
    * way): composed on the CPU (N64PPU_LINE_COMPOSE). */
@@ -1812,6 +1839,7 @@ bool n64_ppu_build_line(const Ppu *ppu, int line, bool same_regs) {
   if (why && !(why & ~(uint32_t)(N64PPU_WHY_COLOR_MATH | N64PPU_WHY_SUB_OBJ))) { compose = true; why = 0; }
 #endif
   if (!why) why |= line_palettes(f, ppu, L, backdrop_math, lmath, compose);
+  BP_ADD(1, bt); bt = BP_T();
   if (why) {
 #ifdef N64PPU_WHY_LOG
     { /* The registers behind a fallback, once per change. */
@@ -1962,6 +1990,7 @@ bool n64_ppu_build_line(const Ppu *ppu, int line, bool same_regs) {
       }
     }
   }
+  BP_ADD(2, bt);
   line_sprites(f, ppu, L, line);
   f->rdp_lines++;
   return true;
@@ -1975,14 +2004,19 @@ static void line_sprites(N64PpuFrame *f, const Ppu *ppu, N64PpuLine *L, int line
   const bool compose = L->kind == N64PPU_LINE_COMPOSE;
   if ((ppu->screenEnabled[0] & 0x10) || (compose && (L->sub_layers & 0x10))) {
 #if N64PPU_SCENE
+    uint32_t bt = BP_T();
     obj_lines_ensure(ppu);
-    if (!compose && obj_line_scene(f, ppu, r)) {
+    BP_ADD(3, bt); bt = BP_T();
+    const bool scene = !compose && obj_line_scene(f, ppu, r);
+    BP_ADD(4, bt); bt = BP_T();
+    if (scene) {
       L->obj_scene = 1;
       L->obj_first = (uint8_t)(PPU_objPriority(ppu) ? (ppu->oamaddl & 0xfe) >> 1 : 0);
       g_scene_obj_lines++;
     } else {
       expand_obj(f, ppu, line);
       g_scene_obj_plane_lines++;
+      BP_ADD(5, bt);
     }
 #else
     expand_obj(f, ppu, line);

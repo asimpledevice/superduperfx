@@ -1825,7 +1825,7 @@ static void WriteVramWord(Ppu *ppu, uint16 value) {
   uint32_t byte_addr = (uint32_t)(adr & 0x7fff) << 1;
   debug_server_on_vram_write(byte_addr,     (uint8_t)(value & 0xff));
   debug_server_on_vram_write(byte_addr + 1, (uint8_t)(value >> 8));
-  WsShadowOnVramWrite((uint16_t)(adr & 0x7fff), value);
+  WsShadowOnVramWriteIfAny((uint16_t)(adr & 0x7fff), value);
   /* With incOnHigh=1 (VMAIN bit 7), the pointer advances after the high
    * byte ($2119). A 16-bit STA $2118 writes both bytes atomically, so
    * the pointer advances by one word — same as the real hardware path

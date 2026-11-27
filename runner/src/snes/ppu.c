@@ -166,6 +166,7 @@ void ppu_saveload(Ppu *ppu, SaveLoadInfo *sli) {
   if (memcmp(oam_before, ppu->oam, sizeof(oam_before)) != 0 ||
       memcmp(high_before, ppu->highOam, sizeof(high_before)) != 0)
     ppu->oamWriteCount++;
+  ppu->cgramWriteCount++;   /* (CGRAM is part of the block: whatever is keyed by the counter is stale) */
 }
 
 void PpuResetWidescreenOamHistory(Ppu *ppu) {
@@ -3965,8 +3966,8 @@ void ppu_write_raw(Ppu* ppu, uint8_t adr, uint8_t val) {
 #if SNESRECOMP_ENABLE_MODS
       snes_text_xlate_on_vram_write_c((uint16_t)(vramAdr & 0x7fff));
 #endif
-      WsShadowOnVramWrite((uint16_t)(vramAdr & 0x7fff),
-                          ppu->vram[vramAdr & 0x7fff]);
+      WsShadowOnVramWriteIfAny((uint16_t)(vramAdr & 0x7fff),
+                               ppu->vram[vramAdr & 0x7fff]);
       if(!ppu->vramIncrementOnHigh) ppu->vramPointer += ppu->vramIncrement;
       break;
     }
@@ -3982,8 +3983,8 @@ void ppu_write_raw(Ppu* ppu, uint8_t adr, uint8_t val) {
 #if SNESRECOMP_ENABLE_MODS
       snes_text_xlate_on_vram_write_c((uint16_t)(vramAdr & 0x7fff));
 #endif
-      WsShadowOnVramWrite((uint16_t)(vramAdr & 0x7fff),
-                          ppu->vram[vramAdr & 0x7fff]);
+      WsShadowOnVramWriteIfAny((uint16_t)(vramAdr & 0x7fff),
+                               ppu->vram[vramAdr & 0x7fff]);
       if(ppu->vramIncrementOnHigh) ppu->vramPointer += ppu->vramIncrement;
       break;
     }

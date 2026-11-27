@@ -168,6 +168,12 @@ void WsShadowFrame(const struct Ppu *ppu);
 // upload was staged for (half parity + travel direction). No-op for
 // inactive layers/addresses.
 void WsShadowOnVramWrite(uint16_t wordAdr, uint16_t value);
+/* Nonzero once any layer has been registered: until then a VRAM store has
+ * nothing to tell the shadow, and the stores are many (the call looked at
+ * every layer's state for each byte). */
+extern unsigned char g_ws_shadow_any;
+#define WsShadowOnVramWriteIfAny(adr, value) \
+  do { if (g_ws_shadow_any) WsShadowOnVramWrite((adr), (value)); } while (0)
 
 // mapWordAdr = the VRAM word address the renderer fetched realTile from
 // (used by fold mode to recover the exact map row/column, independent of

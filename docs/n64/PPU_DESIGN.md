@@ -951,13 +951,42 @@ differing frame in the three games or the test ROM. Each change has its
 reference behind a macro (`SNESRECOMP_HDMA_DIRECT`, `N64PPU_DESC_COUNT`,
 `SNESRECOMP_LINE_STATE_FAST`).
 
-Left: the build's 2.8 ms (the quiet line still goes through
-`line_sprites`: the per-frame sprite verdicts of A3 and the `ref`
-shortcut of A2), and the line state's and HDMA's remaining 0.9 and 0.8,
-which are the price of the calls. The step after those is the loop
-itself: replay, HDMA and the description for all 224 lines first, then
-the build from the bands, so each body of code runs once a frame instead
-of taking turns.
+**The rest of A3 and A2, measured and mostly not built (2026-11-27).**
+The build's time was not on the quiet lines. Timed apart, SMW's level:
+one line a frame is built in full and takes 1.5 of the build's 2.3 ms
+(sprite strips and verdicts 0.62, the sprite-range table 0.43, palettes
+0.32); the other 223 lines share 0.7 ms, 3 us each. So:
+
+- *A per-frame sprite verdict table and the `ref` shortcut without the
+  sprite code* (the plan above): built, exact, and no faster within the
+  measurement (2.32 -> 2.25 ms): rejected and removed.
+- *Palettes kept from frame to frame* (a pool that outlives the frame,
+  keyed as before, a slot recycled when no line of the frame uses it):
+  slower in SMW, which rewrites a few CGRAM entries every frame, so every
+  key is new and the pool only has more to search: rejected and removed.
+- *Palettes from three 32-entry component tables*: no measurable gain:
+  rejected.
+- Kept: sprites parked below the picture are skipped in both per-frame
+  sprite passes (0.43 -> 0.32 and 0.62 -> 0.49 ms); the black palettes
+  are made once, not every frame; the palette memo is told apart by a
+  frame number instead of being cleared (4 KB a frame, 270 data-cache
+  misses).
+
+Two cautions from doing this. A build with `-DN64_PPUSTAGE_PROF` is not
+a build to take totals from: with the timers, the same code ran the
+stage 2 ms slower than without. And the larger effects were not in the
+PPU code at all (see "Data cache" in TODO.md): every VRAM byte stored
+called the widescreen shadow, which looked at each layer's state and
+shared a cache line's position with the PPU's write counters; and the
+VRAM-dirty words at the end of `Ppu` shared positions with the DMA
+channels doing the storing. Together about 2,400 data-cache misses a
+frame in SMW.
+
+Still open: replay, HDMA, the description, the build and the line state
+are five calls a line, about 14 us for a quiet line; handling a run of
+quiet lines in one go (no journal entry, no HDMA transfer that changes
+anything, no change of sprite verdict in the run) is the remaining
+step, and needs plain-build timing to judge.
 
 **Fact F2/F3 in ares (rdptest page 8):** add and subtract in three parts,
 in place on the framebuffer, are right for all 1,024 pairs; in two parts

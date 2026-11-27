@@ -113,6 +113,9 @@ static void draw_frame_rdp(bool software_every_line) {
     const bool same = n64_ppu_desc_line(g_ppu, line);
     PS_ADD(1, pt); pt = PS_T();
     const bool rdp_ok = n64_ppu_build_line(g_ppu, line, same);
+#ifdef N64_PPUSTAGE_PROF
+    if (!same) s_ps[5] += ps_count() - pt;   /* (the build's part on lines unlike the one above) */
+#endif
     PS_ADD(2, pt); pt = PS_T();
     if (software_every_line || !rdp_ok) ppu_runLine(g_ppu, line);
     else ppu_runLineState(g_ppu, line);
@@ -125,13 +128,19 @@ static void draw_frame_rdp(bool software_every_line) {
   }
 #ifdef N64_PPUSTAGE_PROF
   if (++s_ps_frames == 60) {
-    n64_platform_log("[ppustage] us a frame: replay %lu, description %lu, build %lu, line state %lu, HDMA %lu; lines like the one above %lu%%\n",
-                     PS_US(s_ps[0]), PS_US(s_ps[1]), PS_US(s_ps[2]), PS_US(s_ps[3]), PS_US(s_ps[4]), (unsigned long)(s_ps_same * 100 / (s_ps_lines ? s_ps_lines : 1)));
+    n64_platform_log("[ppustage] us a frame: replay %lu, description %lu, build %lu, line state %lu, HDMA %lu; lines like the one above %lu%% (the build on the others: %lu us, %lu lines a frame)\n",
+                     PS_US(s_ps[0]), PS_US(s_ps[1]), PS_US(s_ps[2]), PS_US(s_ps[3]), PS_US(s_ps[4]), (unsigned long)(s_ps_same * 100 / (s_ps_lines ? s_ps_lines : 1)),
+                     PS_US(s_ps[5]), (unsigned long)((s_ps_lines - s_ps_same) / 60));
     { extern uint32_t g_hdma_prof[4];
       n64_platform_log("[ppustage] HDMA a frame: %lu bytes in %lu channel-lines (%lu not written: as the last transfer), %lu table entries\n",
                        (unsigned long)(g_hdma_prof[0] / 60), (unsigned long)(g_hdma_prof[1] / 60),
                        (unsigned long)(g_hdma_prof[3] / 60), (unsigned long)(g_hdma_prof[2] / 60));
       memset(g_hdma_prof, 0, sizeof g_hdma_prof); }
+    { extern uint32_t g_build_prof[6];
+      n64_platform_log("[ppustage] lines built in full, us a frame: spans %lu, palettes %lu, layers %lu, sprite table %lu, sprite verdicts %lu, sprite rows %lu\n",
+                       PS_US(g_build_prof[0]), PS_US(g_build_prof[1]), PS_US(g_build_prof[2]), PS_US(g_build_prof[3]),
+                       PS_US(g_build_prof[4]), PS_US(g_build_prof[5]));
+      memset(g_build_prof, 0, sizeof g_build_prof); }
     memset(s_ps, 0, sizeof s_ps); s_ps_frames = s_ps_same = s_ps_lines = 0;
   }
 #endif

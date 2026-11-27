@@ -77,6 +77,7 @@ typedef struct WsShadowLayer {
 } WsShadowLayer;
 
 static WsShadowLayer s_layers[kLayers];
+unsigned char g_ws_shadow_any;
 
 /* Always-on margin lookup accounting (see WsShadowTile). Never armed. */
 static WsShadowMarginStat s_marginStats[kLayers];
@@ -188,6 +189,7 @@ void WsShadowSetPeriodicFold(int layerIndex) {
     return;
   WsShadowLayer *layer = &s_layers[layerIndex];
   layer->registered = true;
+  g_ws_shadow_any = 1;
   layer->fold = true;
   /* Composable with WsShadowSetWorld: rows with a detected period fold
    * to fresh native columns; the remaining (world-anchored) rows fall
@@ -215,6 +217,7 @@ void WsShadowSetWorld(int layerIndex, uint32_t worldX, uint32_t worldY) {
     }
   }
   layer->registered = true;
+  g_ws_shadow_any = 1;
   layer->worldSet = true;
   if (worldX != layer->worldX)
     layer->dir = ((int32_t)(worldX - layer->worldX) > 0) ? 1 : -1;

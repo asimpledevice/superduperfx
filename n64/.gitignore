@@ -1,3 +1,4 @@
 build/
 *.z64
 profile/build/
+dcprof.txt

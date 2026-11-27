@@ -343,6 +343,14 @@ struct Ppu {
    * forced blank (Yoshi's Island, line 217) otherwise gets one frame's OAM
    * drawn with the next frame's tiles. Not guest state; never serialized. */
   uint32_t vramWriteCount;
+  /* Host-only, with vramWriteCount: bit (b & 31) of word b >> 5 is set when
+   * a store reached 256-byte VRAM block b (word address >> 7), so a host
+   * that mirrors VRAM can revisit only those blocks; the host clears bits
+   * it has consumed. All set on reset and on a save-state load that
+   * changed VRAM. Not guest state; never serialized. (Beside the counter:
+   * a VRAM store writes both, and at the end of the struct these words
+   * shared data-cache lines with the DMA channels that do the storing.) */
+  uint32_t vramDirty[8];
   /* Host-only, same rule, for OAM ($2104, and a save-state load). Tells a
    * host WHEN the sprite table it is drawing was uploaded, so it can pair it
    * with whatever produced it. */
@@ -356,12 +364,6 @@ struct Ppu {
   uint16_t vram[0x8000];
   // -- END OF SNAPSHOT
 
-  /* Host-only, with vramWriteCount: bit (b & 31) of word b >> 5 is set when
-   * a store reached 256-byte VRAM block b (word address >> 7), so a host
-   * that mirrors VRAM can revisit only those blocks; the host clears bits
-   * it has consumed. All set on reset and on a save-state load that
-   * changed VRAM. Not guest state; never serialized. */
-  uint32_t vramDirty[8];
 
 
 };

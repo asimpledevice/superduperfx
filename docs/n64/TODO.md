@@ -768,6 +768,41 @@ reported as moved, since their sizes differ. What is still not pinned: functions
 the placed set (0.5% of the weight) follow in link order, and a code-cache
 module's address still depends on the order modules were loaded in.
 
+**Data cache: a profile, two structural collisions, pinning from two
+games (2026-11-27).** ares's data-cache profile of SMW's level: 21,900
+misses a frame, about 9.8 ms of a 66 ms frame at the EverDrive's 42
+cycles a miss. By owner: APU state 14%, PPU state 12%, the two stacks
+11%, the DSP front end's block 4%, code-cache bookkeeping 4%. Two pairs
+of cache lines were evicting each other on every use:
+
+| pair | misses a frame | fix |
+|---|---|---|
+| the PPU's write counters / the widescreen shadow's layer state, on every VRAM byte | 2,030 | the shadow is told of a store only once a layer has been registered (`g_ws_shadow_any`; never on the N64) |
+| `Ppu.vramDirty` (the struct's last words) / the DMA channels storing to VRAM | 1,370 | `vramDirty` sits beside `vramWriteCount`, which the same store writes |
+
+`dcache_order.py` now merges profiles of several builds by variable name
+(`--also`, each profile weighted equally), keeps the block placed by hand
+(`--keep`) and can start at a chosen cache position (`--start`).
+`data_order.ld` is regenerated from SMW and Pitfall (196 variables, 4 KB
+of positions). A candidate that kept clear of the hot stack frames
+(`--start 0x1820 --budget 2016`) was slower in SMW and regressed Joe &
+Mac 2 by 0.6 ms: not used.
+
+ares, same frames, before -> after (with the PPU-stage changes of the
+same day; ms a frame as run + PPU + present):
+
+| Game | Before | After |
+|---|---|---|
+| SMW | 55.8 + 6.3 + 4.6 = 66.6 | 51.9 + 5.5 + 4.6 = 61.9 |
+| Pitfall | 61.8 + 5.2 + 2.8 = 69.8 | 60.9 + 5.1 + 2.8 = 68.8 |
+| Joe & Mac 2 (not in the profiles) | 35.7 + 5.2 + 8.5 = 49.4 | 35.2 + 5.1 + 8.4 = 48.8 |
+
+Left in the profile: a stack line against the first words of `Snes`
+(470 misses a frame), a stack line against libdragon's low-priority
+queue state (260), and the APU and PPU structs' own spread. To profile:
+build with `-DN64_DCPROF=<first frame>`; ares writes `dcprof.txt`
+(`profile/ares-dcache-profiler.patch`).
+
 See `PPU_DESIGN.md` ("Step 4: the scene builder", "The RSP must never wait
 on the RDP mid-command").
 
