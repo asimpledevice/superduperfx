@@ -163,7 +163,7 @@ static bool same(Apu *ref, Apu *dbt, const char **what, uint32_t *where) {
   apu_dspSync(dbt);
   for (uint32_t a = 0; a < 0x10000; a++)
     if (ref->ram[a] != dbt->ram[a]) { *what = "ARAM"; *where = a; return false; }
-  const size_t ap = offsetof(Apu, ram) + sizeof ref->ram, an = offsetof(Apu, pad) + 6u;
+  const size_t ap = offsetof(Apu, romReadable), an = offsetof(Apu, pad) + 6u;
   if (memcmp((const uint8_t *)ref + ap, (const uint8_t *)dbt + ap, an - ap)) {
     *what = "ports/timers"; *where = 0; return false;
   }

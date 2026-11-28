@@ -75,6 +75,20 @@ struct Apu {
   Spc* spc;
   Dsp* dsp;
   uint8_t ram[0x10000];
+  /* Host-only, never serialized. The RAM is eight data caches long (8 KB,
+   * direct-mapped), and so are the port queue and the DSP log below: without
+   * this, every hot field after the RAM -- the cycle counter, ports and
+   * timers, the DSP registers, the front end -- sat on the cache lines of
+   * SPC addresses $0000-$02AF, the zero page and the stack page, and the two
+   * evicted each other on every instruction (900 to 1,600 misses a frame in
+   * three games). With it they share lines with $1D20-$1FCF (and every 8 KB
+   * from there), which the profiles show cold. On the N64 the struct starts
+   * at cache position 0x1998 (N64_HEAP_COLOR), which puts these fields at
+   * 0x16c0-0x196f: above the two stacks' hot frames (up to 0x1690), below
+   * the SPC's zero page, and off the pinned statics (data_order.ld, 0 to
+   * 0x1000). A pad of 0x800 put them on those statics: Pitfall's loading
+   * scene, where the CPU waits on the APU, took 20,000 more misses a frame. */
+  uint8_t cachePad[0x1d20];
   bool romReadable;
   uint8_t dspAdr;
   uint32_t cycles;
@@ -161,6 +175,10 @@ struct Apu {
   uint8_t dspUntracked;      /* the front end's untracked voices at dspAt (the Dsp's time) */
   uint8_t dspConflict;       /* those of them untracked by an echo conflict */
 #endif
+  /* (host-only) the rest of 8 KB with cachePad, so the struct is as long
+   * modulo the data cache as it was and what is allocated after it keeps
+   * its cache lines: the pad moves the fields above, nothing else. */
+  uint8_t cachePadEnd[0x2000 - 0x1d20];
 };
 #if SNESRECOMP_DSP_STREAM && !(SNESRECOMP_ECHO_IN_PLACE && SNESRECOMP_DSP_RECORDS)
 #error "SNESRECOMP_DSP_STREAM needs SNESRECOMP_ECHO_IN_PLACE and SNESRECOMP_DSP_RECORDS"

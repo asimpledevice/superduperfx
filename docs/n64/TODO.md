@@ -797,7 +797,48 @@ same day; ms a frame as run + PPU + present):
 | Pitfall | 61.8 + 5.2 + 2.8 = 69.8 | 60.9 + 5.1 + 2.8 = 68.8 |
 | Joe & Mac 2 (not in the profiles) | 35.7 + 5.2 + 8.5 = 49.4 | 35.2 + 5.1 + 8.4 = 48.8 |
 
-Left in the profile: a stack line against the first words of `Snes`
+**The APU's fields against the SPC's own RAM (2026-11-28).** `Apu.ram` is
+64 KB, eight data caches long, and so are the port queue and the DSP log
+after it, so every hot field behind the RAM (cycle counter, ports, timers,
+the DSP registers, the front end: 0x2B0 bytes in three places) sat on the
+cache lines of SPC addresses $0000-$02AF, the zero page and the stack
+page: 900 to 1,600 misses a frame in each of the three games. A pad after
+the RAM moves them (`Apu.cachePad`; a second pad at the end keeps the
+struct's length modulo 8 KB, so nothing allocated after it moves; the
+save-state bytes are the same, written as two blocks). Where to matters:
+
+| pad | SMW | Joe & Mac 2 | Pitfall play | Pitfall loading (two 60-frame bins) |
+|---|---|---|---|---|
+| none | 61.92 | 49.96 | 35.99 | 370 / 386 |
+| 0x800 (cold SPC RAM, by the profiles) | 61.53 | 49.33 | 35.99 | 406 / 420 |
+| 0x1d20 | 61.16 | 49.37 | 35.53 | 365 / 383 |
+
+0x800 put the fields at cache positions 0x1a0-0x450, on the pinned
+statics the same code uses (`s_apu_pending_master`, `s_producer`): in
+Pitfall's loading scene, where the CPU waits on the APU, 20,000 more
+misses a frame. 0x1d20 puts them at 0x16c0-0x196f, the one band that is
+above both stacks' hot frames (0xb30-0x1690), below the SPC's zero page
+(0x19a0 on) and off the pinned statics (0-0x1000). Data misses a frame:
+SMW 16,372 -> 14,928, Joe & Mac 2 15,700 -> 14,801, Pitfall's loading
+scene 93,201 -> 48,763. State hashes (WRAM, ARAM, DSP output) of SMW equal
+the build before.
+
+The map of cache positions this now rests on (8 KB): pinned statics 0 to
+0x1000 (with the opcode tables placed by hand at 0x100-0xaff), the host
+and guest-CPU stacks' hot frames 0xb30-0x1690 (`N64_STACK_COLOR` 0x1820,
+both stacks), `Snes`, the SPC and DMA structs 0x1468-0x1690, the first two
+pages of WRAM 0x14a0-0x16a0 (by link order: not pinned), the APU's fields
+0x16c0-0x1970, the SPC's zero and stack pages 0x19a0-0x1ba0. What
+overlaps: the stacks with each other, with WRAM's direct and stack pages
+and with `Snes` (about 800 misses a frame in SMW). ares's data trace
+(`ARES_DCTRACE`) records misses only in this build, so `dcache_sim` cannot
+replay other positions: each candidate is a build and a run.
+
+Left in the profile: in Pitfall, one line of the guest-CPU stack against
+the ROM page the game's hot loop is on (3,160 misses a frame, 1.4 ms: any
+hot guest code whose address modulo 8 KB falls in the stack's band does
+this; the cure is fewer hot stack lines in the interpreter, not a
+position); a stack line against the first words of `Snes`
 (470 misses a frame), a stack line against libdragon's low-priority
 queue state (260), and the APU and PPU structs' own spread. To profile:
 build with `-DN64_DCPROF=<first frame>`; ares writes `dcprof.txt`

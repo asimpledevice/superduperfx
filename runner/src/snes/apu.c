@@ -704,7 +704,10 @@ void apu_saveload(Apu *apu, SaveLoadInfo *sli) {
 #if SNESRECOMP_APU_NATIVE
   apu_native_timers_sync(apu);  /* a save must see current timers */
 #endif
-  sli->func(sli, apu->ram, offsetof(Apu, pad) + 6 - offsetof(Apu, ram));
+  /* (the same bytes in the same order as one block from ram to pad + 6 was,
+   * before cachePad came between) */
+  sli->func(sli, apu->ram, sizeof apu->ram);
+  sli->func(sli, &apu->romReadable, offsetof(Apu, pad) + 6 - offsetof(Apu, romReadable));
   apu_dspViewStale(apu);  /* a load replaced ARAM */
 #if SNESRECOMP_SPC_DBT
   spc_dbt_flush();
